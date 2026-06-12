@@ -91,6 +91,23 @@ NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (
     "prover_endpoint",
     "prover endpoint",
 )
+NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS = (
+    "secret-token",
+    "private-key",
+    "private_key",
+    "password",
+    "passphrase",
+    "bearer",
+    "authorization",
+    "access-key",
+    "access_key",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "session",
+    "token",
+)
 
 
 def _path_markdown_unsafe_character(path: str) -> str | None:
@@ -114,6 +131,12 @@ def _native_evm_prover_duplicate_json_key_error(key: Any) -> str:
         return f"{label} JSON contains duplicate key with whitespace"
     if _path_markdown_unsafe_character(key) is not None:
         return f"{label} JSON contains duplicate key with Markdown-unsafe character"
+    normalized_key = key.lower()
+    if any(
+        marker in normalized_key
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} JSON contains duplicate key with sensitive key name"
     return f"{label} JSON contains duplicate key: {key}"
 
 
@@ -369,7 +392,7 @@ def _native_evm_prover_payload_sources(
     try:
         payload = _load_json_without_duplicate_keys(source)
     except DuplicateJsonKeyError as exc:
-        raise ValueError(_native_evm_prover_duplicate_json_key_error(exc.key)) from exc
+        raise ValueError(_native_evm_prover_duplicate_json_key_error(exc.key)) from None
     if not isinstance(payload, dict):
         raise ValueError("native EVM Groth16 prover bundle must be a JSON object")
 

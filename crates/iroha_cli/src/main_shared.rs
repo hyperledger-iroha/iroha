@@ -1294,7 +1294,7 @@ fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
 
 fn try_fallback_config() -> Result<Config> {
     let chain = ChainId::from("offline-cli");
-    let seed = vec![0u8; 32];
+    let seed = b"iroha-cli-offline-fallback-ed25519-v1".to_vec();
     let key_pair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
         .wrap_err("failed to derive offline fallback Ed25519 key pair")?;
     let account = AccountId::new(key_pair.public_key().clone());
@@ -8290,6 +8290,18 @@ mod tests {
         let args = Args::try_parse_from(["iroha", "--output-format", "json", "tools", "version"])
             .expect("parse args");
         assert_eq!(effective_output_format(&args), CliOutputFormat::Json);
+    }
+
+    #[test]
+    fn fallback_config_derives_checked_signing_key() {
+        let config = fallback_config();
+        let payload = b"offline fallback config signing smoke";
+        let signature = iroha_crypto::Signature::try_new(config.key_pair.private_key(), payload)
+            .expect("fallback signing key should sign");
+
+        signature
+            .verify(config.key_pair.public_key(), payload)
+            .expect("fallback signature should verify");
     }
 
     #[test]

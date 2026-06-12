@@ -211,12 +211,17 @@ impl BlockBuilder {
         block
     }
 
-    /// Convenience: sign the built header hash with a single validator and return the block.
-    pub fn build_with_signature(
+    /// Convenience: fallibly sign the built header hash with a single validator and return the block.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`iroha_crypto::Error::Signing`] when the configured signing
+    /// backend rejects the private-key material or finalized header hash.
+    pub fn try_build_with_signature(
         mut self,
         signatory_index: u64,
         private_key: &iroha_crypto::PrivateKey,
-    ) -> SignedBlock {
+    ) -> Result<SignedBlock, iroha_crypto::Error> {
         // Precompute roots and header hash
         self.header.merkle_root = self.entry_merkle.root();
         self.header.result_merkle_root = self.result_merkle.root();
@@ -244,10 +249,21 @@ impl BlockBuilder {
                 .filter(|bundle| !bundle.is_empty())
                 .map(HashOf::new),
         );
-        let sig = SignatureOf::from_hash(private_key, self.header.hash());
+        let sig = SignatureOf::try_from_hash(private_key, self.header.hash())?;
         let mut set = BTreeSet::new();
         set.insert(BlockSignature::new(signatory_index, sig));
-        self.build(set)
+        Ok(self.build(set))
+    }
+
+    /// Convenience: sign the built header hash with a single validator and return the block.
+    #[must_use]
+    pub fn build_with_signature(
+        self,
+        signatory_index: u64,
+        private_key: &iroha_crypto::PrivateKey,
+    ) -> SignedBlock {
+        self.try_build_with_signature(signatory_index, private_key)
+            .expect("signing should succeed for a valid private key and finalized block header")
     }
 }
 
@@ -395,6 +411,32 @@ mod tests {
             block.header().da_proof_policies_hash,
             Some(HashOf::new(&bundle))
         );
+    }
+
+    #[test]
+    fn try_build_with_signature_matches_compatibility_signature_and_verifies() {
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let keypair = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
+        let builder = BlockBuilder::new(header);
+
+        let fallible = builder
+            .clone()
+            .try_build_with_signature(7, keypair.private_key())
+            .expect("fallible block signing should succeed");
+        let compatibility = builder.build_with_signature(7, keypair.private_key());
+
+        assert_eq!(fallible.header(), compatibility.header());
+        let fallible_signature = fallible.signatures().next().expect("fallible signature");
+        let compatibility_signature = compatibility
+            .signatures()
+            .next()
+            .expect("compatibility signature");
+        assert_eq!(fallible_signature, compatibility_signature);
+        assert_eq!(fallible_signature.index(), 7);
+        fallible_signature
+            .signature()
+            .verify_hash(keypair.public_key(), fallible.hash())
+            .expect("fallible block signature verifies");
     }
 
     fn sample_da_bundle() -> DaCommitmentBundle {

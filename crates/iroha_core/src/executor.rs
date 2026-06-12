@@ -2657,6 +2657,13 @@ impl Executor {
             transaction.metadata(),
             state_transaction.current_dataspace_id,
         )?;
+        let skip_nexus_fee = nexus_protocol_fee_exempt_transaction(&transaction)
+            || successful_claim_fee_exempt_transaction(
+                &state_transaction.world,
+                &state_transaction.nexus,
+                &transaction,
+                state_transaction.block_unix_timestamp_ms(),
+            );
         if let Some(sponsor) = fee_sponsor.as_ref() {
             if !state_transaction.nexus.fees.sponsorship_enabled {
                 sumeragi_status::record_nexus_fee_event(NexusFeeEvent::SponsorDisabled {
@@ -2675,12 +2682,24 @@ impl Executor {
                     "fee sponsor is not authorized".to_owned(),
                 ));
             }
-            ensure_sponsored_fee_operation(
-                &state_transaction.world,
-                &state_transaction.nexus.fees,
-                &transaction,
-            )
-            .map_err(nexus_fee_admission_error_to_validation_fail)?;
+            if state_transaction.nexus.enabled && !skip_nexus_fee {
+                let (_, instruction_count, gas_used) = fee_bound_for_admission(&transaction)
+                    .map_err(nexus_fee_admission_error_to_validation_fail)?;
+                let nexus_fee = compute_nexus_fee_amount(
+                    &state_transaction.nexus.fees,
+                    tx_bytes_len,
+                    instruction_count,
+                    gas_used,
+                )?;
+                if nexus_fee > Numeric::zero() {
+                    ensure_sponsored_fee_operation(
+                        &state_transaction.world,
+                        &state_transaction.nexus.fees,
+                        &transaction,
+                    )
+                    .map_err(nexus_fee_admission_error_to_validation_fail)?;
+                }
+            }
         }
         // Bind the transaction call_hash for ISI event emitters to use in audit fields
         let call_hash = transaction.hash_as_entrypoint();
@@ -2735,13 +2754,6 @@ impl Executor {
         // Payer-provided gas limit (optional for non-VM transactions); used to cap fee exposure
         let gas_limit_md = parse_gas_limit(&md)?;
         configure_executor_fuel_budget(self, state_transaction, &md)?;
-        let skip_nexus_fee = nexus_protocol_fee_exempt_transaction(&transaction)
-            || successful_claim_fee_exempt_transaction(
-                &state_transaction.world,
-                &state_transaction.nexus,
-                &transaction,
-                state_transaction.block_unix_timestamp_ms(),
-            );
         let pipeline_gas = &state_transaction.pipeline.gas;
         if !skip_nexus_fee && !pipeline_gas.accepted_assets.is_empty() {
             let Some(ref gas_asset_id_str) = gas_asset_opt else {

@@ -3289,6 +3289,16 @@ fn norito_to_napi<E: fmt::Display>(error: E) -> napi::Error {
     napi::Error::new(napi::Status::GenericFailure, error.to_string())
 }
 
+fn sign_js_transaction(
+    builder: TransactionBuilder,
+    private_key: &PrivateKey,
+    context: &str,
+) -> napi::Result<SignedTransaction> {
+    builder
+        .try_sign(private_key)
+        .map_err(|err| norito_to_napi(format!("failed to sign {context} transaction: {err}",)))
+}
+
 fn alias_policy_from_js(policy: Option<&JsAliasPolicy>) -> napi::Result<AliasCachePolicy> {
     let mut positive = SORAFS_ALIAS_POSITIVE_TTL_SECS;
     let mut refresh = SORAFS_ALIAS_REFRESH_WINDOW_SECS;
@@ -10147,7 +10157,7 @@ fn assemble_executable_transaction(
     }
 
     let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, secret).map_err(norito_to_napi)?;
-    let signed = builder.sign(&private_key);
+    let signed = sign_js_transaction(builder, &private_key, "JavaScript host assembled")?;
     let signed_bytes = Encode::encode(&signed);
     let hash = Buffer::from(signed.hash().as_ref().to_vec());
 
@@ -10267,7 +10277,7 @@ pub fn sign_transaction(bytes: Uint8Array, secret: Uint8Array) -> napi::Result<B
 
     let private_key =
         PrivateKey::from_bytes(Algorithm::Ed25519, secret.as_ref()).map_err(norito_to_napi)?;
-    let signed = builder.sign(&private_key);
+    let signed = sign_js_transaction(builder, &private_key, "JavaScript host re-signed")?;
     Ok(Buffer::from(Encode::encode(&signed)))
 }
 
@@ -10823,6 +10833,7 @@ struct PrivacyProductionGateEvidenceV1 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 struct PrivacyProductionLocalnetEvidenceV1 {
     run_id: &'static str,
     target: &'static str,
@@ -10931,7 +10942,6 @@ fn privacy_expected_verifier_key_id(entry: &PrivacyAlgorithmEntry) -> &'static s
 
 fn privacy_expected_public_inputs_schema(entry: &PrivacyAlgorithmEntry) -> Option<&'static str> {
     match entry.id {
-        "transparent-transfer" => None,
         "shield" => Some("asset,from,amount,note_commitment"),
         "confidential-transfer-v2" => Some(
             "input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,asset_tag,chain_tag",
@@ -10996,11 +11006,6 @@ fn privacy_expected_public_inputs_schema(entry: &PrivacyAlgorithmEntry) -> Optio
 
 fn privacy_expected_required_state(entry: &PrivacyAlgorithmEntry) -> &'static [&'static str] {
     match entry.id {
-        "transparent-transfer"
-        | "shield"
-        | "confidential-transfer-v2"
-        | "unshield"
-        | "asset-hidden-confidential-transfer-v1" => &[],
         "zk-ace-pq-authorization-v0" => &[
             "registered ZK-ACE identity commitment",
             "source-account allowlist",
@@ -23473,6 +23478,31 @@ mod tests {
     }
 
     #[test]
+    fn sign_js_transaction_checked_signing_verifies() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_id = AssetId::new(asset_definition, authority.clone());
+        let instruction: InstructionBox =
+            Mint::asset_numeric(Numeric::from_str("10").expect("valid numeric"), asset_id).into();
+
+        let tx = sign_js_transaction(
+            TransactionBuilder::new(chain_id, authority.clone()).with_instructions([instruction]),
+            keypair.private_key(),
+            "test",
+        )
+        .expect("checked signing should succeed");
+
+        assert_eq!(tx.authority(), &authority);
+        tx.verify_signature()
+            .expect("checked signed JS transaction should verify");
+    }
+
+    #[test]
     fn smart_contract_bytes_instruction_json_roundtrip() {
         let code_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF];
         let instruction: InstructionBox = Box::new(RegisterSmartContractBytes {
@@ -23655,6 +23685,8 @@ mod tests {
         let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
         assert_eq!(tx.authority(), &authority);
         assert_eq!(tx.chain(), &chain_id);
+        tx.verify_signature()
+            .expect("assembled transaction signature should verify");
         match tx.instructions() {
             Executable::Instructions(batch) => {
                 assert_eq!(batch.len(), 1);

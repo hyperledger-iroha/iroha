@@ -786,7 +786,7 @@ impl Actor {
                 total_chunks: session.total_chunks(),
                 received_chunks: session.received_chunks(),
                 ready_signatures: session.ready_signatures.len(),
-                required_ready: self.rbc_deliver_quorum(commit_topology),
+                required_ready: Self::rbc_protocol_deliver_quorum(commit_topology),
             });
         rbc_availability_unresolved_for_reschedule_decision(
             self.runtime_da_enabled(),
@@ -1037,12 +1037,7 @@ impl Actor {
             let has_qc = pending.commit_qc_observed() || commit_qc_cached || qc_any.is_some();
             let validation_inflight = pending.validation_status == ValidationStatus::Pending
                 && self.subsystems.validation.inflight.contains_key(hash);
-            let payload_available = da_enabled
-                && Self::payload_available_for_da(
-                    &self.subsystems.da_rbc.rbc.sessions,
-                    &self.subsystems.da_rbc.rbc.status_handle,
-                    pending,
-                );
+            let payload_available = da_enabled && self.payload_available_for_da(pending);
             let allow_da_fast_reschedule =
                 da_enabled && self.config.pacemaker.da_fast_reschedule && payload_available;
             let has_votes = vote_count > 0;
@@ -1055,7 +1050,7 @@ impl Actor {
                 && pending_extends_tip(pending.height, pending_parent, tip_height, tip_hash);
             let rbc_key = (*hash, pending.height, pending.view);
             let rbc_pending_entry = self.subsystems.da_rbc.rbc.pending.contains_key(&rbc_key);
-            let required_ready = self.rbc_deliver_quorum(&commit_topology);
+            let required_ready = Self::rbc_protocol_deliver_quorum(&commit_topology);
             let rbc_session_incomplete = da_enabled
                 && self
                     .subsystems
@@ -2247,11 +2242,7 @@ impl Actor {
         let zero_vote_progress_window = reschedule_backoff.max(Duration::from_millis(1));
         let zero_vote_fast_reschedule_allowed = self.config.pacemaker.da_fast_reschedule
             && self.runtime_da_enabled()
-            && Self::payload_available_for_da(
-                &self.subsystems.da_rbc.rbc.sessions,
-                &self.subsystems.da_rbc.rbc.status_handle,
-                &pending,
-            );
+            && self.payload_available_for_da(&pending);
         let da_enabled = self.runtime_da_enabled();
         let availability_timeout = self.availability_timeout(quorum_timeout, da_enabled);
         let missing_local_data_wait_expired = da_enabled
@@ -2354,12 +2345,8 @@ impl Actor {
         // Once quorum timeout expires with no same-height evidence, this block is just zombie
         // state: keeping and rebroadcasting it only multiplies conflicting frontier candidates.
         let drop_pending = !effective_has_reschedule_votes;
-        let authoritative_payload_present = !drop_pending
-            && Self::payload_available_for_da(
-                &self.subsystems.da_rbc.rbc.sessions,
-                &self.subsystems.da_rbc.rbc.status_handle,
-                &pending,
-            );
+        let authoritative_payload_present =
+            !drop_pending && self.payload_available_for_da(&pending);
         let resilience_ingress_backlog_active = self.config.resilience.enabled
             && (Self::frontier_consensus_ingress_queued(queue_depths)
                 || queue_depths.consensus_rx > 0

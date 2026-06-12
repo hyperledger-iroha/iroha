@@ -626,6 +626,61 @@ def test_tron_api_redacts_transport_and_error_response_details():
         raise AssertionError("secret-bearing TRON API error response was accepted")
 
 
+def test_tron_api_redacts_exception_causes():
+    module = load_live_module()
+
+    def http_error_opener(_request, timeout):
+        del timeout
+        raise urllib.error.HTTPError(
+            "https://tron.example/wallet/getnowblock?secret-token=http-url",
+            502,
+            "secret-token HTTP reason",
+            {},
+            RawResponse(b"secret-token HTTP response body"),
+        )
+
+    def transport_error_opener(_request, timeout):
+        del timeout
+        raise urllib.error.URLError("secret-token provider transport reason")
+
+    def invalid_json_opener(_request, timeout):
+        del timeout
+        return RawResponse(b'{"result": "secret-token invalid JSON payload"')
+
+    cases = (
+        (
+            http_error_opener,
+            "TRON API /wallet/getnowblock failed with HTTP 502",
+        ),
+        (
+            transport_error_opener,
+            "TRON API /wallet/getnowblock request failed",
+        ),
+        (
+            invalid_json_opener,
+            "TRON API /wallet/getnowblock returned invalid JSON",
+        ),
+    )
+    for opener, expected_message in cases:
+        try:
+            module._post_json(
+                "https://tron.example",
+                "/wallet/getnowblock",
+                {},
+                opener=opener,
+                timeout=1.0,
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            assert message == expected_message
+            assert "secret-token" not in message
+            assert exc.__cause__ is None
+            assert exc.__context__ is not None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("secret-bearing TRON API failure was accepted")
+
+
 def test_tron_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_live_module()
 
@@ -684,6 +739,9 @@ def test_tron_api_key_is_runtime_exact_ascii(tmp_path):
             )
         except ValueError as exc:
             assert "TRON-PRO-API-KEY" in str(exc)
+            if "\u2603" in api_key:
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
         else:
             raise AssertionError(f"non-exact TRON API key {api_key!r} was accepted")
 
@@ -700,6 +758,81 @@ def test_tron_api_key_is_runtime_exact_ascii(tmp_path):
         assert "TRON-PRO-API-KEY" in str(exc)
     else:
         raise AssertionError("padded file-backed TRON API key was accepted")
+
+
+def test_tron_runtime_input_parsers_redact_exception_causes(tmp_path):
+    module = load_live_module()
+
+    api_key_path = tmp_path / "secret-token-trongrid.key"
+    payload_path = tmp_path / "secret-token-witness-schedule.hex"
+    transition_path = tmp_path / "secret-token-transition.json"
+    cases = (
+        (
+            lambda: module._runtime_tron_pro_api_key(
+                SimpleNamespace(
+                    tron_pro_api_key=None,
+                    tron_pro_api_key_file=str(api_key_path),
+                )
+            ),
+            "--tron-pro-api-key-file cannot be read",
+        ),
+        (
+            lambda: module._runtime_witness_schedule_payload(
+                SimpleNamespace(
+                    witness_schedule_payload_hex=None,
+                    witness_schedule_payload_file=str(payload_path),
+                )
+            ),
+            "--witness-schedule-payload-file cannot be read",
+        ),
+        (
+            lambda: module._runtime_witness_schedule_transitions(
+                SimpleNamespace(
+                    witness_schedule_transition_json=[f"@{transition_path}"],
+                )
+            ),
+            "--witness-schedule-transition-json 0 file cannot be read",
+        ),
+        (
+            lambda: module._runtime_witness_schedule_transitions(
+                SimpleNamespace(
+                    witness_schedule_transition_json=[
+                        '{"secret-token invalid transition JSON"'
+                    ],
+                )
+            ),
+            "--witness-schedule-transition-json 0 must be JSON",
+        ),
+        (
+            lambda: module._runtime_witness_schedule_transitions(
+                SimpleNamespace(
+                    witness_schedule_transition_json=[
+                        (
+                            '{"secret-token-duplicate-transition":"0x11",'
+                            '"secret-token-duplicate-transition":"0x22"}'
+                        )
+                    ],
+                )
+            ),
+            (
+                "--witness-schedule-transition-json 0 must not contain "
+                "duplicate JSON keys"
+            ),
+        ),
+    )
+    for action, expected_message in cases:
+        try:
+            action()
+        except ValueError as exc:
+            message = str(exc)
+            assert message == expected_message
+            assert "secret-token" not in message
+            assert "invalid transition JSON" not in message
+            assert "duplicate-transition" not in message
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("secret-bearing runtime input was accepted")
 
 
 def test_witness_schedule_transition_json_rejects_duplicate_keys(tmp_path):
@@ -723,6 +856,8 @@ def test_witness_schedule_transition_json_rejects_duplicate_keys(tmp_path):
             assert "duplicate JSON keys:" not in rendered
             assert "secret-token" not in rendered
             assert "parent-witness-schedule" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
         else:
             raise AssertionError("duplicate transition JSON key was accepted")
 
@@ -2774,44 +2909,129 @@ def test_live_evidence_redacts_solid_block_header_proof_encoder_failures(monkeyp
         source_event_parent_block_tx_trie_root="dd" * 32,
     )
 
-    def fail_header_proof(_proof_input):
-        raise ValueError("secret-token solid block proof parser detail")
+    for exception_type in (ValueError, RuntimeError):
 
-    monkeypatch.setattr(
-        module.sccp_client,
-        "canonical_tron_solid_block_header_proof_bytes",
-        fail_header_proof,
-    )
+        def fail_header_proof(_proof_input, *, exception_type=exception_type):
+            raise exception_type("secret-token solid block proof parser detail")
 
-    summary = module.collect_live_evidence(
-        SimpleNamespace(
-            tron_node_url="https://tron.example",
-            source_bridge_address=fake.bridge,
-            destination_verifier_address=None,
-            caller_address=None,
-            no_getcontract=False,
-            source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
-            source_event_transaction_id=bytes.fromhex(
-                TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+        monkeypatch.setattr(
+            module.sccp_client,
+            "canonical_tron_solid_block_header_proof_bytes",
+            fail_header_proof,
+        )
+
+        summary = module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                witness_schedule_payload_hex=witness_payload,
+                witness_schedule_payload_file=None,
+                expected_witness_schedule_hash=None,
+                full_toml=False,
+                timeout=1.0,
             ),
-            witness_schedule_payload_hex=witness_payload,
-            witness_schedule_payload_file=None,
-            expected_witness_schedule_hash=None,
-            full_toml=False,
-            timeout=1.0,
-        ),
-        opener=fake.opener,
+            opener=fake.opener,
+        )
+
+        solid_block = summary["source_event_transaction"]["solid_block"]
+        assert solid_block["solid_block_header_proof_ready"] is False
+        assert solid_block["solid_block_header_proof_blocker"] == (
+            "solid block header proof is invalid"
+        )
+        rendered = json.dumps(solid_block, sort_keys=True)
+        assert "secret-token" not in rendered
+        assert "parser detail" not in rendered
+        assert exception_type.__name__ not in rendered
+
+
+def test_live_evidence_redacts_witness_schedule_hash_failures(monkeypatch):
+    module = load_live_module()
+    witness_payload = tron_witness_schedule_payload_hex(
+        ["0x41" + TRON_TEST_OWNER20.hex()],
+        [1],
+    )
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_block_account_state_root="ee" * 32,
+        source_event_parent_block_account_state_root="aa" * 32,
+        source_event_parent_block_tx_trie_root="dd" * 32,
     )
 
-    solid_block = summary["source_event_transaction"]["solid_block"]
-    assert solid_block["solid_block_header_proof_ready"] is False
-    assert solid_block["solid_block_header_proof_blocker"] == (
-        "solid block header proof is invalid"
+    def collect_summary():
+        return module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                witness_schedule_payload_hex=witness_payload,
+                witness_schedule_payload_file=None,
+                expected_witness_schedule_hash=None,
+                receipt_root=None,
+                receipt_proof_hash=None,
+                witness_seal_signers_bitmap_hex=None,
+                witness_seal_signature_hex=[],
+                expected_witness_seal_hash=None,
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+
+    failure_cases = (
+        (
+            "tron_witness_schedule_payload_hash",
+            "secret-token witness schedule payload parser detail",
+        ),
+        (
+            "tron_witness_schedule_hash_from_payload",
+            "secret-token witness schedule hash parser detail",
+        ),
     )
-    rendered = json.dumps(solid_block, sort_keys=True)
-    assert "secret-token" not in rendered
-    assert "parser detail" not in rendered
-    assert "ValueError" not in rendered
+    for patched_name, secret_detail in failure_cases:
+        for exception_type in (ValueError, RuntimeError):
+            with monkeypatch.context() as patch:
+
+                def fail_hash(
+                    *_args,
+                    exception_type=exception_type,
+                    secret_detail=secret_detail,
+                    **_kwargs,
+                ):
+                    raise exception_type(secret_detail)
+
+                patch.setattr(module.sccp_client, patched_name, fail_hash)
+                summary = collect_summary()
+
+            solid_block = summary["source_event_transaction"]["solid_block"]
+            assert solid_block["witness_schedule_proof_ready"] is False
+            assert solid_block["witness_schedule_proof_blocker"] == (
+                "witness schedule payload is invalid"
+            )
+            assert (
+                "witness schedule proof: witness schedule payload is invalid"
+                in summary["source_event_transaction"][
+                    "source_event_transaction_production_blockers"
+                ]
+            )
+            rendered = json.dumps(summary, sort_keys=True)
+            assert "secret-token" not in rendered
+            assert "parser detail" not in rendered
+            assert exception_type.__name__ not in rendered
 
 
 def test_live_evidence_emits_witness_seal_hash_when_certificate_supplied():
@@ -2891,6 +3111,97 @@ def test_live_evidence_emits_witness_seal_hash_when_certificate_supplied():
     assert solid_block["witness_seal_threshold_checked"] is True
 
 
+def test_live_evidence_redacts_witness_seal_encoder_failures(monkeypatch):
+    module = load_live_module()
+    witness_payload = tron_witness_schedule_payload_hex(
+        ["0x41" + TRON_TEST_OWNER20.hex()],
+        [1],
+    )
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_block_account_state_root="ee" * 32,
+        source_event_parent_block_account_state_root="aa" * 32,
+        source_event_parent_block_tx_trie_root="dd" * 32,
+    )
+    seal = tron_live_witness_seal_material(module, fake, witness_payload)
+    expected_witness_schedule_hash = bytes.fromhex(
+        module.sccp_client.tron_witness_schedule_hash_from_payload(
+            bytes.fromhex(witness_payload)
+        ).removeprefix("0x")
+    )
+
+    def collect_summary():
+        return module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                witness_schedule_payload_hex=witness_payload,
+                witness_schedule_payload_file=None,
+                expected_witness_schedule_hash=expected_witness_schedule_hash,
+                receipt_root=seal.receipt_root,
+                receipt_proof_hash=seal.receipt_proof_hash,
+                witness_seal_signers_bitmap_hex="01",
+                witness_seal_signature_hex=[seal.signature],
+                expected_witness_seal_hash=bytes.fromhex(
+                    seal.seal_hash.removeprefix("0x")
+                ),
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+
+    failure_cases = (
+        (
+            "canonical_tron_solid_block_message_bytes",
+            "secret-token witness seal message parser detail",
+            "witness seal solid-block message is invalid",
+        ),
+        (
+            "canonical_tron_witness_seal_bytes",
+            "secret-token witness seal proof parser detail",
+            "witness seal proof is invalid",
+        ),
+    )
+    for patched_name, secret_detail, expected_blocker in failure_cases:
+        for exception_type in (ValueError, RuntimeError):
+            with monkeypatch.context() as patch:
+
+                def fail_encoder(
+                    *_args,
+                    exception_type=exception_type,
+                    secret_detail=secret_detail,
+                    **_kwargs,
+                ):
+                    raise exception_type(secret_detail)
+
+                patch.setattr(module.sccp_client, patched_name, fail_encoder)
+                summary = collect_summary()
+
+            solid_block = summary["source_event_transaction"]["solid_block"]
+            assert solid_block["witness_seal_proof_ready"] is False
+            assert solid_block["witness_seal_proof_blocker"] == expected_blocker
+            assert (
+                f"witness seal proof: {expected_blocker}"
+                in summary["source_event_transaction"][
+                    "source_event_transaction_production_blockers"
+                ]
+            )
+            rendered = json.dumps(summary, sort_keys=True)
+            assert "secret-token" not in rendered
+            assert "parser detail" not in rendered
+            assert exception_type.__name__ not in rendered
+
+
 def test_live_evidence_emits_transaction_source_proof_hash_when_branch_supplied():
     module = load_live_module()
     fake = fake_opener_for(
@@ -2943,6 +3254,62 @@ def test_live_evidence_emits_transaction_source_proof_hash_when_branch_supplied(
         solid_block["transaction_source_proof_hash_matches_receipt_proof_hash"]
         is False
     )
+
+
+def test_live_evidence_redacts_transaction_source_proof_encoder_failures(monkeypatch):
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+    )
+
+    for exception_type in (ValueError, RuntimeError):
+
+        def fail_source_proof(_proof_input, *, exception_type=exception_type):
+            raise exception_type("secret-token transaction source proof parser detail")
+
+        monkeypatch.setattr(
+            module.sccp_client,
+            "canonical_tron_sccp_transaction_source_proof_bytes",
+            fail_source_proof,
+        )
+
+        summary = module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                receipt_root=bytes.fromhex("ab" * 32),
+                receipt_proof_hash=None,
+                source_inclusion_branch_hex=["aa" * 32],
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+
+        solid_block = summary["source_event_transaction"]["solid_block"]
+        assert solid_block["transaction_source_proof_ready"] is False
+        assert solid_block["transaction_source_proof_blocker"] == (
+            "transaction source proof is invalid"
+        )
+        assert (
+            "transaction source proof: transaction source proof is invalid"
+            in summary["source_event_transaction"][
+                "source_event_transaction_production_blockers"
+            ]
+        )
+        rendered = json.dumps(solid_block, sort_keys=True)
+        assert "secret-token" not in rendered
+        assert "parser detail" not in rendered
+        assert exception_type.__name__ not in rendered
 
 
 def test_live_evidence_accepts_zero_source_inclusion_branch_sibling():
@@ -3393,6 +3760,135 @@ def test_live_evidence_accepts_witness_schedule_transition_chain_for_production_
         ]
         == result.transition_seal_hash
     )
+
+
+def test_live_evidence_redacts_witness_schedule_transition_encoder_failures(
+    monkeypatch,
+):
+    module = load_live_module()
+    parent_payload = tron_witness_schedule_payload_hex(
+        ["0x41" + TRON_TEST_OWNER20.hex()],
+        [1],
+    )
+    active_payload = tron_witness_schedule_payload_hex(
+        ["0x41" + TRON_TEST_OWNER20.hex()],
+        [2],
+    )
+    parent_schedule_hash = module.sccp_client.tron_witness_schedule_hash_from_payload(
+        bytes.fromhex(parent_payload)
+    )
+    active_schedule_hash = module.sccp_client.tron_witness_schedule_hash_from_payload(
+        bytes.fromhex(active_payload)
+    )
+    active_payload_hash = module.sccp_client.tron_witness_schedule_payload_hash(
+        bytes.fromhex(active_payload)
+    )
+    transition_block_hash = "0x" + "22" * 32
+    transition_message_input = {
+        "source_domain": module.sccp_client.SCCP_DOMAIN_TRON,
+        "from_witness_schedule_epoch": 0,
+        "to_witness_schedule_epoch": 1,
+        "transition_block_number": 122,
+        "transition_block_hash": transition_block_hash,
+        "parent_witness_schedule_hash": parent_schedule_hash,
+        "next_witness_schedule_hash": active_schedule_hash,
+        "next_witness_schedule_payload": "0x" + active_payload,
+        "next_witness_schedule_payload_hash": active_payload_hash,
+    }
+    transition_message_hash = (
+        module.sccp_client.tron_witness_schedule_transition_message_hash(
+            transition_message_input
+        )
+    )
+    transition_signature = tron_signature_hex(
+        module,
+        bytes.fromhex(transition_message_hash.removeprefix("0x")),
+        nonce_start=41,
+    )
+    transition_seal_input = {
+        **transition_message_input,
+        "transition_message_hash": transition_message_hash,
+        "seal_proof": {
+            "version": 1,
+            "total_weight": 1,
+            "signed_weight": 1,
+            "solid_block_message_hash": transition_message_hash,
+            "witness_addresses": ["0x41" + TRON_TEST_OWNER20.hex()],
+            "witness_weights": [1],
+            "signers_bitmap": "0x01",
+            "signatures": ["0x" + transition_signature],
+        },
+    }
+    transition_seal_hash = (
+        module.sccp_client.tron_witness_schedule_transition_seal_hash(
+            transition_seal_input
+        )
+    )
+    transition_inputs = [
+        {
+            "from_witness_schedule_epoch": 0,
+            "to_witness_schedule_epoch": 1,
+            "transition_block_number": 122,
+            "transition_block_hash": transition_block_hash,
+            "parent_witness_schedule_payload": "0x" + parent_payload,
+            "next_witness_schedule_payload": "0x" + active_payload,
+            "transition_message_hash": transition_message_hash,
+            "transition_seal_hash": transition_seal_hash,
+            "signers_bitmap": "0x01",
+            "signatures": ["0x" + transition_signature],
+        }
+    ]
+    child_header = {"number": 123, "block_id": bytes.fromhex("33" * 32)}
+    parent_header = {"number": 122, "block_id": bytes.fromhex("22" * 32)}
+
+    failure_cases = (
+        (
+            "canonical_tron_witness_schedule_transition_message_bytes",
+            "secret-token transition message parser detail",
+            "witness schedule transition 0 message is invalid",
+        ),
+        (
+            "canonical_tron_witness_schedule_transition_seal_bytes",
+            "secret-token transition seal parser detail",
+            "witness schedule transition 0 seal is invalid",
+        ),
+    )
+    for patched_name, secret_detail, expected_blocker in failure_cases:
+        for exception_type in (ValueError, RuntimeError):
+            with monkeypatch.context() as patch:
+
+                def fail_encoder(
+                    *_args,
+                    exception_type=exception_type,
+                    secret_detail=secret_detail,
+                    **_kwargs,
+                ):
+                    raise exception_type(secret_detail)
+
+                patch.setattr(module.sccp_client, patched_name, fail_encoder)
+                summary = (
+                    module._source_event_witness_schedule_transition_chain_summary(
+                        transition_inputs,
+                        active_witness_schedule_payload=bytes.fromhex(active_payload),
+                        expected_schedule_hash=bytes.fromhex(
+                            parent_schedule_hash.removeprefix("0x")
+                        ),
+                        child_header=child_header,
+                        parent_header=parent_header,
+                        ancestor_headers=[],
+                    )
+                )
+
+            assert summary["witness_schedule_transition_chain_ready"] is False
+            assert summary["witness_schedule_transition_chain_required"] is True
+            assert summary["witness_schedule_transition_chain_blocker"] == (
+                expected_blocker
+            )
+            assert summary["witness_schedule_transition_count"] == 1
+            rendered = json.dumps(summary, sort_keys=True)
+            assert "secret-token" not in rendered
+            assert "parser detail" not in rendered
+            assert exception_type.__name__ not in rendered
 
 
 def test_live_evidence_rejects_witness_schedule_transition_signature_for_wrong_witness():
@@ -5685,6 +6181,43 @@ def test_live_evidence_rejects_constant_result_without_success_flag():
         raise AssertionError("constant call without success flag was accepted")
 
 
+def test_live_evidence_redacts_constant_failure_result_message():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+
+    def opener(_request, timeout):
+        del timeout
+        return FakeResponse(
+            {
+                "result": {
+                    "result": False,
+                    "message": "secret-token constant failure detail",
+                },
+                "constant_result": ["00" * 32],
+            }
+        )
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=True,
+                timeout=1.0,
+            ),
+            opener=opener,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "TRON constant call networkId() failed"
+        assert "secret-token" not in message
+        assert "failure detail" not in message
+    else:
+        raise AssertionError("secret-bearing constant call failure was accepted")
+
+
 def test_live_evidence_rejects_padded_constant_result_word():
     module = load_live_module()
     fake = fake_opener_for(module)
@@ -5714,6 +6247,43 @@ def test_live_evidence_rejects_padded_constant_result_word():
         assert "TRON constant call networkId() returned non-hex data" in str(exc)
     else:
         raise AssertionError("padded constant call word was accepted")
+
+
+def test_live_evidence_redacts_constant_result_word_parser_cause():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+
+    def opener(_request, timeout):
+        del timeout
+        return FakeResponse(
+            {
+                "result": {"result": True},
+                "constant_result": ["0xsecret-token constant parser detail"],
+            }
+        )
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=True,
+                timeout=1.0,
+            ),
+            opener=opener,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "TRON constant call networkId() returned non-hex data"
+        assert "secret-token" not in message
+        assert "parser detail" not in message
+        assert "canonical lowercase hex" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret-bearing constant call word was accepted")
 
 
 def test_live_evidence_rejects_non_production_source_lane():
@@ -6097,6 +6667,70 @@ def test_live_evidence_rejects_malformed_destination_metadata_bytecode():
         raise AssertionError("malformed destination metadata bytecode was accepted")
 
 
+def test_live_evidence_redacts_metadata_parser_exception_causes(monkeypatch):
+    module = load_live_module()
+
+    try:
+        module._metadata_runtime_bytecode(
+            {"bytecode": "0xsecret-token-bytecode"},
+            label="destination verifier",
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == (
+            "/wallet/getcontract returned malformed destination verifier bytecode"
+        )
+        assert "secret-token" not in message
+        assert "must be hex" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret-bearing metadata bytecode was accepted")
+
+    def fail_address_parser(_value, *, label):
+        raise ValueError(f"secret-token {label} parser detail")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "parse_tron_address_payload", fail_address_parser)
+        try:
+            module._check_contract_metadata_address(
+                {"contract_address": "TSecretToken"},
+                expected_payload=b"\x41" + (b"\x11" * 20),
+                label="destination verifier",
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            assert message == (
+                "/wallet/getcontract returned malformed destination verifier "
+                "contract_address"
+            )
+            assert "secret-token" not in message
+            assert "parser detail" not in message
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("secret-bearing metadata address was accepted")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "parse_tron_address_payload", fail_address_parser)
+        try:
+            module._parse_transaction_address_payload(
+                "TSecretToken",
+                label="source-event transaction owner_address",
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            assert message == (
+                "source-event transaction owner_address is not a valid TRON address"
+            )
+            assert "secret-token" not in message
+            assert "parser detail" not in message
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("secret-bearing transaction address was accepted")
+
+
 def test_live_evidence_sends_runtime_trongrid_api_key_file_without_printing_it(tmp_path):
     module = load_live_module()
     api_key_file = tmp_path / "trongrid.key"
@@ -6146,6 +6780,35 @@ def test_live_evidence_can_use_solid_constant_endpoint():
     assert summary["constant_endpoint"] == "walletsolidity/triggerconstantcontract"
     assert summary["source_bridge"]["config_hash_matches"] is True
     assert summary["destination_verifier"]["destination_binding_hash_matches"] is True
+
+
+def test_live_evidence_redacts_generated_full_toml_parser_exception_cause(
+    monkeypatch,
+):
+    module = load_live_module()
+
+    class SecretFailingParser:
+        def parse_args(self, _args):
+            raise SystemExit("secret-token generated full TOML parser detail")
+
+    monkeypatch.setattr(
+        module,
+        "_offline_full_toml_args",
+        lambda _summary: ["--secret-token-generated-arg"],
+    )
+    monkeypatch.setattr(module.evidence, "build_parser", SecretFailingParser)
+
+    try:
+        module.render_offline_full_toml({"destination_verifier": {}})
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "generated offline full TOML arguments are invalid"
+        assert "secret-token" not in message
+        assert "parser detail" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret-bearing generated full TOML parser was accepted")
 
 
 def test_live_evidence_preflights_source_records_and_full_rollout_args():

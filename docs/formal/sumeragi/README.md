@@ -10091,6 +10091,13 @@ Temporal properties:
   `DeliveredPendingCompleteWaitState` exactly on the non-final branch, while
   the certified branch remains outside that wait state with committed finality,
   exact commit witnesses, and closed progress gates.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteContinuation`
+  proves the aggregate first-delivery continuation contract: the same branch
+  selector composes the exact action source, witness surface, residual gates,
+  counter frame, and delivered-pending handoff into either certified finality
+  with exact commit witnesses or the named delivered-pending complete wait
+  state with commit witnesses absent and the continuation action/timer surface
+  exposed.
 - `RbcProgressEvidenceNeverDiverges` proves that every reachable RBC progress
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk

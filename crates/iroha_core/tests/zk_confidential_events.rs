@@ -9,7 +9,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World, WorldReadOnly},
-    zk::test_utils::halo2_fixture_envelope,
+    zk::confidential_v2,
 };
 use iroha_crypto::Hash as CryptoHash;
 use iroha_data_model::{
@@ -21,30 +21,121 @@ use iroha_data_model::{
         data::{DataEvent, confidential::ConfidentialEvent},
     },
     isi::{
-        Mint,
+        Grant, Mint,
         register::Register,
+        verifying_keys,
         zk::{self, RegisterZkAsset},
     },
+    permission::Permission,
     prelude::*,
+    proof::{ProofAttachment, VerifyingKeyId, VerifyingKeyRecord},
 };
+use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
-use iroha_zkp_halo2::confidential;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+
+const HALO2_BACKEND: &str = "halo2/ipa";
+const TEST_CHAIN_ID: &str = "confidential_chain";
+const TRANSFER_VK_NAME: &str = "transfer_vk";
+const UNSHIELD_VK_NAME: &str = "unshield_vk";
+
+#[derive(Clone, Copy)]
+struct ConfidentialNoteFixture {
+    spend_key: [u8; 32],
+    rho: [u8; 32],
+    diversifier: [u8; 32],
+    amount: u128,
+    commitment: [u8; 32],
+}
+
+fn encrypted_payload(seed: u8) -> ConfidentialEncryptedPayload {
+    let mut nonce = [0_u8; 24];
+    nonce.fill(seed);
+    let mut ciphertext = b"zk-confidential-events-payload-v1".to_vec();
+    ciphertext.extend_from_slice(&[seed; 32]);
+    ConfidentialEncryptedPayload::new([1_u8; 32], nonce, ciphertext)
+}
+
+fn transfer_vk_record() -> VerifyingKeyRecord {
+    confidential_v2::confidential_transfer_v2_vk_record(TRANSFER_VK_NAME, 1)
+        .expect("confidential transfer v2 verifying key record")
+}
+
+fn unshield_vk_record() -> VerifyingKeyRecord {
+    confidential_v2::confidential_unshield_v2_vk_record(UNSHIELD_VK_NAME, 1)
+        .expect("confidential unshield v2 verifying key record")
+}
+
+fn note_fixture(
+    asset_def_id: &AssetDefinitionId,
+    spend_seed: u8,
+    rho_seed: u8,
+    diversifier_label: &[u8],
+    amount: u128,
+) -> ConfidentialNoteFixture {
+    let spend_key = [spend_seed; 32];
+    let rho = [rho_seed; 32];
+    let diversifier = confidential_v2::derive_confidential_diversifier_v2(diversifier_label);
+    let owner_tag =
+        confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(&spend_key, diversifier)
+            .expect("owner tag");
+    let commitment = confidential_v2::derive_confidential_note_v2(
+        &asset_def_id.to_string(),
+        amount,
+        rho,
+        owner_tag,
+    )
+    .expect("note commitment");
+    ConfidentialNoteFixture {
+        spend_key,
+        rho,
+        diversifier,
+        amount,
+        commitment,
+    }
+}
+
+fn seed_shielded_note(
+    state: &State,
+    account_id: &AccountId,
+    asset_def_id: &AssetDefinitionId,
+    note: ConfidentialNoteFixture,
+    block_height: u64,
+) -> [u8; 32] {
+    let header = BlockHeader::new(
+        std::num::NonZeroU64::new(block_height).expect("block height must be non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let shield = zk::Shield::new(
+        asset_def_id.clone(),
+        account_id.clone(),
+        note.amount,
+        note.commitment,
+        encrypted_payload(note.rho[0]),
+    );
+    stx.world
+        .executor()
+        .clone()
+        .execute_instruction(&mut stx, account_id, shield.into())
+        .expect("seed shield");
+    stx.apply();
+    block.commit().expect("commit seed shield block");
+    confidential_v2::compute_confidential_root_v2(&[note.commitment])
+        .expect("single-note confidential root")
+}
 
 fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId) {
     let (account_id, keypair) = gen_account_in("zkd");
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(World::new(), kura, query);
+    let mut state = State::new_with_chain(World::new(), kura, query, ChainId::from(TEST_CHAIN_ID));
 
     // ZkTransfer/Unshield execute real proof verification under `verify_backend_with_timing_checked`,
     // so these tests must opt into the halo2 verifier explicitly.
@@ -54,26 +145,43 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id =
         AssetDefinitionId::new(domain_id.clone(), "zcoin".parse().expect("asset name"));
+    let vk_transfer_id = VerifyingKeyId::new(HALO2_BACKEND, TRANSFER_VK_NAME);
+    let vk_unshield_id = VerifyingKeyId::new(HALO2_BACKEND, UNSHIELD_VK_NAME);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
     let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
-    let instructions: [InstructionBox; 5] = [
+    let instructions: Vec<InstructionBox> = vec![
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(account_id.clone())).into(),
+        Grant::account_permission(
+            Permission::new("CanManageVerifyingKeys".parse().unwrap(), Json::new(())),
+            account_id.clone(),
+        )
+        .into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone()).with_name("zcoin".to_owned()),
         )
         .into(),
         Mint::asset_numeric(10_000u64, asset_id).into(),
+        verifying_keys::RegisterVerifyingKey {
+            id: vk_transfer_id.clone(),
+            record: transfer_vk_record(),
+        }
+        .into(),
+        verifying_keys::RegisterVerifyingKey {
+            id: vk_unshield_id.clone(),
+            record: unshield_vk_record(),
+        }
+        .into(),
         RegisterZkAsset::new(
             asset_def_id.clone(),
             zk::ZkAssetMode::Hybrid,
             true,
             true,
-            None,
-            None,
+            Some(vk_transfer_id),
+            Some(vk_unshield_id),
             None,
         )
         .into(),
@@ -108,7 +216,7 @@ fn shield_emits_confidential_event() {
         account_id.clone(),
         123u128,
         commitment,
-        ConfidentialEncryptedPayload::default(),
+        encrypted_payload(0xAB),
     ));
     let chain_id = ChainId::from("confidential_chain");
     let tx = TransactionBuilder::new(chain_id, account_id.clone())
@@ -155,23 +263,67 @@ fn shield_emits_confidential_event() {
 #[test]
 fn transfer_emits_confidential_event() {
     let (state, account_id, keypair, asset_def_id) = setup_state();
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-    let proof_box = fixture.proof_box("halo2/ipa");
-    let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        proof_box,
-        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "transfer_vk"),
+    let note = note_fixture(&asset_def_id, 0x11, 0x21, b"transfer-input", 7);
+    let root = seed_shielded_note(&state, &account_id, &asset_def_id, note, 2);
+    let vk_record = transfer_vk_record();
+    let vk_box = vk_record
+        .key
+        .clone()
+        .expect("inline transfer verifying key");
+    let recipient_owner_tag = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+        &[0x44; 32],
+        confidential_v2::derive_confidential_diversifier_v2(b"transfer-recipient"),
+    )
+    .expect("recipient owner tag");
+    let change_owner_tag = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+        &[0x55; 32],
+        confidential_v2::derive_confidential_diversifier_v2(b"transfer-change"),
+    )
+    .expect("change owner tag");
+    let proof = confidential_v2::build_confidential_transfer_proof_v2(
+        &ChainId::from(TEST_CHAIN_ID),
+        &asset_def_id.to_string(),
+        &note.spend_key,
+        &[note.commitment],
+        &[confidential_v2::ConfidentialTransferInputV2 {
+            amount: note.amount,
+            rho: note.rho,
+            diversifier: note.diversifier,
+            leaf_index: 0,
+        }],
+        &[
+            confidential_v2::ConfidentialTransferOutputV2 {
+                amount: 4,
+                rho: [0x31; 32],
+                owner_tag: recipient_owner_tag,
+            },
+            confidential_v2::ConfidentialTransferOutputV2 {
+                amount: 3,
+                rho: [0x32; 32],
+                owner_tag: change_owner_tag,
+            },
+        ],
+        root,
+        &vk_record.circuit_id,
+        &vk_box,
+    )
+    .expect("confidential transfer proof");
+    let mut attachment = ProofAttachment::new_ref(
+        HALO2_BACKEND.into(),
+        proof.proof,
+        VerifyingKeyId::new(HALO2_BACKEND, TRANSFER_VK_NAME),
     );
-    let outputs = vec![[9u8; 32], [3u8; 32]];
-    let nullifiers = vec![[1u8; 32], [2u8; 32]];
+    attachment.vk_commitment = Some(vk_record.commitment);
+    let outputs = proof.output_commitments.clone();
+    let nullifiers = proof.nullifiers.clone();
     let instruction = InstructionBox::from(zk::ZkTransfer::new(
         asset_def_id.clone(),
         nullifiers.clone(),
         outputs.clone(),
         attachment.clone(),
-        None,
+        Some(root),
     ));
-    let chain_id = ChainId::from("confidential_chain");
+    let chain_id = ChainId::from(TEST_CHAIN_ID);
     let tx = TransactionBuilder::new(chain_id, account_id.clone())
         .with_instructions([instruction])
         .sign(keypair.private_key());
@@ -198,7 +350,7 @@ fn transfer_emits_confidential_event() {
     let mut expected_outputs = outputs.clone();
     expected_outputs.sort_unstable();
     assert_eq!(transfer_event.outputs, expected_outputs);
-    assert!(transfer_event.root_before.is_none());
+    assert_eq!(transfer_event.root_before, Some(root));
 
     let latest_root = state
         .view()
@@ -224,47 +376,46 @@ fn transfer_emits_confidential_event() {
 fn unshield_emits_confidential_event() {
     let (state, account_id, keypair, asset_def_id) = setup_state();
 
-    // Seed a shielded note via direct execution so the ledger has commitments.
-    {
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-        let shield = zk::Shield::new(
-            asset_def_id.clone(),
-            account_id.clone(),
-            500u128,
-            [0x11; 32],
-            ConfidentialEncryptedPayload::default(),
-        );
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &account_id, shield.into())
-            .expect("seed shield");
-        stx.apply();
-        block.commit().expect("commit seed shield block");
-    }
-
-    let nk = [7u8; 32];
-    let rho = [11u8; 32];
-    let chain = "iroha-test-chain";
-    let nullifier = derive_test_nullifier(&nk, &rho, &asset_def_id.to_string(), chain);
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-    let proof_box = fixture.proof_box("halo2/ipa");
-    let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        proof_box,
-        iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
+    let note = note_fixture(&asset_def_id, 0x77, 0x88, b"unshield-input", 250);
+    let root = seed_shielded_note(&state, &account_id, &asset_def_id, note, 2);
+    let vk_record = unshield_vk_record();
+    let vk_box = vk_record
+        .key
+        .clone()
+        .expect("inline unshield verifying key");
+    let proof = confidential_v2::build_confidential_unshield_proof_v2(
+        &ChainId::from(TEST_CHAIN_ID),
+        &asset_def_id.to_string(),
+        &note.spend_key,
+        &[note.commitment],
+        &[confidential_v2::ConfidentialUnshieldInputV2 {
+            amount: note.amount,
+            rho: note.rho,
+            diversifier: note.diversifier,
+            leaf_index: 0,
+        }],
+        note.amount,
+        root,
+        &vk_record.circuit_id,
+        &vk_box,
+    )
+    .expect("confidential unshield proof");
+    let nullifier = proof.nullifiers[0];
+    let mut attachment = ProofAttachment::new_ref(
+        HALO2_BACKEND.into(),
+        proof.proof,
+        VerifyingKeyId::new(HALO2_BACKEND, UNSHIELD_VK_NAME),
     );
+    attachment.vk_commitment = Some(vk_record.commitment);
     let instruction = InstructionBox::from(zk::Unshield::new(
         asset_def_id.clone(),
         account_id.clone(),
-        250u128,
-        vec![nullifier],
+        note.amount,
+        proof.nullifiers.clone(),
         attachment.clone(),
-        None,
+        Some(root),
     ));
-    let chain_id = ChainId::from("confidential_chain");
+    let chain_id = ChainId::from(TEST_CHAIN_ID);
     let tx = TransactionBuilder::new(chain_id, account_id.clone())
         .with_instructions([instruction])
         .sign(keypair.private_key());
@@ -288,9 +439,9 @@ fn unshield_emits_confidential_event() {
 
     assert_eq!(unshield_event.asset_definition, asset_def_id);
     assert_eq!(unshield_event.account, account_id);
-    assert_eq!(unshield_event.public_amount, 250u128);
+    assert_eq!(unshield_event.public_amount, note.amount);
     assert_eq!(unshield_event.nullifiers, vec![nullifier]);
-    assert!(unshield_event.root_hint.is_none());
+    assert_eq!(unshield_event.root_hint, Some(root));
     assert_eq!(
         unshield_event.proof_hash,
         iroha_core::zk::hash_proof(&attachment.proof)
@@ -314,13 +465,4 @@ where
         },
         _ => None,
     })
-}
-
-fn derive_test_nullifier(
-    nk: &[u8; 32],
-    rho: &[u8; 32],
-    asset_id: &str,
-    chain_id: &str,
-) -> [u8; 32] {
-    confidential::derive_nullifier(nk, rho, asset_id.as_bytes(), chain_id.as_bytes())
 }

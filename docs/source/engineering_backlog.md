@@ -1904,9 +1904,10 @@ redistributable schemas, and official trust/revocation bundles.
   secp256k1 key generation and surfaces entropy/keygen failures as `StartTorii`,
   while `iroha_swarm` peer/genesis key generation, seeded network material, and
   BLS PoP proving now return `Error::KeyGeneration` through `Swarm::new`
-  instead of panicking; the CLI offline fallback config and governance council
-  VRF candidate-account derivation now use `KeyPair::try_from_seed`, surfacing
-  config/candidate derivation errors through existing `Result` paths, and
+  instead of panicking; the CLI offline fallback config now uses a nonzero
+  domain seed with `KeyPair::try_from_seed`, governance council VRF
+  candidate-account derivation also uses `KeyPair::try_from_seed`, and both
+  surface config/candidate derivation errors through existing `Result` paths;
   Izanami workload, Nexus gas, NPoS validator, post-topology, and network-builder
   key material now uses `KeyPair::try_random` / `KeyPair::try_from_seed` with
   explicit `Result` propagation instead of panic-only `KeyPair` wrappers;
@@ -1933,8 +1934,12 @@ redistributable schemas, and official trust/revocation bundles.
   display and prefixed compatibility formatting now return a non-secret
   invalid-private-key marker instead of unwrapping checked private-key
   formatting; `Signature::try_new` now routes SM2 through checked private-key
-  rebuild/signing helpers and SM2 key-pair/public-key derivation now routes
-  through `try_public_key`, SM2 concrete public-key prefixed formatting now
+  rebuild/signing helpers, the high-level Rust SDK `Sm2KeyPair` exposes
+  `try_sign` while keeping `sign` as a compatibility wrapper, Connect/Norito C
+  SM2 detached signing returns `ERR_SM2_SIGN` from the checked signer on backend
+  failures, and SM2 key-pair/public-key derivation now routes through
+  `try_public_key`, SM2
+  concrete public-key prefixed formatting now
   returns a deterministic invalid-key marker instead of unwrapping checked
   multihash encoding, SM2 private-key byte export now exposes
   `PrivateKey::try_to_bytes` and routes exposed private-key multihash formatting
@@ -4670,10 +4675,12 @@ redistributable schemas, and official trust/revocation bundles.
     isolation and hardening the RBC sidecar cooldown fixture.
   - The later 2026-05-03 restarted-peer commit-QC recovery fix is covered by
     focused block-body response regressions and the confidential downtime plus
-    timeout localnet scenario, now passing without the restarted-peer catch-up
-    waiver warning. Rerun the full `cargo test -p iroha_core --lib` corridor
-    after the next main-loop edit or before opening the next full workspace
-    sweep.
+    timeout localnet scenario, which now enforces restarted-peer non-empty
+    height catch-up before final balance checks.
+  - The 2026-06-12 `cargo test -p iroha_core --lib -- --nocapture` rerun is
+    green (`4647` passed, `0` failed, `262` ignored; finished in `11832.87s`)
+    after the retained-summary DA/RBC evidence hardening and default-feature
+    STARK-only fixture gating.
   - For the next consensus change, rerun the same broad window so the collector
     fallback, exact-frontier repair, cached-target, vote replay, roster
     recovery, future-new-view, and model-backed reschedule fixtures continue to
@@ -4695,9 +4702,9 @@ redistributable schemas, and official trust/revocation bundles.
     into an arbitrary pipeline unless a new bug requires more than the active
     plus one-future-slot abstraction.
 - Reopen the wider validation corridor after the recent focused `iroha_core`, `iroha_torii`, and `iroha_data_model` test additions.
-  - `cargo test -p iroha_core --lib` is green as of 2026-05-03; rerun it only
-    after the next core/consensus change or before opening the full workspace
-    corridor.
+  - `cargo test -p iroha_core --lib -- --nocapture` is green as of 2026-06-12
+    (`4647` passed, `262` ignored); rerun it only after the next core/consensus
+    change or before opening the full workspace corridor.
   - `cargo test -p iroha_torii` is green as of 2026-05-03 after fixing the
     macOS attachment-sanitizer subprocess wrapper path; rerun it after the next
     Torii/API change or before opening the full workspace corridor.
@@ -5112,7 +5119,12 @@ redistributable schemas, and official trust/revocation bundles.
     signs its locally built transaction through `TransactionBuilder::try_sign`
     and returns a contextual command error on backend signing failure; Torii
     proof-record signed-query construction now uses
-    `QueryRequestWithAuthority::try_sign`, and default streaming key material in
+    `QueryRequestWithAuthority::try_sign`, data-model `BlockBuilder` now
+    exposes `try_build_with_signature` so incremental block assembly can
+    propagate `SignatureOf::try_from_hash` failures while keeping the
+    compatibility block-signing helper, `SignedBlock` genesis assembly now
+    exposes checked variants that return signing failures and reject empty
+    transaction sets without panic-only construction, and default streaming key material in
     test/restored state construction uses nonzero deterministic seed material
     under the all-zero seed admission policy; client query request body assembly
     now uses `QueryRequestWithAuthority::try_sign` and returns a contextual
@@ -5122,7 +5134,44 @@ redistributable schemas, and official trust/revocation bundles.
     while retaining compatibility wrappers for existing infallible callers;
     split and IVM contract deploy CLI helpers now use
     `TransactionBuilder::try_sign` for deploy-envelope transaction construction
-    and return contextual command errors on backend signing failure. The
+    and return contextual command errors on backend signing failure; CLI ZK
+    verifier-key register/update helpers now use the same checked transaction
+    signer before submitting governed verifier-key registry updates; governance
+    CLI IVM execution VK registration and SCCP IVM-proved transaction
+    construction now use a checked `TransactionBuilder::try_sign` helper and
+    return contextual command errors on backend signing failure; Torii
+    governance signable-payload drafts now use deterministic checked dummy
+    signing instead of throwaway random compatibility signing before returning
+    client-signable payload bytes; Torii ISO 20022 pacs.008 and pacs.009
+    transfer transaction construction now uses checked
+    `TransactionBuilder::try_sign` before returning signed bridge
+    transactions; CLI Soracloud release-governance, provenance,
+    uploaded-model, generated-HF, and mutation-auth header signatures now share
+    a checked `Signature::try_new` helper and return contextual command errors
+    on backend signing failure; Torii Offline Notes V1 issue submission and V2
+    issue/redeem submission now use
+    issuer-local checked `TransactionBuilder::try_sign` helpers before queue
+    submission; the shared Connect Norito bridge transaction encoder now uses
+    `TransactionBuilder::try_sign` and propagates a bridge transaction-signing
+    error through transfer, shield/unshield, ZK, governance, mint/burn,
+    multisig, identifier, and Offline Notes FFI exports; Torii App API
+    transaction submissions now share a checked
+    `TransactionBuilder::try_sign` helper across confidential relay, account
+    onboarding/faucet/alias, space-directory manifests, contract
+    call/deploy/alias, verifier-key registry, SoraFS, and subscription
+    endpoints; JavaScript host transaction assembly and re-sign N-API paths now
+    use a checked `TransactionBuilder::try_sign` helper and return N-API errors
+    on backend signing failure; SoraFS CLI fallback manifest `/transaction`
+    submissions now use a checked `TransactionBuilder::try_sign` helper and
+    return contextual command errors before HTTP dispatch on backend signing
+    failure; genesis batch transaction construction now uses
+    `TransactionBuilder::try_sign` and returns contextual genesis-build errors
+    on backend signing failure; Sumeragi recovery-heartbeat transaction
+    construction now uses a fallible `TransactionBuilder::try_sign` helper and
+    returns contextual consensus errors on backend signing failure;
+    transaction-gossip frame-size probing now uses `TransactionBuilder::try_sign`
+    and falls back to a zero payload cap with a warning on dummy probe signing
+    failure. The
     ML-DSA key
     path now rejects inconsistent imported secrets and exposes
     `KeyPair::try_from_seed`, `KeyPair::try_random`,

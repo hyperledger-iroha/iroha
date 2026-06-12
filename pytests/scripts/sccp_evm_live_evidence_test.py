@@ -613,8 +613,36 @@ def test_evm_json_rpc_http_error_detail_is_bounded():
         assert message == "JSON-RPC eth_chainId failed with HTTP 502"
         assert "secret-token" not in message
         assert len(message) < 100
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("oversized EVM JSON-RPC error body was accepted")
+
+
+def test_evm_json_rpc_redacts_invalid_json_parser_details():
+    module = load_live_module()
+
+    def invalid_json_opener(_request, timeout):
+        del timeout
+        return RawResponse(b'{"secret-token invalid EVM JSON-RPC payload": ')
+
+    try:
+        module._json_rpc(
+            "https://ethereum.example",
+            "eth_chainId",
+            [],
+            opener=invalid_json_opener,
+            timeout=3.0,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "JSON-RPC eth_chainId returned invalid JSON"
+        assert "secret-token" not in message
+        assert "JSON-RPC payload" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret-bearing invalid EVM JSON-RPC payload was accepted")
 
 
 def test_evm_json_rpc_rejects_duplicate_json_keys():
@@ -682,6 +710,8 @@ def test_evm_json_rpc_redacts_transport_and_error_response_details():
         message = str(exc)
         assert message == "JSON-RPC eth_chainId request failed"
         assert "secret-token" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("secret-bearing EVM transport error was accepted")
 
@@ -936,6 +966,60 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
         + '"'
         in rendered
     )
+
+
+def test_live_evm_full_toml_redacts_generated_parser_exception_cause(monkeypatch):
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
+    route_canary_hash = route_canary_hash_for(
+        module,
+        fake,
+        route_allowlist_hash,
+    )
+    summary = module.collect_live_evidence(
+        SimpleNamespace(
+            rpc_url="https://ethereum.example",
+            domain=module.evidence.SCCP_DOMAIN_ETH,
+            bridge_address=fake.bridge,
+            expected_network_id=fake.network_id,
+            expected_bridge_code_hash=fake.bridge_code_hash,
+            expected_destination_binding_hash=fake.destination_binding,
+            route_allowlist_hash=route_allowlist_hash,
+            route_canary_evidence_hash=route_canary_hash,
+            route_canary_transaction_hash=fake.route_canary_transaction_hash,
+            route_canary_log_index=fake.route_canary_log_index,
+            source_verifier_material_hash=bytes.fromhex(
+                EVM_SOURCE_VERIFIER_MATERIAL_HASH
+            ),
+            source_adapter_engine_deployment_hash=bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            block_tag="finalized",
+            timeout=1.0,
+        ),
+        opener=fake.opener,
+    )
+
+    class SecretFailingParser:
+        def parse_args(self, _argv):
+            raise SystemExit(
+                "secret-token generated EVM destination TOML parser detail"
+            )
+
+    monkeypatch.setattr(module.evidence, "build_parser", SecretFailingParser)
+
+    try:
+        module.render_offline_toml(summary)
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "generated EVM destination TOML arguments are invalid"
+        assert "secret-token" not in message
+        assert "parser detail" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("EVM full TOML leaked generated parser failure details")
 
 
 def test_live_evm_eth_toml_requires_finalized_block_tag():
@@ -1812,6 +1896,47 @@ def test_live_evm_expected_rpc_chain_id_parser_requires_canonical_decimal():
             assert "canonical lowercase 0x hex" in str(exc)
         else:
             raise AssertionError(f"noncanonical EVM exact hex {value!r} was accepted")
+
+
+def test_live_evm_default_domain_lookups_redact_lookup_causes(monkeypatch):
+    module = load_live_module()
+
+    class SecretChainIds:
+        def __getitem__(self, _domain):
+            raise KeyError("secret-token-evm-live-chain-id")
+
+    monkeypatch.setattr(module, "EXPECTED_RPC_CHAIN_IDS", SecretChainIds())
+
+    try:
+        module._default_rpc_chain_id_for_domain(99)
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "domain must have a canonical RPC chain id"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret EVM live chain-id lookup was accepted")
+
+    def fail_mainnet_network_id(_domain):
+        raise ValueError("secret-token-evm-live-network-id")
+
+    monkeypatch.setattr(
+        module.evidence,
+        "evm_mainnet_network_id_for_domain",
+        fail_mainnet_network_id,
+    )
+
+    try:
+        module._default_network_id_for_domain(99)
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "domain must have a canonical EVM mainnet network id"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret EVM live network-id lookup was accepted")
 
 
 def test_live_evm_block_tag_parser_rejects_unstable_or_noncanonical_tags():

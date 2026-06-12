@@ -203,8 +203,8 @@ def parse_block_tag(value: str) -> str:
 def _default_rpc_chain_id_for_domain(domain: int) -> int:
     try:
         return EXPECTED_RPC_CHAIN_IDS[domain]
-    except KeyError as exc:
-        raise argparse.ArgumentTypeError("domain must have a canonical RPC chain id") from exc
+    except KeyError:
+        raise argparse.ArgumentTypeError("domain must have a canonical RPC chain id") from None
 
 
 def default_block_tag_for_domain(domain: int) -> str:
@@ -221,7 +221,7 @@ def _default_network_id_for_domain(domain: int) -> bytes:
     except Exception as exc:
         raise argparse.ArgumentTypeError(
             "domain must have a canonical EVM mainnet network id"
-        ) from exc
+        ) from None
 
 
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -254,9 +254,11 @@ def _json_rpc(
         with opener(request, timeout=timeout) as response:
             raw = response.read(EVM_JSON_RPC_MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"JSON-RPC {method} failed with HTTP {exc.code}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"JSON-RPC {method} request failed") from exc
+        raise RuntimeError(
+            f"JSON-RPC {method} failed with HTTP {exc.code}"
+        ) from None
+    except urllib.error.URLError:
+        raise RuntimeError(f"JSON-RPC {method} request failed") from None
     if len(raw) > EVM_JSON_RPC_MAX_RESPONSE_BYTES:
         raise RuntimeError(
             f"JSON-RPC {method} response exceeds "
@@ -267,14 +269,14 @@ def _json_rpc(
             raw.decode("utf-8"),
             object_pairs_hook=_json_object_without_duplicate_keys,
         )
-    except UnicodeDecodeError as exc:
-        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
+    except UnicodeDecodeError:
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
+    except json.JSONDecodeError:
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     except ValueError as exc:
         if str(exc) == "JSON-RPC returned duplicate JSON keys":
             raise RuntimeError(f"JSON-RPC {method} returned duplicate JSON keys") from None
-        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     if not isinstance(decoded, dict):
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     if decoded.get("jsonrpc") != "2.0":
@@ -1870,8 +1872,10 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
     parser = evidence.build_parser()
     try:
         args = parser.parse_args([*_offline_args(summary), "--toml"])
-    except SystemExit as exc:
-        raise RuntimeError("generated EVM destination TOML arguments are invalid") from exc
+    except SystemExit:
+        raise RuntimeError(
+            "generated EVM destination TOML arguments are invalid"
+        ) from None
     evidence.apply_runtime_bytecode_hash(args)
     destination_binding_hash = evidence._destination_binding_hash_from_args(args)
     rendered = evidence.render_toml(args, destination_binding_hash)

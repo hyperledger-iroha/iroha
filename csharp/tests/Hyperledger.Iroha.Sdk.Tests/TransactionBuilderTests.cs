@@ -13,6 +13,9 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 public sealed class TransactionBuilderTests
 {
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
+    private const string FixtureChainId = "00000042";
+    private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
+    private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
     [Theory]
     [InlineData("swift_transfer_asset_basic", 761, 1379, "670e42748e47402ec28a9090befd3bcbe0a2e82ef362405a0c237daac3111d65")]
@@ -59,6 +62,189 @@ public sealed class TransactionBuilderTests
         Assert.Equal(expectedHashHex, envelope.TransactionHashHex);
 
         AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
+    }
+
+    [Theory]
+    [InlineData("", FixtureAccountId)]
+    [InlineData(" 00000042", FixtureAccountId)]
+    [InlineData("00000042 ", FixtureAccountId)]
+    [InlineData("0000\u000042", FixtureAccountId)]
+    [InlineData(FixtureChainId, "")]
+    [InlineData(FixtureChainId, " ")]
+    [InlineData(FixtureChainId, " sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    [InlineData(FixtureChainId, "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53 ")]
+    [InlineData(FixtureChainId, "sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    public void ConstructorRejectsNonExactRequiredFields(string chainId, string authorityAccountId)
+    {
+        Assert.Throws<ArgumentException>(() => new TransactionBuilder(chainId, authorityAccountId));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(" memo")]
+    [InlineData("memo ")]
+    [InlineData("\u00A0memo")]
+    [InlineData("memo\u00A0")]
+    [InlineData("me\u0000mo")]
+    public void SetMetadataRejectsNonExactKeys(string key)
+    {
+        var builder = NewTransactionBuilder();
+
+        Assert.Throws<ArgumentException>(() =>
+        {
+            builder.SetMetadata(key, JsonValue.Create("value"));
+        });
+        Assert.Empty(builder.Metadata);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" memo")]
+    [InlineData("memo ")]
+    [InlineData("me\u001Fmo")]
+    public void ReplaceMetadataRejectsNonExactKeysWithoutMutatingExistingMetadata(string key)
+    {
+        var builder = NewTransactionBuilder().SetMetadata("existing", JsonValue.Create("keep"));
+        var replacement = new Dictionary<string, JsonNode?>
+        {
+            ["next"] = JsonValue.Create("value"),
+            [key] = JsonValue.Create("bad"),
+        };
+
+        Assert.Throws<ArgumentException>(() =>
+        {
+            builder.ReplaceMetadata(replacement);
+        });
+        var existing = Assert.Single(builder.Metadata);
+        Assert.Equal("existing", existing.Key);
+        Assert.Equal("\"keep\"", existing.Value!.ToJsonString());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" 00000042")]
+    [InlineData("00000042 ")]
+    [InlineData("0000\u000042")]
+    public void TransactionEncodingContextRejectsNonExactChainIds(string chainId)
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        Assert.Throws<ArgumentException>(() => context.EncodeChainId(chainId));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(" alice")]
+    [InlineData("alice ")]
+    [InlineData("\u00A0alice")]
+    [InlineData("ali\u0000ce")]
+    public void TransactionEncodingContextRejectsNonExactNames(string name)
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        Assert.Throws<ArgumentException>(() => context.EncodeName(name));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" 1")]
+    [InlineData("1 ")]
+    [InlineData("\u00A01")]
+    [InlineData("1\u0000")]
+    public void TransactionEncodingContextRejectsNonExactNumerics(string numeric)
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        Assert.Throws<ArgumentException>(() => context.EncodeNumeric(numeric));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" dragon$wonderland")]
+    [InlineData("dragon$wonderland ")]
+    [InlineData("dragon$ wonderland")]
+    [InlineData("dra\u0000gon$wonderland")]
+    public void TransactionEncodingContextRejectsNonExactNftIds(string nftId)
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        Assert.Throws<ArgumentException>(() => context.EncodeNftId(nftId));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" 62Fk4FPcMuLvW5QjDGNF2a4jAmjM")]
+    [InlineData("62Fk4FPcMuLvW5QjDGNF2a4jAmjM ")]
+    [InlineData("62Fk4FPcMuLvW5QjDGNF2a4jAmjM\u0000")]
+    public void TransactionEncodingContextRejectsNonExactAssetDefinitionIds(string assetDefinitionId)
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        Assert.Throws<ArgumentException>(() => context.EncodeAssetDefinitionId(assetDefinitionId));
+    }
+
+    [Fact]
+    public void TransactionEncodingContextEncodesNullOptionalStringAsNone()
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        Assert.Equal(new byte[] { 0 }, context.EncodeOptionalString(null));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" sort_key")]
+    [InlineData("sort_key ")]
+    [InlineData("sort\u0000key")]
+    public void TransactionEncodingContextRejectsNonExactOptionalStrings(string value)
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        Assert.Throws<ArgumentException>(() => context.EncodeOptionalString(value));
+    }
+
+    [Theory]
+    [InlineData(" sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    [InlineData("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53 ")]
+    [InlineData("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    public void TransactionEncodingContextRejectsNonExactAccountIds(string accountId)
+    {
+        Assert.Throws<ArgumentException>(() => new TransactionEncodingContext(accountId));
+
+        var context = new TransactionEncodingContext(FixtureAccountId);
+        Assert.Throws<ArgumentException>(() => context.EncodeAccountId(accountId));
+    }
+
+    [Theory]
+    [MemberData(nameof(NonExactInstructionFieldCases))]
+    public void BuildSignedRejectsNonExactInstructionFields(
+        string label,
+        Action<TransactionBuilder> configure)
+    {
+        var builder = NewTransactionBuilder()
+            .SetCreationTimeMilliseconds(1736000000000)
+            .SetTimeToLiveMilliseconds(3500)
+            .SetNonce(17);
+        configure(builder);
+
+        var exception = Assert.ThrowsAny<ArgumentException>(() =>
+        {
+            builder.BuildSigned(Convert.FromHexString(FixtureSeedHex));
+        });
+        Assert.NotEmpty(label);
+        Assert.NotEmpty(exception.Message);
+    }
+
+    [Fact]
+    public void EncodeInstructionBoxRejectsNonExactAuthority()
+    {
+        var instruction = TransactionInstruction.TransferDomain("wonderland", FixtureAccountId);
+
+        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(" " + FixtureAccountId));
+        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(FixtureAccountId + " "));
+        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"));
     }
 
     [Fact]
@@ -574,6 +760,94 @@ public sealed class TransactionBuilderTests
         var payloadHash = IrohaHash.Hash(envelope.PayloadBytes);
         var publicKey = Ed25519Signer.GetPublicKey(privateKeySeed);
         Assert.True(Ed25519Signer.Verify(payloadHash, signature, publicKey));
+    }
+
+    private static TransactionBuilder NewTransactionBuilder()
+    {
+        return new TransactionBuilder(FixtureChainId, FixtureAccountId);
+    }
+
+    public static IEnumerable<object[]> NonExactInstructionFieldCases()
+    {
+        yield return
+        [
+            "transfer asset definition",
+            (Action<TransactionBuilder>)(builder => builder.TransferAsset(
+                " " + FixtureAssetDefinitionId,
+                "1",
+                FixtureAccountId)),
+        ];
+        yield return
+        [
+            "transfer quantity",
+            (Action<TransactionBuilder>)(builder => builder.TransferAsset(
+                FixtureAssetDefinitionId,
+                "1 ",
+                FixtureAccountId)),
+        ];
+        yield return
+        [
+            "transfer destination",
+            (Action<TransactionBuilder>)(builder => builder.TransferAsset(
+                FixtureAssetDefinitionId,
+                "1",
+                FixtureAccountId + " ")),
+        ];
+        yield return
+        [
+            "domain id",
+            (Action<TransactionBuilder>)(builder => builder.TransferDomain(" wonderland", FixtureAccountId)),
+        ];
+        yield return
+        [
+            "asset-definition transfer id",
+            (Action<TransactionBuilder>)(builder => builder.TransferAssetDefinition(
+                FixtureAssetDefinitionId + " ",
+                FixtureAccountId)),
+        ];
+        yield return
+        [
+            "nft id",
+            (Action<TransactionBuilder>)(builder => builder.TransferNft("dragon$wonderland ", FixtureAccountId)),
+        ];
+        yield return
+        [
+            "asset metadata key",
+            (Action<TransactionBuilder>)(builder => builder.SetAssetKeyValue(
+                FixtureAssetDefinitionId,
+                FixtureAccountId,
+                " display_name",
+                JsonValue.Create("Treasury buffer"))),
+        ];
+        yield return
+        [
+            "domain metadata key",
+            (Action<TransactionBuilder>)(builder => builder.SetDomainKeyValue(
+                "wonderland",
+                "display_name ",
+                JsonValue.Create("Treasury buffer"))),
+        ];
+        yield return
+        [
+            "account metadata account",
+            (Action<TransactionBuilder>)(builder => builder.SetAccountKeyValue(
+                " " + FixtureAccountId,
+                "display_name",
+                JsonValue.Create("Treasury buffer"))),
+        ];
+        yield return
+        [
+            "trigger id",
+            (Action<TransactionBuilder>)(builder => builder.SetTriggerKeyValue(
+                " settlement_window",
+                "mode",
+                JsonValue.Create("strict"))),
+        ];
+        yield return
+        [
+            "execute trigger id",
+            (Action<TransactionBuilder>)(builder => builder.ExecuteTrigger("settlement_window ")),
+        ];
     }
 
     [Fact]

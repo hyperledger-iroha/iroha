@@ -128,8 +128,8 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
     return raw
@@ -153,8 +153,8 @@ def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must have an even hex length")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
     return raw
@@ -166,8 +166,8 @@ def parse_runtime_bytecode_file(value: str, *, label: str) -> bytes:
     path = Path(value).expanduser()
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from exc
+    except OSError:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     return parse_runtime_bytecode_hex("".join(text.split()), label=label)
 
 

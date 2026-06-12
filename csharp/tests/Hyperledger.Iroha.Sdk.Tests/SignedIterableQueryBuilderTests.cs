@@ -81,6 +81,42 @@ public sealed class SignedIterableQueryBuilderTests
             expectedQueryPayload: Array.Empty<byte>());
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(" sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    [InlineData("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53 ")]
+    [InlineData("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    public void ConstructorRejectsNonExactAuthority(string authorityAccountId)
+    {
+        Assert.Throws<ArgumentException>(() => new SignedIterableQueryBuilder(authorityAccountId));
+    }
+
+    [Fact]
+    public void QueryOperandSettersRejectNonExactValues()
+    {
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedIterableQueryBuilder(FixtureAccountId).FindAccountsWithAsset(" " + FixtureAssetDefinitionId);
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedIterableQueryBuilder(FixtureAccountId).FindPermissionsByAccountId(FixtureAccountId + " ");
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedIterableQueryBuilder(FixtureAccountId).FindRolesByAccountId("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53");
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedIterableQueryBuilder(FixtureAccountId).Continue(" cursor-1", 5);
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedIterableQueryBuilder(FixtureAccountId).SortByMetadata("rank ");
+        });
+    }
+
     [Fact]
     public void BuildSignedEncodesParameterizedIterableQueries()
     {

@@ -3724,13 +3724,14 @@ impl Actor {
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
         let time_source = iroha_primitives::time::TimeSource::new_system();
-        let signed = crate::tx::build_heartbeat_transaction_with_time_source(
+        let signed = crate::tx::try_build_heartbeat_transaction_with_time_source(
             self.state.chain_id_ref().clone(),
             &self.common_config.key_pair,
             &tx_limits,
             proposal_height,
             &time_source,
-        );
+        )
+        .map_err(|err| eyre!("failed to sign recovery heartbeat transaction: {err}"))?;
         let crypto = self.state.crypto();
         AcceptedTransaction::accept_with_time_source(
             signed,
@@ -5325,19 +5326,14 @@ impl Actor {
             for pending in self.pending.pending_blocks.values().filter(|pending| {
                 !pending.aborted && pending.height == height && pending.view == view_idx
             }) {
-                let payload_available = da_enabled
-                    && Self::payload_available_for_da(
-                        &self.subsystems.da_rbc.rbc.sessions,
-                        &self.subsystems.da_rbc.rbc.status_handle,
-                        pending,
-                    );
+                let payload_available = da_enabled && self.payload_available_for_da(pending);
                 if !da_enabled || payload_available {
                     continue;
                 }
                 missing_local_data = true;
                 let rbc_key = (pending.block.hash(), pending.height, pending.view);
                 let pending_entry = self.subsystems.da_rbc.rbc.pending.contains_key(&rbc_key);
-                let required_ready = self.rbc_deliver_quorum(&commit_topology);
+                let required_ready = Self::rbc_protocol_deliver_quorum(&commit_topology);
                 rbc_session_incomplete |= self
                     .subsystems
                     .da_rbc

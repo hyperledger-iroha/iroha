@@ -998,8 +998,8 @@ def _is_nonempty_string(value: Any) -> bool:
 def _decode_canonical_base64(value: str, *, label: str) -> bytes:
     try:
         raw = base64.b64decode(value, validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise ValueError(f"{label} must be base64") from exc
+    except (ValueError, binascii.Error):
+        raise ValueError(f"{label} must be base64") from None
     if base64.b64encode(raw).decode("ascii") != value:
         raise ValueError(f"{label} must be canonical base64")
     return raw
@@ -1130,9 +1130,9 @@ def _reject_unknown_fields(
     record: dict[str, Any],
     allowed_fields: frozenset[str],
 ) -> None:
-    for field in sorted(record):
+    for field in sorted(record, key=lambda item: str(item)):
         if field not in allowed_fields:
-            errors.append(f"unexpected field {field}")
+            errors.append(_unexpected_record_field_detail(field))
 
 
 def _reject_lane_foreign_fields(
@@ -1190,8 +1190,8 @@ def _load_toml(text: str, *, label: str) -> dict[str, Any]:
         return _load_toml_minimal(text, label=label)
     try:
         return tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:  # type: ignore[union-attr]
-        raise ValueError(f"{label}: invalid TOML") from exc
+    except tomllib.TOMLDecodeError:  # type: ignore[union-attr]
+        raise ValueError(f"{label}: invalid TOML") from None
 
 
 def _parse_minimal_toml_value(value: str, *, label: str, line_number: int) -> Any:
@@ -1201,13 +1201,13 @@ def _parse_minimal_toml_value(value: str, *, label: str, line_number: int) -> An
     if text.startswith('"'):
         try:
             return json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{label}:{line_number}: invalid string") from exc
+        except json.JSONDecodeError:
+            raise ValueError(f"{label}:{line_number}: invalid string") from None
     if text.startswith("["):
         try:
             parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{label}:{line_number}: invalid array") from exc
+        except json.JSONDecodeError:
+            raise ValueError(f"{label}:{line_number}: invalid array") from None
         if not isinstance(parsed, list) or not all(
             isinstance(item, str) for item in parsed
         ):
@@ -1224,6 +1224,85 @@ def _parse_minimal_toml_value(value: str, *, label: str, line_number: int) -> An
     ):
         raise ValueError(f"{label}:{line_number}: unsupported TOML value")
     return int(text, 10)
+
+
+MINIMAL_TOML_SAFE_KEY_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+)
+SENSITIVE_MINIMAL_TOML_KEY_MARKERS = (
+    "secret",
+    "token",
+    "private",
+    "password",
+    "passphrase",
+    "bearer",
+    "authorization",
+    "access-key",
+    "access_key",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "session",
+)
+
+
+def _minimal_toml_duplicate_key_detail(key: str) -> str:
+    lowered = key.lower()
+    if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
+        return "duplicate key with sensitive name"
+    if (
+        not key
+        or not key.isascii()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in key)
+        or any(ch not in MINIMAL_TOML_SAFE_KEY_CHARS for ch in key)
+    ):
+        return "duplicate key with malformed name"
+    return f"duplicate key {key}"
+
+
+def _toml_unsupported_section_detail(name: str) -> str:
+    lowered = name.lower()
+    if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
+        return "unsupported zk section with sensitive name"
+    if (
+        not name
+        or not name.isascii()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in name)
+        or any(ch not in MINIMAL_TOML_SAFE_KEY_CHARS for ch in name)
+    ):
+        return "unsupported zk section with malformed name"
+    return f"unsupported zk section {name}"
+
+
+def _evidence_unsupported_section_detail(name: str) -> str:
+    lowered = name.lower()
+    if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
+        return "unsupported evidence section with sensitive name"
+    if (
+        not name
+        or not name.isascii()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in name)
+        or any(ch not in MINIMAL_TOML_SAFE_KEY_CHARS for ch in name)
+    ):
+        return "unsupported evidence section with malformed name"
+    return f"unsupported evidence section {name}"
+
+
+def _unexpected_record_field_detail(field: object) -> str:
+    if not isinstance(field, str):
+        return "unexpected non-string field name"
+    lowered = field.lower()
+    if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
+        return "unexpected field with sensitive name"
+    if (
+        not field
+        or not field.isascii()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in field)
+        or any(ch not in MINIMAL_TOML_SAFE_KEY_CHARS for ch in field)
+    ):
+        return "unexpected field with malformed name"
+    return f"unexpected field {field}"
 
 
 def _is_canonical_decimal_text(value: object, *, positive: bool) -> bool:
@@ -1249,7 +1328,8 @@ def _load_toml_minimal(text: str, *, label: str) -> dict[str, Any]:
                 raise ValueError(f"{label}:{line_number}: expected [[zk.*]] section")
             name = section.removeprefix("zk.")
             if name not in SECTION_NAMES:
-                raise ValueError(f"{label}:{line_number}: unsupported zk section {name}")
+                detail = _toml_unsupported_section_detail(name)
+                raise ValueError(f"{label}:{line_number}: {detail}")
             current = {}
             document["zk"][name].append(current)
             continue
@@ -1260,7 +1340,8 @@ def _load_toml_minimal(text: str, *, label: str) -> dict[str, Any]:
         key, value = line.split("=", 1)
         key = key.strip()
         if key in current:
-            raise ValueError(f"{label}:{line_number}: duplicate key {key}")
+            detail = _minimal_toml_duplicate_key_detail(key)
+            raise ValueError(f"{label}:{line_number}: {detail}")
         current[key] = _parse_minimal_toml_value(
             value,
             label=label,
@@ -1272,8 +1353,8 @@ def _load_toml_minimal(text: str, *, label: str) -> dict[str, Any]:
 def _comment_toml_value(value: str, *, label: str, line_number: int) -> str:
     try:
         parsed = json.loads(value.strip())
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{label}:{line_number}: invalid metadata comment") from exc
+    except json.JSONDecodeError:
+        raise ValueError(f"{label}:{line_number}: invalid metadata comment") from None
     if not isinstance(parsed, str):
         raise ValueError(f"{label}:{line_number}: metadata comment must be a string")
     return parsed
@@ -1400,7 +1481,8 @@ def load_evidence_bundle(paths: list[Path]) -> dict[str, list[dict[str, Any]]]:
             raise ValueError(f"{label}: [zk] must be a TOML table")
         for section in sorted(zk):
             if section not in SECTION_NAMES:
-                raise ValueError(f"{label}: unsupported zk section {section}")
+                detail = _toml_unsupported_section_detail(section)
+                raise ValueError(f"{label}: {detail}")
         for section in SECTION_NAMES:
             records = zk.get(section, [])
             if records is None:
@@ -6491,7 +6573,7 @@ def _evidence_bundle_root_errors(records: Any) -> tuple[dict[str, Any], list[str
         if not isinstance(section, str):
             errors.append(f"evidence section name must be a string: {section!r}")
         elif section not in SECTION_NAMES:
-            errors.append(f"unsupported evidence section {section}")
+            errors.append(_evidence_unsupported_section_detail(section))
     return records, errors
 
 

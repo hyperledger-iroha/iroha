@@ -62,6 +62,68 @@ public sealed class SignedQueryBuilderTests
         AssertSignatureVerifies(envelope);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(" sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    [InlineData("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53 ")]
+    [InlineData("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    public void ConstructorRejectsNonExactAuthority(string authorityAccountId)
+    {
+        Assert.Throws<ArgumentException>(() => new SignedQueryBuilder(authorityAccountId));
+    }
+
+    [Fact]
+    public void QueryOperandSettersRejectNonExactRequiredValues()
+    {
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedQueryBuilder(FixtureAccountId).FindAliasesByAccountId(" " + FixtureAccountId);
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedQueryBuilder(FixtureAccountId).FindAssetById(" " + FixtureAssetDefinitionId, FixtureAccountId);
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedQueryBuilder(FixtureAccountId).FindDomainEndorsements("banka ");
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedQueryBuilder(FixtureAccountId).FindDomainCommittee("committee-7\u0000");
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedQueryBuilder(FixtureAccountId).FindDaPinIntentByAlias(" manifest-root");
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedQueryBuilder(FixtureAccountId).FindDaPinIntentByTicket(FixtureStorageTicket + " ");
+        });
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(" paynet")]
+    [InlineData("paynet ")]
+    [InlineData("pay\u0000net")]
+    public void FindAliasesByAccountIdRejectsNonExactOptionalFilters(string filter)
+    {
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedQueryBuilder(FixtureAccountId).FindAliasesByAccountId(
+                FixtureAccountId,
+                dataspace: filter);
+        });
+        Assert.Throws<ArgumentException>(() =>
+        {
+            new SignedQueryBuilder(FixtureAccountId).FindAliasesByAccountId(
+                FixtureAccountId,
+                domain: filter);
+        });
+    }
+
     [Fact]
     public void BuildSignedEncodesFindAliasesByAccountIdWithFilters()
     {
@@ -237,6 +299,9 @@ public sealed class SignedQueryBuilderTests
             "abc",
             new string('z', 64),
             new string('a', 63),
+            " " + new string('a', 64),
+            new string('a', 64) + " ",
+            new string('a', 32) + "\u0000" + new string('a', 31),
             "0x0x" + new string('a', 64),
         })
         {

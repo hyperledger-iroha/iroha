@@ -2113,6 +2113,81 @@ version = 1
         module.tomllib = original_tomllib
 
 
+def test_all_lanes_minimal_toml_parser_redacts_sensitive_duplicate_keys():
+    module = load_evidence_module()
+    original_tomllib = module.tomllib
+    module.tomllib = None
+    try:
+        cases = (
+            (
+                (
+                    "[[zk.sccp_destination_rollouts]]\n"
+                    'secret-token-duplicate-key = "first"\n'
+                    'secret-token-duplicate-key = "second"\n'
+                ),
+                "operator evidence:3: duplicate key with sensitive name",
+                ("secret-token-duplicate-key", "first", "second"),
+            ),
+            (
+                (
+                    "[[zk.sccp_destination_rollouts]]\n"
+                    'route|operator-duplicate-key = "first"\n'
+                    'route|operator-duplicate-key = "second"\n'
+                ),
+                "operator evidence:3: duplicate key with malformed name",
+                ("route|operator-duplicate-key", "first", "second"),
+            ),
+        )
+        for toml_text, expected, redacted_tokens in cases:
+            try:
+                module._load_toml(toml_text, label="operator evidence")
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected
+                for token in redacted_tokens:
+                    assert token not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "minimal TOML loader accepted unsafe duplicate key"
+                )
+    finally:
+        module.tomllib = original_tomllib
+
+
+def test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names():
+    module = load_evidence_module()
+    original_tomllib = module.tomllib
+    module.tomllib = None
+    try:
+        cases = (
+            (
+                "[[zk.secret-token-section]]\nversion = 1\n",
+                "operator evidence:1: unsupported zk section with sensitive name",
+                "secret-token-section",
+            ),
+            (
+                "[[zk.route|operator-section]]\nversion = 1\n",
+                "operator evidence:1: unsupported zk section with malformed name",
+                "route|operator-section",
+            ),
+        )
+        for toml_text, expected, redacted_token in cases:
+            try:
+                module._load_toml(toml_text, label="operator evidence")
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected
+                assert redacted_token not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "minimal TOML loader accepted unsafe unsupported section"
+                )
+    finally:
+        module.tomllib = original_tomllib
+
+
 def test_all_lanes_loader_redacts_toml_parser_failures():
     module = load_evidence_module()
 
@@ -2134,10 +2209,66 @@ def test_all_lanes_loader_redacts_toml_parser_failures():
             assert rendered == "operator evidence: invalid TOML"
             assert "secret-token" not in rendered
             assert "parser detail" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
         else:
             raise AssertionError("all-lanes TOML loader accepted parser failure")
     finally:
         module.tomllib = original_tomllib
+
+
+def test_all_lanes_minimal_toml_parser_redacts_json_exception_causes():
+    module = load_evidence_module()
+    original_tomllib = module.tomllib
+    module.tomllib = None
+    try:
+        cases = (
+            (
+                '[[zk.sccp_route_allowlists]]\nroute_id = "secret-token string',
+                "operator evidence:2: invalid string",
+                "secret-token string",
+            ),
+            (
+                '[[zk.sccp_route_allowlists]]\nallowed_domains = ["secret-token array",',
+                "operator evidence:2: invalid array",
+                "secret-token array",
+            ),
+        )
+        for toml_text, expected, secret in cases:
+            try:
+                module._load_toml(toml_text, label="operator evidence")
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected
+                assert "secret-token" not in rendered
+                assert secret not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError("minimal TOML loader accepted invalid JSON value")
+    finally:
+        module.tomllib = original_tomllib
+
+
+def test_all_lanes_metadata_comment_redacts_json_exception_causes():
+    module = load_evidence_module()
+
+    try:
+        module._route_allowlist_comment_metadata(
+            '# sccp_route_canary_status = "secret-token comment\n'
+            "[[zk.sccp_route_allowlists]]\n"
+            "version = 1\n",
+            label="operator evidence",
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "operator evidence:1: invalid metadata comment"
+        assert "secret-token" not in rendered
+        assert "secret-token comment" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("all-lanes metadata comment accepted invalid JSON")
 
 
 def test_all_lanes_cli_redacts_top_level_exception_details(
@@ -2503,6 +2634,34 @@ def test_all_lanes_evidence_rejects_unknown_record_fields():
     assert "domain 4 (ton): unexpected field unexpected_route_hash" in blockers
 
 
+def test_all_lanes_evidence_redacts_unsafe_unknown_record_fields():
+    module = load_evidence_module()
+    cases = (
+        (
+            "secret-token-material-field",
+            "unexpected field with sensitive name",
+        ),
+        (
+            "route|operator-material-field",
+            "unexpected field with malformed name",
+        ),
+        (
+            7,
+            "unexpected non-string field name",
+        ),
+    )
+    for field, expected in cases:
+        records = complete_bundle(module)
+        records["sccp_source_verifier_materials"][0][field] = "operator-controlled"
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False
+        assert expected in blockers
+        assert str(field) not in blockers
+
+
 def test_all_lanes_evidence_rejects_reused_source_material_role_hashes():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -2720,6 +2879,62 @@ def test_all_lanes_evidence_rejects_unknown_sections(tmp_path, capsys):
     else:
         assert False, "unknown TOML sections must abort the CLI preflight"
     assert "unsupported zk section sccp_shadow_rollouts" in capsys.readouterr().err
+
+
+def test_all_lanes_evidence_redacts_unsafe_direct_section_names():
+    module = load_evidence_module()
+
+    cases = (
+        (
+            "secret-token-direct-section",
+            "unsupported evidence section with sensitive name",
+        ),
+        (
+            "route|operator-direct-section",
+            "unsupported evidence section with malformed name",
+        ),
+    )
+    for section, expected in cases:
+        records = complete_bundle(module)
+        records[section] = [{"domain": 1}]
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False
+        assert expected in blockers
+        assert section not in blockers
+
+
+def test_all_lanes_loader_redacts_unsupported_zk_section_names(tmp_path):
+    module = load_evidence_module()
+    if module.tomllib is None:
+        return
+
+    cases = (
+        (
+            '[[zk."secret-token-zk-section"]]\ndomain = 1\n',
+            "unsupported zk section with sensitive name",
+            "secret-token-zk-section",
+        ),
+        (
+            '[[zk."route|operator-zk-section"]]\ndomain = 1\n',
+            "unsupported zk section with malformed name",
+            "route|operator-zk-section",
+        ),
+    )
+    for index, (toml_text, expected_detail, redacted_token) in enumerate(cases):
+        path = tmp_path / f"unsafe-section-{index}.toml"
+        path.write_text(toml_text, encoding="utf-8")
+
+        try:
+            module.load_evidence_bundle([path])
+        except ValueError as exc:
+            rendered = str(exc)
+            assert expected_detail in rendered
+            assert redacted_token not in rendered
+        else:
+            raise AssertionError("unsafe unsupported TOML section was accepted")
 
 
 def test_all_lanes_evidence_rejects_malformed_direct_sections():
@@ -5244,6 +5459,25 @@ def test_all_lanes_redacts_solana_live_base64_comment_failures():
     assert "secret-token" not in blockers
     assert "must be base64" not in blockers
     assert "canonical base64" not in blockers
+
+
+def test_all_lanes_base64_helper_redacts_parser_causes():
+    module = load_evidence_module()
+
+    try:
+        module._decode_canonical_base64(
+            "secret-token all-lanes base64",
+            label="Solana Program account data base64 metadata",
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "Solana Program account data base64 metadata must be base64"
+        assert "secret-token" not in rendered
+        assert "all-lanes base64" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("all-lanes base64 helper accepted invalid base64")
 
 
 def test_all_lanes_rejects_solana_programdata_invalid_executable_base64():

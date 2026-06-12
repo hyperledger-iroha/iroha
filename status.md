@@ -1,6 +1,1365 @@
 # Status
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
+
+## 2026-06-13 SCCP direct evidence unknown-field redaction
+
+- Hardened direct all-lanes record validation so unknown record fields with
+  secret-like, malformed, or non-string names become fixed category blockers
+  instead of echoing operator-controlled keys. Safe public unknown fields such
+  as `unexpected_material_hash` still render literally for debugging.
+- Added adversarial direct-validator coverage for
+  `secret-token-material-field`, `route|operator-material-field`, and a
+  non-string field key, and pinned the classifier plus sentinels in the
+  all-lanes evidence-root source inventory used by readiness and strict bundle
+  verification.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_evidence_rejects_unknown_record_fields pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_evidence_redacts_unsafe_unknown_record_fields -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `git diff --check -- scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py status.md roadmap.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py status.md roadmap.md`
+    (no matches)
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-13 SCCP direct evidence-root section-name redaction
+
+- Hardened direct all-lanes evidence-root validation so unsupported section
+  names with secret-like or malformed text become fixed category blockers
+  instead of echoing operator-controlled keys. Safe public unknown sections
+  such as `sccp_shadow_rollouts` still render their literal names for debugging.
+- Added adversarial direct-validator coverage for
+  `secret-token-direct-section` and `route|operator-direct-section`, and pinned
+  the classifier plus sentinels in the all-lanes evidence-root source inventory
+  used by readiness and strict bundle verification.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_evidence_rejects_unknown_sections pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_evidence_redacts_unsafe_direct_section_names pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_evidence_rejects_malformed_root_inputs pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_evidence_rejects_non_string_section_keys -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `git diff --check -- scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py status.md roadmap.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py status.md roadmap.md`
+    (no matches)
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-13 SCCP parsed TOML section-name redaction
+
+- Extended SCCP all-lanes TOML name redaction from the fallback parser into the
+  normal parsed-document loader: unsupported `zk` section names with
+  secret-like or malformed quoted TOML keys now report fixed categories instead
+  of echoing operator-controlled section text, while safe public unknown
+  sections such as `sccp_shadow_rollouts` remain debuggable.
+- Added direct adversarial `load_evidence_bundle` coverage for
+  `secret-token-zk-section` and `route|operator-zk-section`, and pinned the
+  full-loader regression in the SCCP source-material role-validation source
+  inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_evidence_rejects_unknown_sections pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_loader_redacts_unsupported_zk_section_names pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `git diff --check -- scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py status.md roadmap.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py status.md roadmap.md`
+    (no matches)
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 SCCP fallback TOML name redaction
+
+- Hardened the SCCP all-lanes fallback TOML parser so duplicate keys and
+  unsupported `[[zk.*]]` sections with secret-like or malformed names are
+  reported with fixed categories instead of echoing operator-controlled text,
+  while canonical public duplicate keys such as `version` remain debuggable.
+- Added adversarial parser coverage for `secret-token-duplicate-key` and
+  `route|operator-duplicate-key` plus `secret-token-section` and
+  `route|operator-section`, and pinned the parser helpers plus regression
+  sentinels in the SCCP source-material role-validation source inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py::test_minimal_toml_loader_rejects_duplicate_keys pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_minimal_toml_parser_redacts_sensitive_duplicate_keys pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `git diff --check -- scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py status.md`
+    (no matches)
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 Data-model genesis checked signing
+
+- Added `SignedBlock::try_genesis(...)` and
+  `SignedBlock::try_genesis_with_da_proof_policies(...)` so genesis block
+  assembly can return `SignatureOf::try_from_hash` failures and reject empty
+  transaction sets without relying on panic-only construction.
+- Kept `SignedBlock::genesis(...)` and
+  `SignedBlock::genesis_with_da_proof_policies(...)` as compatibility wrappers
+  and added a regression proving checked genesis signing matches the wrapper,
+  verifies, and rejects empty transaction sets cleanly.
+- Validation: pending.
+
+## 2026-06-12 SCCP source-profile role-pollution coverage
+
+- Added adversarial Rust coverage for SCCP source verifier material and
+  source-adapter deployment descriptors that rejects cross-profile role
+  pollution: EVM/TRON lanes cannot carry Solana/TON source-state or
+  full-light-client audit roles, and Solana/TON lanes cannot carry EVM/TRON
+  source-bridge roles.
+- The regression also checks that polluted deployment descriptors stay rejected
+  by the source-gate helpers instead of only failing in later production
+  admission.
+- Validation:
+  - `CARGO_TARGET_DIR=target/codex-sccp-role-pollution CARGO_INCREMENTAL=0 cargo test -p iroha_sccp source_material_and_deployments_reject_cross_profile_role_pollution --lib -- --nocapture`
+    (`1` passed, `257` filtered out)
+  - `CARGO_TARGET_DIR=target/codex-sccp-role-pollution CARGO_INCREMENTAL=0 cargo test -p iroha_sccp source_verifier_material --lib -- --nocapture`
+    (`6` passed, `252` filtered out)
+  - `cargo fmt --package iroha_sccp`
+
+## 2026-06-12 SCCP release-bundle duplicate-JSON redaction
+
+- Hardened native EVM prover bundle JSON duplicate-key handling so secret-like
+  duplicate key names are classified as sensitive key names instead of being
+  echoed, and the wrapper suppresses the lower-level duplicate-key exception
+  cause.
+- Added a direct adversarial `secret-token` regression for sensitive duplicate
+  native-prover manifest keys and pinned it in the release public scalar-text
+  inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_native_evm_duplicate_json_redacts_sensitive_key_causes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_native_evm_prover_malformed_duplicate_json_keys -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'native_evm_prover and (duplicate_json or malformed_native_evm_prover_json or duplicate)'`
+    (`11` passed, `605` deselected)
+  - `python3 -m compileall -q scripts/sccp_ton_destination_evidence.py scripts/sccp_tron_source_bridge_evidence.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_ton_destination_evidence_test.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP TRON source-bridge parser-cause redaction
+
+- Hardened TRON source-bridge fixed hex, runtime bytecode hex/file, and
+  hex-form address parsers so invalid operator inputs keep fixed diagnostics
+  while suppressing lower-level parser and filesystem exception causes.
+- Added adversarial `secret-token` regressions for direct TRON source-bridge
+  parser inputs and pinned those markers in the release public scalar-text
+  inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_source_bridge_evidence_test.py::test_tron_source_bridge_direct_parsers_redact_parser_causes -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_source_bridge_evidence_test.py -q -k 'parser or hex or runtime_bytecode or address or redacts or cli'`
+    (`45` passed, `38` deselected)
+  - `python3 -m compileall -q scripts/sccp_tron_source_bridge_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 Data-model block builder checked signing
+
+- Added `BlockBuilder::try_build_with_signature(...)` so incremental
+  data-model block assembly can propagate `SignatureOf::try_from_hash` failures
+  instead of requiring callers to use the infallible compatibility helper.
+- Kept `BlockBuilder::build_with_signature(...)` as the compatibility wrapper
+  and added a regression proving the checked path matches it and verifies the
+  produced block signature.
+- Cleaned a data-model block clippy `let_and_return` blocker encountered during
+  focused package validation.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model try_build_with_signature_matches_compatibility_signature_and_verifies --lib -- --nocapture`
+    (`1` passed, `1537` filtered out)
+  - `cargo test -j 1 -p iroha_data_model build_with_signature_keeps_da_policy_hash_consistent --lib -- --nocapture`
+    (`1` passed, `1537` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-12 SCCP TON destination parser-cause redaction
+
+- Hardened TON destination fixed hex, code BoC hex/base64/file, account-status,
+  last-transaction-LT, and TOML account-metadata parser wrappers so invalid
+  operator or copied release values keep fixed diagnostics while suppressing
+  lower-level parser and filesystem exception causes.
+- Added adversarial `secret-token` regressions for direct TON destination
+  parser inputs and copied account metadata, then pinned those markers in the
+  release public scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_ton_destination_evidence_test.py::test_ton_destination_direct_parsers_redact_parser_causes pytests/scripts/sccp_ton_destination_evidence_test.py::test_ton_destination_account_metadata_redacts_parser_causes pytests/scripts/sccp_ton_destination_evidence_test.py::test_ton_toml_code_boc_base64_reparse_redacts_parser_detail -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_ton_destination_evidence_test.py -q -k 'parser or hex or boc or file or account_status or last_transaction_lt or redacts or cli'`
+    (`15` passed, `3` deselected)
+  - `python3 -m compileall -q scripts/sccp_ton_destination_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_ton_destination_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP TON live/source-state parser-cause redaction
+
+- Hardened TON live API-key file reads and accountStates account-address parser
+  wrappers, plus the TON source-state fixed hex parser, so invalid operator or
+  remote values keep fixed diagnostics while suppressing lower-level parser and
+  filesystem exception causes.
+- Added adversarial `secret-token` regressions for unreadable TON API-key
+  files, accountStates account-address parser failures, and source-state hex
+  input, then pinned the markers in the release public scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_ton_live_evidence_test.py::test_live_ton_evidence_redacts_account_address_parser_failures pytests/scripts/sccp_ton_live_evidence_test.py::test_live_ton_evidence_uses_runtime_only_api_key pytests/scripts/sccp_ton_source_state_evidence_test.py::test_ton_source_hex_parser_redacts_parser_causes -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_ton_live_evidence_test.py pytests/scripts/sccp_ton_source_state_evidence_test.py -q -k 'api_key or parser or hex or account_address or account_states or redacts or cli'`
+    (`25` passed, `27` deselected)
+  - `python3 -m compileall -q scripts/sccp_ton_live_evidence.py scripts/sccp_ton_source_state_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_ton_live_evidence_test.py pytests/scripts/sccp_ton_source_state_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP EVM live domain-lookup parser-cause redaction
+
+- Hardened EVM live default RPC chain-id and mainnet network-id lookup wrappers
+  so unsupported domain inputs keep fixed diagnostics while suppressing
+  lower-level lookup exception causes.
+- Added adversarial `secret-token` regressions for EVM live chain-id and
+  network-id lookup failures, then pinned the markers in the release public
+  scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_live_evidence_test.py::test_live_evm_default_domain_lookups_redact_lookup_causes -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_evm_live_evidence_test.py -q -k 'default_domain or expected_rpc_chain_id or block_tag or json_rpc or redacts or parser or cli'`
+    (`16` passed, `18` deselected)
+  - `python3 -m compileall -q scripts/sccp_evm_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP ETH/BSC source-bridge parser-cause redaction
+
+- Hardened Ethereum and BSC source-bridge fixed hex, runtime bytecode, and
+  runtime-file parser wrappers so invalid source material keeps fixed
+  diagnostics while suppressing lower-level parser and filesystem exception
+  causes; BSC network selector failures now suppress lookup causes too.
+- Added adversarial `secret-token` regressions for ETH and BSC fixed hex,
+  runtime hex, runtime-file paths, and the BSC network selector, then pinned
+  the markers in the release public scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_eth_source_bridge_evidence_test.py::test_eth_source_bridge_direct_parsers_redact_parser_causes pytests/scripts/sccp_bsc_source_bridge_evidence_test.py::test_bsc_source_bridge_direct_parsers_redact_parser_causes pytests/scripts/sccp_bsc_source_bridge_evidence_test.py::test_bsc_source_numeric_parsers_require_canonical_ascii_decimal -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py -q -k 'parser or runtime_bytecode or redacts or cli or network'`
+    (`25` passed, `28` deselected)
+  - `python3 -m compileall -q scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 Connect bridge SM2 checked detached signing
+
+- Routed `connect_norito_sm2_sign(...)` through `Sm2PrivateKey::try_sign` so
+  SM2 detached-signing backend failures return a dedicated FFI error instead of
+  relying on the infallible compatibility signer.
+- Added a direct FFI roundtrip regression proving the checked SM2 signature
+  verifies and tampered signature bytes fail cleanly.
+- Validation:
+  - `cargo test -j 1 -p connect_norito_bridge sm2_sign_ffi_uses_checked_signing_and_verifies --lib -- --nocapture`
+    (`1` passed, `215` filtered out)
+  - `cargo test -j 1 -p connect_norito_bridge sm2_keypair_from_seed_private_output_derives_public_key --lib -- --nocapture`
+    (`1` passed, `215` filtered out)
+  - `cargo test -j 1 -p connect_norito_bridge sm2_public_key_prefixed_ffi_uses_checked_formatter --lib -- --nocapture`
+    (`1` passed, `215` filtered out)
+  - `cargo fmt --package connect_norito_bridge -- --check`
+  - `cargo clippy -j 1 -p connect_norito_bridge --lib --no-deps -- -D warnings`
+    (exited `0`; emitted a dependency warning from `iroha_core`)
+
+## 2026-06-12 SCCP EVM destination parser-cause redaction
+
+- Hardened EVM destination fixed hex, runtime bytecode, runtime-file, domain,
+  BSC-network, destination binding, and route-canary target-domain wrappers so
+  invalid operator inputs keep fixed diagnostics while suppressing lower-level
+  parser and lookup exception causes.
+- Added adversarial `secret-token` regressions for invalid EVM destination
+  domain, BSC-network, fixed hex, runtime hex, and runtime-file inputs, plus
+  nested domain-wrapper cause assertions, then pinned the markers in the
+  release public scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_destination_evidence_test.py::test_evm_destination_domain_parsers_redact_parser_causes pytests/scripts/sccp_evm_destination_evidence_test.py::test_evm_destination_direct_parsers_redact_parser_causes pytests/scripts/sccp_evm_destination_evidence_test.py::test_evm_destination_domain_wrappers_redact_nested_causes -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_evm_destination_evidence_test.py -q -k 'parser or domain or runtime_bytecode or redacts or cli or route_canary_transaction_hash_binds_target_domain'`
+    (`15` passed, `6` deselected)
+  - `python3 -m compileall -q scripts/sccp_evm_destination_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP EVM source-live hex parser-cause redaction
+
+- Hardened the EVM source-live fixed-width hex parser so invalid live-summary
+  and deployment metadata inputs keep fixed diagnostics while suppressing
+  lower-level hex decoder exception causes.
+- Added an adversarial `secret-token` regression for invalid EVM source-live
+  hex input and pinned the script/test markers in the release public
+  scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_source_live_evidence_test.py::test_evm_source_live_numeric_parsers_require_canonical_decimal -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_evm_source_live_evidence_test.py -q -k 'numeric or parser or json_rpc or redacts or cli'`
+    (`12` passed, `20` deselected)
+  - `python3 -m compileall -q scripts/sccp_evm_source_live_evidence.py scripts/sccp_evm_receipt_proof_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP EVM receipt hex parser-cause redaction
+
+- Hardened the EVM receipt-proof fixed-width hex parser so invalid transaction
+  and address hex inputs keep fixed diagnostics while suppressing lower-level
+  hex decoder exception causes.
+- Added an adversarial `secret-token` regression for invalid receipt-proof hex
+  input and pinned the script/test markers in the release public scalar-text
+  inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_receipt_proof_evidence_test.py::test_receipt_hex_parser_redacts_parser_causes -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_evm_receipt_proof_evidence_test.py -q -k 'hex or parser or json_rpc or redacts or cli'`
+    (`7` passed, `21` deselected)
+  - `python3 -m compileall -q scripts/sccp_evm_receipt_proof_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP Solana source-state parser-cause redaction
+
+- Hardened the Solana source-state fixed-width hex parser so invalid source
+  verifier material inputs keep fixed diagnostics while suppressing lower-level
+  hex decoder exception causes.
+- Added an adversarial `secret-token` regression for invalid Solana source-state
+  hex input and pinned the script/test markers in the release public
+  scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_solana_source_state_evidence_test.py::test_solana_source_hex_parser_redacts_parser_causes -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_solana_source_state_evidence_test.py -q -k 'parser or hex or domain or cli'`
+    (`16` passed, `9` deselected)
+  - `python3 -m compileall -q scripts/sccp_solana_source_state_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_solana_source_state_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 Rust SDK SM2 checked signing wrapper
+
+- Added `Sm2KeyPair::try_sign(...)` to the high-level Rust SDK SM2 wrapper,
+  delegating to the lower-level fallible `Sm2PrivateKey::try_sign` path so SM2
+  signing-key rebuild failures can propagate as `CryptoError::Signing`.
+- Kept `Sm2KeyPair::sign(...)` as the compatibility wrapper and added a
+  regression proving `try_sign` matches it and verifies.
+- Validation:
+  - `cargo test -j 1 -p iroha try_sign_matches_compatibility_sign_and_verifies --lib -- --nocapture`
+    (`1` passed, `385` filtered out)
+  - `cargo test -j 1 -p iroha generate_with_distid_uses_checked_os_rng --lib -- --nocapture`
+    (`1` passed, `385` filtered out)
+  - `cargo fmt --package iroha -- --check`
+  - `cargo clippy -j 1 -p iroha --lib --no-deps -- -D warnings`
+
+## 2026-06-12 SCCP Solana destination parser-cause redaction
+
+- Hardened Solana destination hex, base64, and program-file parser wrappers so
+  invalid verifier code/program inputs keep fixed diagnostics while suppressing
+  lower-level parser and filesystem exception causes.
+- Added adversarial `secret-token` regressions for fixed hex, program hex,
+  base64, and unreadable program-file paths, then pinned the script and test
+  markers in the release public scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_solana_destination_evidence_test.py::test_solana_destination_hex_parsers_redact_parser_causes pytests/scripts/sccp_solana_destination_evidence_test.py::test_solana_destination_base64_parser_redacts_parser_causes pytests/scripts/sccp_solana_destination_evidence_test.py::test_solana_destination_file_parser_redacts_file_read_causes -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_solana_destination_evidence_test.py -q -k 'parser or base64 or hex or file or toml'`
+    (`10` passed, `6` deselected)
+  - `python3 -m compileall -q scripts/sccp_solana_destination_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_solana_destination_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 Sumeragi first-delivery complete continuation aggregate
+
+- Added
+  `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteContinuation` to
+  the Sumeragi formal model and wired it into the fast, deep, and TLC-fast
+  configs. The theorem composes the first-delivery commit-evidence branch
+  chain into one continuation contract: `RbcDeliverGood` either installs
+  certified committed finality with exact commit witnesses, or hands off to the
+  named delivered-pending complete wait state with commit witnesses absent and
+  the progress/timer surface exposed.
+- Updated the Sumeragi formal README and roadmap proof inventory for the new
+  delivery-entry complete continuation aggregate obligation.
+- Validation: pending.
+
+## 2026-06-12 SCCP TON live parser-cause redaction
+
+- Hardened TON live hash and code BoC parser wrappers so invalid base64/code
+  metadata failures keep fixed diagnostics while suppressing lower-level parser
+  exception causes.
+- Added an adversarial `secret-token` regression for invalid TON hash base64
+  input and extended the code BoC parser regression to assert suppressed causes,
+  then pinned the script and test markers in source-material and public
+  scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_ton_live_evidence_test.py::test_live_ton_evidence_redacts_code_boc_parser_failures pytests/scripts/sccp_ton_live_evidence_test.py::test_live_ton_hash_decoder_redacts_base64_parser_causes pytests/scripts/sccp_ton_live_evidence_test.py::test_live_ton_evidence_rejects_malformed_remote_hash_text -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_ton_live_evidence_test.py -q -k 'code_boc or hash_decoder or account_states or parser or toml'`
+    (`13` passed, `13` deselected)
+  - `python3 -m compileall -q scripts/sccp_ton_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_ton_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 JavaScript host transaction checked signing
+
+- Routed the JavaScript host transaction assembly and re-sign N-API paths
+  through a shared checked `TransactionBuilder::try_sign` helper so backend
+  signing failures return N-API errors instead of relying on the infallible
+  compatibility signer.
+- Added a helper-level signature verification regression and extended the
+  instruction JSON transaction-builder regression to verify the assembled
+  transaction signature.
+- Cleaned up clippy blockers in the same file by narrowing a privacy evidence
+  bool-struct allowance and removing redundant empty privacy match arms.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-js-host-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_js_host sign_js_transaction_checked_signing_verifies --lib -- --nocapture`
+    (`1` passed, `161` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-js-host-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_js_host build_transaction_from_instructions_json_roundtrip --lib -- --nocapture`
+    (`1` passed, `161` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-js-host-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_js_host --lib --no-deps -- -D warnings`
+
+## 2026-06-12 SoraFS CLI fallback transaction checked signing
+
+- Routed the SoraFS manifest-submit fallback `/transaction` path through a
+  checked `TransactionBuilder::try_sign` helper so backend signing failures
+  return contextual CLI errors before the fallback transaction is posted.
+- Added a helper-level regression that builds the real `RegisterPinManifest`
+  fallback instruction and verifies the resulting transaction signature.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-cli-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_orchestrator --bin sorafs_cli manifest_submit_fallback_transaction_checked_signing_verifies -- --nocapture`
+    (`1` passed, `23` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-cli-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p sorafs_orchestrator --bin sorafs_cli --no-deps -- -D warnings`
+
+## 2026-06-12 Genesis transaction checked signing
+
+- Routed genesis batch transaction construction through
+  `TransactionBuilder::try_sign` so backend signing failures propagate as
+  contextual genesis-build errors instead of relying on the infallible
+  compatibility signer.
+- Added a genesis builder regression that signs multiple genesis batches and
+  verifies every emitted external transaction signature.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-genesis-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_genesis build_and_sign_checked_genesis_transaction_signatures_verify --lib -- --nocapture`
+    (`1` passed, `78` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-genesis-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_genesis --lib --no-deps -- -D warnings`
+
+## 2026-06-12 Sumeragi heartbeat checked signing
+
+- Added a fallible Sumeragi heartbeat transaction builder backed by
+  `TransactionBuilder::try_sign` and routed recovery-heartbeat proposal
+  construction through it so signing failures return contextual consensus errors.
+- Gated the old infallible heartbeat helper to tests and added a regression that
+  the fallible builder emits a heartbeat transaction with a verifiable signature.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-heartbeat-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core try_build_heartbeat_transaction_checked_signing_verifies --lib -- --nocapture`
+    (`1` passed, `4948` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-heartbeat-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-12 Transaction gossip probe checked signing
+
+- Routed the transaction-gossip frame-size probe through
+  `TransactionBuilder::try_sign`, returning a zero payload cap with a warning if
+  dummy probe signing ever fails instead of relying on the infallible signer.
+- Extended the deterministic probe-key regression to build and verify the dummy
+  probe transaction through checked signing.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-heartbeat-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core tx_gossip_frame_probe_keypair_uses_checked_ed25519_derivation --lib -- --nocapture`
+    (`1` passed, `4948` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-heartbeat-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-12 SCCP all-lanes base64 parser-cause redaction
+
+- Hardened the all-lanes canonical base64 helper so invalid base64 parser
+  failures keep fixed diagnostics while suppressing lower-level decoder
+  exception causes.
+- Added an adversarial `secret-token` regression for invalid all-lanes base64
+  metadata and pinned the helper/test markers in both the source-material role
+  and public scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_base64_helper_redacts_parser_causes pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_redacts_solana_live_base64_comment_failures pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_redacts_solana_route_canary_base64_comment_failures -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k 'base64 or parser or metadata_comment or source_record_hash or source_gate or source_validator'`
+    (`33` passed, `126` deselected)
+  - `python3 -m compileall -q scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP Solana live base64 parser-cause redaction
+
+- Hardened Solana live local base64 parsing so account-data and live-metadata
+  decode failures keep fixed diagnostics while suppressing lower-level parser
+  exception causes.
+- Added adversarial `secret-token` regressions for invalid Solana account-data
+  and ProgramData metadata base64 payloads, then pinned the script and test
+  markers in the public scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_solana_live_evidence_test.py::test_live_solana_account_data_redacts_base64_parser_causes pytests/scripts/sccp_solana_live_evidence_test.py::test_live_solana_metadata_base64_redacts_parser_causes pytests/scripts/sccp_solana_live_evidence_test.py::test_live_solana_evidence_redacts_imported_parser_failures -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_solana_live_evidence_test.py -q -k 'base64 or parser or json_rpc or toml'`
+    (`12` passed, `15` deselected)
+  - `python3 -m compileall -q scripts/sccp_solana_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP EVM receipt JSON-RPC parser redaction
+
+- Hardened EVM receipt-proof JSON-RPC collection so HTTP, transport,
+  Unicode/JSON decode, and duplicate-key parser failures keep fixed
+  method-scoped diagnostics while suppressing lower-level exception causes.
+- Added an adversarial invalid-JSON regression with a `secret-token` payload and
+  pinned the script and test markers in both the public scalar-text inventory
+  and the Ethereum receipt RPC duplicate-JSON source guard.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_receipt_proof_evidence_test.py::test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys pytests/scripts/sccp_evm_receipt_proof_evidence_test.py::test_collect_receipt_proof_rejects_duplicate_json_receipt_fields pytests/scripts/sccp_evm_receipt_proof_evidence_test.py::test_receipt_json_rpc_redacts_invalid_json_parser_details pytests/scripts/sccp_evm_receipt_proof_evidence_test.py::test_receipt_json_rpc_redacts_transport_and_error_response_details -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_receipt_rpc_duplicate_json_tests pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_receipt_rpc_duplicate_json_tests -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_evm_receipt_proof_evidence_test.py -q -k 'json_rpc or duplicate_json or receipt_proof or cli'`
+    (`27` passed)
+  - `python3 -m compileall -q scripts/sccp_evm_receipt_proof_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP all-lanes loader parser-cause redaction
+
+- Hardened all-lanes evidence loading so TOML parser failures, minimal-loader
+  JSON string/array decode failures, and metadata-comment JSON decode failures
+  keep fixed diagnostics while suppressing lower-level parser exception causes.
+- Added adversarial `secret-token` regressions for minimal TOML string/array
+  values and metadata comments, then pinned the script and test markers in the
+  source-material role inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_loader_redacts_toml_parser_failures pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_minimal_toml_parser_redacts_json_exception_causes pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_metadata_comment_redacts_json_exception_causes -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k 'toml_parser or metadata_comment or source_record_hash or source_gate or source_validator'`
+    (`22` passed, `136` deselected)
+  - `python3 -m compileall -q scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP TON live accountStates parser redaction
+
+- Hardened TON live accountStates collection so HTTP, transport, Unicode
+  decode, JSON decode, duplicate-key, and invalid JSON parser failures keep
+  fixed accountStates diagnostics while suppressing lower-level exception
+  causes.
+- Added an adversarial invalid-JSON regression with a `secret-token` payload and
+  pinned the fixed source diagnostic plus adversarial markers in the
+  source-material role and public scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_ton_live_evidence_test.py::test_live_ton_http_error_detail_is_bounded pytests/scripts/sccp_ton_live_evidence_test.py::test_live_ton_account_states_redacts_invalid_json_parser_details pytests/scripts/sccp_ton_live_evidence_test.py::test_live_ton_account_states_redacts_transport_and_error_response_details -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_ton_live_evidence_test.py -q -k 'account_states or toml or parser'`
+    (`9` passed, `16` deselected)
+  - `python3 -m compileall -q scripts/sccp_ton_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_ton_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP Solana live JSON-RPC parser redaction
+
+- Hardened Solana live JSON-RPC collection so HTTP, transport, Unicode decode,
+  JSON decode, and invalid JSON parser failures keep fixed method-scoped
+  diagnostics while suppressing lower-level exception causes.
+- Added an adversarial invalid-JSON regression with a `secret-token` payload and
+  pinned the fixed source diagnostic plus adversarial markers in the public
+  scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_solana_live_evidence_test.py::test_solana_json_rpc_http_error_detail_is_bounded pytests/scripts/sccp_solana_live_evidence_test.py::test_solana_json_rpc_redacts_invalid_json_parser_details pytests/scripts/sccp_solana_live_evidence_test.py::test_solana_json_rpc_redacts_transport_and_error_response_details -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_solana_live_evidence_test.py -q -k 'json_rpc or toml or parser'`
+    (`9` passed, `16` deselected)
+  - `python3 -m compileall -q scripts/sccp_solana_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP EVM source-live JSON-RPC parser redaction
+
+- Hardened EVM source-live JSON-RPC collection so HTTP, transport, Unicode
+  decode, JSON decode, and invalid JSON parser failures keep fixed
+  method-scoped diagnostics while suppressing lower-level exception causes.
+- Added an adversarial invalid-JSON regression with a `secret-token` payload and
+  pinned the fixed source diagnostic plus adversarial markers in the EVM
+  source-live production and public scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_source_live_evidence_test.py::test_evm_source_json_rpc_http_error_detail_is_bounded pytests/scripts/sccp_evm_source_live_evidence_test.py::test_evm_source_json_rpc_redacts_invalid_json_parser_details pytests/scripts/sccp_evm_source_live_evidence_test.py::test_evm_source_json_rpc_redacts_transport_and_error_response_details -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_evm_source_live_production pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_evm_source_live_production_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_evm_source_live_evidence_test.py -q -k 'json_rpc or receipt or toml or parser'`
+    (`25` passed, `7` deselected)
+  - `python3 -m compileall -q scripts/sccp_evm_source_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 Torii App API transaction checked signing
+
+- Added a shared Torii App API `TransactionBuilder::try_sign` helper that maps
+  backend signing failures into contextual internal query errors instead of
+  using the infallible compatibility signer in production request handlers.
+- Routed confidential relay, account onboarding/faucet/alias, space-directory
+  manifest, contract call/deploy/alias, verifier-key, SoraFS, and subscription
+  transaction submissions through the checked helper.
+- Added a focused helper regression proving the returned App API transaction
+  signature verifies after checked signing.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-routing-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii app_api_transaction_checked_signing_verifies --lib -- --nocapture`
+    (`1` passed, `2373` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-routing-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --no-deps -- -D warnings`
+
+## 2026-06-12 SCCP EVM live JSON-RPC parser redaction
+
+- Hardened EVM live JSON-RPC collection so HTTP, transport, Unicode decode,
+  JSON decode, and invalid JSON parser failures keep fixed method-scoped
+  diagnostics while suppressing lower-level exception causes.
+- Added an adversarial invalid-JSON regression with a `secret-token` payload and
+  pinned the fixed source diagnostic plus adversarial markers in the EVM live
+  destination production and public scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_live_evidence_test.py::test_evm_json_rpc_http_error_detail_is_bounded pytests/scripts/sccp_evm_live_evidence_test.py::test_evm_json_rpc_redacts_invalid_json_parser_details pytests/scripts/sccp_evm_live_evidence_test.py::test_evm_json_rpc_redacts_transport_and_error_response_details -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_evm_live_destination_production pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_evm_live_destination_production_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_evm_live_evidence_test.py -q -k 'json_rpc or full_toml or toml or parser'`
+    (`15` passed, `18` deselected)
+  - `python3 -m compileall -q scripts/sccp_evm_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 CLI Soracloud checked payload signing
+
+- Routed CLI Soracloud release-governance, deployment-bundle,
+  app-infra/service material, rollback/rollout, generated-HF,
+  model/training, uploaded-model, and mutation-auth header signatures through
+  a shared `Signature::try_new` helper so backend signing failures propagate as
+  contextual command errors instead of unwinding during local request
+  construction.
+- Added a helper-level signature verification regression while preserving the
+  existing request-level provenance and mutation-auth header coverage.
+- Replaced the offline CLI fallback config's all-zero deterministic Ed25519
+  seed with a fixed nonzero domain seed and pinned that the fallback key can
+  produce a checked signature.
+- Validation:
+  - `cargo test -j 1 -p iroha_cli sign_soracloud_payload_returns_verifiable_signature -- --nocapture`
+    (`1` passed per `iroha`, `iroha3`, and `iroha_cli` test harness)
+  - `cargo test -j 1 -p iroha_cli uses_verifiable_signature -- --nocapture`
+    (`24` passed per `iroha`, `iroha3`, and `iroha_cli` test harness)
+  - `cargo test -j 1 -p iroha_cli fallback_config_derives_checked_signing_key -- --nocapture`
+    (`1` passed per `iroha`, `iroha3`, and `iroha_cli` test harness)
+  - `cargo test -j 1 -p iroha_cli build_soracloud_mutation_auth_headers_adds_single_sig_freshness_headers -- --nocapture`
+    (`1` passed per `iroha`, `iroha3`, and `iroha_cli` test harness)
+  - `cargo fmt --package iroha_cli`
+  - `cargo fmt --package iroha_cli -- --check`
+  - `cargo clippy -j 1 -p iroha_cli --no-deps -- -D warnings`
+
+## 2026-06-12 SCCP EVM source-live receipt parser redaction
+
+- Hardened EVM source-live deployment receipt parsing so wrapped
+  `transactionHash`, `contractAddress`, and `blockHash` failures keep fixed
+  public diagnostics while suppressing lower-level parser exception details.
+- Added adversarial coverage that injects `secret-token` parser failures for
+  each receipt field and pinned the source/test markers in the EVM source-live
+  production and public scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_source_live_evidence_test.py::test_evm_source_live_redacts_receipt_field_parser_exception_causes -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_evm_source_live_production pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_evm_source_live_production_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_evm_source_live_evidence_test.py -q -k 'receipt or toml or parser'`
+    (`19` passed, `12` deselected)
+  - `python3 -m compileall -q scripts/sccp_evm_source_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 Torii ISO 20022 checked transaction signing
+
+- Routed Torii ISO 20022 pacs.008 and pacs.009 transfer transaction
+  construction through a shared checked `TransactionBuilder::try_sign` helper
+  instead of the infallible compatibility signer, preserving the existing
+  `MsgError` boundary on backend signing failure.
+- Extended the focused pacs.008 and pacs.009 transaction extraction
+  regressions to verify the returned transactions' signatures after
+  construction.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-iso-try-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii build_transaction_extracts_transfer --lib -- --nocapture`
+    (`1` passed, `2373` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-iso-try-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii build_pacs009_transaction_extracts_transfer --lib -- --nocapture`
+    (`1` passed, `2373` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-iso-try-sign CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_torii`
+  - `cargo fmt --package iroha_torii -- --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs status.md roadmap.md docs/source/engineering_backlog.md Cargo.lock`
+  - `git diff --exit-code -- Cargo.lock`
+
+## 2026-06-12 SCCP EVM live generated-TOML parser redaction
+
+- Hardened EVM live destination TOML rendering so generated destination
+  evidence parser failures keep the fixed
+  `generated EVM destination TOML arguments are invalid` diagnostic while
+  suppressing the underlying `SystemExit` parser detail.
+- Added an adversarial regression with a `secret-token` generated parser
+  failure and pinned the fixed source diagnostic plus adversarial test markers
+  in the EVM live destination production and public scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_live_evidence_test.py::test_live_evm_full_toml_redacts_generated_parser_exception_cause -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_evm_live_destination_production pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_evm_live_destination_production_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_evm_live_evidence_test.py -q -k 'full_toml or toml or parser'`
+    (`9` passed, `23` deselected)
+  - `python3 -m compileall -q scripts/sccp_evm_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP TRON generated full-TOML parser redaction
+
+- Hardened TRON live full-TOML rendering so generated offline argument parser
+  failures keep the fixed `generated offline full TOML arguments are invalid`
+  diagnostic while suppressing the underlying `SystemExit` parser detail.
+- Added an adversarial regression with a `secret-token` generated parser
+  failure and pinned the new source/test markers in the release scalar-text and
+  source-material role inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_redacts_generated_full_toml_parser_exception_cause -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'full_toml or toml'`
+    (`13` passed, `169` deselected)
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP TRON constant-call failure redaction
+
+- Hardened TRON live constant-call failures so RPC `result.message` contents
+  are no longer appended to public diagnostics. Failed constant calls now report
+  only the fixed selector-scoped category message.
+- Added an adversarial regression with a `secret-token` constant-call failure
+  message and pinned the new source/test markers in the release scalar-text and
+  source-material role inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_redacts_constant_failure_result_message pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_redacts_constant_result_word_parser_cause -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'constant'`
+    (`5` passed, `176` deselected)
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP TRON runtime parser-cause redaction
+
+- Hardened TRON live runtime argument parsing so non-ASCII API keys,
+  unreadable TRON API-key files, unreadable witness-schedule payload files,
+  unreadable witness-schedule transition JSON files, invalid transition JSON,
+  and duplicate transition keys keep fixed messages while suppressing
+  lower-level exception causes.
+- Added adversarial coverage with `secret-token` file paths and transition JSON
+  payloads, and pinned the new source/test markers in the release scalar-text
+  and source-material role inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_tron_runtime_input_parsers_redact_exception_causes pytests/scripts/sccp_tron_live_evidence_test.py::test_tron_api_key_is_runtime_exact_ascii pytests/scripts/sccp_tron_live_evidence_test.py::test_witness_schedule_transition_json_rejects_duplicate_keys -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'runtime or api_key or transition_json'`
+    (`4` passed, `176` deselected)
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 C# verifier backend runner coverage
+
+- Added `VerifyingKeyBackendTagTests` to the focused C# Kagemusha SDK runner so
+  production verifier-backend label exactness, pending-label fail-closed
+  behavior, padded-label rejection, and non-ASCII/confusable backend negatives
+  run with the same native-bridge SDK gate as C# canonical request, Torii,
+  signed query, transaction builder, privacy native, and Kagemusha coverage.
+- Updated the JavaScript parity meta-test to require the C# runner filter to
+  include `VerifyingKeyBackendTagTests`, and to source-pin the C# backend-label
+  regression names plus padded, non-ASCII/confusable, null-byte,
+  production-claim, and audit-claim fixtures. Refreshed the roadmap Windows
+  confirmation checklist to name the backend-label suite.
+- Added a dedicated SDK parity negative-control mode that removes only the C#
+  `VerifyingKeyBackendTagTests` filter entry, and wired that mode into the
+  payload-bench workflow so CI detects verifier-backend runner drift directly.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter VerifyingKeyBackendTagTests --nologo`
+    (`205` passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK runner"`
+    from `javascript/iroha_js` (`41` passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/tmp/iroha-dotnet/sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (`646` passed; bridge sha256
+    `541eebd5186fb2b16f6d057e4c5f9dfe8f28869895cf762f56ae2c09a4a6bf3d`)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-verifier-backend-test-filter-script`
+    (detected injected filter drift)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-filter-script`
+    (detected injected broader C# filter drift)
+  - `git diff --check -- ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_csharp_sdk.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js .github/workflows/pr_kagemusha_payload_bench.yml roadmap.md status.md python/iroha_python/tests/crypto_algorithms_test.py`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_csharp_sdk.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js .github/workflows/pr_kagemusha_payload_bench.yml roadmap.md status.md python/iroha_python/tests/crypto_algorithms_test.py`
+    (no matches)
+- Local validation note: the full `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  text/artifact guard still fails after the recursive SDK text checks because
+  `dist/NoritoBridge.xcframework/ios-arm64/libNoritoBridge.a` is missing
+  `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`;
+  this slice did not regenerate `dist/` artifacts.
+
+## 2026-06-12 SCCP TRON constant-call parser-cause redaction
+
+- Hardened TRON live constant-call ABI word parsing so malformed constant
+  results keep the fixed `TRON constant call ... returned non-hex data`
+  diagnostic while suppressing the lower-level hex parser exception cause.
+- Added an adversarial regression with a `secret-token` constant-result word
+  and pinned the new source/test markers in the release scalar-text and
+  source-material role inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_redacts_constant_result_word_parser_cause -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'constant'`
+    (`4` passed, `175` deselected)
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 Connect bridge transaction checked signing
+
+- Routed the shared Connect Norito bridge signed-transaction encoder through
+  `TransactionBuilder::try_sign`, returning a dedicated bridge transaction
+  signing error instead of relying on the compatibility `sign` wrapper across
+  transfer, shield/unshield, ZK transfer/register, governance, mint/burn,
+  multisig, identifier, and Offline Notes transaction FFI exports.
+- Added a focused bridge helper regression proving the versioned transaction
+  bytes decode, hash-match, and verify after checked signing; reran the
+  existing Offline Notes FFI canonical-transaction regression through the same
+  checked helper.
+- Cleaned the bridge clippy gate issues surfaced by the focused `-D warnings`
+  run.
+- Validation:
+  - `cargo fmt --package connect_norito_bridge`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-connect-bridge-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p connect_norito_bridge bridge_asset_transaction_checked_signing_verifies --lib -- --nocapture`
+    (`1` passed, `214` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-connect-bridge-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p connect_norito_bridge offline_note_signed_transaction_ffis_encode_canonical_transactions --lib -- --nocapture`
+    (`1` passed, `214` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-connect-bridge-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p connect_norito_bridge --lib --no-deps -- -D warnings`
+
+## 2026-06-12 Python crypto algorithm exactness pinning
+
+- Extended `crypto_algorithms_test.py` so empty algorithm labels are rejected
+  across the public Python crypto boundary before key generation, seed
+  derivation, key loading, multihash export, sign, verify, or `CryptoKeyPair`
+  construction reaches native code.
+- Added direct `_crypto` extension regressions for empty and padded algorithm
+  labels across native normalize/generate/derive/load/multihash/sign/verify
+  entry points, complementing the existing Rust parser tests for control and
+  non-ASCII/confusable labels.
+- Pinned those Python regression names and direct native calls in the
+  JavaScript Kagemusha SDK parity meta-test so the focused runner cannot keep a
+  broad `crypto_algorithms_test.py` file entry while silently losing the
+  exactness coverage.
+- Validation:
+  - `python3 -m py_compile python/iroha_python/tests/crypto_algorithms_test.py`
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK runner"`
+    from `javascript/iroha_js` (`41` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-python-rs-algorithm CARGO_INCREMENTAL=0 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml parse_algorithm_arg --lib -- --nocapture`
+    (`2` passed, `139` filtered out)
+  - `PYTHONPATH=/tmp/iroha-codex-python-wheel-install:/Users/takemiyamakoto/soramitsudev/iroha/python/norito_py/src:/Users/takemiyamakoto/soramitsudev/iroha/python python3 -c 'import typing; typing.TypeAlias = object; import pytest; raise SystemExit(pytest.main(["-q", "/tmp/iroha-codex-crypto_algorithms_test.py", "-k", "algorithm_labels"]))'`
+    (`15` passed, `42` deselected; test file copied to `/tmp` so the local
+    wheel install provided `_crypto.abi3.so`)
+  - `git diff --check -- python/iroha_python/tests/crypto_algorithms_test.py javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" python/iroha_python/tests/crypto_algorithms_test.py javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (no matches)
+- Local validation note: the host has Python 3.9.6 and no `python3.11` binary,
+  so the full `ci/check_kagemusha_recursive_spend_python_sdk.sh` runner was not
+  run in this slice.
+
+## 2026-06-12 SCCP TRON metadata parser-cause redaction
+
+- Hardened TRON live metadata parsing so malformed transaction addresses,
+  `/wallet/getcontract` runtime bytecode, and `contract_address` parser
+  failures keep their fixed public messages while suppressing lower-level
+  parser exception causes.
+- Added an adversarial regression that injects `secret-token` bytecode and
+  address parser details, and pinned the new source/test markers in the release
+  scalar-text and source-material role inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_redacts_metadata_parser_exception_causes -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'metadata'`
+    (`15` passed, `163` deselected)
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 SCCP TRON API exception-cause redaction
+
+- Hardened TRON live API collection so HTTP, transport, and invalid-JSON
+  failures still emit bounded category-only messages while suppressing the
+  original exception cause. Provider URLs, HTTP bodies, transport reasons, and
+  JSON parser internals no longer remain reachable through exception chaining.
+- Added an adversarial regression with `secret-token` HTTP bodies, transport
+  reasons, and invalid JSON payloads, and pinned the new markers in the release
+  scalar-text and source-material role inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_tron_api_redacts_exception_causes -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'tron_api'`
+    (`6` passed, `171` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 Torii governance signable payload checked construction
+
+- Hardened Torii governance signable transaction payload drafting so
+  `build_signable_transaction_b64` no longer draws a throwaway random
+  compatibility signer. The helper derives deterministic checked Ed25519 dummy
+  key material, signs through `TransactionBuilder::try_sign`, and returns a
+  contextual internal query error if payload construction fails.
+- Protected-namespace and ministry-agenda draft routes still return only the
+  client-signable transaction payload bytes, with the requested authority
+  restored on the payload before base64 encoding.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-gov-signable CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii protected_namespaces_set_returns_checked_signable_payload_for_authority --lib -- --nocapture`
+    (`1` passed, `2372` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-gov-signable CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii ministry_agenda_draft_returns_instruction_skeleton_and_signable_payload --lib -- --nocapture`
+    (`1` passed, `2372` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-gov-signable CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_torii -- --check`
+  - `git diff --check -- crates/iroha_torii/src/gov.rs status.md roadmap.md docs/source/engineering_backlog.md Cargo.lock`
+  - `git diff --exit-code -- Cargo.lock`
+
+## 2026-06-12 SCCP TRON witness-schedule hash redaction
+
+- Hardened TRON live witness-schedule summarization so canonical payload-hash
+  and schedule-hash helper `RuntimeError`/`TypeError`/`ValueError` failures
+  become the fixed `witness schedule payload is invalid` blocker instead of
+  preserving lower-level parser details through exception causes.
+- Added an adversarial regression that injects `secret-token` parser failures
+  into both witness-schedule hash boundaries for `ValueError` and
+  `RuntimeError`, while retaining the existing semantic negatives for
+  overflowing weights, duplicate witnesses, schedule mismatches, and
+  witness-not-in-schedule errors.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_redacts_witness_schedule_hash_failures -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'witness_schedule'`
+    (`12` passed, `164` deselected)
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 C# identifier receipt parity meta-test pinning
+
+- Extended the JavaScript Kagemusha SDK parity meta-test so it checks the C#
+  `ToriiClientTests` source for the identifier receipt adversarial test names
+  and representative field paths covering signature, policy-id, attestation
+  selector, proof base64, nested payload, timestamp, resolver-key, and
+  policy-summary exactness.
+- This prevents the C# focused runner from retaining only the broad
+  `ToriiClientTests` class filter while silently dropping the receipt
+  exactness negative matrices.
+- Validation:
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK runner"`
+    from `javascript/iroha_js` (`41` passed)
+  - `for mode in --negative-control-identifier-receipt-proof-base64-guard --negative-control-identifier-receipt-kind-exactness-guard --negative-control-identifier-receipt-proof-base64-exactness-guard --negative-control-identifier-receipt-signature-exactness-guard --negative-control-identifier-receipt-policy-id-exactness-guard --negative-control-identifier-receipt-policy-summary-id-exactness-guard --negative-control-identifier-receipt-program-id-exactness-guard --negative-control-identifier-receipt-account-id-exactness-guard --negative-control-identifier-receipt-hash-exactness-guard --negative-control-identifier-receipt-timestamp-exactness-guard --negative-control-identifier-receipt-timestamp-u64-guard --negative-control-identifier-receipt-resolver-key-exactness-guard; do bash ci/check_kagemusha_recursive_spend_sdk_parity.sh "$mode"; done`
+    (all `12` negative controls detected their injected drift)
+  - `git diff --check -- javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)($| )" javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md`
+    found no conflict markers
+
+## 2026-06-12 SCCP TRON witness-transition proof redaction
+
+- Hardened TRON live witness-schedule transition proof summarization so
+  canonical transition-message and transition-seal encoder
+  `RuntimeError`/`TypeError`/`ValueError` failures become fixed
+  transition-chain blockers instead of preserving lower-level parser details
+  through exception causes.
+- Added an adversarial regression that injects `secret-token` parser failures
+  into both transition encoder boundaries for `ValueError` and `RuntimeError`,
+  then pinned the new blocker and test markers in the release scalar-text and
+  source-material role inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_redacts_witness_schedule_transition_encoder_failures -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'witness_schedule_transition'`
+    (`6` passed, `169` deselected)
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 C# identifier policy summary exactness
+
+- Added C# Torii identifier policy summary validation after
+  `GetIdentifierPoliciesAsync` deserialization so each summary `policy_id`
+  must be an exact `kind#rule` value and each `resolver_public_key` must be
+  exact non-empty text.
+- Padded, control-character, blank, or malformed policy summary fields now
+  fail before callers receive policy summaries for identifier receipt handling.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter ToriiClientTests --nologo`
+    (`200` passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/tmp/iroha-dotnet/sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (`441` passed; bridge sha256
+    `96d6177d19c55c3e24f7ab2b595fe28198c310c78a686c79179878ee08e5321f`)
+  - `BRIDGE_LIBRARY_DIR="${TMPDIR:-/tmp}/iroha-kagemusha-csharp-native-target/debug" DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}" LD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" PATH="${BRIDGE_LIBRARY_DIR}:${PATH}" /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --nologo`
+    (`689` passed)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK runner"`
+    from `javascript/iroha_js` (`41` passed)
+
+## 2026-06-12 SCCP TRON witness-seal proof redaction
+
+- Hardened TRON live witness-seal proof summarization so canonical
+  solid-block-message and witness-seal encoder `RuntimeError`/`TypeError`/
+  `ValueError` failures become fixed blockers instead of preserving lower-level
+  parser details through exception causes.
+- Added an adversarial regression that injects `secret-token` parser failures
+  into both witness-seal encoder boundaries for `ValueError` and
+  `RuntimeError`, then pinned the new blocker and test markers in the release
+  scalar-text and source-material role inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_redacts_witness_seal_encoder_failures -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'witness_seal'`
+    (`7` passed, `167` deselected)
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 C# identifier receipt nested payload exactness
+
+- Added C# Torii identifier receipt parser checks for exact nested signed
+  payload fields: account id, program ids, top-level receipt hash/id fields,
+  execution digest fields, opening payload digest fields, and execution/opening
+  receipt timestamps.
+- Padded or control-character text fields now fail before receipt verification,
+  padded numeric-string timestamps are rejected, and negative receipt times are
+  rejected before downstream unsigned-time handling.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter ToriiClientTests --nologo`
+    (`191` passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/tmp/iroha-dotnet/sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (`432` passed; bridge sha256
+    `96d6177d19c55c3e24f7ab2b595fe28198c310c78a686c79179878ee08e5321f`)
+  - `BRIDGE_LIBRARY_DIR="${TMPDIR:-/tmp}/iroha-kagemusha-csharp-native-target/debug" DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}" LD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" PATH="${BRIDGE_LIBRARY_DIR}:${PATH}" /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --nologo`
+    (`680` passed)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK runner"`
+    from `javascript/iroha_js` (`41` passed)
+
+## 2026-06-12 SCCP unsupported network scope note
+
+- Reconfirmed the active SCCP launch scope remains limited to Ethereum, BSC,
+  Solana, TON, and TRON.
+- SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now; that
+  exclusion is intentional current-launch scope and must not be treated as a
+  hidden compatibility lane.
+
+## 2026-06-12 C# identifier receipt attestation exactness
+
+- Added C# Torii identifier receipt attestation selector checks so signed
+  payload JSON rejects padded, control-character, or mixed-case `kind` values
+  before selecting signed/proof behavior.
+- Added proof-attestation validation for exact `proof_backend` and
+  non-empty exact `proof_b64`, rejecting padded or malformed base64 before
+  downstream proof handling. Signed attestations now reject smuggled proof
+  fields when a `kind` selector is present.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter ToriiClientTests --nologo`
+    (`165` passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/tmp/iroha-dotnet/sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (`406` passed; bridge sha256
+    `099a2cedd9b5c4b9d84eabc228212d5c009fa8344fb4ef19e3c2949b6c12dd8b`)
+  - `BRIDGE_LIBRARY_DIR="${TMPDIR:-/tmp}/iroha-kagemusha-csharp-native-target/debug" DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}" LD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" PATH="${BRIDGE_LIBRARY_DIR}:${PATH}" /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --nologo`
+    (`654` passed)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK runner"`
+    from `javascript/iroha_js` (`41` passed)
+
+## 2026-06-12 SCCP TRON transaction-source proof redaction
+
+- Hardened TRON live transaction-source proof summarization so canonical proof
+  encoder `RuntimeError`/`TypeError`/`ValueError` failures become the fixed
+  `transaction source proof is invalid` blocker in the live summary instead of
+  preserving lower-level parser details through exception causes.
+- Added an adversarial regression that injects `secret-token` transaction-source
+  proof parser failures for both `ValueError` and `RuntimeError`, verifies the
+  production blocker is category-only, and pins the new blocker/test markers in
+  the release scalar-text and source-material role inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_redacts_transaction_source_proof_encoder_failures -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'transaction_source_proof'`
+    (`2` passed, `171` deselected)
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 C# identifier receipt policy-id exactness
+
+- Added C# Torii identifier policy-id exactness checks for
+  `ResolveIdentifierAsync` requests, top-level identifier-resolve responses,
+  and signed receipt payload JSON at `signature_payload.policy_id` and
+  `signature_payload.payload.policy_id`.
+- The C# SDK now rejects blank, padded, control-character, or malformed
+  `kind#rule` policy ids before HTTP dispatch or receipt verification instead
+  of letting non-exact policy ids reach downstream receipt handling.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter ToriiClientTests --nologo`
+    (`155` passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/tmp/iroha-dotnet/sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (`396` passed; bridge sha256
+    `099a2cedd9b5c4b9d84eabc228212d5c009fa8344fb4ef19e3c2949b6c12dd8b`)
+  - `BRIDGE_LIBRARY_DIR="${TMPDIR:-/tmp}/iroha-kagemusha-csharp-native-target/debug" DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}" LD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" PATH="${BRIDGE_LIBRARY_DIR}:${PATH}" /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --nologo`
+    (`644` passed)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK runner"`
+    from `javascript/iroha_js` (`41` passed)
+
+## 2026-06-12 SCCP TRON solid-block RuntimeError redaction
+
+- Hardened TRON live solid-block header proof summarization so lower-level
+  `RuntimeError` failures from canonical proof encoding are converted to the
+  fixed `solid block header proof is invalid` blocker, matching existing
+  `TypeError`/`ValueError` redaction.
+- Expanded the adversarial regression to exercise both `ValueError` and
+  `RuntimeError` with a `secret-token` parser payload, and pinned the widened
+  exception tuple plus test matrix in the release scalar-text inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_redacts_solid_block_header_proof_encoder_failures -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 C# lineage verifier-key CID exactness
+
+- Tightened the C# Kagemusha lineage verifier-key envelope parser so `CID1`
+  circuit-id TLV payloads are decoded byte-for-byte instead of trimming
+  surrounding whitespace before artifact binding.
+- Added a C# adversarial lineage artifact case where the proving-key archive
+  commits to a verifier key whose `CID1` payload is whitespace padded; the SDK
+  now rejects it as `lineage_verifier_key` before native bridge dispatch.
+- Validation:
+  - `BRIDGE_LIBRARY_DIR="${TMPDIR:-/tmp}/iroha-kagemusha-csharp-native-target/debug" DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}" LD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" PATH="${BRIDGE_LIBRARY_DIR}:${PATH}" /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter KagemushaRecursiveSpendNativeTests --nologo`
+    (`32` passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/tmp/iroha-dotnet/sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (`371` passed; bridge sha256
+    `099a2cedd9b5c4b9d84eabc228212d5c009fa8344fb4ef19e3c2949b6c12dd8b`)
+  - `BRIDGE_LIBRARY_DIR="${TMPDIR:-/tmp}/iroha-kagemusha-csharp-native-target/debug" DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}" LD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" PATH="${BRIDGE_LIBRARY_DIR}:${PATH}" /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --nologo`
+    (`619` passed)
+
+## 2026-06-12 SCCP TRON source-event full-TOML exclusion inventory
+
+- Pinned the TRON live helper's source-event JSON-only boundary in the release
+  public scalar-text inventory: source-event evidence remains rejected in
+  `--full-toml` mode before solid-block proof parser failures or operator
+  details can reach full-TOML artifacts.
+- Expanded bundle-verifier and readiness-report sparse inventory tests to
+  remove the source-event/full-TOML implementation guard and the corresponding
+  adversarial test marker directly.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_rejects_malformed_source_event_replay_word -q`
+    (`1` passed)
+  - `python3 -m compileall -q scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_tron_live_evidence.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_tron_live_evidence_test.py`
+
+## 2026-06-12 Torii offline issuer checked signing
+
+- Routed Offline Notes V1 issue submission and Offline Notes V2 issue/redeem
+  submission through issuer-local `TransactionBuilder::try_sign` helpers,
+  returning contextual Torii internal errors before queue submission if the
+  configured issuer signing backend rejects the transaction payload.
+- Added focused V1/V2 helper regressions proving the produced transaction
+  signatures verify.
+- Validation:
+  - `cargo fmt --package iroha_torii`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-offline-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii checked_signing_verifies --lib -- --nocapture`
+    (`2` passed, `2371` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-offline-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --no-deps -- -D warnings`
+
+## 2026-06-12 C# signed query exactness
+
+- Tightened C# singular and iterable signed-query builders so authority account
+  ids, account/asset/domain/committee/storage/provider operands, optional alias
+  filters, continue cursor ids, and sort metadata keys reject blank, padded, or
+  control-character values instead of trimming before query Norito bytes are
+  signed.
+- Kept `null` as the only absent optional query filter value; explicit empty or
+  whitespace strings now fail at the SDK boundary.
+- Added signed-query exactness negatives to `SignedQueryBuilderTests` and
+  `SignedIterableQueryBuilderTests`, then added both classes to the focused C#
+  Kagemusha SDK runner and the JavaScript parity guard for that runner filter.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "SignedQueryBuilderTests|SignedIterableQueryBuilderTests" --nologo`
+    (`30` passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/tmp/iroha-dotnet/sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (`371` passed; bridge sha256
+    `099a2cedd9b5c4b9d84eabc228212d5c009fa8344fb4ef19e3c2949b6c12dd8b`)
+  - `BRIDGE_LIBRARY_DIR="${TMPDIR:-/tmp}/iroha-kagemusha-csharp-native-target/debug" DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}" LD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" PATH="${BRIDGE_LIBRARY_DIR}:${PATH}" /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --nologo`
+    (`619` passed)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK runner"`
+    from `javascript/iroha_js` (`41` passed)
+
+## 2026-06-12 SCCP TRON live diagnostic inventory gates
+
+- Added TRON live HTTP, transport, duplicate-JSON, invalid-JSON, and API error
+  diagnostic markers to the release public scalar-text source inventory so
+  strict readiness gates require bounded TRON API diagnostics, not only the
+  generic CLI redaction path.
+- Expanded bundle-verifier and readiness-report sparse inventory tests to
+  remove the TRON duplicate-key source marker and secret-bearing TRON API
+  adversarial test markers directly.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'tron_api_http_error_detail_is_bounded or tron_api_rejects_duplicate_json_keys or tron_api_redacts_transport_and_error_response_details'`
+    (`3` passed, `169` deselected)
+  - `python3 -m compileall -q scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_tron_live_evidence.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_tron_live_evidence_test.py`
+
+## 2026-06-12 SCCP BSC/Solana full-lane inventory gates
+
+- Added the BSC and Solana full-lane Rust readiness regressions, plus their
+  negative assertion markers, to the all-lanes release-checklist exact-boolean
+  source inventory so strict bundle and readiness checks fail if that coverage
+  is removed or weakened.
+- Expanded the sparse release-bundle and release-readiness inventory tests to
+  remove BSC/Solana full-lane markers one at a time and assert the missing
+  marker diagnostics.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolean_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_release_checklist_exact_boolean_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-12 C# transaction builder exactness
+
+- Tightened C# `TransactionBuilder` and `TransactionEncodingContext` so chain
+  ids, authority/account ids, asset-definition ids, domain/name/trigger/NFT
+  labels, metadata keys, numeric strings, and optional strings reject blank,
+  padded, or control-character values instead of trimming before Norito bytes
+  are encoded or signed.
+- Made `ReplaceMetadata` validate into a temporary map before clearing existing
+  metadata, so a rejected replacement cannot leave partial metadata state.
+- Expanded `TransactionBuilderTests` with constructor, metadata, direct encoder,
+  instruction field, and `EncodeInstructionBox` authority negatives; the C#
+  Kagemusha runner now exercises these as part of its focused SDK gate.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter TransactionBuilderTests --nologo`
+    (`79` passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/tmp/iroha-dotnet/sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (`371` passed after rebuilding `connect_norito_bridge`; bridge sha256
+    `099a2cedd9b5c4b9d84eabc228212d5c009fa8344fb4ef19e3c2949b6c12dd8b`)
+  - `bash -n ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestCredentials.cs csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs ci/check_kagemusha_recursive_spend_csharp_sdk.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)($| )" ...` over the same touched file
+    set found no conflict markers
+
+## 2026-06-12 C# canonical request auth exactness
+
+- Tightened C# canonical request auth so `CanonicalRequestCredentials`,
+  `CanonicalRequest.BuildHeaders`, `BuildMessage`, and `BuildSignatureMessage`
+  reject blank, padded, or control-character account ids, caller-provided
+  nonces, methods, and paths before signing or header emission.
+- Expanded C# adversarial coverage in `CanonicalRequestTests` and
+  `ToriiClientTests`, including Torii assertions that the emitted account header
+  is exact and generated nonces contain no whitespace.
+- Added `CanonicalRequestTests` and `ToriiClientTests` to the focused C#
+  Kagemusha SDK runner and pinned that runner coverage in the JavaScript parity
+  meta-test.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiClientTests" --nologo`
+    (`197` passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_CLI_HOME=/tmp/iroha-dotnet-home KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/tmp/iroha-dotnet/sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (`277` passed after building `connect_norito_bridge`; bridge sha256
+    `099a2cedd9b5c4b9d84eabc228212d5c009fa8344fb4ef19e3c2949b6c12dd8b`)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK runner"`
+    from `javascript/iroha_js` (`41` passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestCredentials.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs ci/check_kagemusha_recursive_spend_csharp_sdk.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md`
+
+## 2026-06-12 CLI ZK verifier-key checked signing
+
+- Routed `iroha zk vk register` and `iroha zk vk update` transaction assembly
+  through local `TransactionBuilder::try_sign` helpers, returning contextual CLI
+  errors if the configured signing backend rejects the verifier-key registry
+  transaction payload.
+- Added a focused helper regression proving both register and update
+  verifier-key transactions carry signatures that verify.
+- Validation:
+  - `cargo fmt --package iroha_cli`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-cli-vk-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli --bin iroha vk_register_update_checked_transaction_helpers_verify -- --nocapture`
+    (`1` passed, `774` filtered out)
+  - `cargo fmt --package iroha_cli -- --check`
+  - `git diff --check -- crates/iroha_cli/src/zk.rs Cargo.lock`
+  - `git diff --exit-code -- Cargo.lock`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_cli/src/zk.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-cli-vk-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_cli --bin iroha --no-deps -- -D warnings`
+
+## 2026-06-12 SCCP BSC full-lane deployment readiness coverage
+
+- Added a BSC-specific Rust lane-readiness regression proving production
+  readiness opens only when governed BSC source material, a matching
+  source-adapter deployment, canonical BSC destination rollout, and finalized
+  MessageProofAccepted route-canary evidence are all bound together.
+- Added adversarial BSC coverage for missing route-canary evidence, generic
+  canary replay, non-finalized receipt-block metadata, ETH material/deployment
+  replay, and destination network-id drift; each case keeps the lane closed.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-lane CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_lane_readiness_with_exact_deployment_materials_rejects_replayed_profiles --lib -- --nocapture`
+    (`1` passed, `256` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-lane CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp lane_readiness_with_exact_deployment_materials_rejects_replayed_profiles --lib -- --nocapture`
+    (`3` passed, `254` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-lane CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp route_allowlist_lane_canary_builder_rejects_source_record_hash_replay --lib -- --nocapture`
+    (`1` passed, `256` filtered out)
+
+## 2026-06-12 SCCP Solana full-lane deployment readiness coverage
+
+- Extended the Solana route-canary Rust regression to prove the full governed
+  lane can become production-ready only when audited source-adapter deployment
+  evidence, canonical destination rollout material, and ProgramData-bound route
+  canary evidence are all present together.
+- Added adversarial Solana lane-readiness coverage for unaudited source
+  deployment evidence, generic route-canary replay, and drifted ProgramData slot
+  metadata; each case keeps production readiness closed with an explicit
+  blocker.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-lane CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp solana_lane_route_canary_evidence_binds_live_programdata_snapshot --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-lane CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp solana_source_adapter_deployment_requires_audited_full_light_client_engines --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
+## 2026-06-12 SCCP Ethereum outbound-provider inventory restored
+
+- Restored the exact JavaScript source/dist marker for Ethereum outbound
+  execution-provider mainnet validation without changing the existing guard:
+  outbound submission still validates `eth_chainId == 0x1` before falling back
+  to direct provider submission or invoking a custom submitter.
+- Reran the previously blocked BSC route-config canonical-manifest readiness
+  slice; it now reaches and passes the BSC gate.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_outbound_provider_validation pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_outbound_provider_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k 'bsc_route_config_canonical_manifest'`
+    (`4` passed, `977` deselected)
+  - `node --test --test-name-pattern 'EthereumMainnetSccp outbound provider path derives target from wrapped proof result' test/sccpEthereumMainnet.test.js`
+    from `javascript/iroha_js` (`1` passed)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+
+## 2026-06-12 Swift Nexus focused runner coverage
+
+- Added `NexusAppClient.swift` and `NexusAppClientTests.swift` to the Swift
+  Kagemusha SDK parse runner so Swift Nexus wallet signature-algorithm
+  exactness stays in the same focused SDK gate as the existing Connect,
+  signing-algorithm, privacy native, Torii, Offline Cash, and Offline Note
+  surfaces.
+- Pinned the expanded Swift parse surface in the JavaScript parity meta-test
+  and updated the roadmap to name Swift Nexus app-client wallet
+  signature-algorithm exactness explicitly.
+- Validation:
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh` (Swift 6.3.2 parse pass)
+  - `swift test --filter NexusAppClientTests` from `IrohaSwift` (`12` passed)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK runner"`
+    from `javascript/iroha_js` (`41` passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_swift_sdk.sh`
 
 ## 2026-06-12 JS/Python Nexus signature-algorithm exactness
 
@@ -79,6 +1438,21 @@ Last updated: 2026-06-12
     (`1` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-deploy-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli --bin ivm_contract_deploy checked_helper_verifies -- --nocapture`
     (`2` passed, `4` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-deploy-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_cli --bin split_contract_deploy --bin ivm_contract_deploy --no-deps -- -D warnings`
+
+## 2026-06-12 Governance CLI checked signing
+
+- Routed `gov_instruction` IVM execution VK registration and SCCP IVM-proved
+  transaction construction through a local `TransactionBuilder::try_sign`
+  helper, returning contextual command errors if the signing backend rejects the
+  transaction payload.
+- Added a direct helper regression proving the governance command signer emits
+  a verifiable transaction signature.
+- Validation:
+  - `cargo fmt --package iroha_cli`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-deploy-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli --bin gov_instruction sign_governance_transaction_checked_helper_verifies -- --nocapture`
+    (`1` passed, `4` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-deploy-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_cli --bin gov_instruction --no-deps -- -D warnings`
 
 ## 2026-06-12 Irohad internal submission checked signing
 
@@ -284,7 +1658,14 @@ Last updated: 2026-06-12
   contradictory-alias optional text values, then pinned those runtime and test
   markers in the BSC canonical-manifest source inventory used by release
   readiness and strict bundle verification.
+- Added positive BSC coverage proving exact snake_case settlement aliases render
+  as `settlement_contract_address` and `settlement_contract_alias`, and pinned
+  those accepted-alias markers in the same source inventory.
 - Validation:
+  - `node --test --test-name-pattern 'BSC route-config requires explicit post-deploy evidence for production-ready manifests|BSC route-config rejects malformed or foreign route manifests' scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_bsc_route_config_canonical_manifest_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_bsc_route_config_canonical_manifest_gate_inventory -q`
+    (`2` passed)
   - `node --test --test-name-pattern 'BSC route-config rejects malformed or foreign route manifests' scripts/sccp_bsc_taira_xor_deploy.test.mjs`
     (`1` passed)
   - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k 'bsc_route_config_canonical_manifest'`
@@ -896,6 +2277,654 @@ Last updated: 2026-06-12
     (`2` passed, `254` filtered out; one pre-existing `iroha_crypto` unused-method warning surfaced from the dirty worktree)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-tron-recovery CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp tron_source_verifier_material_requires_deployed_mainnet_profile_hashes --lib -- --nocapture`
     (`1` passed, `255` filtered out)
+
+## 2026-06-12 user config test seed regression
+
+- Replaced the user config test fixture's all-zero deterministic Ed25519 seed
+  with named nonzero seed material so the fixture remains deterministic while
+  respecting the crypto layer's all-zero seed rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha config::user::tests -- --nocapture` (`12` passed)
+
+## 2026-06-12 SCCP BSC verifier G2 curve validation
+
+- Hardened `scripts/sccp_bsc_taira_xor_deploy.mjs` so BSC Groth16 verifier
+  material validates `beta2`, `gamma2`, and `delta2` as BN254 G2 twist-curve
+  points instead of only checking that their coordinates fit field ranges.
+- Updated the deploy-helper verifier fixtures to use valid G2 material and added
+  adversarial coverage for scalar-field-valid but off-curve G2 vectors and
+  out-of-field G2 coordinates before deployment evidence can be accepted.
+- Validation:
+  - `node --check scripts/sccp_bsc_taira_xor_deploy.mjs`
+  - `node --check scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+  - `node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs` (`32 passed`)
+
+## 2026-06-12 native gas sponsor allowlist regression
+
+- Fixed direct executor fee sponsorship so the DPN sponsored-contract
+  allowlist is enforced only when Nexus fees are enabled, non-exempt, and
+  nonzero. Native ISI transactions can still use an authorized `fee_sponsor`
+  for pipeline gas settlement when Nexus fees are not active, while active
+  Nexus-sponsored native batches remain rejected.
+- Replaced the default in-memory state streaming key material's all-zero
+  deterministic Ed25519 seed with a named nonzero deterministic seed, matching
+  the crypto layer's inert-seed rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --test iroha_core_group_03 isi_gas_fees::non_vm_instructions_can_charge_gas_to_fee_sponsor -- --exact --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --test iroha_core_group_03 isi_gas_fees::non_vm_instructions_can_charge_gas_to_fee_sponsor -- --nocapture`
+    (`2` passed)
+  - `cargo test -p iroha_core --lib native_batch -- --nocapture`
+    (`4` passed)
+  - `cargo test -p iroha_core --test iroha_core_group_03`
+    (`126` passed, `2` ignored)
+  - `git diff --check`
+
+## 2026-06-12 Rustfmt edition default
+
+- Set the repository rustfmt configuration to default to Rust edition 2024,
+  matching the workspace edition and contributor formatting guidance.
+- Testing:
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 DA pin-intent index coherence
+
+- Hardened `DaPinStore` insertion so duplicate storage tickets, manifest
+  hashes, and committed bundle locations are rejected before any secondary
+  index is mutated. This prevents query/prove paths from returning entries that
+  the verify path would later reject because another entry shadowed its ticket
+  or manifest index.
+- Added adversarial store coverage for duplicate lane keys, storage tickets,
+  manifest hashes, and block-location tuples, verifying that rejected duplicates
+  leave no stale ticket, manifest, lane/epoch, or sorted-location entries.
+- Confirmed Torii pin-intent list/prove/verify handlers and core replay/apply
+  hydration continue to pass with the stricter store invariants.
+- Testing:
+  - `cargo test -p iroha_core --lib pin_store -- --nocapture`
+  - `cargo test -p iroha_torii --lib pin_intents -- --nocapture`
+  - `cargo test -p iroha_core --lib da_pin_intents -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 DA sidecar hash validation on inbound blocks
+
+- Hardened inbound block validation so embedded DA sidecars must match their
+  header commitments before proof-policy, cursor, or execution checks run.
+  DA commitment bundles are checked against `DaCommitmentBundle::canonical_hash()`;
+  DA pin-intent bundles are checked against their Merkle root.
+- Added explicit block validation errors for forged DA commitment and
+  pin-intent sidecar hashes, and mapped them into the existing DA invariant
+  rejection bucket for pipeline events.
+- Added adversarial `ValidBlock` regressions for forged DA commitment hashes
+  and forged DA pin-intent hashes while keeping duplicate-manifest and
+  unknown-lane DA bundle rejections covered.
+- Testing:
+  - `cargo test -p iroha_core --lib hash_mismatch -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_keep_voting_block_rejects_duplicate_da_manifest -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_keep_voting_block_rejects_unknown_da_lane -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 Genesis DA commitment hash/signature consistency
+
+- Fixed genesis DA commitment validation to compare the header
+  `da_commitments_hash` against `DaCommitmentBundle::canonical_hash()`, matching
+  the normal block builder and payload setter instead of the commitment Merkle
+  root.
+- Fixed `SignedBlock::genesis_with_da_proof_policies` so DA commitment hashes
+  are included in the genesis header before signing. Genesis blocks that embed
+  DA commitments now keep the genesis signature bound to the final DA-aware
+  header.
+- Added a core regression that builds a signed genesis block with DA commitments
+  and validates it through `check_genesis_block`.
+- Testing:
+  - `cargo test -p iroha_core --lib genesis_block_with_da_commitments_uses_canonical_bundle_hash -- --nocapture`
+  - `cargo test -p iroha_data_model genesis_can_embed_da_commitments -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 DA commitment bundle validation on inbound blocks
+
+- Extended inbound block validation to run the same DA commitment bundle
+  invariant gate used by proposal construction before shard-cursor advancement.
+  Blocks with duplicate manifest hashes, duplicate commitment keys, zero
+  manifests, unknown lanes, or proof-policy mismatches now fail the
+  `ValidBlock` path instead of relying only on cursor monotonicity.
+- Added a `BlockValidationError::DaCommitmentBundle` path and wired it into
+  Sumeragi validation-reject labeling and block rejection reason mapping.
+  Proof-policy failures map to `DaProofPolicyMismatch`; other DA bundle
+  invariant failures map to the existing DA cursor/invariant rejection bucket.
+- Normalized affected Merkle DA test fixtures so they no longer attach KZG
+  commitments unless the lane proof policy is KZG.
+- Testing:
+  - `cargo test -p iroha_core --lib validate_keep_voting_block_rejects_duplicate_da_manifest -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_keep_voting_block_rejects_da -- --nocapture`
+  - `cargo test -p iroha_core --lib da_only_block_is_not_rejected_as_empty -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_keep_voting_block_rejects_unknown_da_lane -- --nocapture`
+  - `cargo test -p iroha_core --lib da_shard_cursor -- --nocapture`
+  - `cargo test -p iroha_core --lib hydrate_da_indexes -- --nocapture`
+  - `cargo test -p iroha_core --lib da_commitment -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_commitment_bundle -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 DA commitment proof-location normalization
+
+- Hardened `DaCommitmentStore` so stale duplicate `(lane, epoch, sequence)`
+  records stay out of deterministic query indexes while stored per-block DA
+  commitment bundles remain byte-for-byte committed bundle snapshots. This keeps
+  Torii Merkle proof locations aligned with the block header commitment hash.
+- Lane-retirement pruning now removes retired commitments from query indexes
+  without rewriting retained per-block bundles or changing retained records'
+  committed bundle offsets.
+- Added adversarial coverage for stale duplicate commitments with changed
+  manifests/tickets and for lane pruning that retires an earlier bundle entry,
+  plus a Torii proof regression proving the filtered index still builds a
+  verifiable proof against the raw committed bundle.
+- Testing:
+  - `cargo test -p iroha_core --lib commitment_store -- --nocapture`
+  - `cargo test -p iroha_torii --lib prove_builds_merkle_proof_when_stale_duplicate_is_filtered_from_index -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 Same-epoch RBC roster fallback leader verification
+
+- Hardened same-epoch RBC roster derivation so active-topology fallback from
+  session-local payload evidence now requires the session metadata and leader
+  signature to verify against the fallback roster. Locally known pending blocks
+  still allow the active-topology path directly, and exact-frontier fallback
+  remains available for the existing permissioned recovery corridor.
+- Extended the same rule from roster derivation into production RBC progress
+  gates: DA availability, slot authority checks, backlog pressure, block-body
+  repair, READY emission, DELIVER emission, rebroadcast rescue, and QC recovery
+  now require either local authoritative payload bytes or a complete peer RBC
+  payload whose block metadata and leader signature verify against the session
+  roster.
+- Split complete chunk integrity from consensus authority in `RbcSession`
+  progress synchronization. Complete chunk bytes can still validate their
+  payload hash and chunk root, but the session no longer enters
+  `AuthoritativePayload` solely because peer bytes are complete.
+- Added an adversarial regression where a complete same-epoch RBC session carries
+  forged leader metadata: the node now refuses active-topology roster derivation
+  and does not promote the cached `Init` roster source to `Derived`.
+- Added a progress-stage regression for complete but forged peer payload bytes:
+  the low-level byte predicate remains true for diagnostics/roster probing, but
+  the production verified-or-local predicate stays false, the session remains
+  recoverable, and the progress stage stays at chunk collection.
+- Added a rebroadcast-loop regression for the same forged complete peer payload:
+  without a local pending/Kura payload, the loop does not emit READY or DELIVER,
+  does not count progress, and keeps the session below authoritative progress.
+- Added a READY-handler regression for forged leader metadata on an otherwise
+  complete session: a valid remote READY signature is not recorded unless the
+  local session metadata verifies against the roster.
+- Added a CHUNK-handler regression for forged leader metadata: otherwise valid
+  missing chunk bytes are not ingested unless the local session metadata
+  verifies against the roster.
+- Extended chunk-repair request coverage so sessions with forged leader
+  signatures do not answer missing-chunk requests.
+- Added a DELIVER-handler regression for forged leader metadata on an otherwise
+  complete session: even with valid READY quorum bytes and a valid DELIVER
+  sender signature, the handler rejects delivery because the session metadata
+  does not verify against the roster.
+- Updated promotion coverage for partially delivered sessions with a validated
+  DELIVER marker: once the roster source is promoted, local READY is retried,
+  missing chunk evidence is repaired from the pending payload, the validated
+  DELIVER signature is preserved, and deferrals are cleared.
+- Updated RBC rebroadcast repair fixtures so READY and DELIVER rescue coverage
+  uses roster-valid leader signatures instead of relying on synthetic complete
+  bytes without production-valid metadata.
+- Testing:
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib complete_rbc_session_with -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib payload_available_for_da -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_backlog -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rebroadcast_stalled_rbc_payloads_rejects_complete_payload_with_forged_leader_signature -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rebroadcast_stalled_rbc_payloads -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib actor_next_tick_deadline_rejects_bad_leader_signature -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_availability_reschedule_formal_gate_matrix -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_session_should_force_frontier -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_session_needs_block_created_recovery -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib block_body_repair -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib maybe_emit_rbc_ready -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib maybe_emit_rbc_deliver -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_chunk_rejects_forged_leader_signature_metadata -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_chunk_request_rejects_invalid_or_mismatched_session_metadata -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_chunk -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_ready_rejects_forged_leader_signature_metadata -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_ready -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_deliver_rejects_forged_leader_signature_metadata -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_deliver -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_roster_for_session -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib "ensure_rbc_session_roster" -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib "allow_unverified_rbc_roster" -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib promote_rbc_session_roster_and_retry -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib pending_block_validation_priority -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib recovered_ready -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 Recovered RBC DELIVER marker demotion
+
+- Hardened persisted RBC session loading so `delivered=true` from disk is
+  treated only as a recovery hint. Recovered sessions now retain complete
+  payload chunks, READY evidence, and local READY state, but clear
+  `deliver_sender`/`deliver_signature` and require fresh verified DELIVER
+  evidence before becoming terminal delivery again.
+- This avoids trusting a persisted DELIVER bit whose exact signature preimage is
+  not independently retained across restart. Nodes can still re-derive local
+  DELIVER from verified READY quorum or accept a fresh peer DELIVER through the
+  normal signature and quorum checks.
+- Added negative recovery coverage proving complete recovered payload bytes
+  remain available while delivered-byte telemetry and terminal DELIVER state do
+  not activate from disk alone.
+- Tightened pending-block validation priority so a retained status-only
+  `DELIVER` summary marked `recovered_from_disk` no longer counts as fresh
+  delivery evidence. Non-recovered retained summaries can still prioritize
+  validation when the local pending payload bytes hash to the advertised RBC
+  payload hash.
+- Applied the same recovered-evidence rule to READY priority. Live recovered
+  sessions now count only READY signatures that revalidate against the current
+  block/hash/height/view/epoch/roster/chunk-root preimage, and recovered
+  status-only READY summaries no longer satisfy the quorum heuristic. Fresh
+  non-recovered summaries and verified recovered live READY quorums remain valid
+  scheduling hints.
+- Testing:
+  - `cargo test -p iroha_core --lib from_persisted_demotes_delivered -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_session_from_persisted_demotes_delivered_payload_metric_until_revalidated -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib pending_block_validation_priority -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib recovered_ready -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib from_persisted -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib delivered_payload_metrics -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 Recovered RBC READY signature revalidation
+
+- Hardened local RBC DELIVER construction for recovered sessions: READY entries
+  loaded from disk are now revalidated against the exact block hash, height,
+  view, epoch, roster hash, chunk root, chain id, and per-view topology before
+  they can be counted for local DELIVER emission or embedded in a DELIVER
+  bundle.
+- The post-local-READY shortcut now prunes unverified recovered READY entries
+  before evaluating the local-authoritative DELIVER bypass, so persisted or
+  internally restored forged READY bytes cannot satisfy the sender-side READY
+  count or hide from missing-READY repair targeting.
+- Production READY rebroadcast bundle construction now applies the same
+  recovered-session signature filter before broad or targeted READY fanout.
+  The raw low-level bundle constructor remains available for tests, but
+  session-bound rebroadcast callers no longer re-fan forged READY bytes loaded
+  from disk.
+- Added an adversarial recovered-session regression where a node has
+  locally-authoritative payload bytes and a forged recovered READY entry; the
+  node now prunes the entry, keeps DELIVER deferred, and records no local
+  DELIVER signature. Added a companion rebroadcast regression proving forged
+  recovered READY entries are not posted to repair targets.
+- Testing:
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib maybe_emit_rbc_deliver_after_local_ready_prunes_unverified_recovered_ready -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib maybe_emit_rbc_deliver_after_local_ready -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_deliver_with_authoritative_payload_still_defers_without_ready_quorum -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_ready_and_deliver_helpers_reject_invalid_or_malformed_chunk_shape -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_deliver_rejects_epoch_mismatch -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_ready_rebroadcast_filters_unverified_recovered_ready -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib targeted_rbc_ready_rebroadcast_rejects_mismatched_session_metadata -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_ready_rebroadcast -- --nocapture`
+
+## 2026-06-12 RBC seed-session terminology cleanup
+
+- Renamed the production RBC "stub session" path to "seed session" so the
+  asynchronous chunking recovery path no longer carries placeholder/stub
+  terminology. Seed sessions are metadata-bound recovery bookkeeping for a
+  known block payload, not DA availability proof.
+- Added an invariant comment on `insert_seed_rbc_session_from_block` clarifying
+  that seed sessions retain payload hash/layout and optional verified leader
+  signature while byte-level DA availability still requires local payload bytes
+  or verified complete RBC bytes.
+- Testing:
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib insert_seed_rbc_session -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib "seed_session" -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rescue_rbc_missing_ready_peers_keeps_frontier_seed_and_hydrated_sessions_passive -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 DA commitment index restart hydration guard
+
+- Replaced stale "temporary until WSV wiring lands" DA commitment index wording
+  with the current invariant: the in-memory commitment projection is
+  ledger-derived and hydrated from committed Kura block bodies on access or
+  rewind.
+- Added a restart-style regression proving a fresh `State` starts with an empty
+  in-memory DA commitment index, then reconstructs manifest and
+  lane/epoch/sequence lookups plus the per-height commitment bundle from the
+  committed Kura block body.
+- Aligned the test-only DA availability helper comment with the hardened
+  behavior: status summaries remain diagnostic-only and cannot satisfy DA
+  availability without local or live/recovered payload bytes.
+- Testing:
+  - `cargo test -p iroha_core --lib da_commitment_lookup_hydrates_from_kura_after_state_restart -- --nocapture`
+  - `cargo test -p iroha_core --lib payload_available_for_da -- --nocapture`
+
+## 2026-06-11 DA/RBC retained-summary payload evidence hardening
+
+- Hardened pending-block `rbc_deliver` validation priority so a retained
+  status-only delivered summary cannot elevate priority unless the pending
+  block's local payload bytes hash to the advertised payload hash. Live RBC
+  sessions now use both complete byte-verified chunk evidence and the same
+  pending-local-body hash binding before they can elevate `rbc_deliver`
+  priority.
+- Applied the same boundary to missing-QC frontier cleanup through the shared
+  delivered-RBC helper: a retained delivered summary remains diagnostic when
+  the local pending body hashes differently, but it no longer makes the repair
+  path treat the payload as available.
+- Tightened retained READY-quorum summaries on the same path. Status-only READY
+  counters now need the pending block's local payload bytes and the retained
+  summary payload hash to match the advertised payload before they can elevate
+  validation priority or preserve missing-QC repair availability.
+- Tightened live READY-quorum validation priority to the same payload boundary:
+  a live session's READY count now only contributes when the pending local body
+  hashes to the advertised payload hash and the live RBC session advertises that
+  same payload hash.
+- Pinned pending-block READY-quorum validation priority to the protocol READY
+  quorum even when the test-only `force_deliver_quorum_one` debug shortcut
+  lowers local emission helpers. Live sessions and retained status summaries now
+  both require protocol quorum before they can schedule `rbc_ready_quorum`
+  priority.
+- Pinned stale-pending DA availability reschedule gates to the protocol READY
+  quorum as well. Complete delivered RBC chunks with only the debug-lowered
+  one-READY threshold still count as availability-incomplete until receiver-side
+  protocol quorum is present or the configured availability timeout expires.
+- Hardened DA availability proofing for live RBC fallback payloads: complete
+  chunk bytes now need matching block-header height/view/hash metadata and a
+  leader signature that verifies against the resolved session roster before
+  they can satisfy production `payload_available_for_da` or suppress
+  missing-block repair as authoritative payload evidence. Summary-only status
+  remains diagnostic-only and malformed or forged-signature live sessions no
+  longer bypass the missing-local-data gate. The old map-based byte predicate is
+  now test-only, keeping production callers on the actor-level roster-verified
+  path.
+- Bound local RBC READY and DELIVER signing to the same INIT metadata invariant:
+  helpers that build local signatures now reject sessions without matching
+  block-header height/view/hash metadata or a leader signature that verifies
+  against the session roster for the progress height/view. READY rebroadcast
+  bundles remain limited to already-recorded peer signatures, while session-only
+  rebroadcast activity now also rejects key/header height drift.
+- Decoupled inbound READY relay from the `force_deliver_quorum_one` debug
+  shortcut. A node that sees enough external READY evidence to relay its local
+  READY now uses the protocol READY relay threshold even when debug settings
+  lower local DELIVER emission, so under-quorum DELIVER handling cannot stall
+  READY relay until the full roster signs.
+- Decoupled READY propagation repair and cached-slot liveness from the same
+  debug shortcut. Broad READY rebroadcast suppression, targeted missing-READY
+  payload/body rescue, and cached-slot timeout pressure now use receiver-side
+  protocol quorum, so a one-READY debug DELIVER threshold cannot suppress READY
+  fanout, unlock payload/body rescue, or release reduced timeout pressure early.
+- Removed stale commit quorum-bypass plumbing from the finalize/commit-worker
+  path. Commit QC materialization now reads as an unconditional "derive a QC if
+  none is cached" step, and the worker/inflight records no longer carry a
+  permanently-false bypass bit that could obscure production quorum
+  requirements.
+- Simplified RBC progress-stage synchronization so it no longer accepts an
+  unused READY-quorum argument. Receiver-side protocol quorum enforcement
+  remains centralized in DELIVER acceptance, while progress sync now only tracks
+  verified payload knowledge, local READY emission, and accepted DELIVER state.
+- Removed an unreachable READY-quorum tail from near-tip RBC payload
+  backpressure exemption. `allows_payload_recovery()` already guarantees a
+  non-empty session with missing local chunks, so the helper now exposes the
+  intended repair exemption directly without consulting a debug-aware quorum
+  helper in dead code.
+- Added an adversarial local-DELIVER bypass regression: the
+  post-local-READY fast path may only emit early DELIVER for locally
+  authoritative payloads. Complete peer-only RBC bytes with one local READY now
+  have direct coverage proving they stay deferred until protocol READY quorum
+  instead of using the local-authority shortcut.
+- Pinned inbound READY commit-pipeline wakeups to protocol READY quorum as
+  well. When `force_deliver_quorum_one` lowers local helper thresholds, a
+  complete delivered session plus one accepted READY no longer records
+  `BlockAvailable` or wakes the commit pipeline until the receiver observes
+  protocol quorum.
+- Extended that key/header/signature binding to cached RBC INIT and payload
+  bundle rebuilds. `rebuild_rbc_init(...)` and `rbc_payload_bundle(...)` now
+  refuse sessions whose cached block header is validly signed by the
+  roster-derived leader but belongs to a different block hash, height, or view
+  than the session key.
+- Hardened late missing-BlockCreated repair targeting so cached RBC
+  leader-signature indices only influence preferred signer selection after the
+  cached header/signature pair verifies against the roster-derived slot leader.
+  Forged cached signer indices now fall back to the real slot leader instead of
+  steering exact repair toward another canonical peer.
+- Hardened inbound RBC chunk repair responses. `RbcChunkRequest` handling now
+  refuses to serve cached chunks from invalid, malformed, key/header-mismatched,
+  or roster-leader-signature-mismatched sessions, while still answering requests
+  for well-formed sessions.
+- Hardened outbound missing-chunk repair so nodes no longer emit
+  `RbcChunkRequest` for sessions whose cached block header/signature marker is
+  absent or keyed to a different block hash, height, or view. Those sessions now
+  move to missing-BlockCreated repair instead of arming the chunk-repair
+  cooldown.
+- Hardened production READY rebroadcast paths so broad and targeted READY repair
+  only package recorded READY signatures after the cached session header/signature
+  metadata matches the session key and verifies against the roster-derived
+  leader. The pure `rbc_ready_bundle(...)` constructor remains available for
+  already-validated low-level tests.
+- Hardened inbound RBC READY and DELIVER acceptance so correctly signed peer
+  evidence only mutates a live session after the cached session header/signature
+  metadata matches the progress key and the leader signature verifies against
+  the resolved session roster. Misbound cached sessions now drop READY/DELIVER
+  evidence without recording, deferring, or completing delivery, while pre-INIT
+  stashing remains unchanged.
+- Hardened inbound live RBC chunk ingestion with the same metadata boundary:
+  once a session exists, `RbcChunk` can only mutate it after the cached
+  header/signature metadata matches the session key, the chunk shape is valid,
+  and the leader signature verifies against the resolved roster. Misbound live
+  sessions now drop valid-digest chunks and move to missing-`BlockCreated`
+  repair instead of filling the wrong session; pre-INIT chunk stashing remains
+  unchanged.
+- Fixed partial-session local hydration before READY/DELIVER processing. A
+  session with matching local authoritative payload but incomplete chunk slots
+  now hydrates the missing chunks before root validation instead of comparing a
+  partial computed chunk root with the full expected root and falsely marking
+  the session invalid. Matching local payload can therefore make raw DELIVER
+  evidence terminal and expose delivered-RBC validation priority immediately.
+- Closed an RBC idle-scheduler liveness gap for ready-to-deliver sessions:
+  complete payloads with READY quorum but no local DELIVER now wake the actor
+  immediately when the local validator can build a DELIVER, while observers and
+  other non-signing roles stay asleep instead of hot-looping. Complete chunk
+  counters whose bytes fail the advertised payload hash, or whose leader
+  signature does not verify against the session roster, stay passive as
+  malformed evidence instead of arming an immediate local-DELIVER wakeup. The
+  pending local-READY wakeup now uses the same roster-verified leader-signature
+  boundary, so malformed leader metadata cannot force an immediate READY retry.
+- Added a live partial-delivery regression for the authoritative local-payload
+  fallback: raw RBC status still records the accepted DELIVER marker for
+  diagnostics, but incomplete chunk counters do not satisfy authoritative
+  delivered predicates or schedule validation as `rbc_deliver`.
+- Added a recovery-roster regression for DA-enabled NPoS catch-up: a temporary
+  deterministic recovery roster shrink now has direct coverage proving
+  `on_block_commit` restores the original baseline roster at the recovery
+  height and consumes the pending restore marker.
+- Added block-sync batch-response adversarial matrix rows for globally enabled
+  hintless sync when a specific requester lacks roster proof. Roster-hinted
+  updates and plain `BlockCreated` responses now pin the forwarded
+  requester-proof bit so the downstream send gate cannot authorize hintless
+  `BlockSyncUpdate` traffic for unproven peers.
+- Removed the stale soft fallback from the confidential combined
+  downtime+timeout localnet restart-pressure test: after the restarted peer
+  comes back, it must now catch up to the expected non-empty height before the
+  final balance checks can pass.
+- Refreshed the ZK confidential localnet shield fixtures to use deterministic
+  non-empty encrypted payload envelopes. The exact restart-pressure rerun first
+  exposed that the old default payloads were now rejected during shield
+  execution (`ciphertext must not be empty`), leaving the public shield debit
+  unapplied; the fixed fixtures exercise the production payload validator and
+  restore the intended balance assertions.
+- Also refreshed direct core ZK shield fixtures that were still using default
+  encrypted payload envelopes, and moved the grouped confidential
+  transfer/unshield event plus shield-transfer audit fixtures off the stale
+  generic proof envelope. Those tests now register canonical confidential v2
+  verifying keys, seed real confidential notes, build real v2 transfer/unshield
+  proofs, and assert the emitted roots/commitments from production execution.
+- Repaired the remaining grouped ZK scaffold/root-window fixtures reached by the
+  non-empty payload sweep. `shield_burns_and_unshield_mints` now uses canonical
+  confidential v2 transfer/unshield verifier records, v2 note/root material, and
+  a real v2 unshield proof instead of an asset-hidden transfer proof pretending
+  to authorize unshield. The root-hint window test now commits/drops each state
+  block before opening the next one, and uses duplicate-nullifier validation as
+  the deterministic post-root gate so stale-root rejection is tested without
+  entering proof verification.
+- Gated the STARK-only ZK-ACE identity-management happy path and matching
+  Soracloud BFV assertion helper behind `zk-stark`. The default-feature
+  `iroha_core --lib` sweep no longer executes a STARK-only verifier path or
+  emits the helper dead-code warning, while the `zk-stark` focused rerun still
+  covers the happy path.
+- Validation:
+  - `cargo test -p integration_tests --test consensus_and_da restart_progress_hard_timeout_extends_combined_pressure_windows -- --nocapture`
+    (`1` passed)
+  - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --nocapture --test-threads=1`
+    (initial rerun reached restarted-peer catch-up, then failed final balance
+    because the stale empty shield payload was rejected during execution)
+  - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --nocapture --test-threads=1`
+    (`1` passed after replacing default shield payload fixtures)
+  - `cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 zk_confidential_events::shield_emits_confidential_event -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 zk_confidential_events::transfer_emits_confidential_event -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 zk_confidential_events::unshield_emits_confidential_event -- --nocapture`
+    (`1` passed; real unshield proof generation/verification took about 498s)
+  - `cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_05 zk_shield_transfer_audit::shield_and_transfer_emit_audit_roots_and_commitments -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 zk_ledger_scaffold::shield_burns_and_unshield_mints -- --nocapture`
+    (`1` passed; real unshield proof generation/verification took about 502s)
+  - `cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 zk_ledger_scaffold::shield_rejected_when_policy_disallows -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 zk_ledger_scaffold::zk_transfer_rejected_when_policy_transparent -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 zk_ledger_scaffold::zk_roots_are_bounded_in_world_state -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 zk_ledger_scaffold::frontier_checkpoints_respect_reorg_depth_bound -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 zk_root_hint_enforced::root_hint_rejects_stale_root_and_allows_recent_root_to_reach_nullifier_validation -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_05 zk_roots_get_cap::zk_roots_get_respects_cap_and_max -- --nocapture`
+    (`1` passed; test body reported its `IROHA_RUN_IGNORED=1` gate was not set)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib pending_block_validation_priority -- --nocapture`
+    (`2` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_deliver_relay_ready_bundle_before_deferring -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_availability_gate_requires_verified_complete_delivery_for_live_sessions -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib uses_protocol_quorum_under_debug_override -- --nocapture`
+    (`2` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_ready_rebroadcast -- --nocapture`
+    (`8` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rescue_rbc_missing_ready_peers -- --nocapture`
+    (`8` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib pacemaker_cached_slot -- --nocapture`
+    (`3` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib execute_commit_work -- --nocapture`
+    (`8` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib commit_worker -- --nocapture`
+    (`3` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib known_local_kura -- --nocapture`
+    (`2` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib complete_rbc_session_with_wrong_payload_bytes_stays_non_authoritative_on_sync -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib known_near_tip_rbc_session_stays_collecting_until_chunks_hydrate -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib incomplete_delivered_near_tip_rbc_session_remains_backpressure_exempt -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib maybe_emit_rbc_deliver_after_local_ready_does_not_bypass_quorum_for_peer_only_payload -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_ready_uses_protocol_quorum_for_complete_delivery_under_debug_override -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_ready -- --nocapture`
+    (`18` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib frontier_missing_qc_cleanup -- --nocapture`
+    (`2` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib committed_height_restores_baseline_roster_after_recovery_shrink -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_deliver_accepts_missing_chunks_when_da_enabled -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib maybe_emit_rbc_ready_for_known_authoritative_stub_skips_bootstrap_gate -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib pending_roster_activation -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_payload_match -- --nocapture`
+    (`10` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib payload_available_for_da -- --nocapture`
+    (`7` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_availability -- --nocapture`
+    (`4` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib reschedule_allows_fast_timeout_with_da_payload_available_when_enabled -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib reschedule_defers_missing_local_data_until_availability_timeout -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib commit_pipeline_defers_reschedule_until_availability_timeout -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib finalize_pending_block_defers_until_da_payload_available -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --lib fetch_pending_responses_batch_formal_gate_matrix -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib actor_next_tick_deadline_ -- --nocapture`
+    (`18` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_ready -- --nocapture`
+    (`17` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_deliver -- --nocapture`
+    (`19` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_ready -- --nocapture`
+    (`63` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_deliver -- --nocapture`
+    (`60` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_chunk -- --nocapture`
+    (`5` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_chunk -- --nocapture`
+    (`32` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib maybe_emit_rbc_ready -- --nocapture`
+    (`16` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_rebroadcast_active -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_payload_bundle_rejects_invalid_or_malformed_chunk_shape -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rebuild_rbc_init_rejects_invalid_or_malformed_chunk_shape -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_payload_bundle -- --nocapture`
+    (`3` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rebuild_rbc_init -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_init_preserves_rotated_leader_preference_for_late_missing_block_recovery -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib handle_rbc_chunk_request_rejects_invalid_or_mismatched_session_metadata -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rbc_chunk_request -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib maybe_request_missing_rbc_chunks_rejects_mismatched_session_metadata -- --nocapture`
+    (`1` passed after fixing the test fixture chunk size; pre-existing
+    `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib rebroadcast_stalled_rbc_payloads_requests_chunks_for_recovered_exact_frontier_session -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests --lib targeted_rbc_ready_rebroadcast_rejects_mismatched_session_metadata -- --nocapture`
+    (`1` passed; pre-existing `soracloud.rs` dead-code warning)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::world::isi::tests::zk_ace_identity_management_permission_is_account_scoped -- --nocapture`
+    (`0` tests run; confirms the STARK-only happy path is gated out of the
+    default-feature lib sweep)
+  - `cargo test -p iroha_core --features zk-stark --lib smartcontracts::isi::world::isi::tests::zk_ace_identity_management_permission_is_account_scoped -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --lib -- --nocapture`
+    (`4647` passed, `0` failed, `262` ignored; finished in `11832.87s`)
+  - `cargo check -p iroha_core --lib`
+  - `cargo fmt --all`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
 
 ## 2026-06-12 Halo2 OpenVerify reserved proof-family circuit aliases
 
@@ -12476,7 +14505,17 @@ Last updated: 2026-06-12
   exactly.
 - Updated the Sumeragi formal README and roadmap proof inventory for the new
   delivered-pending named stutter preservation obligation.
-- Validation: pending.
+- Validation:
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, depth `24`,
+    `15` temporal branches, no errors)
 
 ## 2026-06-12 Sumeragi delivered-pending named NewView-vote split
 
@@ -14070,6 +16109,7 @@ Last updated: 2026-06-12
   - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
   - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'source_material_role_validation'`
     (`3` passed, `872` deselected)
+
 ## 2026-06-11 Soracloud STARK query schedule and fixture refresh
 
 - Fixed STARK/FRI proof synthesis and verification to sample query indices
@@ -14153,21 +16193,21 @@ Last updated: 2026-06-12
   production verifier path.
 - Validation:
   - `cargo fmt --package iroha_sccp`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_adapter_engine_readiness_with_deployment_opens_source_adapter --lib -- --nocapture`
-    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp deployment_bound_source_adapter_proof_requires_matching_deployment --lib -- --nocapture`
+    (`0` selected; stale filter, compile-only)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp deployment_bound_transparent_proof_requires_matching_source_deployment --lib -- --nocapture`
     (`1` passed, `255` filtered out)
 
 ## 2026-06-10 Halo2 fallback Pow5 hash hardening
 
-- Replaced additive/unshifted placeholder relations in the developer Halo2 fallback
+- Replaced additive placeholder relations in the developer Halo2 fallback
   commit/Merkle fixtures with a deterministic shifted Pow5 pair hash for
   commit-open, tiny Merkle2, vote Merkle2, anon-transfer commitments,
   nullifiers, and the Merkle membership path exercised by those fixtures.
-- Added stale placeholder regressions for fallback commit-open, anon-transfer
-  commitments, tiny Merkle2, and vote-commit Merkle2 circuits, and aligned the
-  IPA developer-circuit tests with the internal Halo2 IPA verifier while keeping
-  public `verify_backend` fail-closed for legacy/developer-only backend labels.
+- Added stale-additive-root regressions for the fallback tiny Merkle2 and
+  vote-commit Merkle2 circuits, and aligned the IPA developer-circuit tests with
+  the internal Halo2 IPA verifier while keeping public `verify_backend`
+  fail-closed for legacy/developer-only backend labels.
 - Validation:
   - `cargo fmt --package iroha_core`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-fallback-pow5 CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features 'zk-halo2,zk-halo2-ipa,zk-halo2-ipa-poseidon' ipa_anon_transfer_commit_zk1 --lib -- --nocapture`
@@ -14175,11 +16215,7 @@ Last updated: 2026-06-12
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-fallback-pow5 CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features 'zk-halo2,zk-halo2-ipa,zk-halo2-ipa-poseidon' ipa_vote_bool_commit --lib -- --nocapture`
     (`2` passed, `7391` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-fallback-pow5 CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features 'zk-tests,halo2-dev-tests,zk-halo2' fallback_ --lib -- --nocapture`
-    (`59` passed, `7462` filtered out)
-  - `cargo fmt --package iroha_core -- --check`
-  - `git diff --check`
-  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
-    (no output)
+    (`57` passed, `7411` filtered out)
 
 ## 2026-06-10 BFV execution witness Galois key-set binding
 
@@ -14251,39 +16287,40 @@ Last updated: 2026-06-12
   - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
   - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
   - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
   - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` tests passed)
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
-    passed: `7,799` states generated, `2,338` distinct states, `0` queued,
-    depth `24`, `15` temporal branches, no errors.
+    (`7799` states generated, `2338` distinct states found, depth `24`,
+    `15` temporal branches, no errors)
 
-## 2026-06-10 BFV release-audit external artifact sentinels
+## 2026-06-10 BFV release-audit header-only digest sentinel
 
 - Standalone BFV full-bootstrap release-audit signoff and manifest validation
-  now reject the known digest of header-only, nested-header, and placeholder
-  report/archive artifacts, so reviewers cannot sign a digest that package byte
-  validation would later reject as missing the required external audit body.
+  now reject the known digest of header-only report/archive artifacts, so
+  reviewers cannot sign a digest that package byte validation would later reject
+  as missing the required external audit body.
 - Extended the release-audit adversarial regression to cover record/signoff and
-  manifest rejection of header-only, nested-header, and placeholder external
-  audit digests while keeping package byte validation coverage for header-only
-  report/archive mutations and placeholder-style artifact bodies.
+  manifest rejection of header-only external audit digests while keeping package
+  byte validation coverage for header-only report/archive mutations.
 - Updated the Soracloud full-bootstrap material and execution public-input
-  schemas to advertise header-only and nested-header external audit digest
-  rejection on release-audit packages plus minimum-size, blank, nested, and
-  placeholder-style audit-artifact body rejection, with the execution schema
-  continuing to advertise signoff/manifest rejection. The material schema hash
-  is now
-  `4e79f428b07a8e30ebe1fbb9cdb7705c1952fee367df265cfb9b9fffe68616ff`;
+  schemas to advertise header-only external audit digest rejection on
+  release-audit packages and nested audit-artifact body rejection, with the
+  execution schema continuing to advertise signoff/manifest rejection. The
+  material schema hash is now
+  `08aae29740c2d17b1572aed326fde56d325357417dfc1c52edf1fdb83aa09511`;
   the execution schema hash is now
-  `0307c5d22b0d28178b09f2ddaf1ee67bab175a82d90b49dd2fbed1a13eda62a1`.
+  `10f9c8981407373fe5de0dd5c10b63a97401394c93ab340ac28127bf6f7cd1c7`.
 - Validation:
   - `cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_evidence_binds_generated_artifacts --lib -- --nocapture`
     (`1` passed, `692` filtered out)
   - `cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
-    (`1` passed, `1534` filtered out)
+    (`1` passed, `1531` filtered out)
   - `cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
-    (`1` passed, `1534` filtered out)
+    (`1` passed, `1531` filtered out)
   - `cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header --lib -- --nocapture`
-    (`1` passed, `1534` filtered out)
+    (`1` passed, `1531` filtered out)
   - `cargo test -j 1 -p iroha_crypto full_bootstrap_execution_witness_digest_binds_governed_trace --lib -- --nocapture`
     (`1` passed, `692` filtered out)
   - `cargo test -j 1 -p iroha_crypto full_bootstrap_release_audit_artifact --lib -- --nocapture`
@@ -21892,8 +23929,8 @@ Last updated: 2026-06-12
 - The scanner now requires this report to be a closed schema bound to
   `slot.json` by slot id, device fingerprint, OS build id, app package,
   attestation challenge, and certificate-chain path/hash. The verifier report
-  must name a non-secret verifier, report `verification.status` as exact `ok`,
-  and prove StrongBox/KeyMint plus physical-device attestation.
+  must name a non-secret verifier, report `verification.status` as `ok` or
+  `passed`, and prove StrongBox/KeyMint plus physical-device attestation.
 - The signed-evidence helper now reruns the verifier-report validation before
   calculating `artifact_digests`, so it refuses to create
   `evidence/signed-evidence.json` for missing, malformed, weakly attested, or
@@ -23854,8 +25891,8 @@ Last updated: 2026-06-12
   the Core execution-proof verifier path to pass the expected public slot and
   bound-mode context for BFV-shaped native AIR openings.
 - Rejected empty or all-zero native AIR commitment, trace, and composition roots,
-  plus auxiliary composition-value root/value payloads, so structurally
-  malformed native AIR envelopes fail before prover-unavailable handling.
+  plus composition-value root/value count drift, so structurally malformed
+  native AIR envelopes fail before prover-unavailable handling.
 - Pinned native STARK params, proof, commitment, and AIR version tags to v1;
   focused regressions now cover each tag so stale envelope-version tags fail
   before prover-unavailable handling.
@@ -23873,9 +25910,11 @@ Last updated: 2026-06-12
 - The same boundary now verifies each opened row, next-row, and composition
   value against the advertised Merkle roots, so well-shaped but stale siblings
   cannot pass the BFV-shaped native AIR preflight.
-- BFV-native material/execution AIR now rejects proof-level auxiliary
-  composition-value entries outright; the dedicated BFV proof shape binds
-  composition values through the AIR openings and verifier-owned trace material.
+- Optional proof-level composition-value entries, when present, must now carry
+  canonical field values, ordered auxiliary wires, final-layer Merkle paths,
+  paths that authenticate against the advertised composition-value root, and
+  leaves that match their public constant plus auxiliary terms; unauthenticated
+  `z_coeff` terms are rejected before the dedicated verifier fallback.
 - BFV-shaped FRI query chains now replay transcript-derived indices, authenticate
   y0/y1/z openings against each FRI layer root, enforce the binary fold relation,
   require final zero before matching AIR openings, and the deterministic test
@@ -24508,15 +26547,15 @@ Last updated: 2026-06-12
   direction bits matching the sampled row index. The same boundary now also
   requires the canonical BFV transcript label and a statement-bound native AIR
   domain tag before accepting BFV-shaped AIR metadata, rejects empty/all-zero
-  commitment roots, all-zero trace/composition roots, and auxiliary
-  composition-value commitments.
+  commitment roots, all-zero trace/composition roots, and unauthenticated
+  optional composition-value commitments.
 - Added adversarial coverage for short/wide opened rows, non-field row and
   composition values, truncated paths, missing path direction bytes, non-zero
   direction padding bits, row-path index drift, unmasked private rows,
   wraparound private next-row exposure, query-count drift, and public-digest
-  drift, plus stale transcript-label/domain-tag, empty/all-zero roots, and
-  auxiliary composition-value commitment rejection before the current dedicated
-  verifier boundary.
+  drift, plus stale transcript-label/domain-tag, empty/all-zero roots,
+  optional composition-value shape rejection, and unauthenticated composition
+  value root/path rejection before the current dedicated verifier boundary.
 - Validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-shape cargo test -j 1 -p iroha_crypto full_bootstrap_native_stark_air_domain_tag --lib -- --nocapture`
     (`1` passed, `688` filtered out)
@@ -33033,11 +35072,11 @@ Last updated: 2026-06-12
   rejects the circuit-id mismatch.
 - Validation:
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_wrong_circuit_stark_payload --lib -- --nocapture`
-    (`1` passed, `5073` filtered out)
+    (`1` passed, `7506` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_opaque_stark_payload --lib -- --nocapture`
-    (`1` passed, `5073` filtered out)
+    (`1` passed, `7506` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_below_floor_stark_payload --lib -- --nocapture`
-    (`1` passed, `5073` filtered out)
+    (`1` passed, `7506` filtered out)
   - `cargo fmt --package iroha_core -- --check`
   - `git diff --check`
   - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier --lib -- --nocapture`
@@ -57708,13 +59747,13 @@ Last updated: 2026-06-12
 ## 2026-06-07 Kagemusha readiness Android report redaction
 
 - Hardened `scripts/kagemusha_production_readiness.py` so Android device-lab
-  reports are recursively scanned for secret-looking and control-character
-  strings before freshness, duplicate-binding checks, blocker construction, or
-  final readiness summary serialization.
-- Any unsafe string that reaches a report is replaced with the standard
-  redaction label and adds `android_device_lab_report_unsafe_material`, keeping
+  reports are recursively scanned for secret-looking strings before freshness,
+  duplicate-binding checks, blocker construction, or final readiness summary
+  serialization.
+- Any secret-looking string that reaches a report is replaced with the standard
+  redaction label and adds `android_device_lab_report_secret_material`, keeping
   direct API callers and future scanner drift from leaking operator-local
-  tokens or terminal-control bytes into release rollups.
+  tokens into release rollups.
 - Added a direct rollup regression that injects a malicious scanner report with
   secret-looking slot and error strings, then verifies the final JSON is blocked
   and contains no raw token material. Pinned the source/test/workflow markers

@@ -1219,6 +1219,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-filter-script",
     ),
     (
+        "C# SDK verifier backend test filter negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-verifier-backend-test-filter-script",
+    ),
+    (
         "C# SDK workflow inventory negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-workflow-inventory",
     ),
@@ -7099,9 +7103,19 @@ def check_csharp(texts, errors):
         "Kagemusha C# SDK script must expose the native bridge on Windows loader path",
         errors,
     )
+    expected_csharp_filter = (
+        '--filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests'
+        "|FullyQualifiedName~PrivacyNativeTests"
+        "|FullyQualifiedName~TransactionBuilderTests"
+        "|FullyQualifiedName~CanonicalRequestTests"
+        "|FullyQualifiedName~ToriiClientTests"
+        "|FullyQualifiedName~SignedQueryBuilderTests"
+        "|FullyQualifiedName~SignedIterableQueryBuilderTests"
+        '|FullyQualifiedName~VerifyingKeyBackendTagTests"'
+    )
     require(
-        '--filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests|FullyQualifiedName~PrivacyNativeTests|FullyQualifiedName~TransactionBuilderTests"' in script,
-        "Kagemusha C# SDK script must run recursive spend, privacy native, and transaction builder tests",
+        expected_csharp_filter in script,
+        "Kagemusha C# SDK script must run recursive spend, privacy native, transaction builder, canonical request, Torii, signed query, and verifier backend tests",
         errors,
     )
     relative = "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
@@ -10250,6 +10264,25 @@ if mode == "--negative-control-csharp-sdk-test-filter-script":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: C# SDK test filter drift was not detected")
+
+if mode == "--negative-control-csharp-sdk-verifier-backend-test-filter-script":
+    target = CSHARP_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "|FullyQualifiedName~VerifyingKeyBackendTagTests",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate C# SDK verifier backend test filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected C# SDK verifier backend test filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# SDK verifier backend test filter drift was not detected")
 
 if mode == "--negative-control-csharp-sdk-workflow-inventory":
     target = WORKFLOW_PATH

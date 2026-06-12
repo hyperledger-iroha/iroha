@@ -7,15 +7,22 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World, WorldReadOnly},
-    zk::test_utils::halo2_fixture_envelope,
 };
 use iroha_crypto::KeyPair;
-use iroha_data_model::{account::NewAccount, prelude::*};
+use iroha_data_model::{account::NewAccount, prelude::*, proof::ProofBox};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
+fn encrypted_payload(seed: u8) -> iroha_data_model::confidential::ConfidentialEncryptedPayload {
+    let mut nonce = [0_u8; 24];
+    nonce.fill(seed);
+    let mut ciphertext = b"zk-root-hint-payload-v1".to_vec();
+    ciphertext.extend_from_slice(&[seed; 32]);
+    iroha_data_model::confidential::ConfidentialEncryptedPayload::new([1_u8; 32], nonce, ciphertext)
+}
+
 #[test]
-fn unshield_rejects_stale_root_hint_and_accepts_recent() {
+fn root_hint_rejects_stale_root_and_allows_recent_root_to_reach_nullifier_validation() {
     use iroha_config::parameters::{actual as cfg, defaults};
 
     // Create state and cap recent roots to 3
@@ -163,7 +170,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             alice.clone(),
             1u128,
             note,
-            iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+            encrypted_payload(i),
         )
         .into();
         stx.world
@@ -190,7 +197,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             alice.clone(),
             1u128,
             note,
-            iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+            encrypted_payload(i),
         )
         .into();
         stx.world
@@ -200,38 +207,50 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             .unwrap();
     }
     stx.apply();
+    block.commit().expect("commit root history setup");
 
-    // Negative: Unshield with stale root_hint must be rejected
-    let mut block2 = state.block(iroha_data_model::block::BlockHeader::new(
-        nonzero!(2_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    ));
-    let mut stx2 = block2.transaction();
-    let bad_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-    let bad_unshield = iroha_data_model::isi::zk::Unshield::new(
-        asset_def_id.clone(),
-        alice.clone(),
-        1u128,
-        vec![[9u8; 32]],
-        iroha_data_model::proof::ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            bad_fixture.proof_box("halo2/ipa"),
-            iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
-        ),
-        Some(stale_root),
-    );
-    let res =
-        stx2.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx2, &alice, bad_unshield.into());
-    assert!(res.is_err(), "stale root_hint must be rejected");
+    let repeated_nullifier = [9u8; 32];
+    let proof = ProofBox {
+        backend: "halo2/ipa".into(),
+        bytes: b"not-a-proof-not-verified-after-duplicate-nullifier".to_vec(),
+    };
 
-    // Positive: ZkTransfer with recent root_hint is accepted
+    {
+        // Negative: stale root_hint must be rejected before later transfer validation.
+        let mut block2 = state.block(iroha_data_model::block::BlockHeader::new(
+            nonzero!(2_u64),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx2 = block2.transaction();
+        let bad_transfer = iroha_data_model::isi::zk::ZkTransfer::new(
+            asset_def_id.clone(),
+            vec![repeated_nullifier, repeated_nullifier],
+            vec![[3u8; 32]],
+            iroha_data_model::proof::ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                proof.clone(),
+                iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "transfer_vk"),
+            ),
+            Some(stale_root),
+        );
+        let res = stx2.world.executor().clone().execute_instruction(
+            &mut stx2,
+            &alice,
+            bad_transfer.into(),
+        );
+        let err = format!("{:?}", res.expect_err("stale root_hint must be rejected"));
+        assert!(
+            err.contains("stale or unknown Merkle root"),
+            "stale root must fail at root gate, got {err}"
+        );
+    }
+
+    // Positive root-window coverage: a recent root_hint must pass the root gate and
+    // reach the next deterministic validation error without proof verification.
     let mut block3 = state.block(iroha_data_model::block::BlockHeader::new(
         nonzero!(3_u64),
         None,
@@ -251,21 +270,30 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             .last()
             .unwrap()
     };
-    let ok_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let ok_transfer = iroha_data_model::isi::zk::ZkTransfer::new(
         asset_def_id.clone(),
-        Vec::new(),
+        vec![repeated_nullifier, repeated_nullifier],
         vec![[3u8; 32]],
         iroha_data_model::proof::ProofAttachment::new_ref(
             "halo2/ipa".into(),
-            ok_fixture.proof_box("halo2/ipa"),
+            proof,
             iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "transfer_vk"),
         ),
         Some(current_root),
     );
-    stx3.world
+    let err = stx3
+        .world
         .executor()
         .clone()
         .execute_instruction(&mut stx3, &alice, ok_transfer.into())
-        .expect("recent root_hint accepted");
+        .expect_err("recent root should proceed to duplicate-nullifier validation");
+    let err = format!("{err:?}");
+    assert!(
+        err.contains("duplicate nullifier"),
+        "recent root should advance past root gate, got {err}"
+    );
+    assert!(
+        !err.contains("stale or unknown Merkle root"),
+        "recent root must not be rejected as stale: {err}"
+    );
 }

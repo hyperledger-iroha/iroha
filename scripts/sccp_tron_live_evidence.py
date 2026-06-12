@@ -315,8 +315,8 @@ def _tron_pro_api_key_token(value: Any, *, label: str) -> str:
         raise ValueError(f"{label} must not contain whitespace")
     try:
         value.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise ValueError(f"{label} must be ASCII") from exc
+    except UnicodeEncodeError:
+        raise ValueError(f"{label} must be ASCII") from None
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         raise ValueError(f"{label} must not contain control characters")
     return value
@@ -359,9 +359,11 @@ def _post_json(
         with opener(request, timeout=timeout) as response:
             raw = response.read(TRON_API_MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"TRON API {endpoint} failed with HTTP {exc.code}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"TRON API {endpoint} request failed") from exc
+        raise RuntimeError(
+            f"TRON API {endpoint} failed with HTTP {exc.code}"
+        ) from None
+    except urllib.error.URLError:
+        raise RuntimeError(f"TRON API {endpoint} request failed") from None
     if len(raw) > TRON_API_MAX_RESPONSE_BYTES:
         raise RuntimeError(
             f"TRON API {endpoint} response exceeds "
@@ -372,8 +374,8 @@ def _post_json(
             raw.decode("utf-8"),
             object_pairs_hook=_json_object_without_duplicate_keys,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"TRON API {endpoint} returned invalid JSON") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise RuntimeError(f"TRON API {endpoint} returned invalid JSON") from None
     except ValueError as exc:
         if str(exc) == "duplicate JSON keys":
             raise RuntimeError(f"TRON API {endpoint} returned duplicate JSON keys") from None
@@ -484,13 +486,7 @@ def _constant_word(
     )
     result = response.get("result")
     if not isinstance(result, dict) or result.get("result") is not True:
-        message = _decode_tron_error_message(
-            result.get("message") if isinstance(result, dict) else None
-        )
-        raise RuntimeError(
-            f"TRON constant call {function_selector} failed"
-            + (f": {message}" if message else "")
-        )
+        raise RuntimeError(f"TRON constant call {function_selector} failed")
     values = response.get("constant_result")
     if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], str):
         raise RuntimeError(f"TRON constant call {function_selector} returned no single word")
@@ -500,10 +496,10 @@ def _constant_word(
             label=f"TRON constant call {function_selector} ABI word",
             nonzero=False,
         )
-    except RuntimeError as exc:
+    except RuntimeError:
         raise RuntimeError(
             f"TRON constant call {function_selector} returned non-hex data"
-        ) from exc
+        ) from None
     if len(word) != 32:
         raise RuntimeError(f"TRON constant call {function_selector} must return one ABI word")
     return word
@@ -1847,7 +1843,7 @@ def _source_event_solid_block_header_proof_summary(
             proof_input
         )
         proof_hash = sccp_client.tron_solid_block_header_proof_hash(proof_input)
-    except (TypeError, ValueError):
+    except (RuntimeError, TypeError, ValueError):
         return {
             "solid_block_header_proof_ready": False,
             "solid_block_header_proof_blocker": "solid block header proof is invalid",
@@ -1927,8 +1923,11 @@ def _source_event_witness_schedule_summary(
     try:
         payload_hash = sccp_client.tron_witness_schedule_payload_hash(payload)
         schedule_hash = sccp_client.tron_witness_schedule_hash_from_payload(payload)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("witness schedule payload is not canonical") from exc
+    except (RuntimeError, TypeError, ValueError):
+        return {
+            "witness_schedule_proof_ready": False,
+            "witness_schedule_proof_blocker": "witness schedule payload is invalid",
+        }
     schedule_hash_bytes = _parse_hex32_blob(
         schedule_hash,
         label="witness schedule hash",
@@ -2189,10 +2188,15 @@ def _source_event_witness_schedule_transition_chain_summary(
                     message_input
                 )
             )
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(
-                f"witness schedule transition {index} message is not canonical"
-            ) from exc
+        except (RuntimeError, TypeError, ValueError):
+            return {
+                "witness_schedule_transition_chain_ready": False,
+                "witness_schedule_transition_chain_required": True,
+                "witness_schedule_transition_chain_blocker": (
+                    f"witness schedule transition {index} message is invalid"
+                ),
+                "witness_schedule_transition_count": len(transition_inputs),
+            }
         supplied_message_hash = _mapping_optional_value(
             raw_transition,
             "transitionMessageHash",
@@ -2272,10 +2276,15 @@ def _source_event_witness_schedule_transition_chain_summary(
             seal_hash = sccp_client.tron_witness_schedule_transition_seal_hash(
                 seal_input
             )
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(
-                f"witness schedule transition {index} seal is not canonical"
-            ) from exc
+        except (RuntimeError, TypeError, ValueError):
+            return {
+                "witness_schedule_transition_chain_ready": False,
+                "witness_schedule_transition_chain_required": True,
+                "witness_schedule_transition_chain_blocker": (
+                    f"witness schedule transition {index} seal is invalid"
+                ),
+                "witness_schedule_transition_count": len(transition_inputs),
+            }
         supplied_seal_hash = _mapping_optional_value(
             raw_transition,
             "transitionSealHash",
@@ -2441,8 +2450,11 @@ def _source_event_witness_seal_summary(
         solid_block_message_hash = sccp_client.tron_solid_block_message_hash(
             solid_block_message_input
         )
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("witness seal solid-block message is not canonical") from exc
+    except (RuntimeError, TypeError, ValueError):
+        return {
+            "witness_seal_proof_ready": False,
+            "witness_seal_proof_blocker": "witness seal solid-block message is invalid",
+        }
     total_weight = sum(witness_weights)
     signed_weight = sum(witness_weights[index] for index in signer_indices)
     if signed_weight * 3 <= total_weight * 2:
@@ -2471,8 +2483,11 @@ def _source_event_witness_seal_summary(
     try:
         seal_bytes = sccp_client.canonical_tron_witness_seal_bytes(seal_input)
         seal_hash = sccp_client.tron_witness_seal_hash(seal_input)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("witness seal proof is not canonical") from exc
+    except (RuntimeError, TypeError, ValueError):
+        return {
+            "witness_seal_proof_ready": False,
+            "witness_seal_proof_blocker": "witness seal proof is invalid",
+        }
     seal_hash_bytes = _parse_hex32_blob(seal_hash, label="witness seal hash")
     if expected_seal_hash is not None and seal_hash_bytes != expected_seal_hash:
         raise RuntimeError("witness seal hash does not match expected witness seal hash")
@@ -2755,8 +2770,14 @@ def _source_event_transaction_source_proof_summary(
         proof_hash = sccp_client.tron_sccp_transaction_source_proof_hash(
             proof_input
         )
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("transaction source proof input is not canonical") from exc
+    except (RuntimeError, TypeError, ValueError):
+        return (
+            {
+                "transaction_source_proof_ready": False,
+                "transaction_source_proof_blocker": "transaction source proof is invalid",
+            },
+            None,
+        )
     proof_hash_bytes = _parse_hex32_blob(
         proof_hash,
         label="transaction source proof hash",
@@ -3025,8 +3046,8 @@ def _parse_transaction_address_payload(value: Any, *, label: str) -> bytes:
         raise RuntimeError(f"{label} must be a TRON address")
     try:
         return parse_tron_address_payload(value, label=label)
-    except (argparse.ArgumentTypeError, ValueError) as exc:
-        raise RuntimeError(f"{label} is not a valid TRON address") from exc
+    except (argparse.ArgumentTypeError, ValueError):
+        raise RuntimeError(f"{label} is not a valid TRON address") from None
 
 
 def _source_event_trigger_contract_summary(
@@ -4331,8 +4352,10 @@ def _metadata_runtime_bytecode(metadata: dict[str, Any], *, label: str) -> bytes
             bytecode,
             label=f"{label} bytecode",
         )
-    except (argparse.ArgumentTypeError, RuntimeError) as exc:
-        raise RuntimeError(f"/wallet/getcontract returned malformed {label} bytecode") from exc
+    except (argparse.ArgumentTypeError, RuntimeError):
+        raise RuntimeError(
+            f"/wallet/getcontract returned malformed {label} bytecode"
+        ) from None
 
 
 def _check_contract_metadata_address(
@@ -4349,10 +4372,10 @@ def _check_contract_metadata_address(
             value,
             label=f"{label} contract_address",
         )
-    except (argparse.ArgumentTypeError, ValueError) as exc:
+    except (argparse.ArgumentTypeError, ValueError):
         raise RuntimeError(
             f"/wallet/getcontract returned malformed {label} contract_address"
-        ) from exc
+        ) from None
     if observed_payload != expected_payload:
         raise RuntimeError(
             f"/wallet/getcontract {label} contract_address does not match the queried address"
@@ -6088,8 +6111,10 @@ def render_offline_full_toml(summary: dict[str, Any]) -> str:
     offline_parser = evidence.build_parser()
     try:
         offline_args = offline_parser.parse_args(args)
-    except SystemExit as exc:
-        raise RuntimeError("generated offline full TOML arguments are invalid") from exc
+    except SystemExit:
+        raise RuntimeError(
+            "generated offline full TOML arguments are invalid"
+        ) from None
     evidence.apply_runtime_bytecode_hashes(offline_args)
     config_hash = evidence.tron_source_bridge_config_hash(
         bridge_address=offline_args.bridge_address,
@@ -6170,8 +6195,8 @@ def _runtime_tron_pro_api_key(args: argparse.Namespace) -> str | None:
     if key_file is not None:
         try:
             inline_key = Path(key_file).expanduser().read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ValueError("--tron-pro-api-key-file cannot be read") from exc
+        except OSError:
+            raise ValueError("--tron-pro-api-key-file cannot be read") from None
     if inline_key is None:
         return None
     return _tron_pro_api_key_token(
@@ -6194,8 +6219,8 @@ def _runtime_witness_schedule_payload(args: argparse.Namespace) -> bytes | None:
             inline_payload = Path(payload_file).expanduser().read_text(
                 encoding="utf-8"
             )
-        except OSError as exc:
-            raise ValueError("--witness-schedule-payload-file cannot be read") from exc
+        except OSError:
+            raise ValueError("--witness-schedule-payload-file cannot be read") from None
     if inline_payload is None:
         return None
     if not from_file:
@@ -6235,24 +6260,24 @@ def _runtime_witness_schedule_transitions(
         if text.startswith("@"):
             try:
                 text = Path(text[1:]).expanduser().read_text(encoding="utf-8")
-            except OSError as exc:
+            except OSError:
                 raise ValueError(
                     f"--witness-schedule-transition-json {index} file cannot be read"
-                ) from exc
+                ) from None
         try:
             parsed = json.loads(
                 text,
                 object_pairs_hook=_json_object_without_duplicate_keys,
             )
-        except json.JSONDecodeError as exc:
+        except json.JSONDecodeError:
             raise ValueError(
                 f"--witness-schedule-transition-json {index} must be JSON"
-            ) from exc
-        except ValueError as exc:
+            ) from None
+        except ValueError:
             raise ValueError(
                 f"--witness-schedule-transition-json {index} must not contain "
                 "duplicate JSON keys"
-            ) from exc
+            ) from None
         if not isinstance(parsed, dict):
             raise ValueError(
                 f"--witness-schedule-transition-json {index} must be a JSON object"

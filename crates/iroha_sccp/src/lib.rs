@@ -58607,6 +58607,128 @@ mod tests {
             "Solana route canaries must replay the live ProgramData transcript"
         );
 
+        let source_material =
+            sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_v1(
+                sample_solana_vote_roster_hash(),
+                [0xB2; 32],
+                [0xC3; 32],
+                [0xE5; 32],
+                [0xD4; 32],
+            )
+            .expect("Solana mainnet source verifier material");
+        let unaudited_source_deployment =
+            build_sccp_solana_mainnet_source_adapter_deployment(&source_material, [0xE6; 32])
+                .expect("Solana source deployment");
+        let source_deployment =
+            build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &source_material,
+                [0xE6; 32],
+                [0xB7; 32],
+                [0xC8; 32],
+                [0xD9; 32],
+            )
+            .expect("audited Solana source deployment");
+        let route_allowlist = sccp_profiled_route_allowlist_for_lane_evidence_v1(
+            SCCP_DOMAIN_SOL,
+            &source_material,
+            &source_deployment,
+            &destination_rollout,
+        )
+        .expect("evidence-bound Solana route allowlist");
+        let source_material_hash = sccp_source_verifier_material_hash(&source_material);
+        let source_deployment_hash = sccp_source_adapter_engine_deployment_hash(&source_deployment);
+        let route_allowlist = sccp_solana_route_allowlist_with_lane_canary_evidence_v1(
+            route_allowlist,
+            &destination_rollout,
+            destination_binding_hash,
+            source_material_hash,
+            source_deployment_hash,
+        )
+        .expect("Solana ProgramData-bound canary route allowlist");
+        let readiness = sccp_lane_production_readiness_with_deployment_materials_for_domain(
+            SCCP_DOMAIN_SOL,
+            &source_material,
+            &source_deployment,
+            &destination_rollout,
+            &route_allowlist,
+        )
+        .expect("Solana lane readiness");
+        assert!(readiness.source_adapter_ready);
+        assert!(readiness.immutable_verifier_ready);
+        assert!(readiness.anchors_ready);
+        assert!(readiness.routes_allowlisted);
+        assert!(readiness.production_ready);
+        assert!(readiness.blockers.is_empty());
+
+        let unaudited_readiness =
+            sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                SCCP_DOMAIN_SOL,
+                &source_material,
+                &unaudited_source_deployment,
+                &destination_rollout,
+                &route_allowlist,
+            )
+            .expect("unaudited Solana source deployment readiness");
+        assert!(!unaudited_readiness.source_adapter_ready);
+        assert!(!unaudited_readiness.production_ready);
+        assert!(
+            unaudited_readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.contains("Solana audited Tower replay")
+                    || blocker.contains("Solana finalized-slot/status")),
+            "unaudited Solana deployment evidence must keep a source-adapter blocker: {:?}",
+            unaudited_readiness.blockers
+        );
+
+        let generic_canary_route_allowlist = sccp_route_allowlist_with_lane_canary_evidence_v1(
+            route_allowlist.clone(),
+            [0xE1; 32],
+            destination_binding_hash,
+            source_material_hash,
+            source_deployment_hash,
+        )
+        .expect("generic Solana canary route allowlist");
+        let generic_canary_readiness =
+            sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                SCCP_DOMAIN_SOL,
+                &source_material,
+                &source_deployment,
+                &destination_rollout,
+                &generic_canary_route_allowlist,
+            )
+            .expect("generic Solana canary readiness");
+        assert!(!generic_canary_readiness.routes_allowlisted);
+        assert!(!generic_canary_readiness.production_ready);
+        assert!(
+            generic_canary_readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.contains("route canary evidence is not bound")),
+            "generic Solana route canary evidence must not satisfy lane readiness: {:?}",
+            generic_canary_readiness.blockers
+        );
+
+        let mut drifted_programdata_slot = destination_rollout.clone();
+        drifted_programdata_slot.solana_programdata_slot = Some("4322".to_owned());
+        let drifted_readiness =
+            sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                SCCP_DOMAIN_SOL,
+                &source_material,
+                &source_deployment,
+                &drifted_programdata_slot,
+                &route_allowlist,
+            )
+            .expect("drifted Solana ProgramData readiness");
+        assert!(!drifted_readiness.production_ready);
+        assert!(
+            drifted_readiness.blockers.iter().any(|blocker| blocker
+                .contains("route canary evidence is not bound")
+                || blocker.contains("destination verifier rollout material")),
+            "drifted Solana ProgramData metadata must close lane readiness: {:?}",
+            drifted_readiness.blockers
+        );
+
         let mut drifted_metadata = destination_rollout;
         drifted_metadata.solana_programdata_slot = Some("4322".to_owned());
         assert!(!sccp_destination_rollout_is_production_ready(
@@ -58977,6 +59099,225 @@ mod tests {
                 .blockers
                 .iter()
                 .any(|blocker| blocker.contains("route allowlist is not production-ready"))
+        );
+    }
+
+    #[test]
+    fn bsc_lane_readiness_with_exact_deployment_materials_rejects_replayed_profiles() {
+        let source_material =
+            sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                SCCP_DOMAIN_BSC,
+                sample_bsc_validator_set_hash(),
+                [0x62; 32],
+                [0x63; 32],
+                [0x64; 32],
+                sample_evm_message_emitter_address(SCCP_DOMAIN_BSC),
+                sample_evm_source_bridge_code_hash(SCCP_DOMAIN_BSC),
+            )
+            .expect("BSC source material");
+        let source_deployment =
+            build_sccp_bsc_mainnet_source_adapter_deployment(&source_material, [0x65; 32])
+                .expect("BSC source deployment");
+        let destination_rollout = sccp_evm_mainnet_destination_rollout_with_binding_v1(
+            SCCP_DOMAIN_BSC,
+            "0x2222222222222222222222222222222222222222".to_owned(),
+            format!("0x{}", "66".repeat(32)),
+            format!("0x{}", "67".repeat(32)),
+            encode_0x_lower_hex(&sccp_bsc_mainnet_network_id_word_v1()),
+            format!("0x{}", "68".repeat(20)),
+        )
+        .expect("BSC destination rollout");
+        let route_allowlist = sccp_profiled_route_allowlist_for_lane_evidence_v1(
+            SCCP_DOMAIN_BSC,
+            &source_material,
+            &source_deployment,
+            &destination_rollout,
+        )
+        .expect("evidence-bound BSC route allowlist");
+        let missing_canary_readiness =
+            sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                SCCP_DOMAIN_BSC,
+                &source_material,
+                &source_deployment,
+                &destination_rollout,
+                &route_allowlist,
+            )
+            .expect("missing BSC route canary readiness");
+        assert!(!missing_canary_readiness.routes_allowlisted);
+        assert!(!missing_canary_readiness.production_ready);
+        assert!(
+            missing_canary_readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.contains("route canary evidence is not bound")),
+            "BSC lane readiness must require live route canary evidence: {:?}",
+            missing_canary_readiness.blockers
+        );
+
+        let destination_binding_hash = required_hex_string_is_nonzero::<32>(
+            destination_rollout.destination_binding_hash.as_deref(),
+        )
+        .expect("BSC destination binding hash");
+        let source_material_hash = sccp_source_verifier_material_hash(&source_material);
+        let source_deployment_hash = sccp_source_adapter_engine_deployment_hash(&source_deployment);
+        let route_allowlist = sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
+            route_allowlist,
+            &destination_rollout,
+            destination_binding_hash,
+            source_material_hash,
+            source_deployment_hash,
+            [0x69; 32],
+            2,
+            44_556_677,
+            [0x6a; 32],
+            true,
+            [0x6b; 32],
+            [0x6c; 32],
+            [0x6d; 32],
+            [0x6e; 32],
+            SCCP_DOMAIN_BSC,
+            [0x6f; 32],
+            [0x70; 32],
+            [0x71; 32],
+            [0x72; 32],
+            1,
+            SCCP_DOMAIN_SORA,
+            true,
+        )
+        .expect("BSC transaction-bound canary route allowlist");
+        let readiness = sccp_lane_production_readiness_with_deployment_materials_for_domain(
+            SCCP_DOMAIN_BSC,
+            &source_material,
+            &source_deployment,
+            &destination_rollout,
+            &route_allowlist,
+        )
+        .expect("BSC lane readiness");
+        assert!(readiness.source_adapter_ready);
+        assert!(readiness.immutable_verifier_ready);
+        assert!(readiness.anchors_ready);
+        assert!(readiness.routes_allowlisted);
+        assert!(readiness.production_ready);
+        assert!(readiness.blockers.is_empty());
+
+        let generic_canary_route_allowlist = sccp_route_allowlist_with_lane_canary_evidence_v1(
+            route_allowlist.clone(),
+            [0x73; 32],
+            destination_binding_hash,
+            source_material_hash,
+            source_deployment_hash,
+        )
+        .expect("generic BSC canary route allowlist");
+        let generic_canary_readiness =
+            sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                SCCP_DOMAIN_BSC,
+                &source_material,
+                &source_deployment,
+                &destination_rollout,
+                &generic_canary_route_allowlist,
+            )
+            .expect("generic BSC canary readiness");
+        assert!(!generic_canary_readiness.routes_allowlisted);
+        assert!(!generic_canary_readiness.production_ready);
+        assert!(
+            generic_canary_readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.contains("route canary evidence is not bound")),
+            "BSC generic canary evidence must not satisfy lane readiness: {:?}",
+            generic_canary_readiness.blockers
+        );
+
+        assert!(
+            sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
+                route_allowlist.clone(),
+                &destination_rollout,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                [0x69; 32],
+                2,
+                44_556_677,
+                [0x6a; 32],
+                false,
+                [0x6b; 32],
+                [0x6c; 32],
+                [0x6d; 32],
+                [0x6e; 32],
+                SCCP_DOMAIN_BSC,
+                [0x6f; 32],
+                [0x70; 32],
+                [0x71; 32],
+                [0x72; 32],
+                1,
+                SCCP_DOMAIN_SORA,
+                true,
+            )
+            .is_none(),
+            "BSC route canary evidence must require finalized receipt-block metadata"
+        );
+
+        let eth_material =
+            sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                SCCP_DOMAIN_ETH,
+                sample_eth_sync_committee_hash(),
+                [0x74; 32],
+                [0x75; 32],
+                [0x76; 32],
+                sample_evm_message_emitter_address(SCCP_DOMAIN_ETH),
+                sample_evm_source_bridge_code_hash(SCCP_DOMAIN_ETH),
+            )
+            .expect("ETH source material");
+        let eth_deployment =
+            build_sccp_eth_mainnet_source_adapter_deployment(&eth_material, [0x77; 32])
+                .expect("ETH source deployment");
+        let replayed_source_readiness =
+            sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                SCCP_DOMAIN_BSC,
+                &eth_material,
+                &eth_deployment,
+                &destination_rollout,
+                &route_allowlist,
+            )
+            .expect("ETH material replayed to BSC readiness");
+        assert!(!replayed_source_readiness.source_adapter_ready);
+        assert!(!replayed_source_readiness.production_ready);
+        assert!(
+            replayed_source_readiness
+                .blockers
+                .iter()
+                .any(
+                    |blocker| blocker.contains("BSC recursive source-adapter verifier")
+                        || blocker.contains("source verifier material")
+                ),
+            "BSC readiness must reject ETH source material/deployment replay: {:?}",
+            replayed_source_readiness.blockers
+        );
+
+        let mut wrong_network_destination = destination_rollout.clone();
+        wrong_network_destination.destination_network_id =
+            Some(encode_0x_lower_hex(&sccp_eth_mainnet_network_id_word_v1()));
+        let wrong_network_readiness =
+            sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                SCCP_DOMAIN_BSC,
+                &source_material,
+                &source_deployment,
+                &wrong_network_destination,
+                &route_allowlist,
+            )
+            .expect("BSC wrong-network destination readiness");
+        assert!(!wrong_network_readiness.production_ready);
+        assert!(
+            wrong_network_readiness
+                .blockers
+                .iter()
+                .any(
+                    |blocker| blocker.contains("route allowlist evidence cannot be derived")
+                        || blocker.contains("destination verifier rollout material")
+                        || blocker.contains("route canary evidence is not bound")
+                ),
+            "BSC destination network drift must close lane readiness: {:?}",
+            wrong_network_readiness.blockers
         );
     }
 
@@ -60641,6 +60982,272 @@ mod tests {
                 [0xdd; 32],
             ),
             None
+        );
+    }
+
+    #[test]
+    fn source_material_and_deployments_reject_cross_profile_role_pollution() {
+        let eth_material =
+            sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                SCCP_DOMAIN_ETH,
+                sample_eth_sync_committee_hash(),
+                [0x22; 32],
+                [0x23; 32],
+                [0x24; 32],
+                sample_evm_message_emitter_address(SCCP_DOMAIN_ETH),
+                sample_evm_source_bridge_code_hash(SCCP_DOMAIN_ETH),
+            )
+            .expect("ETH source material");
+        let eth_deployment =
+            sccp_source_adapter_engine_deployment_from_material_v1(&eth_material, [0x25; 32])
+                .expect("ETH source deployment");
+        assert!(sccp_source_adapter_engine_deployment_matches_material(
+            &eth_material,
+            &eth_deployment,
+        ));
+
+        let mut eth_with_source_state = eth_material.clone();
+        eth_with_source_state.source_state_verifier_id =
+            SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1.to_owned();
+        eth_with_source_state.source_state_verifier_hash = [0x91; 32];
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&eth_with_source_state),
+            "EVM-family material must reject Solana/TON source-state verifier roles"
+        );
+        assert!(
+            sccp_source_adapter_engine_deployment_from_material_v1(
+                &eth_with_source_state,
+                [0x92; 32],
+            )
+            .is_none(),
+            "polluted EVM-family source material must not build a deployment descriptor"
+        );
+
+        let mut eth_with_solana_audit = eth_deployment.clone();
+        eth_with_solana_audit.solana_tower_replay_verifier_hash = [0x93; 32];
+        eth_with_solana_audit.solana_full_accountsdb_lattice_verifier_hash = [0x94; 32];
+        eth_with_solana_audit.solana_bank_fork_choice_verifier_hash = [0x95; 32];
+        assert!(
+            !sccp_source_adapter_engine_deployment_matches_material(
+                &eth_material,
+                &eth_with_solana_audit,
+            ),
+            "EVM-family deployments must reject injected Solana audit roles"
+        );
+        assert_eq!(
+            sccp_evm_source_gate_hash_v1(SCCP_DOMAIN_ETH, &eth_material, &eth_with_solana_audit),
+            None
+        );
+
+        let mut eth_with_ton_audit = eth_deployment.clone();
+        eth_with_ton_audit.ton_masterchain_config_verifier_hash = [0x96; 32];
+        eth_with_ton_audit.ton_validator_set_transition_verifier_hash = [0x97; 32];
+        eth_with_ton_audit.ton_shard_accounts_dictionary_verifier_hash = [0x98; 32];
+        assert!(
+            !sccp_source_adapter_engine_deployment_matches_material(
+                &eth_material,
+                &eth_with_ton_audit,
+            ),
+            "EVM-family deployments must reject injected TON audit roles"
+        );
+        assert_eq!(
+            sccp_evm_source_gate_hash_v1(SCCP_DOMAIN_ETH, &eth_material, &eth_with_ton_audit),
+            None
+        );
+
+        let sol_material =
+            sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_v1(
+                sample_solana_vote_roster_hash(),
+                [0xB2; 32],
+                [0xC3; 32],
+                [0xE5; 32],
+                [0xD4; 32],
+            )
+            .expect("Solana source material");
+        let sol_deployment =
+            build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &sol_material,
+                [0xE6; 32],
+                [0xB7; 32],
+                [0xC8; 32],
+                [0xD9; 32],
+            )
+            .expect("audited Solana source deployment");
+        assert!(sccp_source_adapter_engine_deployment_matches_material(
+            &sol_material,
+            &sol_deployment,
+        ));
+
+        let mut sol_with_bridge = sol_material.clone();
+        sol_with_bridge.source_bridge_emitter_id =
+            SCCP_ETH_MAINNET_SOURCE_BRIDGE_EMITTER_ID_V1.to_owned();
+        sol_with_bridge.source_bridge_emitter_address =
+            sample_evm_message_emitter_address(SCCP_DOMAIN_ETH).to_vec();
+        sol_with_bridge.source_bridge_emitter_code_hash =
+            sample_evm_source_bridge_code_hash(SCCP_DOMAIN_ETH);
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&sol_with_bridge),
+            "Solana material must reject EVM/TRON source-bridge roles"
+        );
+
+        let mut sol_deployment_with_bridge = sol_deployment.clone();
+        sol_deployment_with_bridge.source_bridge_emitter_id =
+            SCCP_ETH_MAINNET_SOURCE_BRIDGE_EMITTER_ID_V1.to_owned();
+        sol_deployment_with_bridge.source_bridge_emitter_address =
+            sample_evm_message_emitter_address(SCCP_DOMAIN_ETH).to_vec();
+        sol_deployment_with_bridge.source_bridge_emitter_code_hash =
+            sample_evm_source_bridge_code_hash(SCCP_DOMAIN_ETH);
+        assert!(
+            !sccp_source_adapter_engine_deployment_matches_material(
+                &sol_material,
+                &sol_deployment_with_bridge,
+            ),
+            "Solana deployments must reject injected EVM/TRON source-bridge roles"
+        );
+        assert!(
+            sccp_solana_full_light_client_gate_hash_from_deployment_v1(
+                &sol_material,
+                &sol_deployment_with_bridge,
+            )
+            .is_none()
+        );
+
+        let mut sol_deployment_with_ton_audit = sol_deployment.clone();
+        sol_deployment_with_ton_audit.ton_masterchain_config_verifier_hash = [0xDA; 32];
+        sol_deployment_with_ton_audit.ton_validator_set_transition_verifier_hash = [0xDB; 32];
+        sol_deployment_with_ton_audit.ton_shard_accounts_dictionary_verifier_hash = [0xDC; 32];
+        assert!(
+            !sccp_source_adapter_engine_deployment_matches_material(
+                &sol_material,
+                &sol_deployment_with_ton_audit,
+            ),
+            "Solana deployments must reject injected TON full-light-client audit roles"
+        );
+
+        let tron_material = sccp_tron_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+            sample_tron_witness_schedule_hash(),
+            [0x32; 32],
+            [0x33; 32],
+            sample_tron_message_emitter_address(),
+            sample_tron_source_bridge_code_hash(),
+            sample_tron_source_bridge_network_id(),
+            sample_tron_source_bridge_owner_address(),
+            sample_tron_source_bridge_config_hash(),
+            [0x34; 32],
+        )
+        .expect("TRON source material");
+        let tron_deployment =
+            build_sccp_tron_mainnet_source_adapter_deployment(&tron_material, [0x35; 32])
+                .expect("TRON source deployment");
+        assert!(sccp_source_adapter_engine_deployment_matches_material(
+            &tron_material,
+            &tron_deployment,
+        ));
+
+        let mut tron_with_source_state = tron_material.clone();
+        tron_with_source_state.source_state_verifier_id =
+            SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1.to_owned();
+        tron_with_source_state.source_state_verifier_hash = [0xA7; 32];
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&tron_with_source_state),
+            "TRON material must reject Solana/TON source-state verifier roles"
+        );
+
+        let mut tron_with_solana_audit = tron_deployment.clone();
+        tron_with_solana_audit.solana_tower_replay_verifier_hash = [0xA8; 32];
+        tron_with_solana_audit.solana_full_accountsdb_lattice_verifier_hash = [0xA9; 32];
+        tron_with_solana_audit.solana_bank_fork_choice_verifier_hash = [0xAA; 32];
+        assert!(
+            !sccp_source_adapter_engine_deployment_matches_material(
+                &tron_material,
+                &tron_with_solana_audit,
+            ),
+            "TRON deployments must reject injected Solana audit roles"
+        );
+        assert_eq!(
+            sccp_tron_dpos_source_gate_hash_from_deployment_v1(
+                &tron_material,
+                &tron_with_solana_audit,
+            ),
+            None
+        );
+
+        let ton_material =
+            sccp_ton_mainnet_source_verifier_material_with_hashes_and_shard_state_v1(
+                sample_ton_validator_set_hash(),
+                [0x22; 32],
+                [0x23; 32],
+                [0x25; 32],
+                [0x24; 32],
+            )
+            .expect("TON source material");
+        let ton_deployment =
+            build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &ton_material,
+                [0x29; 32],
+                [0x26; 32],
+                [0x27; 32],
+                [0x28; 32],
+            )
+            .expect("audited TON source deployment");
+        assert!(sccp_source_adapter_engine_deployment_matches_material(
+            &ton_material,
+            &ton_deployment,
+        ));
+
+        let mut ton_with_bridge = ton_material.clone();
+        ton_with_bridge.source_bridge_emitter_id =
+            SCCP_TRON_MAINNET_SOURCE_BRIDGE_EMITTER_ID_V1.to_owned();
+        ton_with_bridge.source_bridge_emitter_address =
+            sample_tron_message_emitter_address().to_vec();
+        ton_with_bridge.source_bridge_emitter_code_hash = sample_tron_source_bridge_code_hash();
+        ton_with_bridge.source_bridge_network_id = sample_tron_source_bridge_network_id();
+        ton_with_bridge.source_bridge_owner_address =
+            sample_tron_source_bridge_owner_address().to_vec();
+        ton_with_bridge.source_bridge_config_hash = sample_tron_source_bridge_config_hash();
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&ton_with_bridge),
+            "TON material must reject EVM/TRON source-bridge roles"
+        );
+
+        let mut ton_deployment_with_bridge = ton_deployment.clone();
+        ton_deployment_with_bridge.source_bridge_emitter_id =
+            SCCP_TRON_MAINNET_SOURCE_BRIDGE_EMITTER_ID_V1.to_owned();
+        ton_deployment_with_bridge.source_bridge_emitter_address =
+            sample_tron_message_emitter_address().to_vec();
+        ton_deployment_with_bridge.source_bridge_emitter_code_hash =
+            sample_tron_source_bridge_code_hash();
+        ton_deployment_with_bridge.source_bridge_network_id =
+            sample_tron_source_bridge_network_id();
+        ton_deployment_with_bridge.source_bridge_owner_address =
+            sample_tron_source_bridge_owner_address().to_vec();
+        ton_deployment_with_bridge.source_bridge_config_hash =
+            sample_tron_source_bridge_config_hash();
+        assert!(
+            !sccp_source_adapter_engine_deployment_matches_material(
+                &ton_material,
+                &ton_deployment_with_bridge,
+            ),
+            "TON deployments must reject injected EVM/TRON source-bridge roles"
+        );
+        assert!(
+            sccp_ton_full_light_client_gate_hash_from_deployment_v1(
+                &ton_material,
+                &ton_deployment_with_bridge,
+            )
+            .is_none()
+        );
+
+        let mut ton_deployment_with_solana_audit = ton_deployment;
+        ton_deployment_with_solana_audit.solana_tower_replay_verifier_hash = [0xAD; 32];
+        ton_deployment_with_solana_audit.solana_full_accountsdb_lattice_verifier_hash = [0xAE; 32];
+        ton_deployment_with_solana_audit.solana_bank_fork_choice_verifier_hash = [0xAF; 32];
+        assert!(
+            !sccp_source_adapter_engine_deployment_matches_material(
+                &ton_material,
+                &ton_deployment_with_solana_audit,
+            ),
+            "TON deployments must reject injected Solana full-light-client audit roles"
         );
     }
 

@@ -3577,6 +3577,52 @@ fn norito_internal_error(err: json::Error) -> Error {
 }
 
 #[cfg(feature = "app_api")]
+fn app_api_transaction_signing_error(context: &str, err: impl fmt::Display) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+        "failed to sign {context} transaction: {err}",
+    )))
+}
+
+#[cfg(feature = "app_api")]
+fn sign_app_api_transaction(
+    builder: TransactionBuilder,
+    private_key: &iroha_crypto::PrivateKey,
+    context: &str,
+) -> Result<SignedTransaction> {
+    builder
+        .try_sign(private_key)
+        .map_err(|err| app_api_transaction_signing_error(context, err))
+}
+
+#[cfg(all(feature = "app_api", test))]
+mod app_api_transaction_signing_tests {
+    use super::*;
+
+    #[test]
+    fn app_api_transaction_checked_signing_verifies() {
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let key_pair = KeyPair::from_seed(
+            b"iroha:torii:routing:test:app-api-transaction-signing".to_vec(),
+            Algorithm::Ed25519,
+        );
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let tx = sign_app_api_transaction(
+            TransactionBuilder::new(chain_id, authority.clone())
+                .with_instructions([Log::new(Level::INFO, "app-api checked signing".to_owned())]),
+            key_pair.private_key(),
+            "/test/app-api-transaction-signing",
+        )
+        .expect("checked signing should succeed");
+
+        assert_eq!(tx.authority(), &authority);
+        tx.verify_signature()
+            .expect("checked signed transaction should verify");
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn explorer_not_found() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::NotFound,
@@ -18957,7 +19003,7 @@ async fn submit_contract_call_request(
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
     if let Some(private_key) = private_key {
-        let tx = builder.sign(&private_key.0);
+        let tx = sign_app_api_transaction(builder, &private_key.0, endpoint)?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
         let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
         handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
@@ -19433,7 +19479,7 @@ pub async fn handle_post_bridge_proof_submit(
 
     let response =
         if let Some(private_key) = private_key {
-            let tx = builder.sign(&private_key.0);
+            let tx = sign_app_api_transaction(builder, &private_key.0, "/v1/bridge/proofs/submit")?;
             let tx_hash_hex = hex::encode(tx.hash().as_ref());
             handle_transaction_with_metrics(
                 chain_id,
@@ -19686,7 +19732,7 @@ pub async fn handle_post_bridge_message_submit(
 
     let response =
         if let Some(private_key) = private_key {
-            let tx = builder.sign(&private_key.0);
+            let tx = sign_app_api_transaction(builder, &private_key.0, "/v1/bridge/messages")?;
             let tx_hash_hex = hex::encode(tx.hash().as_ref());
             handle_transaction_with_metrics(
                 chain_id.clone(),
@@ -28443,10 +28489,13 @@ pub async fn handle_post_vk_register(
         record: vk_record,
     };
     let tx_metadata = metadata_with_default_gas_asset(state.as_ref());
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-        .with_metadata(tx_metadata)
-        .with_instructions(core::iter::once(dm::InstructionBox::from(isi)))
-        .sign(&req.private_key.0);
+    let tx = sign_app_api_transaction(
+        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
+            .with_metadata(tx_metadata)
+            .with_instructions(core::iter::once(dm::InstructionBox::from(isi))),
+        &req.private_key.0,
+        "/v1/zk/vk/register",
+    )?;
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/register")
         .await
         .map(|_| (StatusCode::ACCEPTED, ()))
@@ -28485,10 +28534,13 @@ pub async fn handle_post_vk_update(
         record: vk_record,
     };
     let tx_metadata = metadata_with_default_gas_asset(state.as_ref());
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-        .with_metadata(tx_metadata)
-        .with_instructions(core::iter::once(dm::InstructionBox::from(isi)))
-        .sign(&req.private_key.0);
+    let tx = sign_app_api_transaction(
+        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
+            .with_metadata(tx_metadata)
+            .with_instructions(core::iter::once(dm::InstructionBox::from(isi))),
+        &req.private_key.0,
+        "/v1/zk/vk/update",
+    )?;
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/update")
         .await
         .map(|_| (StatusCode::ACCEPTED, ()))
@@ -31894,10 +31946,13 @@ async fn submit_contract_deploy_request(
         dm::Json::new(next_nonce),
     )));
     let metadata = metadata_with_default_gas_asset(&state);
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
-        .with_metadata(metadata)
-        .with_instructions(instructions.into_iter())
-        .sign(&private_key.0);
+    let tx = sign_app_api_transaction(
+        dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
+            .with_metadata(metadata)
+            .with_instructions(instructions.into_iter()),
+        &private_key.0,
+        endpoint,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
@@ -32454,10 +32509,13 @@ pub async fn handle_post_contract_alias_set(
         None => dm::InstructionBox::from(SetContractAlias::clear(contract_address.clone())),
     };
     let metadata = metadata_with_default_gas_asset(&state);
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority)
-        .with_metadata(metadata)
-        .with_instructions(std::iter::once(instruction))
-        .sign(&private_key.0);
+    let tx = sign_app_api_transaction(
+        dm::TransactionBuilder::new((*chain_id).clone(), authority)
+            .with_metadata(metadata)
+            .with_instructions(std::iter::once(instruction)),
+        &private_key.0,
+        "/v1/contracts/aliases",
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(
@@ -32936,10 +32994,13 @@ pub async fn handle_post_sorafs_register_manifest(
         metadata.insert(gas_asset_key, IrohaJson::new(asset_id));
     }
 
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-        .with_metadata(metadata)
-        .with_instructions([dm::InstructionBox::from(isi)])
-        .sign(&req.private_key.0);
+    let tx = sign_app_api_transaction(
+        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
+            .with_metadata(metadata)
+            .with_instructions([dm::InstructionBox::from(isi)]),
+        &req.private_key.0,
+        "/v1/sorafs/pin/register",
+    )?;
 
     let pin_fee_nano = state.gov.sorafs_pricing.public_pin_fee_nano(
         policy.storage_class,
@@ -33039,9 +33100,12 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
     let record_for_node = record.clone();
     let isi = sorafs::RegisterCapacityDeclaration { record };
 
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-        .with_instructions([dm::InstructionBox::from(isi)])
-        .sign(&req.private_key.0);
+    let tx = sign_app_api_transaction(
+        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
+            .with_instructions([dm::InstructionBox::from(isi)]),
+        &req.private_key.0,
+        "/v1/sorafs/capacity/declare",
+    )?;
 
     handle_transaction_with_metrics(
         chain_id,
@@ -33164,9 +33228,12 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
 
     let isi = sorafs::RecordCapacityTelemetry { record };
 
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-        .with_instructions([dm::InstructionBox::from(isi)])
-        .sign(&req.private_key.0);
+    let tx = sign_app_api_transaction(
+        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
+            .with_instructions([dm::InstructionBox::from(isi)]),
+        &req.private_key.0,
+        "/v1/sorafs/capacity/telemetry",
+    )?;
 
     let telemetry_for_tx = telemetry.clone();
     handle_transaction_with_metrics(
@@ -33469,9 +33536,12 @@ pub async fn handle_post_sorafs_register_capacity_dispute(
     );
 
     let isi = sorafs::RegisterCapacityDispute { record };
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-        .with_instructions([dm::InstructionBox::from(isi)])
-        .sign(&req.private_key.0);
+    let tx = sign_app_api_transaction(
+        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
+            .with_instructions([dm::InstructionBox::from(isi)]),
+        &req.private_key.0,
+        "/v1/sorafs/capacity/dispute",
+    )?;
 
     let telemetry_for_tx = telemetry.clone();
     handle_transaction_with_metrics(
@@ -66425,7 +66495,11 @@ pub async fn handle_v1_confidential_relay_submit(
         builder = builder.with_attachments(attachments);
     }
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
-    let tx = builder.sign(&signer.private_key.0);
+    let tx = sign_app_api_transaction(
+        builder,
+        &signer.private_key.0,
+        ENDPOINT_CONFIDENTIAL_RELAY_SUBMIT,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(
@@ -66840,7 +66914,7 @@ pub async fn handle_v1_accounts_onboard(
         .with_metadata(tx_metadata)
         .with_instructions(instructions);
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
-    let tx = builder.sign(&signer.private_key.0);
+    let tx = sign_app_api_transaction(builder, &signer.private_key.0, ENDPOINT_ACCOUNTS_ONBOARD)?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(
@@ -67001,7 +67075,7 @@ pub async fn handle_v1_accounts_faucet(
         .with_metadata(tx_metadata)
         .with_instructions(instructions);
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
-    let tx = builder.sign(&faucet.private_key.0);
+    let tx = sign_app_api_transaction(builder, &faucet.private_key.0, ENDPOINT_ACCOUNTS_FAUCET)?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(
@@ -67226,7 +67300,11 @@ pub async fn handle_v1_accounts_onboard_multisig(
             instructions
         });
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
-    let tx = builder.sign(&signer.private_key.0);
+    let tx = sign_app_api_transaction(
+        builder,
+        &signer.private_key.0,
+        ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(
@@ -67386,16 +67464,19 @@ pub async fn handle_post_v1_account_alias_renew(
             .as_ref()
             .map_or(1, |signer| signer.alias_lease_term_years.max(1))
     });
-    let tx = TransactionBuilder::new((*app.chain_id).clone(), authority_id.clone())
-        .with_metadata(metadata_with_default_gas_asset(app.state.as_ref()))
-        .with_instructions([InstructionBox::from(
-            iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
-                alias,
-                authority_id.clone(),
-                term_years,
-            ),
-        )])
-        .sign(&req.private_key.0);
+    let tx = sign_app_api_transaction(
+        TransactionBuilder::new((*app.chain_id).clone(), authority_id.clone())
+            .with_metadata(metadata_with_default_gas_asset(app.state.as_ref()))
+            .with_instructions([InstructionBox::from(
+                iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
+                    alias,
+                    authority_id.clone(),
+                    term_years,
+                ),
+            )]),
+        &req.private_key.0,
+        ENDPOINT_ACCOUNT_ALIAS_RENEW,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
     handle_transaction_with_metrics(
         app.chain_id.clone(),
@@ -67628,10 +67709,13 @@ pub async fn handle_post_v1_account_alias_auto_renew(
         }
     }
 
-    let tx = TransactionBuilder::new((*app.chain_id).clone(), authority_id.clone())
-        .with_metadata(metadata_with_default_gas_asset(app.state.as_ref()))
-        .with_instructions(instructions)
-        .sign(&req.private_key.0);
+    let tx = sign_app_api_transaction(
+        TransactionBuilder::new((*app.chain_id).clone(), authority_id.clone())
+            .with_metadata(metadata_with_default_gas_asset(app.state.as_ref()))
+            .with_instructions(instructions),
+        &req.private_key.0,
+        ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
     handle_transaction_with_metrics(
         app.chain_id.clone(),
@@ -68829,9 +68913,12 @@ pub async fn handle_post_space_directory_manifest_publish(
     }
 
     let isi = PublishSpaceDirectoryManifest { manifest };
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority.into())
-        .with_instructions([InstructionBox::from(isi)])
-        .sign(&private_key.0);
+    let tx = sign_app_api_transaction(
+        TransactionBuilder::new((*chain_id).clone(), authority.into())
+            .with_instructions([InstructionBox::from(isi)]),
+        &private_key.0,
+        ENDPOINT_SPACE_DIRECTORY_MANIFEST_PUBLISH,
+    )?;
 
     handle_transaction_with_metrics(
         chain_id,
@@ -68876,9 +68963,12 @@ pub async fn handle_post_space_directory_manifest_revoke(
         revoked_epoch,
         reason,
     };
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority.into())
-        .with_instructions([InstructionBox::from(isi)])
-        .sign(&private_key.0);
+    let tx = sign_app_api_transaction(
+        TransactionBuilder::new((*chain_id).clone(), authority.into())
+            .with_instructions([InstructionBox::from(isi)]),
+        &private_key.0,
+        ENDPOINT_SPACE_DIRECTORY_MANIFEST_REVOKE,
+    )?;
 
     handle_transaction_with_metrics(
         chain_id,
@@ -76458,9 +76548,12 @@ pub async fn handle_post_v1_subscription_plan(
         )),
     ];
 
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone().into())
-        .with_instructions(instructions)
-        .sign(&private_key.0);
+    let tx = sign_app_api_transaction(
+        TransactionBuilder::new((*chain_id).clone(), authority.clone().into())
+            .with_instructions(instructions),
+        &private_key.0,
+        ENDPOINT_SUBSCRIPTION_PLANS_LIST,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(
@@ -76673,9 +76766,12 @@ pub async fn handle_post_v1_subscription_create(
         }
     }
 
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
-        .with_instructions(instructions)
-        .sign(&private_key.0);
+    let tx = sign_app_api_transaction(
+        TransactionBuilder::new((*chain_id).clone(), authority.clone())
+            .with_instructions(instructions),
+        &private_key.0,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(
@@ -76923,9 +77019,12 @@ pub async fn handle_post_v1_subscription_pause(
         )));
     }
 
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
-        .with_instructions(instructions)
-        .sign(&private_key.0);
+    let tx = sign_app_api_transaction(
+        TransactionBuilder::new((*chain_id).clone(), authority.clone())
+            .with_instructions(instructions),
+        &private_key.0,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
     handle_transaction_with_metrics(
         chain_id,
@@ -77046,9 +77145,12 @@ pub async fn handle_post_v1_subscription_resume(
             next_charge_ms,
         ),
     )));
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
-        .with_instructions(instructions)
-        .sign(&private_key.0);
+    let tx = sign_app_api_transaction(
+        TransactionBuilder::new((*chain_id).clone(), authority.clone())
+            .with_instructions(instructions),
+        &private_key.0,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
     handle_transaction_with_metrics(
         chain_id,
@@ -77150,9 +77252,12 @@ pub async fn handle_post_v1_subscription_cancel(
         }
     }
 
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
-        .with_instructions(instructions)
-        .sign(&private_key.0);
+    let tx = sign_app_api_transaction(
+        TransactionBuilder::new((*chain_id).clone(), authority.clone())
+            .with_instructions(instructions),
+        &private_key.0,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
     handle_transaction_with_metrics(
         chain_id,
@@ -77233,9 +77338,12 @@ pub async fn handle_post_v1_subscription_keep(
         IrohaJson::new(subscription_state.clone()),
     ))];
 
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
-        .with_instructions(instructions)
-        .sign(&private_key.0);
+    let tx = sign_app_api_transaction(
+        TransactionBuilder::new((*chain_id).clone(), authority.clone())
+            .with_instructions(instructions),
+        &private_key.0,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
     handle_transaction_with_metrics(
         chain_id,
@@ -77331,9 +77439,12 @@ pub async fn handle_post_v1_subscription_charge_now(
             charge_at_ms,
         ),
     )));
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
-        .with_instructions(instructions)
-        .sign(&private_key.0);
+    let tx = sign_app_api_transaction(
+        TransactionBuilder::new((*chain_id).clone(), authority.clone())
+            .with_instructions(instructions),
+        &private_key.0,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
     handle_transaction_with_metrics(
         chain_id,
@@ -77391,9 +77502,12 @@ pub async fn handle_post_v1_subscription_usage(
         delta,
     };
     let instruction = ExecuteTrigger::new(trigger_id).with_args(usage_args);
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
-        .with_instructions([InstructionBox::from(instruction)])
-        .sign(&private_key.0);
+    let tx = sign_app_api_transaction(
+        TransactionBuilder::new((*chain_id).clone(), authority.clone())
+            .with_instructions([InstructionBox::from(instruction)]),
+        &private_key.0,
+        ENDPOINT_SUBSCRIPTIONS_LIST,
+    )?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
     handle_transaction_with_metrics(
         chain_id,

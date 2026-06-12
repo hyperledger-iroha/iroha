@@ -60,8 +60,8 @@ def parse_hex_bytes(value: str, *, label: str, byte_length: int, nonzero: bool =
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
     return raw
@@ -152,9 +152,9 @@ def _json_rpc(
         with opener(request, timeout=timeout) as response:
             raw = response.read(EVM_RECEIPT_PROOF_JSON_RPC_MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"JSON-RPC {method} failed with HTTP {exc.code}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"JSON-RPC {method} request failed") from exc
+        raise RuntimeError(f"JSON-RPC {method} failed with HTTP {exc.code}") from None
+    except urllib.error.URLError:
+        raise RuntimeError(f"JSON-RPC {method} request failed") from None
     if len(raw) > EVM_RECEIPT_PROOF_JSON_RPC_MAX_RESPONSE_BYTES:
         raise RuntimeError(
             f"JSON-RPC {method} response exceeds "
@@ -165,12 +165,12 @@ def _json_rpc(
             raw.decode("utf-8"),
             object_pairs_hook=_json_object_without_duplicate_keys,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     except ValueError as exc:
         if str(exc) == "JSON-RPC returned duplicate JSON keys":
             raise RuntimeError(f"JSON-RPC {method} returned duplicate JSON keys") from None
-        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     if not isinstance(decoded, dict):
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     if decoded.get("jsonrpc") != "2.0":

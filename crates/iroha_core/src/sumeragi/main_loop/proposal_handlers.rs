@@ -2784,7 +2784,7 @@ impl Actor {
                                             emit_ready: true,
                                         },
                                     );
-                                    match self.insert_stub_rbc_session_from_block(
+                                    match self.insert_seed_rbc_session_from_block(
                                         session_key,
                                         &block,
                                         payload_hash,
@@ -2800,7 +2800,7 @@ impl Actor {
                                                 view,
                                                 block = %block_hash,
                                                 error = %err,
-                                                "failed to insert stub RBC session after seed enqueue"
+                                                "failed to insert seed RBC session after seed enqueue"
                                             );
                                             self.subsystems
                                                 .da_rbc
@@ -3882,7 +3882,7 @@ impl Actor {
                                         emit_ready: true,
                                     },
                                 );
-                                match self.insert_stub_rbc_session_from_block(
+                                match self.insert_seed_rbc_session_from_block(
                                     session_key,
                                     &block,
                                     payload_hash,
@@ -3897,7 +3897,7 @@ impl Actor {
                                             view,
                                             block = %block_hash,
                                             error = %err,
-                                            "failed to insert stub RBC session after seed enqueue"
+                                            "failed to insert seed RBC session after seed enqueue"
                                         );
                                         self.subsystems
                                             .da_rbc
@@ -4064,7 +4064,7 @@ impl Actor {
             (seed_ms, hydrate_ms)
         } else {
             if da_enabled && exact_frontier_block_created {
-                self.persist_exact_frontier_rbc_recovery_snapshot(
+                let _ = self.persist_exact_frontier_rbc_recovery_snapshot(
                     session_key,
                     &block,
                     &payload_bytes,

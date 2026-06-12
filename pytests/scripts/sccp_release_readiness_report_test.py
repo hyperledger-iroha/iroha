@@ -2616,6 +2616,18 @@ def test_release_readiness_report_guards_bsc_route_config_canonical_manifest_gat
     )
     assert any(
         "SCCP BSC route-config canonical-manifest source inventory" in error
+        and 'missing marker: settlement_contract_address = "bsc-settlement-v1"'
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and 'missing marker: settlement_contract_alias = "taira-bsc-xor"'
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
         and "missing marker: sourceEventTransactionId: HASH_55.toUpperCase()"
         in error
         for error in errors
@@ -2909,26 +2921,43 @@ def test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inv
     verifier = load_verify_helpers()
     assert report._all_lanes_evidence_root_schema_gate_inventory_errors() == []
 
-    sparse_script = tmp_path / "sccp_all_lanes_evidence.py"
-    sparse_script.write_text(
-        "def _evidence_bundle_root_errors(records: Any):\n",
-        encoding="utf-8",
-    )
-    errors = report._all_lanes_evidence_root_schema_gate_inventory_errors(
+    required_script_markers = verifier.ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS[0][1]
+    for index, removed_script_marker in enumerate(
         (
-            (
-                sparse_script,
-                verifier.ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS[0][1],
-            ),
+            "evidence bundle root must be an object",
+            "def _evidence_unsupported_section_detail(",
+            "unsupported evidence section with sensitive name",
+            "unsupported evidence section with malformed name",
+            "def _unexpected_record_field_detail(",
+            "unexpected field with sensitive name",
+            "unexpected field with malformed name",
+            "unexpected non-string field name",
         )
-    )
+    ):
+        sparse_script = tmp_path / f"sccp_all_lanes_evidence_{index}.py"
+        sparse_script.write_text(
+            "\n".join(
+                marker
+                for marker in required_script_markers
+                if marker != removed_script_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = report._all_lanes_evidence_root_schema_gate_inventory_errors(
+            (
+                (
+                    sparse_script,
+                    required_script_markers,
+                ),
+            )
+        )
 
-    assert any(
-        "SCCP all-lanes evidence-root schema source inventory" in error
-        and str(sparse_script) in error
-        and "missing marker: evidence bundle root must be an object" in error
-        for error in errors
-    )
+        assert any(
+            "SCCP all-lanes evidence-root schema source inventory" in error
+            and str(sparse_script) in error
+            and f"missing marker: {removed_script_marker}" in error
+            for error in errors
+        )
 
     required_test_markers = verifier.ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS[1][1]
     removed_marker = "def test_all_lanes_evidence_rejects_non_string_section_keys"
@@ -2978,6 +3007,41 @@ def test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inv
         and f"missing marker: {removed_unknown_marker}" in error
         for error in errors
     )
+
+    for index, removed_redaction_marker in enumerate(
+        (
+            "def test_all_lanes_evidence_redacts_unsafe_direct_section_names",
+            "secret-token-direct-section",
+            "route|operator-direct-section",
+            "def test_all_lanes_evidence_redacts_unsafe_unknown_record_fields",
+            "secret-token-material-field",
+            "route|operator-material-field",
+        )
+    ):
+        sparse_redaction_tests = tmp_path / f"sccp_all_lanes_redaction_{index}.py"
+        sparse_redaction_tests.write_text(
+            "\n".join(
+                marker
+                for marker in required_test_markers
+                if marker != removed_redaction_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = report._all_lanes_evidence_root_schema_gate_inventory_errors(
+            (
+                (
+                    sparse_redaction_tests,
+                    required_test_markers,
+                ),
+            )
+        )
+
+        assert any(
+            "SCCP all-lanes evidence-root schema source inventory" in error
+            and str(sparse_redaction_tests) in error
+            and f"missing marker: {removed_redaction_marker}" in error
+            for error in errors
+        )
 
 
 def test_release_readiness_report_guards_all_lanes_governed_blocker_schema_gate_inventory(
@@ -3139,31 +3203,38 @@ def test_release_readiness_report_guards_all_lanes_release_checklist_exact_boole
     required_rust_markers = verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[
         2
     ][1]
-    removed_rust_marker = (
-        "Solana route canary evidence must reject route allowlist/source material hash role reuse"
-    )
-    sparse_rust = tmp_path / "lib.rs"
-    sparse_rust.write_text(
-        "\n".join(
-            marker for marker in required_rust_markers if marker != removed_rust_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = report._all_lanes_release_checklist_exact_boolean_gate_inventory_errors(
-        (
-            (
-                sparse_rust,
-                required_rust_markers,
+    for removed_rust_marker_index, removed_rust_marker in enumerate((
+        "fn solana_lane_route_canary_evidence_binds_live_programdata_snapshot",
+        "BSC lane readiness must require live route canary evidence",
+        "BSC route canary evidence must require finalized receipt-block metadata",
+        "generic Solana route canary evidence must not satisfy lane readiness",
+        "Solana route canary evidence must reject route allowlist/source material hash role reuse",
+    )):
+        sparse_rust = tmp_path / f"lib_{removed_rust_marker_index}.rs"
+        sparse_rust.write_text(
+            "\n".join(
+                marker
+                for marker in required_rust_markers
+                if marker != removed_rust_marker
             ),
+            encoding="utf-8",
         )
-    )
+        errors = report._all_lanes_release_checklist_exact_boolean_gate_inventory_errors(
+            (
+                (
+                    sparse_rust,
+                    required_rust_markers,
+                ),
+            )
+        )
 
-    assert any(
-        "SCCP all-lanes release-checklist exact-boolean source inventory" in error
-        and str(sparse_rust) in error
-        and f"missing marker: {removed_rust_marker}" in error
-        for error in errors
-    )
+        assert any(
+            "SCCP all-lanes release-checklist exact-boolean source inventory"
+            in error
+            and str(sparse_rust) in error
+            and f"missing marker: {removed_rust_marker}" in error
+            for error in errors
+        )
 
     required_sdk_markers = next(
         markers
@@ -3864,9 +3935,118 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
         for error in errors
     )
 
+    tron_script_markers = next(
+        markers
+        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
+        if path == "scripts/sccp_tron_live_evidence.py"
+    )
+    for removed_tron_script_index, removed_tron_script_marker in enumerate((
+        'if source_event_digest is not None and getattr(args, "full_toml", False):',
+        'raise ValueError(f"{label} must be ASCII") from None',
+        'raise ValueError("--tron-pro-api-key-file cannot be read") from None',
+        'raise ValueError("--witness-schedule-payload-file cannot be read") from None',
+        'f"--witness-schedule-transition-json {index} must be JSON"',
+        'f"TRON constant call {function_selector} failed"',
+        'raise RuntimeError(f"{label} is not a valid TRON address") from None',
+        "generated offline full TOML arguments are invalid",
+        'f"/wallet/getcontract returned malformed {label} bytecode"',
+        'f"/wallet/getcontract returned malformed {label} contract_address"',
+        'f"TRON constant call {function_selector} returned non-hex data"',
+        "except (RuntimeError, TypeError, ValueError):",
+        "witness schedule payload is invalid",
+        'f"witness schedule transition {index} message is invalid"',
+        'f"witness schedule transition {index} seal is invalid"',
+        "witness seal solid-block message is invalid",
+        "witness seal proof is invalid",
+        "transaction source proof is invalid",
+        "TRON API {endpoint} returned invalid JSON",
+        "TRON API {endpoint} returned duplicate JSON keys",
+    )):
+        sparse_tron_script = (
+            tmp_path / f"sccp_tron_live_evidence_{removed_tron_script_index}.py"
+        )
+        sparse_tron_script.write_text(
+            "\n".join(
+                marker
+                for marker in tron_script_markers
+                if marker != removed_tron_script_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = report._sccp_release_public_scalar_text_schema_gate_inventory_errors(
+            ((sparse_tron_script, tron_script_markers),)
+        )
+
+        assert any(
+            "SCCP release public scalar-text schema source inventory" in error
+            and str(sparse_tron_script) in error
+            and f"missing marker: {removed_tron_script_marker}" in error
+            for error in errors
+        )
+
+    evm_live_script_markers = next(
+        markers
+        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
+        if path == "scripts/sccp_evm_live_evidence.py"
+    )
+    evm_live_removed_marker = "generated EVM destination TOML arguments are invalid"
+    sparse_evm_live_script = tmp_path / "sccp_evm_live_evidence.py"
+    sparse_evm_live_script.write_text(
+        "\n".join(
+            marker
+            for marker in evm_live_script_markers
+            if marker != evm_live_removed_marker
+        ),
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_public_scalar_text_schema_gate_inventory_errors(
+        ((sparse_evm_live_script, evm_live_script_markers),)
+    )
+
+    assert any(
+        "SCCP release public scalar-text schema source inventory" in error
+        and str(sparse_evm_live_script) in error
+        and f"missing marker: {evm_live_removed_marker}" in error
+        for error in errors
+    )
+
+    evm_source_live_script_markers = next(
+        markers
+        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
+        if path == "scripts/sccp_evm_source_live_evidence.py"
+    )
+    evm_source_live_removed_marker = (
+        "deployment receipt transactionHash must be a non-zero bytes32"
+    )
+    sparse_evm_source_live_script = tmp_path / "sccp_evm_source_live_evidence.py"
+    sparse_evm_source_live_script.write_text(
+        "\n".join(
+            marker
+            for marker in evm_source_live_script_markers
+            if marker != evm_source_live_removed_marker
+        ),
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_public_scalar_text_schema_gate_inventory_errors(
+        ((sparse_evm_source_live_script, evm_source_live_script_markers),)
+    )
+
+    assert any(
+        "SCCP release public scalar-text schema source inventory" in error
+        and str(sparse_evm_source_live_script) in error
+        and f"missing marker: {evm_source_live_removed_marker}" in error
+        for error in errors
+    )
+
     solana_test_markers = (
         "def test_solana_json_rpc_redacts_transport_and_error_response_details",
+        "def test_solana_json_rpc_redacts_invalid_json_parser_details",
+        "def test_live_solana_account_data_redacts_base64_parser_causes",
+        "def test_live_solana_metadata_base64_redacts_parser_causes",
         "secret-token-solana-error",
+        "secret-token invalid Solana JSON-RPC payload",
+        "secret-token live account base64",
+        "secret-token live metadata base64",
         "duplicate JSON keys",
         'assert "secret-token" not in message',
     )
@@ -3890,34 +4070,355 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
         for error in errors
     )
 
+    solana_script_markers = next(
+        markers
+        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
+        if path == "scripts/sccp_solana_live_evidence.py"
+    )
+    solana_script_removed_marker = "JSON-RPC {method} returned invalid JSON"
+    sparse_solana_script = tmp_path / "sccp_solana_live_evidence_invalid_json.py"
+    sparse_solana_script.write_text(
+        "\n".join(
+            marker
+            for marker in solana_script_markers
+            if marker != solana_script_removed_marker
+        ),
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_public_scalar_text_schema_gate_inventory_errors(
+        ((sparse_solana_script, solana_script_markers),)
+    )
+
+    assert any(
+        "SCCP release public scalar-text schema source inventory" in error
+        and str(sparse_solana_script) in error
+        and f"missing marker: {solana_script_removed_marker}" in error
+        for error in errors
+    )
+
+    for solana_script_removed_marker in (
+        'raise RuntimeError(f"{label} account data is invalid base64") from None',
+        'raise ValueError(f"{label} must be base64") from None',
+    ):
+        sparse_solana_script = (
+            tmp_path / f"sccp_solana_live_base64_{len(solana_script_removed_marker)}.py"
+        )
+        sparse_solana_script.write_text(
+            "\n".join(
+                marker
+                for marker in solana_script_markers
+                if marker != solana_script_removed_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = report._sccp_release_public_scalar_text_schema_gate_inventory_errors(
+            ((sparse_solana_script, solana_script_markers),)
+        )
+
+        assert any(
+            "SCCP release public scalar-text schema source inventory" in error
+            and str(sparse_solana_script) in error
+            and f"missing marker: {solana_script_removed_marker}" in error
+            for error in errors
+        )
+
+    solana_payload_removed_marker = "secret-token invalid Solana JSON-RPC payload"
+    sparse_solana_payload_test = tmp_path / "sccp_solana_live_evidence_payload_test.py"
+    sparse_solana_payload_test.write_text(
+        "\n".join(
+            marker
+            for marker in solana_test_markers
+            if marker != solana_payload_removed_marker
+        ),
+        encoding="utf-8",
+    )
+    errors = report._sccp_release_public_scalar_text_schema_gate_inventory_errors(
+        ((sparse_solana_payload_test, solana_test_markers),)
+    )
+
+    assert any(
+        "SCCP release public scalar-text schema source inventory" in error
+        and str(sparse_solana_payload_test) in error
+        and f"missing marker: {solana_payload_removed_marker}" in error
+        for error in errors
+    )
+
     adversarial_marker_cases = (
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
             "secret-token-ton-error",
         ),
         (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "secret-token invalid TON accountStates payload",
+        ),
+        (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "secret-token hash base64",
+        ),
+        (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "secret-token-ton-api-key-file",
+        ),
+        (
+            "pytests/scripts/sccp_ton_source_state_evidence_test.py",
+            "secret-token-ton-source-hex",
+        ),
+        (
+            "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+            "secret-token invalid EVM receipt JSON-RPC payload",
+        ),
+        (
+            "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+            "secret-token-evm-receipt-hex",
+        ),
+        (
+            "pytests/scripts/sccp_release_bundle_test.py",
+            "secret-token-native-duplicate",
+        ),
+        (
+            "pytests/scripts/sccp_solana_live_evidence_test.py",
+            "secret-token live account base64",
+        ),
+        (
+            "pytests/scripts/sccp_solana_live_evidence_test.py",
+            "secret-token live metadata base64",
+        ),
+        (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
             "secret-token solid block proof parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "source-event calldata rendered in full TOML mode",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "for exception_type in (ValueError, RuntimeError):",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token transaction source proof parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token witness schedule payload parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token witness schedule hash parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token transition message parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token transition seal parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token witness seal message parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token witness seal proof parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token TRON API error object",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token invalid JSON payload",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token invalid transition JSON",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token-duplicate-transition",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "0xsecret-token-bytecode",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token {label} parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token constant failure detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "0xsecret-token constant parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token generated full TOML parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "TRON API /wallet/triggerconstantcontract returned duplicate JSON keys",
+        ),
+        (
+            "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
+            "secret-token-tron-source-fixed-hex",
+        ),
+        (
+            "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
+            "secret-token-tron-source-runtime",
+        ),
+        (
+            "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
+            "secret-token-tron-source-file",
+        ),
+        (
+            "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
+            "secret-token-tron-source-address",
         ),
         (
             "pytests/scripts/sccp_evm_source_live_evidence_test.py",
             "0xsecret-token-source-bridge-runtime",
         ),
         (
+            "pytests/scripts/sccp_evm_source_live_evidence_test.py",
+            "secret-token invalid EVM source JSON-RPC payload",
+        ),
+        (
+            "pytests/scripts/sccp_evm_source_live_evidence_test.py",
+            "secret-token-evm-source-live-hex",
+        ),
+        (
+            "pytests/scripts/sccp_evm_source_live_evidence_test.py",
+            "secret-token {target_method} parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
+            "secret-token-eth-source-hex",
+        ),
+        (
+            "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
+            "secret-token-eth-source-runtime0",
+        ),
+        (
+            "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
+            "secret-token-eth-source-file-path.hex",
+        ),
+        (
+            "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
+            "secret-token-bsc-source-hex",
+        ),
+        (
+            "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
+            "secret-token-bsc-source-runtime0",
+        ),
+        (
+            "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
+            "secret-token-bsc-source-file-path.hex",
+        ),
+        (
+            "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
+            "secret-token-bsc-source-network",
+        ),
+        (
             "pytests/scripts/sccp_evm_live_evidence_test.py",
             "0xsecret-token-destination-runtime",
+        ),
+        (
+            "pytests/scripts/sccp_evm_live_evidence_test.py",
+            "secret-token invalid EVM JSON-RPC payload",
+        ),
+        (
+            "pytests/scripts/sccp_evm_live_evidence_test.py",
+            "secret-token-evm-live-chain-id",
+        ),
+        (
+            "pytests/scripts/sccp_evm_live_evidence_test.py",
+            "secret-token-evm-live-network-id",
+        ),
+        (
+            "pytests/scripts/sccp_evm_live_evidence_test.py",
+            "secret-token generated EVM destination TOML parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_evm_destination_evidence_test.py",
+            "secret-token-evm-destination-domain",
+        ),
+        (
+            "pytests/scripts/sccp_evm_destination_evidence_test.py",
+            "secret-token-evm-destination-bsc-network",
+        ),
+        (
+            "pytests/scripts/sccp_evm_destination_evidence_test.py",
+            "secret-token-evm-destination-hex",
+        ),
+        (
+            "pytests/scripts/sccp_evm_destination_evidence_test.py",
+            "secret-token-evm-destination-runtime",
+        ),
+        (
+            "pytests/scripts/sccp_evm_destination_evidence_test.py",
+            "secret-token-evm-destination-file-path.hex",
         ),
         (
             "pytests/scripts/sccp_solana_destination_evidence_test.py",
             "secret-token {label} parser detail",
         ),
         (
+            "pytests/scripts/sccp_solana_destination_evidence_test.py",
+            "secret-token-solana-fixed-hex",
+        ),
+        (
+            "pytests/scripts/sccp_solana_destination_evidence_test.py",
+            "secret-token-solana-program-hex",
+        ),
+        (
+            "pytests/scripts/sccp_solana_destination_evidence_test.py",
+            "secret-token-solana-destination-base64",
+        ),
+        (
+            "pytests/scripts/sccp_solana_destination_evidence_test.py",
+            "secret-token-private-verifier.so",
+        ),
+        (
+            "pytests/scripts/sccp_solana_source_state_evidence_test.py",
+            "secret-token-solana-source-hex",
+        ),
+        (
             "pytests/scripts/sccp_ton_destination_evidence_test.py",
             "secret-token {label} parser detail",
         ),
         (
+            "pytests/scripts/sccp_ton_destination_evidence_test.py",
+            "secret-token-ton-destination-fixed-hex",
+        ),
+        (
+            "pytests/scripts/sccp_ton_destination_evidence_test.py",
+            "secret-token-ton-destination-code-boc",
+        ),
+        (
+            "pytests/scripts/sccp_ton_destination_evidence_test.py",
+            "secret-token-ton-destination-file-path",
+        ),
+        (
+            "pytests/scripts/sccp_ton_destination_evidence_test.py",
+            "secret-token-ton-destination-account-status",
+        ),
+        (
+            "pytests/scripts/sccp_ton_destination_evidence_test.py",
+            "secret-token-ton-destination-last-lt",
+        ),
+        (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "secret-token-route-metadata!",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "secret-token all-lanes base64",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -5076,6 +5577,143 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
             for error in errors
         )
 
+    for inventory_path, removed_marker in (
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            'raise ValueError(f"{label} must be base64") from None',
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            'raise ValueError(f"{label}:{line_number}: invalid metadata comment") from None',
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "def _minimal_toml_duplicate_key_detail(",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "duplicate key with sensitive name",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "duplicate key with malformed name",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "def _toml_unsupported_section_detail(",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "unsupported zk section with sensitive name",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "unsupported zk section with malformed name",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_minimal_toml_parser_redacts_json_exception_causes",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_minimal_toml_parser_redacts_sensitive_duplicate_keys",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_loader_redacts_unsupported_zk_section_names",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_metadata_comment_redacts_json_exception_causes",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_base64_helper_redacts_parser_causes",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "secret-token string",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "secret-token-duplicate-key",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "route|operator-duplicate-key",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "secret-token-section",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "route|operator-section",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "secret-token-zk-section",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "route|operator-zk-section",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "secret-token comment",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "secret-token all-lanes base64",
+        ),
+        (
+            "scripts/sccp_ton_live_evidence.py",
+            'raise RuntimeError(f"{label} must be 32-byte hex or base64") from None',
+        ),
+        (
+            "scripts/sccp_ton_live_evidence.py",
+            'raise RuntimeError("TON verifier account code_boc is invalid") from None',
+        ),
+        (
+            "scripts/sccp_ton_live_evidence.py",
+            'raise ValueError("TON live code BoC base64 metadata is invalid") from None',
+        ),
+        (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
+        ),
+        (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "secret-token hash base64",
+        ),
+    ):
+        required_markers = next(
+            markers
+            for path, markers in verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS
+            if path == inventory_path
+        )
+        sparse_source = tmp_path / f"all-lanes-{Path(inventory_path).name}"
+        sparse_source.write_text(
+            "\n".join(
+                marker for marker in required_markers if marker != removed_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = report._sccp_source_material_role_validation_gate_inventory_errors(
+            ((sparse_source, required_markers),)
+        )
+
+        assert any(
+            "SCCP source-material role validation source inventory" in error
+            and str(sparse_source) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        )
+
 
 def test_release_readiness_report_guards_ethereum_evm_source_adapter_deployment_gate_inventory(
     tmp_path: Path,
@@ -5326,6 +5964,107 @@ def test_release_readiness_report_guards_ethereum_evm_source_live_production_gat
         for error in errors
     )
 
+    removed_marker = "deployment receipt transactionHash must be a non-zero bytes32"
+    sparse_source = tmp_path / "sccp_evm_source_live_receipt_fields.py"
+    sparse_source.write_text(
+        "\n".join(marker for marker in required_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+
+    errors = report._ethereum_evm_source_live_production_gate_inventory_errors(
+        (
+            (
+                sparse_source,
+                required_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet live EVM source production SDK test inventory" in error
+        and str(sparse_source) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+    removed_marker = "JSON-RPC {method} returned invalid JSON"
+    sparse_source = tmp_path / "sccp_evm_source_live_invalid_json.py"
+    sparse_source.write_text(
+        "\n".join(marker for marker in required_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+
+    errors = report._ethereum_evm_source_live_production_gate_inventory_errors(
+        (
+            (
+                sparse_source,
+                required_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet live EVM source production SDK test inventory" in error
+        and str(sparse_source) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+    source_test_markers = next(
+        markers
+        for path, markers in verifier.ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS
+        if path == "pytests/scripts/sccp_evm_source_live_evidence_test.py"
+    )
+    removed_marker = "secret-token invalid EVM source JSON-RPC payload"
+    sparse_source_test = tmp_path / "sccp_evm_source_live_invalid_json_test.py"
+    sparse_source_test.write_text(
+        "\n".join(
+            marker for marker in source_test_markers if marker != removed_marker
+        ),
+        encoding="utf-8",
+    )
+
+    errors = report._ethereum_evm_source_live_production_gate_inventory_errors(
+        (
+            (
+                sparse_source_test,
+                source_test_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet live EVM source production SDK test inventory" in error
+        and str(sparse_source_test) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+    removed_marker = "secret-token {target_method} parser detail"
+    sparse_source_test = tmp_path / "sccp_evm_source_live_evidence_test.py"
+    sparse_source_test.write_text(
+        "\n".join(
+            marker for marker in source_test_markers if marker != removed_marker
+        ),
+        encoding="utf-8",
+    )
+
+    errors = report._ethereum_evm_source_live_production_gate_inventory_errors(
+        (
+            (
+                sparse_source_test,
+                source_test_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet live EVM source production SDK test inventory" in error
+        and str(sparse_source_test) in error
+        and removed_marker in error
+        for error in errors
+    )
+
 
 def test_release_readiness_report_guards_ethereum_evm_live_destination_production_gate_inventory(
     tmp_path: Path,
@@ -5360,6 +6099,107 @@ def test_release_readiness_report_guards_ethereum_evm_live_destination_productio
         "Ethereum mainnet live EVM destination production SDK test inventory"
         in error
         and str(sparse_source) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+    removed_marker = "generated EVM destination TOML arguments are invalid"
+    sparse_source = tmp_path / "sccp_evm_live_evidence_generated_toml.py"
+    sparse_source.write_text(
+        "\n".join(marker for marker in required_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+
+    errors = report._ethereum_evm_live_destination_production_gate_inventory_errors(
+        (
+            (
+                sparse_source,
+                required_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet live EVM destination production SDK test inventory"
+        in error
+        and str(sparse_source) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+    removed_marker = "JSON-RPC {method} returned invalid JSON"
+    sparse_source = tmp_path / "sccp_evm_live_evidence_invalid_json.py"
+    sparse_source.write_text(
+        "\n".join(marker for marker in required_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+
+    errors = report._ethereum_evm_live_destination_production_gate_inventory_errors(
+        (
+            (
+                sparse_source,
+                required_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet live EVM destination production SDK test inventory"
+        in error
+        and str(sparse_source) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+    live_test_markers = next(
+        markers
+        for path, markers in verifier.ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS
+        if path == "pytests/scripts/sccp_evm_live_evidence_test.py"
+    )
+    removed_marker = "secret-token invalid EVM JSON-RPC payload"
+    sparse_live_test = tmp_path / "sccp_evm_live_evidence_invalid_json_test.py"
+    sparse_live_test.write_text(
+        "\n".join(marker for marker in live_test_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+
+    errors = report._ethereum_evm_live_destination_production_gate_inventory_errors(
+        (
+            (
+                sparse_live_test,
+                live_test_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet live EVM destination production SDK test inventory"
+        in error
+        and str(sparse_live_test) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+    removed_marker = "secret-token generated EVM destination TOML parser detail"
+    sparse_live_test = tmp_path / "sccp_evm_live_evidence_test.py"
+    sparse_live_test.write_text(
+        "\n".join(marker for marker in live_test_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+
+    errors = report._ethereum_evm_live_destination_production_gate_inventory_errors(
+        (
+            (
+                sparse_live_test,
+                live_test_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet live EVM destination production SDK test inventory"
+        in error
+        and str(sparse_live_test) in error
         and removed_marker in error
         for error in errors
     )
@@ -22296,6 +23136,7 @@ def test_release_readiness_guards_ethereum_receipt_rpc_duplicate_json_tests() ->
             "JSON-RPC returned duplicate JSON keys",
             "JSON-RPC {method} failed with HTTP {exc.code}",
             "JSON-RPC {method} request failed",
+            "JSON-RPC {method} returned invalid JSON",
             "JSON-RPC {method} returned error response",
             "object_pairs_hook=_json_object_without_duplicate_keys",
         ),
@@ -22303,7 +23144,9 @@ def test_release_readiness_guards_ethereum_receipt_rpc_duplicate_json_tests() ->
             "FakeRawResponse",
             "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys",
             "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
+            "test_receipt_json_rpc_redacts_invalid_json_parser_details",
             "test_receipt_json_rpc_redacts_transport_and_error_response_details",
+            "secret-token invalid EVM receipt JSON-RPC payload",
             "secret-token",
             "duplicate JSON-RPC result keys were accepted",
             "duplicate JSON receipt fields were accepted",

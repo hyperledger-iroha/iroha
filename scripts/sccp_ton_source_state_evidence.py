@@ -112,8 +112,8 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
     return raw

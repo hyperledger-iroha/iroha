@@ -4559,6 +4559,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-sdk-native-bridge-script",
     "--negative-control-csharp-sdk-native-library-evidence-script",
     "--negative-control-csharp-sdk-test-filter-script",
+    "--negative-control-csharp-sdk-verifier-backend-test-filter-script",
     "--negative-control-csharp-sdk-workflow-inventory",
     "--negative-control-csharp-archive-copy",
     "--negative-control-csharp-recursive-compact-verifier-unavailable",
@@ -6087,6 +6088,73 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "Kagemusha C# SDK runner must print host and bridge digest evidence",
   );
   assert.match(
+    csharpRunner,
+    /FullyQualifiedName~KagemushaRecursiveSpendNativeTests[\s\S]*FullyQualifiedName~PrivacyNativeTests[\s\S]*FullyQualifiedName~TransactionBuilderTests[\s\S]*FullyQualifiedName~CanonicalRequestTests[\s\S]*FullyQualifiedName~ToriiClientTests[\s\S]*FullyQualifiedName~SignedQueryBuilderTests[\s\S]*FullyQualifiedName~SignedIterableQueryBuilderTests[\s\S]*FullyQualifiedName~VerifyingKeyBackendTagTests/,
+    "Kagemusha C# SDK runner must exercise canonical request, signed query, and verifier backend exactness tests",
+  );
+  const csharpVerifyingKeyBackendTests = source(
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/VerifyingKeyBackendTagTests.cs",
+  );
+  for (const requiredCsharpVerifierBackendTest of [
+    "ProductionVerifierBackendClassifierMirrorsNativeAllowlist",
+    "ProductionVerifierBackendClassifierRejectsUnsafeLabels",
+    "CatalogAliasesRejectNonAsciiConfusablesBeforeCompaction",
+    "AdversarialPendingAliasSplicesStayUnsupported",
+  ]) {
+    assert.ok(
+      csharpVerifyingKeyBackendTests.includes(requiredCsharpVerifierBackendTest),
+      `Kagemusha C# verifier backend tests must keep ${requiredCsharpVerifierBackendTest}`,
+    );
+  }
+  for (const requiredCsharpVerifierBackendFixture of [
+    '" halo2/ipa"',
+    '"halo2/ipa "',
+    '"stark/fri/sha256-goldilocks "',
+    '"halo2\\uFF0Fipa"',
+    '"halo2/\\u200Bipa"',
+    '"h\\u0430lo2/ipa"',
+    '"halo2/ipa\\0"',
+    '"halo2/ipa:production-ready"',
+    '"stark/fri/S.e.c.u.r.i.t.yReviewPassed"',
+  ]) {
+    assert.ok(
+      csharpVerifyingKeyBackendTests.includes(requiredCsharpVerifierBackendFixture),
+      `Kagemusha C# verifier backend tests must keep fixture ${requiredCsharpVerifierBackendFixture}`,
+    );
+  }
+  const csharpToriiTests = source("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs");
+  for (const requiredCsharpIdentifierReceiptTest of [
+    "ResolveIdentifierAsyncRejectsPaddedSignatureReceiptFields",
+    "ResolveIdentifierAsyncRejectsNonExactPolicyIdBeforeDispatch",
+    "ResolveIdentifierAsyncRejectsNonExactTopLevelPolicyId",
+    "ResolveIdentifierAsyncRejectsNonExactSignaturePayloadPolicyIds",
+    "ResolveIdentifierAsyncAcceptsExactProofAttestationReceipt",
+    "ResolveIdentifierAsyncRejectsNonExactAttestationSelectors",
+    "ResolveIdentifierAsyncAcceptsExactNestedReceiptPayloadFields",
+    "ResolveIdentifierAsyncRejectsNonExactNestedReceiptPayloadFields",
+    "GetIdentifierPoliciesAsyncRejectsNonExactPolicySummaryFields",
+  ]) {
+    assert.ok(
+      csharpToriiTests.includes(requiredCsharpIdentifierReceiptTest),
+      `Kagemusha C# Torii tests must keep ${requiredCsharpIdentifierReceiptTest}`,
+    );
+  }
+  for (const requiredCsharpIdentifierReceiptField of [
+    "identifier resolve response.signature_payload.attestation.proof_b64",
+    "identifier resolve response.signature_payload.payload.policy_id",
+    "identifier resolve response.signature_payload.payload.execution.program_id",
+    "identifier resolve response.signature_payload.payload.account_id",
+    "identifier resolve response.signature_payload.payload.receipt_hash",
+    "identifier resolve response.signature_payload.payload.execution.executed_at_ms",
+    "identifier policies response.items[0].policy_id",
+    "identifier policies response.items[0].resolver_public_key",
+  ]) {
+    assert.ok(
+      csharpToriiTests.includes(requiredCsharpIdentifierReceiptField),
+      `Kagemusha C# Torii tests must keep ${requiredCsharpIdentifierReceiptField}`,
+    );
+  }
+  assert.match(
     pythonRunner,
     /PYTHON_OVERRIDE="\$\{KAGEMUSHA_RECURSIVE_SPEND_PYTHON_BIN:-\}"[\s\S]*resolve_python_311_bin\(\)[\s\S]*python3\.11[\s\S]*PYTHON_BIN="\$\(resolve_python_311_bin\)"/,
     "Kagemusha Python SDK runner must keep the documented Python override variable",
@@ -6111,6 +6179,33 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /tests\/client_ledger_helpers_test\.py[\s\S]*zk_event_filters_reject_unsupported_backends_before_request[\s\S]*zk_verifying_key_event_filters_reject_malformed_names_before_request[\s\S]*zk_proof_event_filters_reject_malformed_hashes_before_request[\s\S]*zk_raw_event_filters_reject_malformed_privacy_matchers_before_request[\s\S]*zk_raw_event_filters_canonicalize_privacy_matchers_before_request/,
     "Kagemusha Python SDK runner must exercise Torii event-filter verifier/proof exactness tests",
   );
+  const pythonCryptoAlgorithmTests = source("python/iroha_python/tests/crypto_algorithms_test.py");
+  for (const requiredPythonCryptoExactnessTest of [
+    "test_algorithm_labels_reject_empty_strings_across_public_api",
+    "test_algorithm_labels_reject_surrounding_whitespace_across_public_api",
+    "test_algorithm_labels_reject_empty_and_padded_native_inputs",
+    "test_algorithm_labels_reject_control_and_confusable_native_inputs",
+  ]) {
+    assert.ok(
+      pythonCryptoAlgorithmTests.includes(requiredPythonCryptoExactnessTest),
+      `Kagemusha Python crypto tests must keep ${requiredPythonCryptoExactnessTest}`,
+    );
+  }
+  for (const requiredPythonNativeCryptoCall of [
+    "crypto_module._crypto.normalize_crypto_algorithm(label)",
+    "crypto_module._crypto.generate_keypair(label)",
+    "crypto_module._crypto.derive_keypair_from_seed(",
+    "crypto_module._crypto.load_keypair(keypair.private_key, label)",
+    "crypto_module._crypto.public_key_multihash(label, keypair.public_key, False)",
+    "crypto_module._crypto.private_key_multihash(label, keypair.private_key, False)",
+    "crypto_module._crypto.sign(label, keypair.private_key, payload)",
+    "crypto_module._crypto.verify(label, keypair.public_key, payload, signature)",
+  ]) {
+    assert.ok(
+      pythonCryptoAlgorithmTests.includes(requiredPythonNativeCryptoCall),
+      `Kagemusha Python crypto tests must keep direct native exactness call ${requiredPythonNativeCryptoCall}`,
+    );
+  }
   assert.match(
     jsRunner,
     /NODE_OVERRIDE="\$\{KAGEMUSHA_RECURSIVE_SPEND_JS_SDK_NODE_BIN:-\}"[\s\S]*is_node_20_bin\(\)[\s\S]*resolve_node_20_bin\(\)[\s\S]*NODE_BIN="\$\(resolve_node_20_bin\)"/,

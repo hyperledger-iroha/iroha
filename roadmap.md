@@ -21,17 +21,22 @@ and completed history lives in [`status.md`](./status.md).
   before native probing or dispatch, accepting safe non-negative numbers and
   bounded `u64` bigints only, and the SDK parity guard must continue pinning
   those surfaces.
-- Kagemusha C# SDK validation remains a Windows-machine follow-up because this
-  macOS host does not have `dotnet` installed. On Windows, install or select a
-  .NET 8 SDK, run the standalone C# Kagemusha guard
+- Kagemusha C# SDK validation still needs a Windows-machine confirmation even
+  though a temporary macOS .NET 8 SDK validated the standalone runner. On
+  Windows, install or select a .NET 8 SDK, run the standalone C# Kagemusha guard
   `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` or its direct
   `dotnet test` equivalent, and preserve the selected `dotnet --version`
   evidence in the output. The focused pass should cover
   `csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs`,
-  `PrivacyNativeTests.cs`, and `TransactionBuilderTests.cs`, with native bridge
-  loading and P/Invoke symbol probing enabled for the ABI-6 recursive spend and
-  ABI-7 compact-token, recursive aggregation, recursive compact
-  verifier/projection, and instruction transaction-builder surfaces. The
+  `PrivacyNativeTests.cs`, `TransactionBuilderTests.cs`,
+  `CanonicalRequestTests.cs`, `ToriiClientTests.cs`,
+  `SignedQueryBuilderTests.cs`, `SignedIterableQueryBuilderTests.cs`, and
+  `VerifyingKeyBackendTagTests.cs`, with native bridge loading and P/Invoke
+  symbol probing enabled for the ABI-6
+  recursive spend, ABI-7 compact-token, recursive aggregation, recursive
+  compact verifier/projection, instruction transaction-builder surfaces, C#
+  canonical request auth exactness, C# signed query exactness, and C#
+  production verifier-backend label exactness. The
   standalone runner now builds `connect_norito_bridge`, resolves the
   platform-specific native library name, fails if the freshly built artifact is
   missing, prints the selected native bridge path, and prepends that directory
@@ -39,8 +44,9 @@ and completed history lives in [`status.md`](./status.md).
   The
   Windows pass must also pin the C# negative controls for malformed Norito
   input/output headers, caller archive-copy immutability, verifier-unavailable
-  status mapping, transaction-builder schema and wire-name drift, and
-  package/evidence parity. After the Windows run passes, update `status.md`
+  status mapping, transaction-builder schema and wire-name drift,
+  verifier-backend test-filter drift, and package/evidence parity. After the
+  Windows run passes, update `status.md`
   with the C# SDK evidence and rerun the Kagemusha SDK parity or production
   readiness guards needed to clear the C# row.
   Windows-machine TODOs:
@@ -53,7 +59,9 @@ and completed history lives in [`status.md`](./status.md).
     and `connect_norito_bridge native bridge sha256:` for the freshly built
     `connect_norito_bridge.dll` before the P/Invoke tests start.
   - Confirm the pass includes `KagemushaRecursiveSpendNativeTests`,
-    `PrivacyNativeTests`, and `TransactionBuilderTests`.
+    `PrivacyNativeTests`, `TransactionBuilderTests`, `CanonicalRequestTests`,
+    `ToriiClientTests`, `SignedQueryBuilderTests`, and
+    `SignedIterableQueryBuilderTests`, and `VerifyingKeyBackendTagTests`.
   - Confirm `KagemushaRecursiveSpendNativeTests` exercises
     `KagemushaOverlongCompactLength`,
     `KagemushaOversizedTerminalCompactLength`,
@@ -63,10 +71,10 @@ and completed history lives in [`status.md`](./status.md).
     `invalidUtf8CircuitArchive` so the C# parser rejects non-canonical,
     address-space oversized, u64-overflowing compact lengths and invalid UTF-8
     lineage archive circuit fields on Windows.
-  - Add the Windows C# negative that a whitespace-padded `CID1` circuit id in
-    the lineage verifier key rejects as `lineage_verifier_key` before native
-    bridge dispatch, even when the proving-key archive commits to that padded
-    verifier key.
+  - Confirm the Windows C# pass includes the negative that a
+    whitespace-padded `CID1` circuit id in the lineage verifier key rejects as
+    `lineage_verifier_key` before native bridge dispatch, even when the
+    proving-key archive commits to that padded verifier key.
   - Confirm whether the C# SDK has or adds an Offline Note V1/V2 canonical
     model/decoder surface; if so, mirror the Swift/Kotlin/Android exact-domain
     negatives for key-certificate payload, issued-claim, redeem-public-inputs,
@@ -81,12 +89,16 @@ and completed history lives in [`status.md`](./status.md).
     negatives for persisted `chain_id`, `account_id`, and optional
     `spent_payment_request_id`, rejecting padded or blank values instead of
     normalizing them across account-scope or replay-prevention boundaries.
-  - Mirror the non-C# identifier receipt hardening on Windows so C# canonical
-    attestation builders and Torii JSON receipt parsing reject padded or
-    mixed-case attestation `kind` tags before selecting signed/proof behavior.
-  - Mirror the non-C# identifier receipt proof-attestation hardening on Windows
-    so C# canonical attestation builders and Torii JSON receipt parsing reject
-    padded `proof_b64` before base64 decoding or selecting proof behavior.
+  - Confirm the Windows C# pass includes identifier receipt attestation
+    selector exactness: Torii JSON receipt parsing now rejects padded,
+    control-character, or mixed-case attestation `kind` tags before selecting
+    signed/proof behavior. If C# canonical attestation builders are added
+    later, mirror the same selector checks there too.
+  - Confirm the Windows C# pass includes identifier receipt proof-attestation
+    exactness: Torii JSON receipt parsing now rejects missing, padded, or
+    malformed proof-attestation `proof_b64` before base64 decoding or proof
+    behavior selection. If C# canonical attestation builders are added later,
+    mirror the same proof checks there too.
   - C# Torii identifier-resolve JSON parsing now rejects padded response
     `signature`, `signature_payload_hex`, exposed `payload.opening.signature`,
     and signed-attestation `signature` fields before callers can decode or
@@ -95,43 +107,55 @@ and completed history lives in [`status.md`](./status.md).
     builders and verifier inputs, then run the .NET 8 lane so padded
     `payload.opening.signature` and signed attestation `signature` cannot
     reach hex decoding or receipt verification.
-  - Mirror the non-C# identifier receipt policy-id hardening on Windows so C#
-    canonical payload builders and Torii JSON receipt parsing reject padded
-    `payload.policy_id` text and padded `kind`/`rule` components before
-    canonical receipt bytes are encoded or verified.
-  - Mirror the non-C# identifier receipt program-id hardening on Windows so C#
-    canonical payload builders and Torii JSON receipt parsing reject padded
-    `payload.execution.program_id` and `payload.opening.payload.program_id`
-    before canonical receipt bytes are encoded or verified.
-  - Mirror the non-C# identifier receipt account-id hardening on Windows so C#
-    canonical payload builders and Torii JSON receipt parsing reject padded
-    `payload.account_id` before canonical receipt bytes are encoded or verified.
-  - Mirror the non-C# identifier receipt hash-field hardening on Windows so C#
-    canonical payload builders and Torii JSON receipt parsing reject padded
-    `payload.opaque_id`, `payload.receipt_hash`, `payload.uaid`, execution
-    digest fields, and opening payload digest fields before canonical receipt
-    bytes are encoded or verified.
-  - Mirror the non-C# identifier receipt timestamp hardening on Windows so C#
-    canonical payload builders and Torii JSON receipt parsing reject padded
-    numeric-string receipt times for `payload.execution.executed_at_ms`,
-    `payload.execution.expires_at_ms`, `payload.opening.payload.opened_at_ms`,
-    and `payload.opening.payload.expires_at_ms`, and reject negative receipt
-    times before canonical u64 receipt bytes are encoded or verified.
-  - Tighten the C# `TransactionBuilder`/`TransactionEncodingContext` Windows
-    pass so chain ids, authority/account ids, asset/domain ids, metadata keys,
-    optional memo/fee-sponsor strings, and label-like fields reject surrounding
-    whitespace before Norito transaction bytes are encoded or signed, instead
-    of normalizing with `Trim()`. Add focused `TransactionBuilderTests`
-    negatives for padded constructor, instruction, metadata, and encoding
-    fields after selecting the Windows .NET SDK.
-  - Tighten the C# canonical request auth Windows pass so
-    `CanonicalRequestCredentials`, `CanonicalRequest.BuildHeaders`, and
-    `CanonicalRequestHeaders` reject padded or explicitly blank account ids,
-    nonces, and signature/header fields before signing or header emission,
-    instead of accepting `ArgumentException.ThrowIfNullOrWhiteSpace` or
-    generating a fresh nonce for caller-supplied blank values. Add focused
-    `CanonicalRequestTests` and `ToriiClientTests` negatives for padded account
-    ids/nonces after selecting the Windows .NET SDK.
+  - Confirm the Windows C# pass includes identifier receipt policy-id
+    exactness: `ResolveIdentifierAsync` now rejects non-exact request
+    `policy_id`, top-level response `policy_id`, and
+    `signature_payload.policy_id` / `signature_payload.payload.policy_id`
+    values with padded, control-character, or malformed `kind#rule`
+    components before HTTP dispatch or receipt verification. If a C#
+    canonical receipt payload builder is added later, mirror the same
+    policy-id checks there too.
+  - Confirm the Windows C# pass includes identifier receipt program-id
+    exactness: Torii JSON receipt parsing now rejects padded or
+    control-character `signature_payload.payload.execution.program_id` and
+    `signature_payload.payload.opening.payload.program_id` values before
+    receipt verification. If a C# canonical receipt payload builder is added
+    later, mirror the same program-id checks there too.
+  - Confirm the Windows C# pass includes identifier receipt account-id
+    exactness: Torii JSON receipt parsing now rejects padded or
+    control-character `signature_payload.payload.account_id` values before
+    receipt verification. If a C# canonical receipt payload builder is added
+    later, mirror the same account-id checks there too.
+  - Confirm the Windows C# pass includes identifier receipt hash-field
+    exactness: Torii JSON receipt parsing now rejects padded or
+    control-character `signature_payload.payload.opaque_id`,
+    `signature_payload.payload.receipt_hash`,
+    `signature_payload.payload.uaid`, execution digest fields, and opening
+    payload digest fields before receipt verification. If a C# canonical
+    receipt payload builder is added later, mirror the same digest-field checks
+    there too.
+  - Confirm the Windows C# pass includes identifier receipt timestamp
+    exactness: Torii JSON receipt parsing now rejects padded numeric-string
+    receipt times for `signature_payload.payload.execution.executed_at_ms`,
+    `signature_payload.payload.execution.expires_at_ms`,
+    `signature_payload.payload.opening.payload.opened_at_ms`, and
+    `signature_payload.payload.opening.payload.expires_at_ms`, and rejects
+    negative receipt times before receipt verification. If a C# canonical
+    receipt payload builder is added later, mirror the same u64 checks there
+    too.
+  - Confirm the Windows C# `TransactionBuilder`/`TransactionEncodingContext`
+    pass includes the new focused negatives for padded constructor,
+    instruction, metadata, and common encoder fields. Chain ids,
+    authority/account ids, asset/domain ids, metadata keys, numeric strings,
+    optional strings, NFT/trigger labels, and label-like fields now reject
+    surrounding whitespace or control characters before Norito transaction bytes
+    are encoded or signed instead of normalizing with `Trim()`.
+  - Confirm the Windows C# canonical request auth pass includes the new
+    `CanonicalRequestTests` and `ToriiClientTests` negatives for padded or
+    explicitly blank account ids, caller-provided nonces, methods, and paths;
+    the implementation now rejects those values before signing or header
+    emission instead of accepting `ArgumentException.ThrowIfNullOrWhiteSpace`
+    or generating a fresh nonce for caller-supplied blank values.
   - Confirm the Windows C# SDK lane includes `PrivacyNativeTests`, whose
     cross-platform .NET 8 pass now covers the public VeRange V1 aliases
     `BuildVeRangeProofV1`, `buildVeRangeProofV1`, `VerifyVeRangeProofV1`, and
@@ -185,7 +209,10 @@ and completed history lives in [`status.md`](./status.md).
   to those runner-covered surfaces trigger the focused SDK pass. The native
   `_crypto` parser must keep exact non-empty, non-padded, printable-ASCII
   algorithm labels before alias normalization so direct extension callers match
-  the public Python wrapper. Python Torii
+  the public Python wrapper. Python crypto tests and the JavaScript parity
+  meta-test must pin empty/padded labels across key generation, key loading,
+  multihash, sign, verify, key-pair construction, and direct `_crypto` calls.
+  Python Torii
   identifier receipt helpers must keep
   `encode_identifier_resolution_receipt_payload`,
   `encode_identifier_resolution_receipt_attestation`, and
@@ -223,19 +250,36 @@ and completed history lives in [`status.md`](./status.md).
   `--negative-control-identifier-receipt-timestamp-u64-guard`, and
   `--negative-control-identifier-receipt-resolver-key-exactness-guard` drift checks wired
   into the workflow and JavaScript meta-test so that validation cannot be
-  removed silently.
-  C# Windows TODO: mirror resolver public-key exactness for identifier receipt
-  policy summaries and verifier inputs, including padded-key negative vectors.
-  C# Windows TODO: mirror policy-summary `policy_id` exactness for identifier
-  receipt verification, including padded policy-id negative vectors.
-  C# Windows TODO: run the source-level Torii identifier-resolve signature
-  exactness negatives under .NET 8 and mirror signed-attestation `signature`
-  verifier-input exactness for identifier receipt verification, including
-  padded signature negative vectors.
+  removed silently. The JavaScript parity meta-test now also pins the C#
+  `ToriiClientTests` identifier receipt negative test names and representative
+  C# field paths for signature, policy-id, attestation, proof-base64,
+  nested payload, timestamp, resolver-key, and policy-summary exactness so the
+  C# lane cannot keep a broad class filter while dropping those adversarial
+  cases.
+  C# Windows TODO: confirm the Windows C# pass includes resolver public-key
+  exactness for identifier receipt policy summaries; `GetIdentifierPoliciesAsync`
+  now rejects blank, padded, and control-character `resolver_public_key` values
+  before returning summaries. If C# verifier inputs are added later, mirror the
+  same padded-key negative vectors there too.
+  C# Windows TODO: confirm the Windows C# pass includes policy-summary
+  `policy_id` exactness for identifier receipt policy summaries;
+  `GetIdentifierPoliciesAsync` now rejects padded, control-character, and
+  malformed `kind#rule` policy ids before returning summaries. If C#
+  identifier receipt verifier inputs are added later, mirror the same
+  policy-id negative vectors there too.
+  C# Windows TODO: confirm the Windows .NET 8 pass includes the source-level
+  Torii identifier-resolve signature exactness negatives now covered by
+  `ToriiClientTests`, including padded response `signature`,
+  `signature_payload_hex`, exposed `payload.opening.signature`, and
+  signed-attestation `signature` fields. If C# identifier receipt verifier
+  inputs are added later, mirror the same padded signed-attestation
+  `signature` negative vectors there too.
   Python crypto algorithm labels must remain exact at the public SDK
   boundary: aliases can normalize, but empty or padded labels must fail before
   key generation, key loading, multihash, sign, verify, or key-pair construction
-  reaches native code. Production verifier backend labels must keep the same
+  reaches native code, and direct `_crypto` callers must reject the same empty
+  and padded labels before alias normalization. Production verifier backend
+  labels must keep the same
   exactness across Python, JavaScript, Kotlin/JVM, Android Java, Swift, and C#
   Torii/instruction-builder surfaces: padded labels fail with a
   surrounding-whitespace error before unsupported backend classification,
@@ -1267,7 +1311,8 @@ and completed history lives in [`status.md`](./status.md).
   `disabledReason`, `settlement.contractAddress`, and
   `settlement.contractAlias`, must also reject surrounding whitespace,
   non-string values, and contradictory snake_case/camelCase aliases before TOML
-  rendering. Route-config generation also requires
+  rendering; snake_case settlement aliases are accepted only when they render to
+  the same exact canonical TOML values. Route-config generation also requires
   production-ready BSC manifests to carry profile-bound `explorerUrl` and
   `explorerHost` metadata, while disabled legacy drafts can be backfilled to
   the selected profile and contradictory explorer aliases still fail closed.
@@ -3507,6 +3552,12 @@ and completed history lives in [`status.md`](./status.md).
   exporter, CLI domain-endorsement preparation, and SoraFS repair worker
   claim/complete/fail payload signing now also propagate
   `Signature::try_new`/`SignatureOf::try_new` failures through command errors;
+  data-model `BlockBuilder` now exposes `try_build_with_signature` so
+  incremental block assembly can propagate `SignatureOf::try_from_hash`
+  failures while keeping the compatibility block-signing helper, and
+  `SignedBlock` genesis assembly now exposes checked variants that return
+  signing failures and reject empty transaction sets without panic-only
+  construction;
   transaction submission receipts now expose
   `TransactionSubmissionReceipt::try_sign` and Torii submission responses use it
   to return formatted internal errors on receipt-signing backend failures;
@@ -3553,7 +3604,41 @@ and completed history lives in [`status.md`](./status.md).
   paths while retaining compatibility wrappers for existing infallible callers;
   split and IVM contract deploy CLI helpers now use
   `TransactionBuilder::try_sign` for deploy-envelope transaction construction
-  and return contextual command errors on backend signing failure;
+  and return contextual command errors on backend signing failure; CLI ZK
+  verifier-key register/update helpers now use the same checked transaction
+  signer before submitting governed verifier-key registry updates;
+  governance CLI IVM execution VK registration and SCCP IVM-proved transaction
+  construction now use a checked `TransactionBuilder::try_sign` helper and
+  return contextual command errors on backend signing failure; Torii governance
+  signable-payload drafts now use deterministic checked dummy signing instead
+  of throwaway random compatibility signing before returning client-signable
+  payload bytes; Torii ISO 20022 pacs.008 and pacs.009 transfer transaction
+  construction now uses checked `TransactionBuilder::try_sign` before returning
+  signed bridge transactions; CLI Soracloud release-governance, provenance,
+  uploaded-model, generated-HF, and mutation-auth header signatures now share a
+  checked `Signature::try_new` helper and return contextual command errors on
+  backend signing failure;
+  Torii Offline Notes V1 issue submission and V2 issue/redeem submission now
+  use issuer-local checked `TransactionBuilder::try_sign` helpers before queue
+  submission; the shared Connect Norito bridge transaction encoder now uses
+  `TransactionBuilder::try_sign` and propagates a bridge transaction-signing
+  error through transfer, shield/unshield, ZK, governance, mint/burn, multisig,
+  identifier, and Offline Notes FFI exports; Torii App API transaction
+  submissions now share a checked `TransactionBuilder::try_sign` helper across
+  confidential relay, account onboarding/faucet/alias, space-directory
+  manifests, contract call/deploy/alias, verifier-key registry, SoraFS, and
+  subscription endpoints; JavaScript host transaction assembly and re-sign
+  N-API paths now use a checked `TransactionBuilder::try_sign` helper and
+  return N-API errors on backend signing failure; SoraFS CLI fallback manifest
+  `/transaction` submissions now use a checked `TransactionBuilder::try_sign`
+  helper and return contextual command errors before HTTP dispatch on backend
+  signing failure; genesis batch transaction construction now uses
+  `TransactionBuilder::try_sign` and returns contextual genesis-build errors on
+  backend signing failure; Sumeragi recovery-heartbeat transaction construction
+  now uses a fallible `TransactionBuilder::try_sign` helper and returns
+  contextual consensus errors on backend signing failure; transaction-gossip
+  frame-size probing now uses `TransactionBuilder::try_sign` and falls back to a
+  zero payload cap with a warning on dummy probe signing failure;
   transaction builders, multisig signature bundles, and sealed transaction
   commitments now route through fallible `SignatureOf::try_new` APIs while
   retaining compatibility wrappers for existing callers;
@@ -3591,9 +3676,10 @@ and completed history lives in [`status.md`](./status.md).
   secp256k1 key generation and surfaces entropy/keygen failures as `StartTorii`,
   while `iroha_swarm` peer/genesis key generation, seeded network material, and
   BLS PoP proving now return `Error::KeyGeneration` through `Swarm::new`
-  instead of panicking; the CLI offline fallback config and governance council
-  VRF candidate-account derivation now use `KeyPair::try_from_seed`, surfacing
-  config/candidate derivation errors through existing `Result` paths, and
+  instead of panicking; the CLI offline fallback config now uses a nonzero
+  domain seed with `KeyPair::try_from_seed`, governance council VRF
+  candidate-account derivation also uses `KeyPair::try_from_seed`, and both
+  surface config/candidate derivation errors through existing `Result` paths;
   Izanami workload, Nexus gas, NPoS validator, post-topology, and network-builder
   key material now uses `KeyPair::try_random` / `KeyPair::try_from_seed` with
   explicit `Result` propagation instead of panic-only `KeyPair` wrappers;
@@ -3621,8 +3707,12 @@ and completed history lives in [`status.md`](./status.md).
   display and prefixed compatibility formatting now return a non-secret
   invalid-private-key marker instead of unwrapping checked private-key
   formatting; `Signature::try_new` now routes SM2 through checked private-key
-  rebuild/signing helpers and SM2 key-pair/public-key derivation now routes
-  through `try_public_key`; SM2 concrete public-key prefixed formatting now
+  rebuild/signing helpers, the high-level Rust SDK `Sm2KeyPair` exposes
+  `try_sign` while keeping `sign` as a compatibility wrapper, Connect/Norito C
+  SM2 detached signing returns `ERR_SM2_SIGN` from the checked signer on backend
+  failures, and SM2 key-pair/public-key derivation now routes through
+  `try_public_key`; SM2
+  concrete public-key prefixed formatting now
   returns a deterministic invalid-key marker instead of unwrapping checked
   multihash encoding; SM2 private-key byte export now exposes
   `PrivateKey::try_to_bytes` and routes exposed private-key multihash formatting
@@ -5455,6 +5545,16 @@ and completed history lives in [`status.md`](./status.md).
   reports non-UTF-8 manifest JSON, readiness JSON, all-lanes summary JSON,
   readiness Markdown, and release-note attachments as structured bundle
   failures instead of raising out of the verifier.
+- Keep DA/RBC runtime hardening focused on protocol-quorum and
+  roster-verified evidence boundaries. Recent cleanup removed stale commit
+  quorum-bypass plumbing, an unused READY-quorum progress-sync argument, and a
+  dead near-tip backpressure branch that referenced the debug-aware quorum
+  helper; future DA/RBC work should keep receiver-side availability/finality
+  gates on protocol quorum and avoid reintroducing debug-shortcut dependencies
+  outside local emission/scheduling helpers. The 2026-06-12 broad
+  `cargo test -p iroha_core --lib -- --nocapture` run is green (`4647` passed,
+  `262` ignored) after the retained-summary evidence hardening and
+  default-feature STARK-only fixture gating.
 - Keep extending the Sumeragi formal corridor with independent TLC
   cross-checks; the current local TLC slice covers the top-level commit-path
   fast model under the fairness-backed `Spec`, including finality and
@@ -5462,7 +5562,8 @@ and completed history lives in [`status.md`](./status.md).
   live commit-gate finality equivalence, NPoS stake-quorum fork-safety via
   `fork-npos`,
   live commit-gate RBC evidence binding,
-	  RBC CHUNK gate header/digest matching,
+	  inbound RBC READY/DELIVER key-header-signature evidence binding,
+	  inbound RBC CHUNK key-header-signature evidence binding and digest matching,
 	  RBC READY gate full-chunk matching,
 	  RBC DELIVER gate complete-evidence matching,
 	  RBC DELIVER finality buffered-commit matching,
@@ -5518,6 +5619,7 @@ and completed history lives in [`status.md`](./status.md).
 	  RBC DELIVER delivery-entry commit-evidence pending counter-frame seed,
 	  RBC DELIVER delivery-entry commit-evidence pending complete wait-state seed,
 	  RBC DELIVER delivery-entry commit-evidence delivered-pending wait-state handoff,
+	  RBC DELIVER delivery-entry commit-evidence complete continuation aggregate,
 	  RBC DELIVER commit-evidence branch handoff,
 	  RBC delivered-pending commit-evidence wait-state handoff,
 	  RBC delivered-pending named complete wait-state closure,
@@ -12481,7 +12583,13 @@ fixture corridor into broader release validation.
   terminal delivery and resumed progress. The payload-loss DA-gate scenario
   now requires expected-height RBC session evidence on commit quorum, at least
   one nonterminal/incomplete session, and committed-quorum Sumeragi snapshots
-  before accepting commit progress. Required-observation large-payload DA/RBC
+  before accepting commit progress. The confidential downtime plus timeout
+  restart-pressure localnet now also requires the restarted peer to catch up to
+  the expected non-empty height instead of logging a best-effort waiver, and
+  its shield fixtures carry deterministic non-empty encrypted payload envelopes
+  so production payload validation cannot silently turn the shield debit into a
+  rejected-in-block no-op.
+  Required-observation large-payload DA/RBC
   tests, including the tight block queue case, fail closed if neither the session
   endpoint nor quorum-visible persisted RBC snapshots expose same-block-hash
   delivery evidence; conflicting persisted delivered hashes cannot be merged
@@ -12590,11 +12698,14 @@ fixture corridor into broader release validation.
   same-key summaries instead of preserving old delivered-payload proof. RBC INIT
   rejection coverage now also pins digest-count, digest-root, header-hash, and
   invalid leader-signature/layout failures as no-cache paths, so malformed INITs
-  cannot leave session-roster or vote-roster evidence behind. Local
-  authoritative payload shortcuts now also hydrate-probe a cloned session before
-  satisfying missing-chunk progress, so a matching local payload hash cannot
-  accept READY/DELIVER progress when the advertised RBC chunk root, digest
-  vector, or layout contradicts deterministic local chunking.
+  cannot leave session-roster or vote-roster evidence behind. Local READY and
+  DELIVER signing now shares the same key/header boundary: helpers require
+  matching block-header hash/height/view metadata plus a leader signature that
+  verifies against the session roster for that height/view before producing new
+  local signatures. Local authoritative payload shortcuts now also hydrate-probe
+  a cloned session before satisfying missing-chunk progress, so a matching local
+  payload hash cannot accept READY/DELIVER progress when the advertised RBC
+  chunk root, digest vector, or layout contradicts deterministic local chunking.
   Committed-block cleanup now keeps retained RBC summaries observable without
   synthesizing delivered status unless a matching local payload and positive
   chunk shape back the summary. Live RBC complete payload matches now also hash
@@ -12603,7 +12714,12 @@ fixture corridor into broader release validation.
   payload proof without byte-carrying live/recovered session evidence. Delivered
   payload-byte telemetry also refuses complete chunk sets whose reconstructed
   bytes do not match the advertised payload hash, so mismatched payload material
-  cannot consume or report delivered-byte metrics; complete chunk sets without an
+  cannot consume or report delivered-byte metrics. Production DA availability
+  and authoritative-payload repair suppression now additionally require that
+  the live/recovered RBC session's cached leader signature verifies against the
+  resolved session roster, so forged signature metadata remains diagnostic-only
+  even with complete chunk bytes; the older map-based complete-byte predicate is
+  retained only for unit-level byte-shape coverage. Complete chunk sets without an
   advertised payload hash now follow the same nonterminal/unreported path,
   including restart recovery of `delivered=true` persisted sessions.
   RS16 layout payload-size metadata alone is no longer accepted as
@@ -12643,8 +12759,11 @@ fixture corridor into broader release validation.
   invariant: non-invalid zero-chunk or over-counted sessions with READY quorum
   remain unresolved before the availability timeout unless local block payload
   bytes are already available; the timeout boundary still releases the
-  reschedule gate. The direct availability reschedule TLA gate includes the
-  over-counted case and expected-failure mutation.
+  reschedule gate. The live reschedule gate also uses protocol READY quorum
+  even when `force_deliver_quorum_one` lowers local emission helpers, so
+  debug-only one-READY delivery cannot resolve DA availability before
+  receiver-side quorum. The direct availability reschedule TLA gate includes
+  the over-counted case and expected-failure mutation.
   RBC recovery-helper coverage now also pins non-invalid over-counted metadata
   as payload-repairable, matching zero-chunk metadata rather than treating the
   impossible count as complete recovery evidence.
@@ -12663,14 +12782,22 @@ fixture corridor into broader release validation.
 	  hydration-probe chunk-metadata guard before status, cleanup, or DELIVER
 	  emission can record bytes; matching local payload hashes alone no longer
 	  satisfy delivered-byte telemetry when advertised roots, digest vectors, or
-	  layouts contradict deterministic local chunking.
+	  layouts contradict deterministic local chunking. Commit cleanup now keeps
+	  retained summaries on that boundary as well: live-session summaries retain
+	  delivered status and delivered-byte metrics only when complete chunks or the
+	  strict local fallback prove the payload, while status-only retained
+	  summaries now need exact local height/view/payload-hash evidence plus a
+	  successful deterministic exact-frontier RBC snapshot refresh.
 	  Live maintenance now carries that invalid-shape invariant through READY and
 	  DELIVER emission, rebroadcast scheduling, and operator backlog accounting:
 	  malformed zero-total or over-counted sessions first try local-payload
 	  hydration; exact authoritative local payloads can rebuild zero-total
 	  metadata into the deterministic positive chunk layout, while sessions that
 	  remain malformed stay deferred/repair-visible instead of signing from
-	  malformed counters or reporting zero missing pressure. The RBC
+	  malformed counters or reporting zero missing pressure. Pending local READY
+	  and ready-quorum local DELIVER wakeups now use the same roster-verified
+	  leader-signature boundary as the local signing helpers, so invalid leader
+	  metadata cannot hot-loop the actor before the builders refuse to sign. The RBC
 	  backlog-status TLA gate now also models malformed summary/proposal/snapshot
 	  pressure so saturating-to-zero accounting and authoritative-payload skips
 	  stay pinned as expected failures. A dedicated RBC payload-hydration TLA
@@ -12702,8 +12829,56 @@ fixture corridor into broader release validation.
   Pending-block validation priority now uses the same exact-payload
   complete-delivery invariant for both live RBC sessions and retained RBC
   status summaries, so malformed `delivered=true` evidence with missing chunks,
-  missing payload hashes, or mismatched payload hashes cannot schedule
-  validation as `rbc_deliver`.
+  missing payload hashes, mismatched payload hashes, live delivered chunks for
+  locally mismatched pending bodies, or status-only summaries for locally
+  mismatched pending bodies cannot schedule validation as `rbc_deliver` or make
+  missing-QC cleanup treat repair payloads as available.
+  Status-only READY-quorum counters now follow the same local
+  height/view/payload-hash binding before they can schedule
+  `rbc_ready_quorum` priority or preserve missing-QC repair availability, and
+  live READY-quorum priority now also requires the live session payload hash to
+  match the pending block's locally verified payload hash. That priority gate
+  now uses the protocol READY quorum even when the test-only
+  `force_deliver_quorum_one` shortcut lowers local RBC emission helpers, so
+  debug settings cannot promote live-session or retained-summary priority below
+  receiver-side protocol quorum.
+	  DA availability proofing now also requires complete live RBC payload sessions
+	  to carry matching block-header height/view/hash metadata and leader-signature
+	  metadata before they can clear missing-local-data gates; summary-only status
+	  and malformed live sessions remain diagnostic-only.
+	  Local RBC READY and DELIVER construction now shares that metadata binding:
+	  validators refuse to sign local READY/DELIVER messages for sessions whose
+	  INIT/header metadata is absent or keyed to a different block height, hash, or
+	  view, while READY relay uses the protocol relay threshold even when
+	  `force_deliver_quorum_one` lowers local DELIVER emission helpers. READY
+	  rebroadcast suppression, targeted missing-READY payload/body rescue, and
+	  cached-slot timeout pressure also use protocol READY quorum, so the debug
+	  one-READY DELIVER shortcut cannot suppress READY fanout, unlock targeted
+	  payload rescue, or release reduced timeout pressure early. READY rebroadcast
+	  bundles stay limited to already-recorded peer signatures. Cached RBC INIT
+	  rebuilds and payload-bundle emission apply the
+	  same key/header/signature binding before repackaging cached session metadata,
+	  including same-height/view headers that are leader-signed for a different
+	  block hash. Late missing-BlockCreated repair targeting now also trusts cached
+	  leader-signature indices only after that verification, falling back to the
+	  real slot leader when a cached index is forged. Inbound RBC chunk repair
+	  responses now apply the same boundary before serving cached chunks, so
+	  invalid, malformed, key/header-mismatched, or wrong-leader-signature sessions
+	  cannot answer `RbcChunkRequest`. Outbound missing-chunk repair now also
+	  requires cached header/signature metadata to match the session key before
+	  emitting `RbcChunkRequest`, falling back to missing-BlockCreated repair for
+	  misbound sessions. Production READY rebroadcast paths now use the same
+	  verified session boundary before broad or targeted repair packages recorded
+	  READY signatures for outbound traffic.
+	  The actor idle scheduler now wakes immediately for complete READY-quorum RBC
+	  sessions that still need local DELIVER emission, but keeps observers and
+	  non-signing roles from hot-looping on states they cannot advance, and keeps
+  complete-but-payload-mismatched chunk evidence passive instead of scheduling
+  immediate local DELIVER attempts.
+  Live partial DELIVER acceptance through authoritative local payload fallback
+  is pinned as diagnostic-only delivery status until complete chunk evidence is
+  present, so it can expose READY-quorum progress without masquerading as
+  delivered-RBC validation priority.
   The Torii `/v1/sumeragi/rbc/delivered/{height}/{view}` operator endpoint now
   applies that same non-invalid positive-complete chunk invariant to its
   `delivered` flag while keeping incomplete matches visible as diagnostics.
@@ -12785,7 +12960,10 @@ fixture corridor into broader release validation.
   deferrals together with pending RBC messages. The
   four-peer NPoS/DA late-VRF persistence gate now passes on the current tree,
   advancing past the previously documented height-4 RBC stall and finalizing the
-  epoch after recording the late reveal.
+  epoch after recording the late reveal. DA-enabled NPoS recovery roster
+  shrinkage now also has direct regression coverage proving the baseline
+  validator set is restored and the pending restore marker is consumed at the
+  committed recovery height.
   The RBC status lookup formal model now matches the current helper contract:
   `is_delivered` requires delivered, non-invalid, complete chunk metadata while
   intentionally not checking payload equality, and the expected-failure configs

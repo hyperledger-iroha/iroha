@@ -3245,6 +3245,39 @@ mod tests2 {
     }
 
     #[test]
+    fn build_and_sign_checked_genesis_transaction_signatures_verify() {
+        init_instruction_registry();
+
+        let chain = ChainId::from("iroha:test:checked-genesis-sign");
+        let manifest = RawGenesisTransaction {
+            chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+            executor: None,
+            ivm_dir: IvmPath::default(),
+            transactions: vec![RawGenesisTx::default(), RawGenesisTx::default()],
+            consensus_mode: None,
+            bls_domain: None,
+            wire_proto_versions: vec![],
+            consensus_fingerprint: None,
+            crypto: ManifestCrypto::default(),
+        };
+        let keypair = KeyPair::random();
+
+        let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
+        let transactions: Vec<_> = genesis.0.external_transactions().collect();
+        assert!(
+            !transactions.is_empty(),
+            "genesis builder should emit signed external transactions"
+        );
+
+        for transaction in transactions {
+            transaction
+                .verify_signature()
+                .expect("checked genesis transaction signature should verify");
+        }
+    }
+
+    #[test]
     fn collect_parameter_instructions_respects_manual_values() {
         use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
 
@@ -4624,7 +4657,9 @@ impl RawGenesisTransaction {
                     u64::try_from(tx_index).expect("too many genesis transactions"),
                 ),
             ));
-            let transaction = builder.sign(genesis_key_pair.private_key());
+            let transaction = builder
+                .try_sign(genesis_key_pair.private_key())
+                .wrap_err_with(|| format!("failed to sign genesis transaction batch {tx_index}"))?;
             transactions.push(transaction);
         }
         let confidential_digest = ConfidentialFeatureDigest::new(

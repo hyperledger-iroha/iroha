@@ -12,6 +12,9 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class ToriiClientTests
 {
+    private static readonly byte[] CanonicalPrivateKeySeed = Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
+    private const string CanonicalAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
+
     [Fact]
     public async Task GetHealthAsyncReturnsTextResponse()
     {
@@ -39,8 +42,8 @@ public sealed class ToriiClientTests
         {
             BearerToken = "dev-token",
             CanonicalRequestCredentials = new CanonicalRequestCredentials(
-                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
-                Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032")),
+                CanonicalAccountId,
+                CanonicalPrivateKeySeed),
         };
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler), options);
@@ -51,7 +54,24 @@ public sealed class ToriiClientTests
         Assert.Equal("dev-token", handler.LastRequest.Headers.Authorization?.Parameter);
         Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Account"));
         Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Signature"));
+        Assert.Equal(CanonicalAccountId, Assert.Single(handler.LastRequest.Headers.GetValues("X-Iroha-Account")));
+        Assert.All(
+            Assert.Single(handler.LastRequest.Headers.GetValues("X-Iroha-Nonce")),
+            character => Assert.False(char.IsWhiteSpace(character)));
         Assert.Equal("/v1/query?gas_units=100&cursor_mode=stored", handler.LastRequest.RequestUri!.PathAndQuery);
+    }
+
+    [Theory]
+    [InlineData(" ")]
+    [InlineData(" sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    [InlineData("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53 ")]
+    [InlineData("\u00A0sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    [InlineData("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    public void CanonicalRequestCredentialsRejectNonExactAccountIdsBeforeToriiRequestSetup(string accountId)
+    {
+        Assert.Throws<ArgumentException>(() => new CanonicalRequestCredentials(
+            accountId,
+            CanonicalPrivateKeySeed));
     }
 
     [Fact]
@@ -1710,6 +1730,48 @@ public sealed class ToriiClientTests
         Assert.Equal("/v1/identifier-policies", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
+    [Theory]
+    [InlineData(" phone#retail", "ed0120abcd", "identifier policies response.items[0].policy_id", "whitespace")]
+    [InlineData("phone#retail ", "ed0120abcd", "identifier policies response.items[0].policy_id", "whitespace")]
+    [InlineData("phone# retail", "ed0120abcd", "identifier policies response.items[0].policy_id.rule", "whitespace")]
+    [InlineData("phone", "ed0120abcd", "identifier policies response.items[0].policy_id", "kind#rule")]
+    [InlineData("phone#retail\u0001", "ed0120abcd", "identifier policies response.items[0].policy_id", "control")]
+    [InlineData("phone#retail", "", "identifier policies response.items[0].resolver_public_key", "non-empty")]
+    [InlineData("phone#retail", " ed0120abcd", "identifier policies response.items[0].resolver_public_key", "whitespace")]
+    [InlineData("phone#retail", "ed0120abcd ", "identifier policies response.items[0].resolver_public_key", "whitespace")]
+    [InlineData("phone#retail", "ed0120abcd\u0001", "identifier policies response.items[0].resolver_public_key", "control")]
+    public async Task GetIdentifierPoliciesAsyncRejectsNonExactPolicySummaryFields(
+        string policyId,
+        string resolverPublicKey,
+        string expectedField,
+        string expectedReason)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent($$"""
+                {
+                  "total": 1,
+                  "items": [
+                    {
+                      "policy_id": {{JsonSerializer.Serialize(policyId)}},
+                      "owner": "sorauロ1Nowner",
+                      "active": true,
+                      "normalization": "phone_e164",
+                      "resolver_public_key": {{JsonSerializer.Serialize(resolverPublicKey)}},
+                      "backend": "bfv-affine-sha3-256-v1"
+                    }
+                  ]
+                }
+                """),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var error = await Assert.ThrowsAsync<JsonException>(() => client.GetIdentifierPoliciesAsync());
+
+        Assert.Contains(expectedField, error.Message);
+        Assert.Contains(expectedReason, error.Message);
+    }
+
     [Fact]
     public async Task GetSoraFsCidLookupAsyncDeserializesListing()
     {
@@ -2799,6 +2861,31 @@ public sealed class ToriiClientTests
     }
 
     [Theory]
+    [InlineData("")]
+    [InlineData(" phone#retail")]
+    [InlineData("phone#retail ")]
+    [InlineData("phone# retail")]
+    [InlineData("phone")]
+    [InlineData("phone#retail#extra")]
+    [InlineData("phone#retail\u0001")]
+    public async Task ResolveIdentifierAsyncRejectsNonExactPolicyIdBeforeDispatch(string policyId)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("non-exact identifier policy id reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => client.ResolveIdentifierAsync(
+            new ToriiIdentifierResolveRequest
+            {
+                PolicyId = policyId,
+                Input = "+15551234567",
+            }));
+
+        Assert.Contains("identifier resolve request.policy_id", error.Message);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
     [InlineData(" ABCD", "DEADBEEF", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature")]
     [InlineData("ABCD", " DEADBEEF", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload_hex")]
     [InlineData("ABCD", "DEADBEEF", """{"opening":{"signature":" ABCD"}}""", "identifier resolve response.signature_payload.opening.signature")]
@@ -2828,6 +2915,253 @@ public sealed class ToriiClientTests
 
         Assert.Contains(expectedField, error.Message);
         Assert.Contains("whitespace", error.Message);
+    }
+
+    [Theory]
+    [InlineData(" phone#retail", "identifier resolve response.policy_id", "whitespace")]
+    [InlineData("phone#retail ", "identifier resolve response.policy_id", "whitespace")]
+    [InlineData("phone# retail", "identifier resolve response.policy_id.rule", "whitespace")]
+    [InlineData("phone", "identifier resolve response.policy_id", "kind#rule")]
+    [InlineData("phone#retail#extra", "identifier resolve response.policy_id", "kind#rule")]
+    [InlineData("phone#retail\u0001", "identifier resolve response.policy_id", "control")]
+    public async Task ResolveIdentifierAsyncRejectsNonExactTopLevelPolicyId(
+        string policyId,
+        string expectedField,
+        string expectedReason)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(IdentifierResolveResponseJson(
+                "ABCD",
+                "DEADBEEF",
+                """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""",
+                policyId)),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
+            new ToriiIdentifierResolveRequest
+            {
+                PolicyId = "phone#retail",
+                Input = "+15551234567",
+            }));
+
+        Assert.Contains(expectedField, error.Message);
+        Assert.Contains(expectedReason, error.Message);
+    }
+
+    [Theory]
+    [InlineData("""{"policy_id":" phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id", "whitespace")]
+    [InlineData("""{"policy_id":"phone#retail ","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id", "whitespace")]
+    [InlineData("""{"policy_id":"phone# retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id.rule", "whitespace")]
+    [InlineData("""{"policy_id":"phone","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id", "kind#rule")]
+    [InlineData("""{"policy_id":"phone#retail#extra","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id", "kind#rule")]
+    [InlineData("""{"policy_id":"phone#retail\u0001","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id", "control")]
+    [InlineData("""{"payload":{"policy_id":" phone#retail"}}""", "identifier resolve response.signature_payload.payload.policy_id", "whitespace")]
+    [InlineData("""{"payload":{"policy_id":"phone#retail "}}""", "identifier resolve response.signature_payload.payload.policy_id", "whitespace")]
+    [InlineData("""{"payload":{"policy_id":"phone# retail"}}""", "identifier resolve response.signature_payload.payload.policy_id.rule", "whitespace")]
+    [InlineData("""{"payload":{"policy_id":"phone"}}""", "identifier resolve response.signature_payload.payload.policy_id", "kind#rule")]
+    [InlineData("""{"payload":{"policy_id":"phone#retail#extra"}}""", "identifier resolve response.signature_payload.payload.policy_id", "kind#rule")]
+    [InlineData("""{"payload":{"policy_id":"phone#retail\u0001"}}""", "identifier resolve response.signature_payload.payload.policy_id", "control")]
+    public async Task ResolveIdentifierAsyncRejectsNonExactSignaturePayloadPolicyIds(
+        string signaturePayloadJson,
+        string expectedField,
+        string expectedReason)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(IdentifierResolveResponseJson(
+                "ABCD",
+                "DEADBEEF",
+                signaturePayloadJson)),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
+            new ToriiIdentifierResolveRequest
+            {
+                PolicyId = "phone#retail",
+                Input = "+15551234567",
+            }));
+
+        Assert.Contains(expectedField, error.Message);
+        Assert.Contains(expectedReason, error.Message);
+    }
+
+    [Fact]
+    public async Task ResolveIdentifierAsyncAcceptsExactProofAttestationReceipt()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(IdentifierResolveResponseJson(
+                "ABCD",
+                "DEADBEEF",
+                """
+                {
+                  "policy_id": "phone#retail",
+                  "attestation": {
+                    "kind": "proof",
+                    "proof_backend": "halo2/ipa",
+                    "proof_b64": "AQID"
+                  }
+                }
+                """)),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
+        {
+            PolicyId = "phone#retail",
+            Input = "+15551234567",
+        });
+
+        Assert.Equal("proof", resolved.SignaturePayload!["attestation"]!["kind"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("""{"attestation":{"kind":" signed","signature":"ABCD"}}""", "identifier resolve response.signature_payload.attestation.kind", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"signed ","signature":"ABCD"}}""", "identifier resolve response.signature_payload.attestation.kind", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"Signed","signature":"ABCD"}}""", "identifier resolve response.signature_payload.attestation.kind", "signed or proof")]
+    [InlineData("""{"attestation":{"kind":"signed","signature":"ABCD","proof_b64":"AQID"}}""", "identifier resolve response.signature_payload.attestation signed attestations", "proof fields")]
+    [InlineData("""{"attestation":{"proof_b64":"AQID"}}""", "identifier resolve response.signature_payload.attestation.kind", "required")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":" halo2/ipa","proof_b64":"AQID"}}""", "identifier resolve response.signature_payload.attestation.proof_backend", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":" AQID"}}""", "identifier resolve response.signature_payload.attestation.proof_b64", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AQID "}}""", "identifier resolve response.signature_payload.attestation.proof_b64", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"@@@"}}""", "identifier resolve response.signature_payload.attestation.proof_b64", "valid base64")]
+    public async Task ResolveIdentifierAsyncRejectsNonExactAttestationSelectors(
+        string signaturePayloadJson,
+        string expectedField,
+        string expectedReason)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(IdentifierResolveResponseJson(
+                "ABCD",
+                "DEADBEEF",
+                signaturePayloadJson)),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
+            new ToriiIdentifierResolveRequest
+            {
+                PolicyId = "phone#retail",
+                Input = "+15551234567",
+            }));
+
+        Assert.Contains(expectedField, error.Message);
+        Assert.Contains(expectedReason, error.Message);
+    }
+
+    [Fact]
+    public async Task ResolveIdentifierAsyncAcceptsExactNestedReceiptPayloadFields()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(IdentifierResolveResponseJson(
+                "ABCD",
+                "DEADBEEF",
+                """
+                {
+                  "payload": {
+                    "policy_id": "phone#retail",
+                    "account_id": "sorauﾛ1Nmerchant",
+                    "opaque_id": "opaque-1",
+                    "receipt_hash": "receipt-1",
+                    "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "execution": {
+                      "program_id": "identifier_lookup_retail",
+                      "program_digest": "program-digest",
+                      "backend": "hkdf-sha3-512-prf-v1",
+                      "verification_mode": "signed",
+                      "input_ciphertext_hash": "input-hash",
+                      "output_ciphertext_hash": "output-hash",
+                      "parameter_digest": "parameter-digest",
+                      "evaluation_key_digest": "evaluation-key-digest",
+                      "output_hash": "output-open-hash",
+                      "associated_data_hash": "associated-data-hash",
+                      "executed_at_ms": 1710000000000,
+                      "expires_at_ms": "1710003600000"
+                    },
+                    "opening": {
+                      "payload": {
+                        "program_id": "identifier_lookup_retail",
+                        "input_ciphertext_hash": "input-hash",
+                        "output_ciphertext_hash": "output-hash",
+                        "parameter_digest": "parameter-digest",
+                        "evaluation_key_digest": "evaluation-key-digest",
+                        "opened_output_hash": "opened-output-hash",
+                        "opened_at_ms": 1710000000000,
+                        "expires_at_ms": "1710003600000"
+                      },
+                      "signature": "ABCD"
+                    }
+                  }
+                }
+                """)),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
+        {
+            PolicyId = "phone#retail",
+            Input = "+15551234567",
+        });
+
+        Assert.Equal(
+            "identifier_lookup_retail",
+            resolved.SignaturePayload!["payload"]!["execution"]!["program_id"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("""{"payload":{"account_id":" sorauﾛ1Nmerchant"}}""", "identifier resolve response.signature_payload.payload.account_id", "whitespace")]
+    [InlineData("""{"payload":{"account_id":"sorauﾛ1Nmerchant\u0001"}}""", "identifier resolve response.signature_payload.payload.account_id", "control")]
+    [InlineData("""{"payload":{"opaque_id":" opaque-1"}}""", "identifier resolve response.signature_payload.payload.opaque_id", "whitespace")]
+    [InlineData("""{"payload":{"receipt_hash":"receipt-1 "}}""", "identifier resolve response.signature_payload.payload.receipt_hash", "whitespace")]
+    [InlineData("""{"payload":{"uaid":" uaid:0123456789abcdef"}}""", "identifier resolve response.signature_payload.payload.uaid", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"program_id":" identifier_lookup_retail"}}}""", "identifier resolve response.signature_payload.payload.execution.program_id", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"program_digest":"program-digest "}}}""", "identifier resolve response.signature_payload.payload.execution.program_digest", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"backend":" hkdf-sha3-512-prf-v1"}}}""", "identifier resolve response.signature_payload.payload.execution.backend", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"verification_mode":"signed "}}}""", "identifier resolve response.signature_payload.payload.execution.verification_mode", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"input_ciphertext_hash":" input-hash"}}}""", "identifier resolve response.signature_payload.payload.execution.input_ciphertext_hash", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"output_ciphertext_hash":"output-hash "}}}""", "identifier resolve response.signature_payload.payload.execution.output_ciphertext_hash", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"parameter_digest":" parameter-digest"}}}""", "identifier resolve response.signature_payload.payload.execution.parameter_digest", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"evaluation_key_digest":"evaluation-key-digest "}}}""", "identifier resolve response.signature_payload.payload.execution.evaluation_key_digest", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"output_hash":" output-open-hash"}}}""", "identifier resolve response.signature_payload.payload.execution.output_hash", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"associated_data_hash":"associated-data-hash "}}}""", "identifier resolve response.signature_payload.payload.execution.associated_data_hash", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"executed_at_ms":" 1710000000000"}}}""", "identifier resolve response.signature_payload.payload.execution.executed_at_ms", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"expires_at_ms":-1}}}""", "identifier resolve response.signature_payload.payload.execution.expires_at_ms", "non-negative")]
+    [InlineData("""{"payload":{"opening":{"payload":{"program_id":"identifier_lookup_retail "}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.program_id", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"input_ciphertext_hash":" input-hash"}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.input_ciphertext_hash", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"output_ciphertext_hash":"output-hash "}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.output_ciphertext_hash", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"parameter_digest":" parameter-digest"}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.parameter_digest", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"evaluation_key_digest":"evaluation-key-digest "}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.evaluation_key_digest", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"opened_output_hash":" opened-output-hash"}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.opened_output_hash", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"opened_at_ms":"1710000000000 "}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.opened_at_ms", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"expires_at_ms":"-1"}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.expires_at_ms", "non-negative")]
+    public async Task ResolveIdentifierAsyncRejectsNonExactNestedReceiptPayloadFields(
+        string signaturePayloadJson,
+        string expectedField,
+        string expectedReason)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(IdentifierResolveResponseJson(
+                "ABCD",
+                "DEADBEEF",
+                signaturePayloadJson)),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
+            new ToriiIdentifierResolveRequest
+            {
+                PolicyId = "phone#retail",
+                Input = "+15551234567",
+            }));
+
+        Assert.Contains(expectedField, error.Message);
+        Assert.Contains(expectedReason, error.Message);
     }
 
     [Fact]
@@ -4360,11 +4694,12 @@ public sealed class ToriiClientTests
     private static string IdentifierResolveResponseJson(
         string signature,
         string signaturePayloadHex,
-        string signaturePayloadJson)
+        string signaturePayloadJson,
+        string policyId = "phone#retail")
     {
         return $$"""
             {
-              "policy_id": "phone#retail",
+              "policy_id": {{JsonSerializer.Serialize(policyId)}},
               "opaque_id": "opaque-1",
               "receipt_hash": "receipt-1",
               "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
