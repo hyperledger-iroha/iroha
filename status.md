@@ -262,6 +262,16 @@ Last updated: 2026-06-12
   - `cargo fmt --all -- --check`
   - `git diff --check`
   - `git diff --quiet -- Cargo.lock`
+## 2026-06-12 CLI all-zero seed fixture cleanup
+
+- Replaced the CLI offline fallback signer seed and remaining CLI unit-test
+  Ed25519 fixture seeds that used all-zero material with deterministic nonzero
+  seed material, matching the crypto layer's all-zero seed rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_cli` (`cargo` emitted the existing
+    `MlDsaSecretKey::sign` unused warning; all `iroha_cli` unit and smoke
+    tests passed)
 
 ## 2026-06-12 user config test seed regression
 

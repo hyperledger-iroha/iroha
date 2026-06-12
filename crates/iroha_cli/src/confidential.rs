@@ -283,7 +283,7 @@ mod tests {
 
     impl TestContext {
         fn new() -> Self {
-            let key_pair = KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519);
+            let key_pair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
             let account_id = AccountId::new(key_pair.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),

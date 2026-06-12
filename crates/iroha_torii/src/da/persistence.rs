@@ -628,6 +628,28 @@ fn existing_artifact_path_if_matching(
     ))
 }
 
+fn install_artifact_without_overwrite(
+    tmp_path: &Path,
+    target_path: &Path,
+    expected: &[u8],
+    artifact: &str,
+) -> std::io::Result<()> {
+    match fs::hard_link(tmp_path, target_path) {
+        Ok(()) => {
+            let _ = fs::remove_file(tmp_path);
+            Ok(())
+        }
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+            let _ = fs::remove_file(tmp_path);
+            existing_artifact_path_if_matching(target_path, expected, artifact).map(|_| ())
+        }
+        Err(err) => {
+            let _ = fs::remove_file(tmp_path);
+            Err(err)
+        }
+    }
+}
+
 pub(super) fn persist_da_receipt(
     spool_dir: &Path,
     receipt: &DaIngestReceipt,
@@ -667,7 +689,7 @@ pub(super) fn persist_da_receipt(
     );
     let tmp_path = spool_dir.join(tmp_name);
 
-    match fs::write(&tmp_path, encoded) {
+    match fs::write(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
             let _ = fs::remove_file(&tmp_path);
@@ -675,10 +697,12 @@ pub(super) fn persist_da_receipt(
         }
     }
 
-    if let Err(err) = fs::rename(&tmp_path, &target_path) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(err);
-    }
+    install_artifact_without_overwrite(
+        &tmp_path,
+        &target_path,
+        &encoded,
+        "DA receipt artifact",
+    )?;
 
     debug!(
         path = ?target_path,
@@ -949,10 +973,12 @@ pub(super) fn persist_manifest_for_sorafs(
         }
     }
 
-    if let Err(err) = fs::rename(&tmp_path, &target_path) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(err);
-    }
+    install_artifact_without_overwrite(
+        &tmp_path,
+        &target_path,
+        manifest_bytes,
+        "DA manifest artifact",
+    )?;
 
     debug!(
         path = ?target_path,
@@ -1002,7 +1028,7 @@ pub(super) fn persist_pdp_commitment(
     );
     let tmp_path = spool_dir.join(tmp_name);
 
-    match fs::write(&tmp_path, encoded) {
+    match fs::write(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
             let _ = fs::remove_file(&tmp_path);
@@ -1010,10 +1036,12 @@ pub(super) fn persist_pdp_commitment(
         }
     }
 
-    if let Err(err) = fs::rename(&tmp_path, &target_path) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(err);
-    }
+    install_artifact_without_overwrite(
+        &tmp_path,
+        &target_path,
+        &encoded,
+        "PDP commitment artifact",
+    )?;
 
     debug!(
         path = ?target_path,
@@ -1063,7 +1091,7 @@ pub(super) fn persist_da_commitment_record(
     );
     let tmp_path = spool_dir.join(tmp_name);
 
-    match fs::write(&tmp_path, encoded) {
+    match fs::write(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
             let _ = fs::remove_file(&tmp_path);
@@ -1071,10 +1099,12 @@ pub(super) fn persist_da_commitment_record(
         }
     }
 
-    if let Err(err) = fs::rename(&tmp_path, &target_path) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(err);
-    }
+    install_artifact_without_overwrite(
+        &tmp_path,
+        &target_path,
+        &encoded,
+        "DA commitment artifact",
+    )?;
 
     debug!(
         path = ?target_path,
@@ -1144,7 +1174,7 @@ pub(super) fn persist_da_commitment_schedule_entry(
     );
     let tmp_path = spool_dir.join(tmp_name);
 
-    match fs::write(&tmp_path, encoded) {
+    match fs::write(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
             let _ = fs::remove_file(&tmp_path);
@@ -1152,10 +1182,12 @@ pub(super) fn persist_da_commitment_schedule_entry(
         }
     }
 
-    if let Err(err) = fs::rename(&tmp_path, &target_path) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(err);
-    }
+    install_artifact_without_overwrite(
+        &tmp_path,
+        &target_path,
+        &encoded,
+        "DA commitment schedule artifact",
+    )?;
 
     debug!(
         path = ?target_path,
@@ -1205,7 +1237,7 @@ pub(super) fn persist_da_pin_intent(
     );
     let tmp_path = spool_dir.join(tmp_name);
 
-    match fs::write(&tmp_path, encoded) {
+    match fs::write(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
             let _ = fs::remove_file(&tmp_path);
@@ -1213,10 +1245,12 @@ pub(super) fn persist_da_pin_intent(
         }
     }
 
-    if let Err(err) = fs::rename(&tmp_path, &target_path) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(err);
-    }
+    install_artifact_without_overwrite(
+        &tmp_path,
+        &target_path,
+        &encoded,
+        "DA pin intent artifact",
+    )?;
 
     debug!(
         path = ?target_path,
