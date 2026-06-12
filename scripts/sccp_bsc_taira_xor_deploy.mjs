@@ -198,6 +198,25 @@ const NATIVE_EVM_PROVER_BUNDLE_KEYS = Object.freeze([
   "proverBundle",
   "prover_bundle",
 ]);
+const NATIVE_EVM_PROVER_BUNDLE_VERIFIER_KEY_ARTIFACT_HASH_KEYS =
+  Object.freeze(["verifierKeyArtifactHash", "verifier_key_artifact_hash"]);
+const NATIVE_EVM_PROVER_ROLE_SEPARATED_HASH_FIELDS = Object.freeze([
+  ["verifierKeyHash", ["verifierKeyHash", "verifier_key_hash"]],
+  [
+    "verifierKeyArtifactHash",
+    ["verifierKeyArtifactHash", "verifier_key_artifact_hash"],
+  ],
+  ["proofArtifactHash", ["proofArtifactHash", "proof_artifact_hash"]],
+  ["provingKeyHash", ["provingKeyHash", "proving_key_hash"]],
+  [
+    "nativeEvmProverBundleHash",
+    ["nativeEvmProverBundleHash", "native_evm_prover_bundle_hash"],
+  ],
+  [
+    "destinationBindingHash",
+    ["destinationBindingHash", "destination_binding_hash"],
+  ],
+]);
 const FORBIDDEN_BSC_ROUTE_MANIFEST_ADDRESS_ALIASES = Object.freeze({
   sourceBridgeAddress: Object.freeze([
     "sccpTronSourceBridgeAddress",
@@ -238,8 +257,8 @@ const NATIVE_EVM_PROVER_AUDIT_OPTION_KEYS = Object.freeze({
     "audit-reproducible-build-attestation",
   ],
   cross_sdk_fixture_parity: [
-    "audit-cross-sdk-fixture-parity",
     "audit-cross-sdk-parity",
+    "audit-cross-sdk-fixture-parity",
   ],
   native_prover_self_test: ["audit-native-prover-self-test", "audit-self-test"],
   no_wasm_no_remote_scan: [
@@ -343,7 +362,7 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs deploy --bsc-network testnet|mainnet --verifier <verifier-key.json> --broadcast true --confirm-network ${ROUTE_ID}:testnet|${ROUTE_ID}:mainnet [--confirm-mainnet true] [--private-key-env ${DEFAULT_PRIVATE_KEY_ENV}] [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs evidence --bsc-network testnet|mainnet --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>] [--production-ready true --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
-	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --cross-sdk-fixture-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-fixture-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs self-test
@@ -476,7 +495,7 @@ export function bscProductionRequirements(options = {}) {
         "--proof-artifact <relative-circuit.r1cs> " +
         "--proving-key <relative-circuit.zkey> " +
         "--verifier-key <relative-verifier-key.json> " +
-        "--cross-sdk-fixture-parity <relative-cross-sdk-parity.json> " +
+        "--cross-sdk-parity <relative-cross-sdk-parity.json> " +
         "--native-prover-self-test <relative-native-self-test.json> " +
         "--javascript-implementation <relative-js-implementation> " +
         "--swift-implementation <relative-swift-implementation> " +
@@ -566,12 +585,12 @@ export function bscProductionRequirements(options = {}) {
           "Production burn-record proving key referenced relative to the artifact root.",
       }),
       productionRequirementInput({
-        id: "cross-sdk-fixture-parity-report",
+        id: "cross-sdk-parity-report",
         kind: "file",
         placeholder: "<relative-cross-sdk-parity.json>",
         requiredBy: ["native-prover-bundle"],
         description:
-          "Cross-SDK fixture parity report covering JavaScript, Swift, Kotlin, Java Android, and .NET bindings.",
+          "Cross-SDK production parity report covering JavaScript, Swift, Kotlin, Java Android, and .NET bindings.",
       }),
       productionRequirementInput({
         id: "native-prover-self-test-report",
@@ -1450,6 +1469,79 @@ function routeManifestProductionProblems(record, label) {
   return uniqueNonEmpty(problems);
 }
 
+function requireExplicitBscNativeEvmVerifierKeyArtifactHash(
+  record,
+  label,
+  verifierKeyHash = "",
+) {
+  const entries = collectStringEntries(
+    record,
+    NATIVE_EVM_PROVER_BUNDLE_VERIFIER_KEY_ARTIFACT_HASH_KEYS,
+    label,
+  );
+  if (entries.length === 0) {
+    throw new Error(
+      `${label} verifierKeyArtifactHash is required for production BSC native EVM prover bundles.`,
+    );
+  }
+  if (entries.length > 1) {
+    throw new Error(
+      `${label} verifierKeyArtifactHash must not use multiple aliases: ${entries
+        .map((entry) => entry.key)
+        .join(", ")}.`,
+    );
+  }
+  const verifierKeyArtifactHash = normalizeCanonicalHex32(
+    entries[0].value,
+    `${entries[0].path}`,
+  );
+  if (verifierKeyHash && verifierKeyArtifactHash === verifierKeyHash) {
+    throw new Error(
+      `${label} verifierKeyArtifactHash must be role-separated from verifierKeyHash.`,
+    );
+  }
+  return verifierKeyArtifactHash;
+}
+
+function bscNativeEvmProverBundleRoleSeparatedHashProblems(
+  record,
+  label,
+  overrides = {},
+) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const problems = [];
+  const seen = new Map();
+  for (const [role, keys] of NATIVE_EVM_PROVER_ROLE_SEPARATED_HASH_FIELDS) {
+    let value = overrides[role];
+    if (!value) {
+      try {
+        value = readConsistentNormalizedString(
+          [{ record, keys, pathName: label }],
+          `${label} ${role}`,
+          (entryValue, fieldLabel) =>
+            normalizeCanonicalHex32(entryValue, fieldLabel),
+        );
+      } catch (_error) {
+        value = "";
+      }
+    }
+    if (!value) {
+      continue;
+    }
+    const previous = seen.get(value);
+    if (previous) {
+      problems.push(
+        `${label} ${role} must be role-separated from ${previous}.`,
+      );
+    } else {
+      seen.set(value, role);
+    }
+  }
+  return problems;
+}
+
 function nativeProverBundleProductionProblems(record, label) {
   if (!isRecord(record)) {
     return [];
@@ -1466,6 +1558,7 @@ function nativeProverBundleProductionProblems(record, label) {
 
   const problems = [];
   let descriptor = null;
+  let verifierKeyArtifactHash = "";
   const profile =
     bundleId === SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 ||
     readFirstString(record, "chain") === "bsc-mainnet"
@@ -1479,6 +1572,16 @@ function nativeProverBundleProductionProblems(record, label) {
         error instanceof Error ? error.message : String(error)
       }`,
     );
+  }
+  try {
+    verifierKeyArtifactHash =
+      requireExplicitBscNativeEvmVerifierKeyArtifactHash(
+        record,
+        label,
+        descriptor?.verifierKeyHash,
+      );
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : String(error));
   }
   const verifierKeyHash =
     descriptor?.verifierKeyHash ??
@@ -1498,6 +1601,27 @@ function nativeProverBundleProductionProblems(record, label) {
       `${label} verifierKeyHash=${verifierKeyHash} is a known diagnostic BSC verifier key hash`,
     );
   }
+  if (
+    verifierKeyArtifactHash &&
+    verifierKeyHash &&
+    verifierKeyArtifactHash === verifierKeyHash
+  ) {
+    problems.push(
+      `${label} verifierKeyArtifactHash must be role-separated from verifierKeyHash.`,
+    );
+  }
+  problems.push(
+    ...bscNativeEvmProverBundleRoleSeparatedHashProblems(record, label, {
+      verifierKeyHash,
+      verifierKeyArtifactHash,
+      proofArtifactHash: descriptor?.proofArtifactHash,
+      provingKeyHash: descriptor?.provingKeyHash,
+      nativeEvmProverBundleHash: descriptor
+        ? canonicalBscNativeEvmProverBundleHash(descriptor)
+        : "",
+      destinationBindingHash: descriptor?.destinationBindingHash,
+    }),
+  );
   return uniqueNonEmpty(problems);
 }
 
@@ -2696,10 +2820,10 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
     root,
     requiredOption(
       options,
-      ["cross-sdk-fixture-parity", "parity-fixture"],
-      "cross-SDK fixture parity artifact",
+      ["cross-sdk-parity", "cross-sdk-fixture-parity", "parity-fixture"],
+      "cross-SDK parity artifact",
     ),
-    "cross-SDK fixture parity artifact",
+    "cross-SDK parity artifact",
   );
   const selfTestFixture = await readArtifactUnderRoot(
     root,
@@ -4191,6 +4315,11 @@ function normalizeBscRouteNativeEvmProverBundle({
   let selected = null;
   let selectedJson = "";
   for (const entry of entries) {
+    const rawVerifierKeyArtifactHash =
+      requireExplicitBscNativeEvmVerifierKeyArtifactHash(
+        entry.value,
+        entry.path,
+      );
     let normalized;
     try {
       normalized = validateBscNativeEvmProverBundleForProfile(
@@ -4204,6 +4333,28 @@ function normalizeBscRouteNativeEvmProverBundle({
       throw new Error(
         `${entry.path} failed BSC SDK validation: ${error instanceof Error ? error.message : String(error)}.`,
       );
+    }
+    if (rawVerifierKeyArtifactHash === normalized.verifierKeyHash) {
+      throw new Error(
+        `${entry.path} verifierKeyArtifactHash must be role-separated from verifierKeyHash.`,
+      );
+    }
+    const roleSeparatedHashProblems =
+      bscNativeEvmProverBundleRoleSeparatedHashProblems(
+        entry.value,
+        entry.path,
+        {
+          verifierKeyHash: normalized.verifierKeyHash,
+          verifierKeyArtifactHash: rawVerifierKeyArtifactHash,
+          proofArtifactHash: normalized.proofArtifactHash,
+          provingKeyHash: normalized.provingKeyHash,
+          nativeEvmProverBundleHash:
+            canonicalBscNativeEvmProverBundleHash(normalized),
+          destinationBindingHash: normalized.destinationBindingHash,
+        },
+      );
+    if (roleSeparatedHashProblems.length > 0) {
+      throw new Error(roleSeparatedHashProblems.join("; "));
     }
     if (normalized.verifierKeyHash !== verifierKeyHash) {
       throw new Error(

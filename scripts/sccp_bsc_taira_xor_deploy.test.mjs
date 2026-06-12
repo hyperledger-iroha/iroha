@@ -65,6 +65,7 @@ const HASH_44 = `0x${"44".repeat(32)}`;
 const HASH_55 = `0x${"55".repeat(32)}`;
 const HASH_66 = `0x${"66".repeat(32)}`;
 const HASH_77 = `0x${"77".repeat(32)}`;
+const HASH_88 = `0x${"88".repeat(32)}`;
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
 const SOURCE_EVENT_EXPLORER_URL = `https://testnet.bscscan.com/tx/${HASH_55}`;
 const ROUTE_CANARY_EXPLORER_URL = `https://testnet.bscscan.com/tx/${HASH_77}`;
@@ -191,12 +192,13 @@ const nativeProverBundleForRollout = (destinationRollout, overrides = {}) => {
     proving_key_hash: provingKeyHash,
     verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
     verifier_key_hash: destinationRollout.verifierKeyHash,
+    verifier_key_artifact_hash: HASH_88,
     destination_binding_hash: destinationRollout.destinationBindingHash,
     no_wasm: true,
     remote_prover_required: false,
     browser_implementation: "pure-typescript",
     cross_sdk_fixture_parity_artifact:
-      "artifacts/bsc-testnet/cross-sdk-fixture-parity.json",
+      "artifacts/bsc-testnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-testnet/native-prover-self-test.json",
     native_sdk_artifacts: Object.entries(
@@ -586,7 +588,7 @@ async function writeNativeProverFixtureFiles({
   await writeArtifact("proof-artifact.r1cs", proofBytes);
   await writeArtifact("proving-key.zkey", provingKeyBytes);
   await writeArtifact("verifier-key.json", verifierKeyBytes);
-  await writeArtifact("cross-sdk-fixture-parity.json", parityBytes);
+  await writeArtifact("cross-sdk-parity.json", parityBytes);
   await writeArtifact("native-prover-self-test.json", selfTestBytes);
   const sdkImplementationPaths = {};
   for (const sdk of Object.keys(
@@ -648,7 +650,7 @@ async function writeNativeProverFixtureFiles({
       "proof-artifact": "proof-artifact.r1cs",
       "proving-key": "proving-key.zkey",
       "verifier-key": "verifier-key.json",
-      "cross-sdk-fixture-parity": "cross-sdk-fixture-parity.json",
+      "cross-sdk-parity": "cross-sdk-parity.json",
       "native-prover-self-test": "native-prover-self-test.json",
       "javascript-implementation": sdkImplementationPaths.javascript,
       "swift-implementation": sdkImplementationPaths.swift,
@@ -1988,6 +1990,46 @@ test("BSC route-config requires SDK-valid native prover bundles for production r
       ),
     /nativeEvmProverBundle verifierKeyHash must match route manifest verifierKeyHash/u,
   );
+  const missingVerifierArtifactHashBase = productionReadyRouteManifest();
+  const missingVerifierArtifactHashBundle = nativeProverBundleForRollout(
+    missingVerifierArtifactHashBase.destinationRollout,
+  );
+  delete missingVerifierArtifactHashBundle.verifier_key_artifact_hash;
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml({
+        ...missingVerifierArtifactHashBase,
+        nativeEvmProverBundle: missingVerifierArtifactHashBundle,
+      }),
+    /nativeEvmProverBundle verifierKeyArtifactHash is required/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyRouteManifest({
+          bundleOverrides: { verifierKeyArtifactHash: HASH_88 },
+        }),
+      ),
+    /nativeEvmProverBundle verifierKeyArtifactHash must not use multiple aliases/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyRouteManifest({
+          bundleOverrides: { verifier_key_artifact_hash: HASH_22 },
+        }),
+      ),
+    /nativeEvmProverBundle verifierKeyArtifactHash must be role-separated from verifierKeyHash/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyRouteManifest({
+          bundleOverrides: { verifier_key_artifact_hash: HASH_44 },
+        }),
+      ),
+    /nativeEvmProverBundle.*hashes must be role-separated.*verifierKeyArtifactHash matches proofArtifactHash/u,
+  );
   const proofHashDriftBase = productionReadyRouteManifest();
   const proofHashDriftBundle = nativeProverBundleForRollout(
     proofHashDriftBase.destinationRollout,
@@ -2103,7 +2145,7 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
     result.bundle.audit_hashes.cross_sdk_fixture_parity,
     sha256Hex(
       await readFile(
-        join(fixture.artifactRoot, "cross-sdk-fixture-parity.json"),
+        join(fixture.artifactRoot, "cross-sdk-parity.json"),
       ),
     ),
   );
@@ -2344,6 +2386,30 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
         ),
       }),
     /auditHashes.cross_sdk_fixture_parity must match the artifact sha256/u,
+  );
+  await writeFile(
+    join(fixture.artifactRoot, "cross-sdk-fixture-parity.json"),
+    await readFile(join(fixture.artifactRoot, "cross-sdk-parity.json")),
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...fixture.options,
+        "cross-sdk-parity": "cross-sdk-fixture-parity.json",
+      }),
+    /crossSdkFixtureParityArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+  );
+  await writeFile(
+    join(fixture.artifactRoot, "sample-native-prover-self-test.json"),
+    await readFile(join(fixture.artifactRoot, "native-prover-self-test.json")),
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...fixture.options,
+        "native-prover-self-test": "sample-native-prover-self-test.json",
+      }),
+    /nativeProverSelfTestArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
   );
 
   const oversizedProofPath = join(
@@ -2725,6 +2791,18 @@ test("BSC canonical production output guard rejects diagnostic or draft material
     ),
     [],
   );
+  const {
+    verifier_key_artifact_hash: _dropVerifierKeyArtifactHash,
+    ...legacyCompatBundle
+  } = productionBundle;
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalBundlePath,
+      legacyCompatBundle,
+      "BSC native EVM prover bundle",
+    ).join(" "),
+    /verifierKeyArtifactHash is required/u,
+  );
   assert.match(
     bscCanonicalProductionOutputProblems(
       canonicalBundlePath,
@@ -2735,6 +2813,17 @@ test("BSC canonical production output guard rejects diagnostic or draft material
       "BSC native EVM prover bundle",
     ).join(" "),
     /known diagnostic BSC verifier key hash/u,
+  );
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalBundlePath,
+      {
+        ...productionBundle,
+        verifier_key_artifact_hash: productionBundle.proof_artifact_hash,
+      },
+      "BSC native EVM prover bundle",
+    ).join(" "),
+    /proofArtifactHash must be role-separated from verifierKeyArtifactHash/u,
   );
   const { native_sdk_artifacts: _dropSdkArtifacts, ...incompleteBundle } =
     productionBundle;
@@ -3420,7 +3509,7 @@ test("BSC production requirements expose network-specific public handoff inputs"
           "post-deploy-live-evidence",
           "burn-record-proof-artifact",
           "burn-record-proving-key",
-          "cross-sdk-fixture-parity-report",
+          "cross-sdk-parity-report",
           "audit-no-wasm-no-remote-scan",
         ].includes(entry.id),
       )
@@ -3432,7 +3521,7 @@ test("BSC production requirements expose network-specific public handoff inputs"
       "post-deploy-live-evidence",
       "burn-record-proof-artifact",
       "burn-record-proving-key",
-      "cross-sdk-fixture-parity-report",
+      "cross-sdk-parity-report",
       "audit-no-wasm-no-remote-scan",
     ],
   );
