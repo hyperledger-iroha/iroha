@@ -29,10 +29,10 @@ def test_connect_codec_caches_native_module(monkeypatch: pytest.MonkeyPatch) -> 
     assert connect._require_codec_module() is module
 
 
-def test_connect_sign_result_ok_normalizes_ed25519_algorithm() -> None:
+def test_connect_sign_result_ok_normalizes_exact_ed25519_algorithm() -> None:
     payload = connect.ConnectSignResultOkPayload(
         signature=bytes([0x11]) * 64,
-        algorithm=" Ed25519 ",
+        algorithm="Ed25519",
     )
 
     assert payload.algorithm == "ed25519"
@@ -43,7 +43,15 @@ def test_connect_sign_result_ok_normalizes_ed25519_algorithm() -> None:
     "algorithm",
     [
         "secp256k1",
+        "",
+        " ",
+        " Ed25519",
+        "Ed25519 ",
+        "\tEd25519",
+        "Ed25519\n",
         "ed\t25519",
+        "\u00a0Ed25519",
+        "Ed25519\u00a0",
         "ed\u200b25519",
         "\u0435d25519",
         "ed\uff0d25519",
@@ -60,8 +68,43 @@ def test_connect_sign_result_ok_rejects_confusable_algorithms(algorithm: str) ->
 @pytest.mark.parametrize(
     "algorithm",
     [
+        "",
+        " ",
+        " Ed25519",
+        "Ed25519 ",
+        "\tEd25519",
+        "Ed25519\n",
+        "\u00a0Ed25519",
+        "Ed25519\u00a0",
+    ],
+)
+def test_connect_sign_result_ok_from_dict_rejects_padded_algorithm(
+    algorithm: str,
+) -> None:
+    with pytest.raises(ValueError, match="unsupported wallet signature algorithm"):
+        connect.ConnectSignResultOkPayload.from_dict(
+            {
+                "signature": {
+                    "algorithm": algorithm,
+                    "signature": bytes([0x11]) * 64,
+                }
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "algorithm",
+    [
         "secp256k1",
+        "",
+        " ",
+        " Ed25519",
+        "Ed25519 ",
+        "\tEd25519",
+        "Ed25519\n",
         "ed\t25519",
+        "\u00a0Ed25519",
+        "Ed25519\u00a0",
         "ed\u200b25519",
         "\u0435d25519",
         "ed\uff0d25519",
@@ -74,6 +117,33 @@ def test_connect_control_approve_rejects_confusable_algorithms(algorithm: str) -
             account_id="account-i105",
             signature=bytes([0x33]) * 64,
             algorithm=algorithm,
+        )
+
+
+@pytest.mark.parametrize(
+    "algorithm",
+    [
+        "",
+        " ",
+        " Ed25519",
+        "Ed25519 ",
+        "\tEd25519",
+        "Ed25519\n",
+        "\u00a0Ed25519",
+        "Ed25519\u00a0",
+    ],
+)
+def test_connect_control_approve_from_dict_rejects_padded_algorithm(
+    algorithm: str,
+) -> None:
+    with pytest.raises(ValueError, match="unsupported wallet signature algorithm"):
+        connect.ConnectControlApprove.from_dict(
+            {
+                "wallet_public_key": bytes([0x22]) * 32,
+                "account_id": "account-i105",
+                "signature": bytes([0x33]) * 64,
+                "algorithm": algorithm,
+            }
         )
 
 

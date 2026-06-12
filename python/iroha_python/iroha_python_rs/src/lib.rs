@@ -176,7 +176,26 @@ fn supported_crypto_algorithms() -> Vec<Algorithm> {
 }
 
 fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
-    let normalized = algorithm.trim().to_ascii_lowercase();
+    if algorithm.is_empty() {
+        return Err(PyValueError::new_err(
+            "algorithm must be a non-empty string",
+        ));
+    }
+    if algorithm.trim() != algorithm {
+        return Err(PyValueError::new_err(
+            "algorithm must not contain surrounding whitespace",
+        ));
+    }
+    if !algorithm
+        .chars()
+        .all(|ch| ch.is_ascii() && !ch.is_ascii_control())
+    {
+        return Err(PyValueError::new_err(format!(
+            "unsupported crypto algorithm `{algorithm}`"
+        )));
+    }
+
+    let normalized = algorithm.to_ascii_lowercase();
     if let Ok(parsed) = Algorithm::from_str(&normalized) {
         return Ok(parsed);
     }
@@ -5552,6 +5571,65 @@ mod tests {
     fn sample_account(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         AccountId::new(keypair.public_key().clone())
+    }
+
+    #[test]
+    fn parse_algorithm_arg_accepts_exact_supported_aliases() {
+        for (label, expected) in [
+            ("ed-25519", Algorithm::Ed25519),
+            ("ECDSA-SECP256K1-SHA256", Algorithm::Secp256k1),
+            ("ml_dsa", Algorithm::MlDsa),
+            (
+                "gost3410_2012_512_paramset_b",
+                Algorithm::Gost3410_2012_512ParamSetB,
+            ),
+            ("bls-normal", Algorithm::BlsNormal),
+            ("SM2", Algorithm::Sm2),
+        ] {
+            assert_eq!(parse_algorithm_arg(label).unwrap(), expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn parse_algorithm_arg_rejects_empty_padded_control_and_non_ascii_labels() {
+        for (label, expected_message) in [
+            ("", "algorithm must be a non-empty string"),
+            (" ", "algorithm must not contain surrounding whitespace"),
+            ("\t", "algorithm must not contain surrounding whitespace"),
+            (
+                "\u{00A0}",
+                "algorithm must not contain surrounding whitespace",
+            ),
+            (
+                " ed25519",
+                "algorithm must not contain surrounding whitespace",
+            ),
+            (
+                "ed25519 ",
+                "algorithm must not contain surrounding whitespace",
+            ),
+            (
+                "\ted25519",
+                "algorithm must not contain surrounding whitespace",
+            ),
+            (
+                "ed25519\n",
+                "algorithm must not contain surrounding whitespace",
+            ),
+            ("ed\u{0000}25519", "unsupported crypto algorithm"),
+            ("ed\u{001F}25519", "unsupported crypto algorithm"),
+            ("ed\u{007F}25519", "unsupported crypto algorithm"),
+            ("ed\u{200B}25519", "unsupported crypto algorithm"),
+            ("\u{0435}d25519", "unsupported crypto algorithm"),
+            ("ed\u{FF0D}25519", "unsupported crypto algorithm"),
+        ] {
+            let err = parse_algorithm_arg(label).expect_err(label);
+            let message = py_err_message(err);
+            assert!(
+                message.contains(expected_message),
+                "{label:?}: expected {expected_message:?}, got {message:?}"
+            );
+        }
     }
 
     fn sample_kagemusha_transfer_instruction() -> iroha_data_model::isi::offline::KagemushaTransfer

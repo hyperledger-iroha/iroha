@@ -866,7 +866,7 @@ pub mod manifest {
     //! Intended to be attached optionally to a transaction's `metadata`
     //! under a well-known key for admission-time checks.
 
-    use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
+    use iroha_crypto::{Error as CryptoError, Hash, KeyPair, PublicKey, Signature};
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
     #[cfg(feature = "json")]
@@ -1336,15 +1336,26 @@ pub mod manifest {
         }
 
         /// Attach provenance by signing the canonical payload with the provided key pair.
-        #[must_use]
-        pub fn signed(mut self, key_pair: &KeyPair) -> Self {
+        ///
+        /// # Errors
+        ///
+        /// Returns a crypto error if the selected signing backend rejects the
+        /// key material or payload.
+        pub fn try_signed(mut self, key_pair: &KeyPair) -> Result<Self, CryptoError> {
             let payload = self.signature_payload_bytes();
-            let signature = Signature::new(key_pair.private_key(), &payload);
+            let signature = Signature::try_new(key_pair.private_key(), &payload)?;
             self.provenance = Some(ManifestProvenance {
                 signer: key_pair.public_key().clone(),
                 signature,
             });
-            self
+            Ok(self)
+        }
+
+        /// Attach provenance by signing the canonical payload with the provided key pair.
+        #[must_use]
+        pub fn signed(self, key_pair: &KeyPair) -> Self {
+            self.try_signed(key_pair)
+                .expect("contract manifest signing should succeed")
         }
     }
 
@@ -1459,6 +1470,32 @@ pub mod manifest {
             // Provenance should not affect the payload bytes.
             assert_eq!(payload, manifest.signature_payload_bytes());
             signature
+                .verify(kp.public_key(), &payload)
+                .expect("signature must verify");
+        }
+
+        #[test]
+        fn try_signed_attaches_verifiable_provenance() {
+            let kp = KeyPair::random();
+            let manifest = ContractManifest {
+                code_hash: Some(Hash::new(b"contract-code")),
+                abi_hash: Some(Hash::new(b"contract-abi")),
+                compiler_fingerprint: Some("kotodama-test".to_owned()),
+                features_bitmap: Some(0x55),
+                access_set_hints: None,
+                entrypoints: None,
+                states: None,
+                kotoba: None,
+                provenance: None,
+            };
+
+            let signed = manifest.try_signed(&kp).expect("sign manifest");
+            let provenance = signed.provenance.as_ref().expect("manifest provenance");
+            let payload = signed.signature_payload_bytes();
+
+            assert_eq!(provenance.signer, kp.public_key().clone());
+            provenance
+                .signature
                 .verify(kp.public_key(), &payload)
                 .expect("signature must verify");
         }

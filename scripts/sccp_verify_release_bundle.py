@@ -792,6 +792,7 @@ SOURCE_INVENTORY_REQUIRED_GATES = {
     "readiness_markdown_invariants_gate",
     "retired_network_surface_gate",
     "unready_transparent_proof_config_gate",
+    "tron_deploy_operator_boolean_gate",
 }
 USER_PROVER_SDK_HOOK_MARKERS = {
     "js-sdk": ("witnessProvider", "proveFn"),
@@ -4312,6 +4313,8 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "route_canary_production_blockers",
             "function postDeployLiveEvidenceProductionBlockers(record)",
             "function canonicalRecordString(value, label)",
+            "function normalizeCanonicalManifestText(value, label)",
+            "function readOptionalCanonicalManifestText(",
             "function normalizeCanonicalHex32(value, label = \"value\")",
             "function normalizeCanonicalEvmAddress(value, label = \"address\")",
             "route manifest bscNetwork must be canonical lowercase text",
@@ -4332,12 +4335,25 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "bscNetwork: \"BSC-TESTNET\"",
             "chainIdHex: \"0X61\"",
             "networkIdHex: BSC_TESTNET_NETWORK_ID_HEX.toUpperCase()",
+            "productionReady: \"true\"",
+            "productionReady: 1",
+            "disabledReason: \" disabled\"",
+            "disabledReason: 1",
+            "disabledReason aliases disagree",
             "bscTokenAddress: BSC_TOKEN_ADDRESS.toUpperCase()",
             "destinationBridgeAddress: BSC_BRIDGE_ADDRESS.toUpperCase()",
             "sccpBscSourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS.toUpperCase()",
             "bscVerifierAddress: BSC_VERIFIER_ADDRESS.replace(/^0x/u, \"0X\")",
             "verifierIdentity: BSC_VERIFIER_ADDRESS.toUpperCase()",
             "sourceEventTransactionId: HASH_55.toUpperCase()",
+            "fullTomlReady: \"true\"",
+            "fullTomlReady: 1",
+            "contractAddress: \" contract-v1\"",
+            "contractAddress: 1",
+            "settlement\\.contractAddress aliases disagree",
+            "contractAlias: \" taira-bsc-xor\"",
+            "contractAlias: 1",
+            "settlement\\.contractAlias aliases disagree",
             "BSC source event transaction contradictory blockers",
             "/productionReady requires empty postDeployLiveEvidence production blockers.*source_event_transaction_production_blockers: witness seal proof required/u",
             "BSC source event transaction scalar blockers",
@@ -4389,9 +4405,11 @@ TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "function postDeployLiveEvidenceProductionBlockers(record)",
             "function normalizeBytes32(value, label)",
             "function normalizeNonEmptyText(value, label)",
+            "function readOptionalCanonicalManifestText(",
             "route manifest tronNetwork must be canonical lowercase text",
             "route manifest chain must be canonical lowercase text",
             "route manifest chainIdHex must be canonical lowercase hex",
+            "route manifest postDeployLiveEvidence.fullTomlReady must be true or false",
             "route manifest tairaXorTokenAddress",
             "route manifest tairaXorBridgeAddress",
             "route manifest sccpTronSourceBridgeAddress",
@@ -4405,6 +4423,13 @@ TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "TRON route-config rejects malformed or foreign route manifests",
             "routeId: \" taira_tron_xor\"",
             "assetKey: \"xor \"",
+            "productionReady: \"true\"",
+            "productionReady: 1",
+            "disabledReason: \" disabled\"",
+            "disabledReason: 1",
+            "disabledReason and disabled_reason must match",
+            "postDeployReadbackChecked: \"true\"",
+            "postDeployReadbackChecked: 1",
             "tronNetwork: \"TRON-MAINNET\"",
             "chainIdHex: \"0X2B6653DC\"",
             "networkIdHex: TRON_MAINNET_NETWORK_ID_HEX.toUpperCase()",
@@ -4420,6 +4445,16 @@ TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "/postDeployLiveEvidence\\.route_canary_production_blockers\\[0\\].*without surrounding whitespace/u",
             "full_toml_production_blockers: [123]",
             "/postDeployLiveEvidence\\.full_toml_production_blockers\\[0\\].*without surrounding whitespace/u",
+            "fullTomlReady: \"true\"",
+            "fullTomlReady: 1",
+            "contractAddress: \" tron-settlement-v1\"",
+            "contractAddress: 1",
+            "settlement\\.contractAddress aliases disagree",
+            "contractAlias: \" taira-tron-xor\"",
+            "contractAlias: 1",
+            "settlement\\.contractAlias aliases disagree",
+            "settlement_contract_address = \"tron-settlement-v1\"",
+            "settlement_contract_alias = \"taira-tron-xor\"",
             "sourceEventTransactionId: routeHash(\"source-event-transaction\").toUpperCase()",
             "source event transaction contradictory blockers",
             "/source_event_transaction_production_blockers must be empty.*witness seal proof required/u",
@@ -4776,7 +4811,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "route canary evidence hash for domain 2 must be distinct from domain 1",
             "def test_all_lanes_release_checklist_requires_source_gate_hash_and_audits",
             "def test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay",
-            "def test_all_lanes_release_checklist_rejects_non_required_source_gate_material",
+            "def test_all_lanes_release_checklist_rejects_evm_source_gate_policy_downgrade",
             "def test_all_lanes_release_checklist_rejects_malformed_source_gate_blockers",
             "def test_all_lanes_summary_rejects_malformed_source_gate_blockers",
             "source_gate.checklist_empty",
@@ -5073,9 +5108,10 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "source live eth_chainId must be",
             "destination live eth_chainId must be",
             "source verifier material hash must not reuse source adapter engine deployment hash",
-            "active EVM source adapter gate summary must not be required",
-            "active EVM source adapter gate hash must be empty",
-            "active EVM source adapter gate audit hashes must be empty",
+            "active EVM source adapter gate summary must be required",
+            "active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string",
+            "active EVM source adapter gate audit hashes must contain only evm_source_gate_hash",
+            "active EVM source adapter gate hash must match audit hash evm_source_gate_hash",
             "_active_launch_route_allowlist_binding_blockers(lane_label, lane)",
             "route allowlist hash must match the expected canonical source, deployment, and destination binding hash",
             "route allowlist expected hash match flag must be true",
@@ -5111,9 +5147,10 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "source live eth_chainId must be",
             "destination live eth_chainId must be",
             "source verifier material hash must not reuse source adapter engine deployment hash",
-            "active EVM source adapter gate summary must not be ",
-            "active EVM source adapter gate hash must be empty",
-            "active EVM source adapter gate audit hashes must be ",
+            "active EVM source adapter gate summary must be required",
+            "active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string",
+            "active EVM source adapter gate audit hashes must contain only evm_source_gate_hash",
+            "active EVM source adapter gate hash must match audit hash evm_source_gate_hash",
             "route allowlist hash must match the expected canonical ",
             "route allowlist expected hash match flag must be true",
             '("transaction_hash", "transaction hash"),',
@@ -5399,21 +5436,27 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
         "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
         (
             "BSC route-config refuses allow-unready for production-ready manifests",
+            "BSC route-config rejects malformed allow-unready option values",
             "assert.match(toml, /sccp_allow_unready_transparent_proofs = false/u);",
             "buildBscTairaXorRouteConfigToml(manifest, {",
             '"allow-unready": "true",',
+            'for (const value of [" TRUE", "true ", "TRUE", true, false, 1, 0])',
             "buildMergedBscTairaXorRouteConfigToml(",
             "/production-ready route manifests cannot enable --allow-unready/u",
+            "/--allow-unready must be true or false/u",
         ),
     ),
     (
         "scripts/sccp_tron_taira_xor_deploy.test.mjs",
         (
             "TRON route-config refuses allow-unready for production-ready manifests",
+            "TRON route-config rejects malformed allow-unready option values",
             "assert.match(toml, /sccp_allow_unready_transparent_proofs = false/u);",
             'buildTairaXorRouteConfigToml(manifest, { "allow-unready": "true" })',
+            'for (const value of [" TRUE", "true ", "TRUE", true, false, 1, 0])',
             "buildMergedTairaXorRouteConfigToml(",
             "/production-ready route manifests cannot enable --allow-unready/u",
+            "/--allow-unready must be true or false/u",
         ),
     ),
     (
@@ -5442,6 +5485,53 @@ SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_ENV_PATHS = (
 )
 SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_ENV = (
     "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS"
+)
+TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS = (
+    (
+        "scripts/sccp_tron_taira_xor_deploy.mjs",
+        (
+            "function optionEnabled(options, key, fallback = false)",
+            'if (options[key] === "true") return true;',
+            'if (options[key] === "false") return false;',
+            "throw new Error(`--${key} must be true or false`);",
+            'const broadcast = options.broadcast === "true";',
+            'if (options.broadcast !== undefined && !["true", "false"].includes(options.broadcast))',
+            'throw new Error("--broadcast must be true or false");',
+        ),
+    ),
+    (
+        "scripts/sccp_tron_taira_xor_deploy.test.mjs",
+        (
+            "TRON deploy operator booleans reject malformed option values",
+            "TRON route-manifest readiness booleans reject malformed option values",
+            'const malformedValues = [" TRUE", "true ", "TRUE", "1", "yes", "on", true, false, 1, 0];',
+            "/--force must be true or false/u",
+            "/--production-ready must be true or false/u",
+            "/--live-readback-checked must be true or false/u",
+            '"check-account"',
+            '"require-secret"',
+            '"require-verifier"',
+            '"require-optional-packages"',
+            "new RegExp(`--${key} must be true or false`, \"u\")",
+            "unexpected TRON network access",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _tron_deploy_operator_boolean_gate_inventory_errors",
+            '"tron_deploy_operator_boolean_gate"',
+            "tron_deploy_operator_boolean_gate_blockers",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_tron_deploy_operator_boolean_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_tron_deploy_operator_boolean_gate",
+            '"tron_deploy_operator_boolean_gate"',
+        ),
+    ),
 )
 SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
     (
@@ -9387,6 +9477,8 @@ ALL_LANES_EVM_LIVE_METADATA_KEYS = {
     "destination_block_tag",
 }
 ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {
+    SCCP_DOMAIN_ETH: {"evm_source_gate_hash"},
+    SCCP_DOMAIN_BSC: {"evm_source_gate_hash"},
     SCCP_DOMAIN_SOL: {
         "solana_tower_replay_verifier_hash",
         "solana_full_accountsdb_lattice_verifier_hash",
@@ -9402,6 +9494,8 @@ ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {
     SCCP_DOMAIN_TRON: {"tron_dpos_source_gate_hash"},
 }
 ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN = {
+    SCCP_DOMAIN_ETH: "evm_source_gate_hash",
+    SCCP_DOMAIN_BSC: "evm_source_gate_hash",
     SCCP_DOMAIN_SOL: "solana_full_light_client_gate_hash",
     SCCP_DOMAIN_TON: "ton_full_light_client_gate_hash",
     SCCP_DOMAIN_TRON: "tron_dpos_source_gate_hash",
@@ -10756,6 +10850,19 @@ def _sccp_unready_transparent_proof_config_inventory_errors(
                 f"{SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_ENV}"
             )
     return errors
+
+
+def _tron_deploy_operator_boolean_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for TRON deploy operator boolean guards."""
+
+    if inventory is None:
+        inventory = TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP TRON deploy operator boolean",
+    )
 
 
 def _sccp_proof_request_bundle_gate_inventory_errors(
@@ -12321,25 +12428,27 @@ def _active_launch_governed_deployment_metadata_blockers(
         return blockers + [f"{lane_label}: source adapter gate summary is missing"]
     if source_gate.get("ready") is not True:
         blockers.append(f"{lane_label}: source adapter gate summary must be ready")
-    if source_gate.get("required") is not False:
+    if source_gate.get("required") is not True:
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate summary must not be "
-            "required"
+            f"{lane_label}: active EVM source adapter gate summary must be required"
         )
-    if source_gate.get("gate_hash") not in ("", None):
+    gate_hash = source_gate.get("gate_hash")
+    if not _is_nonzero_hex32(gate_hash):
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate hash must be empty"
+            f"{lane_label}: active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string"
         )
     audit_hashes = source_gate.get("audit_hashes")
     if not isinstance(audit_hashes, dict):
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate audit hashes must be "
-            "empty"
+            f"{lane_label}: active EVM source adapter gate audit hashes must be an object"
         )
-    elif audit_hashes:
+    elif set(audit_hashes) != {"evm_source_gate_hash"}:
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate audit hashes must be "
-            "empty"
+            f"{lane_label}: active EVM source adapter gate audit hashes must contain only evm_source_gate_hash"
+        )
+    elif audit_hashes.get("evm_source_gate_hash") != gate_hash:
+        blockers.append(
+            f"{lane_label}: active EVM source adapter gate hash must match audit hash evm_source_gate_hash"
         )
     return blockers
 
@@ -19096,6 +19205,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_ethereum_route_canary_finalized_receipt_block_inventory_errors())
     errors.extend(_ethereum_evm_block_tag_metadata_inventory_errors())
     errors.extend(_sccp_unready_transparent_proof_config_inventory_errors())
+    errors.extend(_tron_deploy_operator_boolean_inventory_errors())
     errors.extend(_sccp_proof_request_bundle_gate_inventory_errors())
     errors.extend(_contract_smoke_eth_mainnet_network_id_inventory_errors())
     errors.extend(_contract_smoke_evm_production_surface_inventory_errors())

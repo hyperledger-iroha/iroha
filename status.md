@@ -2,6 +2,901 @@
 
 Last updated: 2026-06-12
 
+## 2026-06-12 JS/Python Nexus signature-algorithm exactness
+
+- Tightened JavaScript and Python Nexus wallet signature-algorithm
+  normalization so string labels must be exactly `ed25519` or `0`; padded,
+  uppercase/mixed-case, control, non-ASCII/confusable, and repeated-zero labels
+  now fail before finalization or wallet-signature transport dispatch.
+- Expanded the JavaScript and Python Nexus app-client adversarial matrices and
+  fixed the Python exact-`0` positive to use the shared fixture payload, public
+  key, wallet signature, and fake Torii submit path so it proves the real
+  Ed25519 verification boundary.
+- Wired the JavaScript and Python Kagemusha SDK runners plus the parity
+  meta-test to keep Nexus wallet signature-algorithm exactness in the focused
+  SDK gate.
+- Validation:
+  - `node --test test/nexusAppClient.test.js --test-name-pattern "NexusAppClient rejects non-Ed25519 wallet signatures|NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags"`
+    from `javascript/iroha_js` (`11` passed)
+  - Staged Python source plus freshly built `/tmp/iroha-codex-python-wheel-install/iroha_python/_crypto.abi3.so`, then ran
+    `pytest -q /tmp/iroha-codex-python-nexus-src/python/iroha_python/tests/test_nexus_app.py -k signature_algorithm`
+    (`63` passed, `8` deselected)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK runner"`
+    from `javascript/iroha_js` (`41` passed)
+  - `node --check src/nexusApp.js && node --check dist/nexusApp.js` from
+    `javascript/iroha_js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/nexus_app.py python/iroha_python/tests/test_nexus_app.py`
+  - `bash -n ci/check_kagemusha_recursive_spend_js_sdk.sh && bash -n ci/check_kagemusha_recursive_spend_python_sdk.sh`
+  - `git diff --check -- ci/check_kagemusha_recursive_spend_js_sdk.sh ci/check_kagemusha_recursive_spend_python_sdk.sh javascript/iroha_js/src/nexusApp.js javascript/iroha_js/dist/nexusApp.js javascript/iroha_js/test/nexusAppClient.test.js javascript/iroha_js/test/kagemushaFfiContractParity.test.js python/iroha_python/src/iroha_python/nexus_app.py python/iroha_python/tests/test_nexus_app.py roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ci/check_kagemusha_recursive_spend_js_sdk.sh ci/check_kagemusha_recursive_spend_python_sdk.sh javascript/iroha_js/src/nexusApp.js javascript/iroha_js/dist/nexusApp.js javascript/iroha_js/test/nexusAppClient.test.js javascript/iroha_js/test/kagemushaFfiContractParity.test.js python/iroha_python/src/iroha_python/nexus_app.py python/iroha_python/tests/test_nexus_app.py roadmap.md status.md`
+- Local validation notes:
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh` rejected this host's
+    selected `node` (`v26.3.0`) because the runner requires Node 20.
+  - `ci/check_kagemusha_recursive_spend_python_sdk.sh` rejected this host's
+    `python3` (`3.9.6`) because the runner requires Python 3.11.
+
+## 2026-06-12 Client query request checked signing
+
+- Routed `ClientQueryRequestHead` request-body construction through
+  `QueryRequestWithAuthority::try_sign`, so singular, iterable-start, cursor
+  continuation, and raw cursor-continuation query sends return a contextual
+  `QueryError` before HTTP dispatch if the signing backend rejects the query
+  payload.
+- Updated the query request-head test helper to surface signing failures instead
+  of relying on the compatibility `sign` wrapper.
+- Validation:
+  - `cargo fmt --package iroha`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-query-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha accept_header --lib -- --nocapture`
+    (`3` passed, `381` filtered out)
+
+## 2026-06-12 Client transaction builder checked signing
+
+- Routed `Client::try_build_transaction`,
+  `Client::try_build_transaction_from_items`, and the new
+  `Client::try_sign_transaction` helper through `TransactionBuilder::try_sign`,
+  so configured signing backend failures return contextual `eyre` errors from
+  fallible client transaction construction and submission paths.
+- Kept `Client::build_transaction`, `Client::build_transaction_from_items`, and
+  `Client::sign_transaction` as compatibility wrappers that panic on signing
+  failure, with docs updated to point callers at the fallible APIs.
+- Validation:
+  - `cargo fmt --package iroha`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-query-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha try_sign_transaction_attaches_verifiable_signature --lib -- --nocapture`
+    (`1` passed, `384` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-query-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha --lib --no-deps -- -D warnings`
+
+## 2026-06-12 CLI deploy helper checked signing
+
+- Routed `split_contract_deploy` transaction construction and
+  `ivm_contract_deploy` IVM/instruction transaction construction through
+  `TransactionBuilder::try_sign`, returning contextual command errors instead
+  of relying on the compatibility `sign` wrappers.
+- Added direct helper regressions proving the split deploy, IVM bytecode, and
+  instruction transaction helpers produce signatures that verify.
+- Validation:
+  - `cargo fmt --package iroha_cli`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-deploy-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli --bin split_contract_deploy sign_transaction_checked_helper_verifies -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-deploy-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli --bin ivm_contract_deploy checked_helper_verifies -- --nocapture`
+    (`2` passed, `4` filtered out)
+
+## 2026-06-12 Irohad internal submission checked signing
+
+- Routed queue-backed Soracloud runtime mutation submissions and Nexus fee relay
+  worker submissions through local checked-signing helpers that call
+  `TransactionBuilder::try_sign`, returning endpoint-specific `eyre` context
+  before acceptance/enqueueing if the signing backend rejects the payload.
+- Added verifiability regressions for both helper paths; the Soracloud runtime
+  coverage runs under `embedded-soracloud-runtime`, which is the feature that
+  compiles the full runtime manager instead of the stub.
+- Validation:
+  - `cargo fmt --package irohad`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-internal-submit-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p irohad --bin irohad submission_transaction_checked_signing_verifies -- --nocapture`
+    (`1` passed, `144` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-internal-submit-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p irohad --features embedded-soracloud-runtime --bin irohad runtime_submission_transaction_checked_signing_verifies -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-internal-submit-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p irohad --features embedded-soracloud-runtime --bin irohad --no-deps -- -D warnings`
+
+## 2026-06-12 Torii proof-query checked signing
+
+- Routed `signed_find_proof_by_id` through `QueryRequestWithAuthority::try_sign`
+  so proof-record query construction returns a conversion error if the signing
+  backend rejects the query payload.
+- Replaced the all-zero deterministic Ed25519 seed used for default streaming
+  key material in test/restored state construction with nonzero deterministic
+  seed material, matching the stricter all-zero seed admission policy.
+- Validation:
+  - `cargo fmt --package iroha_torii`
+  - `cargo fmt --package iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-query-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_zk proofs_query_find_by_id_returns_norito -- --nocapture`
+    (`1` passed, `61` filtered out)
+
+## 2026-06-12 Sumeragi local vote checked signing
+
+- Routed local Sumeragi consensus vote signing through `Signature::try_new` so
+  backend signing failures log and skip local vote emission instead of
+  unwinding the commit/precommit vote path.
+- Added a focused commit-module regression proving the private signing helper
+  replaces stale signature bytes and emits a BLS vote signature that verifies
+  against the local key.
+- Validation:
+  - `cargo fmt --package iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vote-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sign_vote_with_local_key_attaches_verifiable_signature --lib -- --nocapture`
+    (`1` passed, `4931` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check -- crates/iroha_core/src/sumeragi/main_loop/commit.rs roadmap.md status.md docs/source/engineering_backlog.md Cargo.lock`
+  - `git diff --exit-code -- Cargo.lock`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vote-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-12 CLI contract simulation checked signing
+
+- Routed `iroha contract simulate` transaction construction through
+  `TransactionBuilder::try_sign`, returning a contextual command error if the
+  configured signing backend rejects the simulated transaction payload.
+- Updated the contract CLI test context to use nonzero deterministic Ed25519
+  seed material now that all-zero seed admission is rejected.
+- Validation:
+  - `cargo fmt --package iroha_cli`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-simulate-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli --bin iroha simulate_emits_gas_limit_metadata_key -- --nocapture`
+    (`1` passed, `773` filtered out)
+
+## 2026-06-12 Native/Python and JVM Nexus algorithm exactness
+
+- Hardened the Python native `_crypto` algorithm parser so direct extension
+  callers reject empty labels, Unicode-whitespace padding, ASCII control bytes,
+  and non-ASCII/confusable labels before alias normalization. Existing exact
+  aliases such as `ed-25519`, uppercase secp256k1 labels, `ml_dsa`, GOST,
+  BLS, and SM2 remain accepted.
+- Added native Rust parser regressions plus a public Python crypto regression
+  for control and Unicode-confusable labels, so the high-level wrapper and
+  direct extension boundary cannot drift back to trim-before-normalize behavior.
+- Extended Kotlin/JVM and Android Java Nexus app-client tests with exact `"0"`
+  alias positives, padded/control/non-ASCII/repeated-zero/case-confusable
+  finalization negatives, and request-signature transport-boundary negatives.
+- Validation:
+  - `cargo fmt --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml`
+  - `cargo fmt --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml -- --check`
+  - `python3 -m py_compile python/iroha_python/tests/crypto_algorithms_test.py`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-python-rs-algorithm CARGO_INCREMENTAL=0 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml parse_algorithm_arg --lib -- --nocapture`
+    (`2` passed, `139` filtered out)
+  - `python3 -m pip install --target /tmp/iroha-codex-python-tools maturin==1.8.7`
+  - `PYTHONPATH=/tmp/iroha-codex-python-tools CARGO_TARGET_DIR=/tmp/iroha-codex-python-rs-algorithm /tmp/iroha-codex-python-tools/bin/maturin build --out /tmp/iroha-codex-python-wheel`
+    from `python/iroha_python` (built
+    `/tmp/iroha-codex-python-wheel/iroha_python-0.0.1-cp39-abi3-macosx_11_0_arm64.whl`)
+  - `python3 -m pip install --target /tmp/iroha-codex-python-wheel-install --no-deps --ignore-requires-python /tmp/iroha-codex-python-wheel/iroha_python-0.0.1-cp39-abi3-macosx_11_0_arm64.whl`
+  - `PYTHONPATH=/tmp/iroha-codex-python-wheel-install:python/norito_py/src:python python3 -c 'import typing; typing.TypeAlias = object; from iroha_python import crypto; print(crypto._crypto.__file__); print(crypto.supported_crypto_algorithms()[:3]); print(crypto.normalize_crypto_algorithm("ed-25519"))'`
+    (loaded `/tmp/iroha-codex-python-wheel-install/iroha_python/_crypto.abi3.so`)
+  - `cp python/iroha_python/tests/crypto_algorithms_test.py /tmp/iroha-codex-crypto_algorithms_test.py && PYTHONPATH=/tmp/iroha-codex-python-wheel-install:/Users/takemiyamakoto/soramitsudev/iroha/python/norito_py/src:/Users/takemiyamakoto/soramitsudev/iroha/python python3 -c 'import typing; typing.TypeAlias = object; import pytest; raise SystemExit(pytest.main(["-q", "/tmp/iroha-codex-crypto_algorithms_test.py", "-k", "algorithm_labels_reject_control_and_confusable_native_inputs"]))'`
+    (`6` passed, `44` deselected)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.nexus.NexusAppClientTest --console=plain`
+    from `kotlin` (`11` passed, `0` failed)
+  - `ci/check_kagemusha_recursive_spend_jvm_sdk.sh` (selected Homebrew
+    OpenJDK 21.0.11 and completed; Kotlin/JVM and Android Java
+    `NexusAppClientTest` suites each reported `11` passed, `0` failed)
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK runner"`
+    from `javascript/iroha_js` (`41` passed)
+  - `git diff --check -- ci/check_kagemusha_recursive_spend_jvm_sdk.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/nexus/NexusAppClientTest.kt java/iroha_android/src/test/java/org/hyperledger/iroha/android/nexus/NexusAppClientTest.java python/iroha_python/iroha_python_rs/src/lib.rs python/iroha_python/tests/crypto_algorithms_test.py roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ci/check_kagemusha_recursive_spend_jvm_sdk.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/nexus/NexusAppClientTest.kt java/iroha_android/src/test/java/org/hyperledger/iroha/android/nexus/NexusAppClientTest.java python/iroha_python/iroha_python_rs/src/lib.rs python/iroha_python/tests/crypto_algorithms_test.py roadmap.md status.md`
+- Local validation notes:
+  - The host `python3` is Python 3.9.6 while `iroha-python` metadata requires
+    Python 3.10+, so the focused wheel install used `--ignore-requires-python`
+    and the existing `typing.TypeAlias` shim. The copied `/tmp` pytest file is
+    byte-for-byte the repo test file for this run; copying avoided the repo
+    `tests/conftest.py` path insertion from preferring the stale source-tree
+    extension over the rebuilt wheel.
+
+## 2026-06-12 Runtime upgrade manifest checked signing
+
+- Added `RuntimeUpgradeManifest::try_signed` so runtime-upgrade provenance
+  signing returns crypto backend errors while preserving `signed` as the
+  infallible compatibility wrapper.
+- Routed the local runtime manifest provenance test through the checked signer,
+  preserving the invariant that provenance signatures do not alter the
+  canonical signing payload.
+- Validation:
+  - `cargo fmt --package iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-runtime-manifest-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model signature_payload_excludes_provenance_signatures --lib -- --nocapture`
+    (`1` passed, `1536` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-runtime-manifest-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-12 ML-KEM ciphertext wrapper admission
+
+- Hardened the private `MlKemCiphertext` wrapper constructor so backend
+  encapsulation ciphertext bytes must satisfy suite length and all-zero
+  inert-material checks before a ciphertext wrapper can be returned.
+- Added constructor-level regressions for accepted nonzero ciphertext payloads
+  and rejected all-zero ciphertext payloads while preserving the existing
+  validation, decapsulation, FFI, and full focused ML-KEM suite.
+- Validation:
+  - `cargo fmt --package soranet_pq`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-ciphertext-wrapper CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq ciphertext_constructor --lib -- --nocapture`
+    (`2` passed, `162` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-ciphertext-wrapper CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq validation_rejects_all_zero_ciphertext_material --lib -- --nocapture`
+    (`1` passed, `163` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-ciphertext-wrapper CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq mlkem --lib -- --nocapture`
+    (`76` passed, `88` filtered out)
+  - `cargo fmt --package soranet_pq -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-ciphertext-wrapper CARGO_INCREMENTAL=0 cargo clippy -j 1 -p soranet_pq --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 SCCP route-config allow-unready option exactness
+
+- Added BSC and TRON TAIRA XOR route-config regressions for malformed
+  `--allow-unready` option values, including padded/uppercase strings,
+  booleans, and numeric values, on both direct and merged overlay builders.
+- Pinned those malformed-option regressions in the unready transparent-proof
+  source inventory so release readiness cannot pass if the tests are removed.
+- Updated the roadmap to require exact `--allow-unready` option handling, not
+  only rejection of the canonical string `"true"` on production-ready manifests.
+- Validation:
+  - `node --test --test-name-pattern 'BSC route-config refuses allow-unready for production-ready manifests|BSC route-config rejects malformed allow-unready option values' scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+    (`2` passed)
+  - `node --test --test-name-pattern 'TRON route-config refuses allow-unready for production-ready manifests|TRON route-config rejects malformed allow-unready option values' scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k 'unready_transparent_proof_config'`
+    (`2` passed, `976` deselected)
+
+## 2026-06-12 SCCP BSC deploy boolean exactness
+
+- Hardened the BSC TAIRA XOR deploy/evidence helper so supplied boolean CLI
+  values for `--broadcast`, `--confirm-mainnet`,
+  `--allow-diagnostic-verifier`, and `--allow-local-rpc` must be exactly
+  `true` or `false`; legacy aliases such as `1`, `yes`, `on`, uppercase, or
+  padded values no longer pass operator-safety checks.
+- Added deploy-command regressions proving malformed booleans fail before
+  signer, RPC, diagnostic-verifier, or network operations can continue.
+- Updated the SCCP roadmap operator-surface note with the exact boolean
+  invariant.
+- Validation:
+  - `node --test --test-name-pattern 'BSC deploy command refuses to broadcast without explicit testnet confirmation|BSC deploy command rejects malformed boolean switches before network use|BSC deploy command rejects missing signer and unsafe local RPC before network use|BSC deploy command refuses smoke-test verifier material before signer or RPC use' scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+    (`4` passed)
+  - `node --check scripts/sccp_bsc_taira_xor_deploy.mjs && node --check scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+
+## 2026-06-12 SCCP BSC route-manifest readiness boolean exactness
+
+- Added adversarial BSC route-config coverage proving manifest JSON readiness
+  fields reject non-boolean truthy values: `productionReady: "true"`,
+  `productionReady: 1`, `postDeployLiveEvidence.fullTomlReady: "true"`, and
+  `postDeployLiveEvidence.fullTomlReady: 1`.
+- Pinned those cases in the BSC route-config canonical-manifest source
+  inventory used by release readiness and strict bundle verification, so the
+  readiness parser cannot drift back to accepting string/numeric truthy state
+  while producing production route overlays.
+- Validation:
+  - `node --test --test-name-pattern 'BSC route-config rejects malformed or foreign route manifests|BSC route-config requires explicit post-deploy evidence for production-ready manifests' scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k 'bsc_route_config_canonical_manifest'`
+    (`4` passed, `977` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'source_inventory or bsc_route_config_canonical_manifest'`
+    (`13` passed, `602` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'source_inventory or bsc_route_config_canonical_manifest'`
+    (`2` passed, `364` deselected)
+  - `python3 -m compileall scripts/sccp_verify_release_bundle.py && node --check scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+
+## 2026-06-12 SCCP BSC route-manifest optional text exactness
+
+- Hardened BSC route-config manifest ingestion so optional manifest-owned
+  text fields are not trim-normalized or string-coerced before TOML rendering:
+  `disabledReason`, `settlement.contractAddress`, and
+  `settlement.contractAlias` must be non-empty canonical strings when present,
+  and their snake_case/camelCase aliases must agree exactly.
+- Added adversarial BSC route-config cases for padded, numeric, and
+  contradictory-alias optional text values, then pinned those runtime and test
+  markers in the BSC canonical-manifest source inventory used by release
+  readiness and strict bundle verification.
+- Validation:
+  - `node --test --test-name-pattern 'BSC route-config rejects malformed or foreign route manifests' scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k 'bsc_route_config_canonical_manifest'`
+    (`4` passed, `977` deselected)
+  - `node --check scripts/sccp_bsc_taira_xor_deploy.mjs && node --check scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+  - `python3 -m compileall scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py`
+  - `git diff --check -- scripts/sccp_bsc_taira_xor_deploy.mjs scripts/sccp_bsc_taira_xor_deploy.test.mjs scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py roadmap.md status.md Cargo.lock`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/sccp_bsc_taira_xor_deploy.mjs scripts/sccp_bsc_taira_xor_deploy.test.mjs scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py roadmap.md status.md`
+    (no matches)
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 SCCP TRON deploy boolean exactness
+
+- Pinned the TRON TAIRA XOR deploy helper's operator booleans so malformed,
+  padded, uppercase, alias, boolean-object, or numeric values for `--force`,
+  doctor `--check-account`, `--require-secret`, `--require-verifier`,
+  `--require-optional-packages`, deploy `--broadcast`, route-manifest
+  `--production-ready`, and route-manifest `--live-readback-checked` fail
+  closed instead of being coerced.
+- Added adversarial Node coverage proving malformed deployer/doctor booleans
+  reject before TRON account/network access and malformed route-manifest
+  readiness booleans reject before live-evidence production readiness can be
+  acknowledged, then added a dedicated release-readiness/strict-bundle
+  source-inventory gate so those parser and test markers cannot be removed
+  while SCCP still reports production-ready.
+- Updated the readiness `source_inventory` schema and bundle verifier required
+  gates with `tron_deploy_operator_boolean_gate`.
+- Validation:
+  - `node --test --test-name-pattern 'TRON deploy operator booleans reject malformed option values|generate-deployer writes restrictive secret files and refuses accidental overwrite|deployment doctor can check funded deployer account without broadcasting' scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`3` passed)
+  - `node --test --test-name-pattern 'TRON route-manifest readiness booleans reject malformed option values|route manifest draft defaults to disabled and requires production readiness acknowledgements' scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k 'tron_deploy_operator_boolean'`
+    (`3` passed, `978` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'source_inventory or tron_deploy_operator_boolean'`
+    (`12` passed, `603` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'source_inventory or tron_deploy_operator_boolean'`
+    (`2` passed, `364` deselected)
+  - `python3 -m compileall scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py && node --check scripts/sccp_tron_taira_xor_deploy.mjs && node --check scripts/sccp_tron_taira_xor_deploy.test.mjs`
+
+## 2026-06-12 SCCP TRON route-manifest JSON readiness boolean exactness
+
+- Hardened TRON route-config manifest ingestion so a supplied
+  `postDeployLiveEvidence.fullTomlReady` must be a JSON boolean; malformed
+  string/numeric truthy values no longer normalize to `false` on non-production
+  manifests.
+- Added adversarial TRON route-config cases for `productionReady: "true"`,
+  `productionReady: 1`, `postDeployReadbackChecked: "true"`,
+  `postDeployReadbackChecked: 1`,
+  `postDeployLiveEvidence.fullTomlReady: "true"`, and
+  `postDeployLiveEvidence.fullTomlReady: 1`, then pinned the runtime and test
+  markers in the TRON canonical-manifest source inventory used by release
+  readiness and strict bundle verification.
+- Validation:
+  - `node --test --test-name-pattern 'TRON route-config rejects malformed or foreign route manifests|TRON route-config requires post-deploy evidence for production manifests' scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k 'tron_route_config_canonical_manifest'`
+    (`4` passed, `977` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'source_inventory or tron_route_config_canonical_manifest'`
+    (`13` passed, `602` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'source_inventory or tron_route_config_canonical_manifest'`
+    (`2` passed, `364` deselected)
+  - `python3 -m compileall scripts/sccp_verify_release_bundle.py && node --check scripts/sccp_tron_taira_xor_deploy.mjs && node --check scripts/sccp_tron_taira_xor_deploy.test.mjs`
+
+## 2026-06-12 SCCP TRON route-manifest optional text exactness
+
+- Hardened TRON route-config manifest ingestion so optional manifest-owned
+  text fields are exact before TOML rendering: `disabledReason`,
+  `settlement.contractAddress`, and `settlement.contractAlias` reject padded
+  or non-string values, and snake_case/camelCase aliases must agree exactly.
+- Added positive coverage for snake_case settlement aliases rendering as
+  `settlement_contract_address` and `settlement_contract_alias`, plus
+  adversarial cases for padded, numeric, and contradictory optional text.
+- Pinned the helper and test markers in the TRON canonical-manifest source
+  inventory used by release readiness and strict bundle verification.
+- Validation:
+  - `node --test --test-name-pattern 'TRON route-config refuses allow-unready for production-ready manifests|TRON route-config rejects malformed or foreign route manifests' scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k 'tron_route_config_canonical_manifest'`
+    (`4` passed, `977` deselected)
+  - `node --check scripts/sccp_tron_taira_xor_deploy.mjs && node --check scripts/sccp_tron_taira_xor_deploy.test.mjs`
+  - `python3 -m compileall scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py`
+  - `git diff --check -- scripts/sccp_tron_taira_xor_deploy.mjs scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py roadmap.md status.md Cargo.lock`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/sccp_tron_taira_xor_deploy.mjs scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py roadmap.md status.md`
+    (no matches)
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 SCCP EVM source-gate policy-drift coverage
+
+- Tightened all-lanes and strict release-bundle regressions so Ethereum and BSC
+  source-adapter gates cannot be downgraded to optional/non-required gates after
+  `evm_source_gate_hash` became required production evidence.
+- Updated the SCCP roadmap wording so active EVM governed-deployment readiness
+  requires a canonical non-zero `evm_source_gate_hash` audit entry instead of
+  stale empty/not-required gate metadata.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k 'source_adapter_gate or evm_source_gate'`
+    (`1` passed, `155` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'source_adapter_gate or source_gate or crypto_evidence'`
+    (`34` passed, `580` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'all_lanes_release_checklist_exact_boolean or source_adapter_gate or evm_source_gate'`
+    (`2` passed, `362` deselected)
+  - `python3 -m compileall scripts/sccp_verify_release_bundle.py`
+
+## 2026-06-12 Swift Connect/Nexus wallet algorithm exactness
+
+- Extended Swift Connect `SignResultOk` decoding regressions so blank,
+  padded, control-padded, and non-breaking-space-padded wallet signature
+  algorithm labels are rejected alongside unsupported and Unicode-confusable
+  aliases.
+- The production decoder already requires exact printable `ed25519`, so this
+  pins the adversarial coverage without changing runtime behavior.
+- Extended Swift Nexus client regressions so explicit padded, control,
+  non-ASCII, uppercase, repeated-zero, and confusable signature-algorithm
+  labels fail before wallet request dispatch, wallet-returned signature
+  admission, or final transaction submission. The exact string `"0"` alias
+  remains accepted for compatibility.
+- Validation:
+  - `swift test --filter ConnectEnvelopeTests/testDecodeSignResultOkRejectsConfusableAlgorithms`
+    (`1` passed)
+  - `swift test --filter NexusAppClientTests`
+    (`12` passed)
+
+## 2026-06-12 C# account-address algorithm exactness coverage
+
+- Extended C# account-address signing-algorithm regressions with NBSP-only,
+  tab/newline/NBSP-padded, and embedded NUL/unit-separator/DEL control labels.
+- The production selector already rejects blank or surrounding-whitespace
+  labels before alias lookup and rejects non-printable or non-ASCII aliases, so
+  this pins the adversarial boundary without changing runtime behavior.
+- Validation:
+  - `git diff --check -- csharp/tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/tests/Hyperledger.Iroha.Sdk.Tests/AddressFixtureTests.cs status.md`
+- Local validation gap:
+  - `dotnet --version` failed because `dotnet` is not installed on this macOS
+    host; run the focused C# address fixture test under the .NET 8 lane.
+
+## 2026-06-12 Kotlin/Java account-address algorithm exactness
+
+- Hardened Kotlin/JVM and Android Java account-address curve selection so
+  blank, padded, control-character, or non-ASCII signing algorithm labels fail
+  before alias lowercasing; exact aliases such as `ed25519`, `ed`, `ml-dsa`,
+  `secp256k1`, and long GOST labels keep their existing behavior.
+- Mirrored blank/padded selector regressions across the Kotlin and Android Java
+  address tests, including ASCII spaces, tab/newline padding, and
+  non-breaking-space padding.
+- Validation:
+  - `rg -n "val normalized = algorithm\\.trim|algorithm\\.trim\\(\\)\\.toLowerCase|curveIdForAlgorithm\\(.*trim|unsupported signing algorithm" kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddress.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`
+  - `git diff --check -- kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddress.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountAddressTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddress.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountAddressTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`
+- Local validation gaps:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.address.AccountAddressTest --console=plain`
+    could not run because no Java runtime is installed locally.
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --tests org.hyperledger.iroha.android.address.AccountAddressTests --console=plain`
+    could not run because no Java runtime is installed locally.
+
+## 2026-06-12 SCCP EVM source-gate release enforcement
+
+- Added canonical `evm_source_gate_hash` emission to the ETH and BSC mainnet
+  source-bridge evidence helpers. The hash binds the same EVM-family source
+  gate transcript used by Rust readiness: governed source material, source
+  adapter deployment, receipt policy, source bridge runtime binding, and ETH
+  beacon or BSC Parlia verifier constants.
+- Extended all-lanes evidence validation so ETH/BSC source-adapter gates are
+  required, recomputed, exposed in lane summaries, and rejected when missing,
+  drifted, lane-foreign, recomputation-failing, or replayed from another
+  deployment role hash. BSC testnet rendering remains diagnostic-only and does
+  not emit the production source-gate field.
+- Updated release-readiness and release-bundle verification so the active
+  Ethereum launch checklist and public cryptographic-evidence rows require the
+  non-zero `evm_source_gate_hash` audit key before a bundle can be marked
+  ready.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q`
+    (`156` passed)
+  - `python3 -m pytest pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py -q`
+    (`51` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q`
+    (`364` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'source_adapter_gate or evm_source_adapter_deployment_gate or active_launch_checklist or crypto_evidence'`
+    (`28` passed, `586` deselected)
+  - `python3 -m compileall scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py scripts/sccp_all_lanes_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py`
+  - `git diff --check -- scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py scripts/sccp_all_lanes_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======$|>>>>>>>)' scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py scripts/sccp_all_lanes_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+    (no matches)
+  - `git diff --exit-code -- Cargo.lock`
+
+## 2026-06-12 C# Torii identifier receipt signature exactness
+
+- Hardened C# `ResolveIdentifierAsync` response admission so Torii identifier
+  receipt `signature`, `signature_payload_hex`, exposed
+  `signature_payload.opening.signature`,
+  `signature_payload.payload.opening.signature`, and
+  `signature_payload.attestation.signature` fields must be exact non-empty hex
+  without surrounding whitespace before SDK callers can decode or verify them.
+- Added focused Torii client negative vectors for padded top-level signed
+  receipt signatures, padded signature payload bytes, padded opening
+  signatures, nested payload opening signatures, and signed-attestation
+  signatures.
+- Validation:
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs roadmap.md status.md`
+    (no matches)
+- Local validation gap:
+  - `dotnet --version` failed because `dotnet` is not installed on this macOS
+    host; run the focused C# Torii client test under the Windows/.NET 8 lane.
+
+## 2026-06-12 Contract manifest checked signing
+
+- Added `ContractManifest::try_signed` so contract provenance signing returns
+  crypto backend errors while preserving `signed` as the infallible
+  compatibility wrapper.
+- Routed CLI manifest build/deploy, Torii app API contract deployment
+  preparation, and Connect Norito governance propose-deploy bridge signing
+  through the checked manifest signer.
+- Added direct provenance coverage proving a `try_signed` manifest verifies
+  against the signer key.
+- Validation:
+  - `cargo fmt --package iroha_data_model --package iroha_cli --package iroha_torii --package connect_norito_bridge`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model try_signed_attaches_verifiable_provenance --lib -- --nocapture`
+    (`1` passed, `1536` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-signing CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_cli --bins`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-signing CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_torii -p connect_norito_bridge --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+- Local validation gap:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --tests --no-deps -- -D warnings`
+    is currently blocked by unrelated long-test and needless-pass-by-value
+    lints in `crates/iroha_data_model/src/soracloud.rs`.
+
+## 2026-06-12 ML-KEM generated keypair admission
+
+- Hardened SoraNet PQ ML-KEM key generation so direct backend-generated public
+  and secret key material is revalidated before returning from the private
+  derandomized helper, not only after the public wrapper delegates to it.
+- Added a focused generated-keypair mismatch regression while preserving the
+  existing ML-KEM keygen, encapsulation, decapsulation, validation, and FFI
+  focused suite.
+- Validation:
+  - `cargo fmt --package soranet_pq`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-keypair-output CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq mlkem::tests::generated_keypair_validator_rejects_public_secret_mismatch --lib -- --nocapture`
+    (`1` passed, `161` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-keypair-output CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq mlkem --lib -- --nocapture`
+    (`74` passed, `88` filtered out)
+  - `cargo fmt --package soranet_pq -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-keypair-output CARGO_INCREMENTAL=0 cargo clippy -j 1 -p soranet_pq --lib --tests --no-deps -- -D warnings`
+  - `git diff --check`
+
+## 2026-06-12 JavaScript Connect/Nexus wallet algorithm exactness
+
+- Hardened the JavaScript browser Connect wallet-signature algorithm encoder so
+  explicit padded string labels fail before Ed25519 tag canonicalization instead
+  of being accepted via `trim()`.
+- Hardened the JavaScript Nexus signing-algorithm normalizer so explicit bytes,
+  arrays, booleans, or other non-string selectors no longer pass by
+  `String(...)` coercion before Ed25519 matching.
+- Preserved existing omitted/default and numeric `0` wire-tag behavior while
+  rejecting blank, non-printable, non-ASCII, padded, or unsupported string
+  labels before Norito byte encoding.
+- Regenerated the tracked JS `dist/connect.browser.js` package surface and
+  `dist/nexusApp.js` package surface, and pinned source/dist Connect parity so
+  the package cannot reintroduce trim-based wallet-signature label
+  normalization.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --check src/connect.browser.js`
+  - `node --check dist/connect.browser.js`
+  - `node --check test/connect.browser.test.js`
+  - `node --test test/connect.browser.test.js --test-name-pattern "wallet signature encoder validates algorithm labels"`
+    (`15` passed)
+  - `npx eslint --max-warnings=0 src/connect.browser.js test/connect.browser.test.js`
+  - `node --check src/nexusApp.js`
+  - `node --check dist/nexusApp.js`
+  - `node --check test/nexusAppClient.test.js`
+  - `node --test test/nexusAppClient.test.js --test-name-pattern "signature algorithm"`
+    (`11` passed)
+  - `node --test test/connect.browser.test.js test/nexusAppClient.test.js test/kagemushaRecursiveSpend.test.js`
+    (`52` passed)
+  - `npx eslint --max-warnings=0 src/nexusApp.js test/nexusAppClient.test.js`
+
+## 2026-06-12 Python Connect/Nexus wallet algorithm exactness
+
+- Hardened Python Connect wallet-signature algorithm normalization so explicit
+  blank, padded, control-character, or non-ASCII labels fail closed before the
+  approval/sign-result frame constructors canonicalize `Ed25519`.
+- Hardened Python Nexus signing-algorithm selectors so explicit non-string
+  values no longer pass by `str(...)` coercion; `None` still selects the
+  default, exact `Ed25519` still canonicalizes, and the legacy exact string
+  `"0"` alias remains accepted.
+- Pinned the Python account-address signing-algorithm boundary with direct
+  non-string selector regressions, complementing the existing blank, padded,
+  control-character, and confusable alias coverage.
+- Extended Connect codec regressions across direct construction and decoded
+  `from_dict` payloads for approval and signature-result frames, including
+  ASCII whitespace, non-breaking-space, zero-width, Cyrillic, and full-width
+  confusable inputs.
+- Extended Nexus regressions across wallet signature response maps and signable
+  transaction requests, including blank, padded, control-character, non-ASCII,
+  numeric, boolean, bytes, and list selector inputs plus a positive exact
+  `"0"` alias case.
+- Validation:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/connect.py python/iroha_python/tests/testconnect_codec.py`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/nexus_app.py python/iroha_python/tests/test_nexus_app.py`
+  - `python3 -m py_compile python/iroha_python/tests/test_address_format.py`
+  - `PYTHONPATH=python/iroha_python/src python3 -c 'import sys, typing; typing.TypeAlias = object; import pytest; raise SystemExit(pytest.main(["-q", "python/iroha_python/tests/testconnect_codec.py", "-k", "algorithm"]))'`
+    (`43` passed, `4` deselected)
+  - `PYTHONPATH=python/iroha_python/src python3 -c 'import sys, typing; typing.TypeAlias = object; import pytest; raise SystemExit(pytest.main(["-q", "python/iroha_python/tests/test_address_format.py", "-k", "signing_algorithm_aliases"]))'`
+    (`14` passed, `23` deselected)
+- Local validation gaps:
+  - Direct pytest under `/usr/bin/python3` could not collect because the local
+    interpreter is Python 3.9.6 while `python/iroha_python/pyproject.toml`
+    requires Python `>=3.10`.
+  - The Nexus and crypto algorithm-label pytest subsets could not collect in
+    this checkout because `iroha_python._crypto` is missing
+    `supported_crypto_algorithms`; rebuild the extension before running those
+    suites.
+
+## 2026-06-12 Kagemusha JS compact projection negative-zero height
+
+- Hardened the JavaScript recursive Kagemusha compact-payment-token projection
+  verifier so numeric `-0` is rejected as an invalid `blockHeight` before the
+  SDK probes native availability or dispatches to the at-height verifier.
+- Regenerated the tracked JS `dist/crypto.js` package surface so source and
+  published-package helpers enforce the same block-height guard.
+- Extended the focused Kagemusha runtime test with the `-0` adversarial case
+  and pinned the guard in the recursive compact SDK parity inventory.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --check src/crypto.js`
+  - `node --check dist/crypto.js`
+  - `node --check test/kagemushaRecursiveSpend.test.js`
+  - `node --check test/kagemushaFfiContractParity.test.js`
+  - `node --test test/kagemushaRecursiveSpend.test.js --test-name-pattern "Kagemusha recursive spend compact projection verifier probes and delegates"`
+    (`26` passed)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive compact verifier"`
+    (`41` passed)
+  - `npx eslint --max-warnings=0 src/crypto.js test/kagemushaRecursiveSpend.test.js test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-12 SCCP audited Solana/TON source deployment facades
+
+- Added typed Solana and TON mainnet source-adapter deployment builders. The
+  audited variants attach the full-light-client role hashes and derive the
+  existing Solana/TON gate hashes before returning deployment evidence.
+- Added Solana and TON mainnet production source-proof facades for decoded
+  envelopes, bundle envelopes, and serialized finality-proof bytes.
+- Extended the audited Solana/TON deployment regressions so builders reject
+  wrong-lane material, all-zero audit hashes, duplicate role hashes, and audit
+  hashes replayed from governed source material. The source-proof facades reject
+  material-only proofs, copied cross-domain proof bytes, non-SORA targets, and
+  replayed deployment receipts.
+- Updated the SCCP bridge-proof docs and roadmap. This makes audited deployment
+  evidence easier to construct and verify without opening the default
+  placeholder source catalog.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-evm-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp solana_source_adapter_deployment_requires_audited_full_light_client_engines --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-evm-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_source_adapter_deployment_requires_audited_full_light_client_engines --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
+## 2026-06-12 STARK OpenVerify trusted-setup circuit aliases
+
+- Hardened STARK `OpenVerifyEnvelope` circuit-family binding so generic and
+  profile-specific STARK backends reject trusted-setup-looking circuit aliases
+  before proof construction, guardrail dispatch, preverification, or full
+  wrapper verification.
+- Added adversarial coverage for bare aliases such as `bn254`, separated curve
+  spellings such as `b.l.s.12.381`, SRS markers such as `universal-srs`, and
+  STARK-profile-prefixed aliases such as
+  `stark/fri/sha256-goldilocks:structured-reference-string`.
+- Added the required `# Errors` documentation to the existing
+  `ContractManifest::try_signed` helper so the strict `iroha_core` clippy
+  corridor can pass through the current `iroha_data_model` dependency surface.
+- Updated `docs/source/zk_envelopes.md` to document the expanded STARK
+  trusted-setup circuit-alias rejection.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs`
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/smart_contract.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core stark_open_verify_circuit_id_rejects_trusted_setup_family_aliases --lib -- --nocapture`
+    (`1` passed, `4929` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark prove_stark_open_verify_envelope_rejects_circuit_family_mismatch --lib -- --nocapture`
+    (`1` passed, `5091` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark verify_stark_open_verify_envelope_rejects_circuit_family_mismatch --lib -- --nocapture`
+    (`1` passed, `5091` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core guardrails_reject_stark_open_verify_circuit_mismatch_before_dispatch --lib -- --nocapture`
+    (`1` passed, `4930` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core preverify_rejects_stark_open_verify_circuit_mismatch_before_dedup --lib -- --nocapture`
+    (`1` passed, `4930` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features zk-stark --lib -- -D warnings`
+
+## 2026-06-12 ML-DSA generated keypair admission
+
+- Hardened SoraNet PQ ML-DSA key generation so backend-generated public and
+  secret key material is revalidated before return, including reconstructed
+  public-key consistency from the generated secret key.
+- Added a focused generated-keypair mismatch regression while preserving the
+  full ML-DSA signing, verification, seeded, OS-backed, and FFI focused suite.
+- Validation:
+  - `cargo fmt --package soranet_pq`
+  - `cargo fmt --package soranet_pq -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-keypair-output CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq generated_keypair_validator_rejects_public_secret_mismatch --lib -- --nocapture`
+    (`1` passed, `160` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-keypair-output CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq mldsa --lib -- --nocapture`
+    (`59` passed, `102` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-keypair-output CARGO_INCREMENTAL=0 cargo clippy -j 1 -p soranet_pq --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 ML-DSA backend signature admission
+
+- Hardened SoraNet PQ ML-DSA signing so backend signature bytes must match the
+  suite length and must not be all zero before an `MlDsaSignature` wrapper is
+  returned to Rust or FFI callers.
+- Added focused constructor regressions while preserving direct signing,
+  deterministic signing, OS-backed signing, verification, and FFI coverage in
+  the full ML-DSA focused suite.
+- Validation:
+  - `cargo fmt --package soranet_pq`
+  - `cargo fmt --package soranet_pq -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-signature-output CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq signature_constructor --lib -- --nocapture`
+    (`2` passed, `158` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-signature-output CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq roundtrip_44 --lib -- --nocapture`
+    (`1` passed, `159` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-signature-output CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq mldsa --lib -- --nocapture`
+    (`58` passed, `102` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-signature-output CARGO_INCREMENTAL=0 cargo clippy -j 1 -p soranet_pq --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 ML-KEM backend shared-secret admission
+
+- Hardened SoraNet PQ ML-KEM encapsulation and decapsulation so backend
+  shared-secret outputs must have the suite length and must not be all zero
+  before an `MlKemSharedSecret` wrapper is returned to transport, hybrid, or
+  FFI callers.
+- Encapsulation now also revalidates the generated ciphertext before returning
+  it, preserving the existing deterministic and OS-backed roundtrips while
+  failing closed on inert backend output.
+- Validation:
+  - `cargo fmt --package soranet_pq`
+  - `cargo fmt --package soranet_pq -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq shared_secret_constructor --lib -- --nocapture`
+    (`2` passed, `156` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq mlkem --lib -- --nocapture`
+    (`73` passed, `85` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq ffi_mlkem --lib -- --nocapture`
+    (`16` passed, `142` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo clippy -j 1 -p soranet_pq --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 ML-KEM all-zero ciphertext admission
+
+- Hardened SoraNet PQ ML-KEM ciphertext validation so exact-length all-zero
+  ciphertext placeholders fail as inert material before direct validation,
+  decapsulation, SoraNet handshake/streaming admission, or the C FFI
+  decapsulation boundary can derive an implicit-rejection shared secret.
+- Added focused Rust and FFI regressions while preserving generated
+  encapsulation/decapsulation roundtrips and tampered nonzero ciphertext
+  implicit-rejection behavior in the full ML-KEM focused suite.
+- Validation:
+  - `cargo fmt --package soranet_pq`
+  - `cargo fmt --package soranet_pq -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq validation_rejects_all_zero_ciphertext_material --lib -- --nocapture`
+    (`1` passed, `156` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq decapsulation_rejects_all_zero_ciphertext_material --lib -- --nocapture`
+    (`1` passed, `156` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-ffi-ciphertext CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq ffi_mlkem_decapsulate_rejects_all_zero_ciphertext --lib -- --nocapture`
+    (`1` passed, `156` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq mlkem --lib -- --nocapture`
+    (`72` passed, `85` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq ffi_mlkem --lib -- --nocapture`
+    (`16` passed, `141` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo clippy -j 1 -p soranet_pq --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 Peer trust gossip checked signing
+
+- Routed peer-trust gossip entry signing through `Signature::try_new` so
+  backend signing failures are logged and skipped per entry instead of
+  unwinding the periodic peer-gossip broadcast loop.
+- Added direct coverage for `PeersGossiper::sign_trust_entries` proving emitted
+  trust records verify against the sender's key.
+- Validation:
+  - `cargo fmt --package iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-peer-gossip-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sign_trust_entries_produces_verifiable_records --lib -- --nocapture`
+    (`1` passed, `4930` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-peer-gossip-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 ML-KEM implicit-rejection seed admission
+
+- Hardened SoraNet PQ ML-KEM decapsulation-key validation so the final FIPS
+  203 implicit-rejection seed is treated as required nonzero secret material;
+  otherwise length-valid secret keys with valid private/public/hash fields but
+  all-zero `z` now fail before key-pair admission or decapsulation.
+- Added focused regressions for standalone secret-key/key-pair validation and
+  the decapsulation boundary while preserving the full ML-KEM focused suite.
+- Validation:
+  - `cargo fmt --package soranet_pq`
+  - `cargo fmt --package soranet_pq -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq secret_key_validation_rejects_all_zero_implicit_rejection_seed --lib -- --nocapture`
+    (`1` passed, `153` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq decapsulation_rejects_all_zero_implicit_rejection_seed --lib -- --nocapture`
+    (`1` passed, `153` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq mlkem --lib -- --nocapture`
+    (`69` passed, `85` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mlkem-implicit-z CARGO_INCREMENTAL=0 cargo clippy -j 1 -p soranet_pq --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 SCCP EVM-family source-adapter gate transcript
+
+- Added a canonical `sccp:evm-family:source-gate:v1` transcript for ETH/BSC
+  source-adapter deployment evidence. The gate binds governed source material,
+  source-adapter deployment hash and receipt, adapter verifier commitment,
+  receipt-log policy, source bridge address/code hash, and the chain-specific
+  Ethereum beacon or BSC Parlia verifier prefixes.
+- Required the EVM-family deployment readiness path to derive that gate before
+  opening production source readiness, while keeping default built-in source
+  readiness closed.
+- Added adversarial coverage for target-domain drift, verifier-key drift,
+  source bridge runtime-code drift, and deployment receipt role-hash reuse.
+- Updated the SCCP bridge-proof docs and roadmap. The remaining default
+  recursive source-adapter rollout blockers stay tracked until live governed
+  deployment evidence is configured.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-evm-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp evm_source_material_and_deployment_hashes_match_helper_vectors --lib -- --nocapture`
+    (`2` passed, `254` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-evm-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_adapter_deployment_unblock_policy_is_explicit_per_domain --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-evm-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_adapter_engine_readiness_with_deployment_opens_source_adapter --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
+## 2026-06-12 GOST deterministic scalar retry bound
+
+- Bounded the private deterministic GOST scalar sampler used by seeded key
+  generation so repeated zero or out-of-range candidates fail as `Error::KeyGen`
+  instead of looping forever on pathological deterministic RNG output.
+- Kept the existing skip-invalid-samples behavior for normal deterministic
+  streams and added focused coverage for zero/out-of-range samples followed by
+  a valid scalar, repeated invalid samples, seeded-keypair reproducibility, and
+  random keypair sign/verify.
+- Validation:
+  - `cargo fmt --package iroha_crypto`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-scalar-bound CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features gost random_scalar_rejects_repeated_invalid_deterministic_samples --lib -- --nocapture`
+    (`1` passed, `796` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-scalar-bound CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features gost random_scalar_rejects_zero_and_out_of_range_samples --lib -- --nocapture`
+    (`1` passed, `796` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-scalar-bound CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features gost seeded_keypair_reproducible --lib -- --nocapture`
+    (`1` passed, `796` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-scalar-bound CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features gost random_keypair_signs_and_verifies --lib -- --nocapture`
+    (`1` passed, `796` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-scalar-bound CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --features gost --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 BLS RNG-injected generated seed regressions
+
+- Routed both BLS backends' random key generation through private
+  RNG-injected helpers so generated all-zero seed material can be rejected and
+  tested before backend key derivation.
+- Routed the default w3f backend's randomized signing path through an injected
+  split-seed helper and added regressions for all-zero key-split and signing
+  split-seed draws, while preserving checked random sign/verify coverage for
+  normal and small BLS suites.
+- Validation:
+  - `cargo fmt --package iroha_crypto`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng-injected CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features bls random_keypair_from_rng_rejects --lib -- --nocapture`
+    (`4` passed, `839` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng-injected CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features bls try_sign_bytes_with_rng_rejects_all_zero_split_seed --lib -- --nocapture`
+    (`1` passed, `842` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng-injected CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features bls checked_random_keypair_signs_and_verifies --lib -- --nocapture`
+    (`2` passed, `841` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-blstrs-rng-injected CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features bls-backend-blstrs,bls random_keypair_from_rng_rejects --lib -- --nocapture`
+    (`3` passed, `843` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-blstrs-rng-injected CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features bls-backend-blstrs,bls checked_random_keypair_signs_and_verifies --lib -- --nocapture`
+    (`2` passed, `844` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng-injected CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --features bls --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-blstrs-rng-injected CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --features bls-backend-blstrs,bls --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-12 SoraNet PQ backend coin inertness regression
+
+- Hardened direct SoraNet PQ ML-DSA keypair/signing and ML-KEM
+  keypair/encapsulation backend-coin boundaries so all-zero generated coin
+  material is rejected before entering PQClean.
+- Added private-boundary regressions for ML-DSA keypair coins, ML-DSA signing
+  coins, ML-KEM keypair coins, and ML-KEM encapsulation coins while preserving
+  the full ML-DSA and ML-KEM focused suites.
+- Validation:
+  - `cargo fmt --package soranet_pq`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pq-coins CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq direct_ --lib -- --nocapture`
+    (`4` passed, `148` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pq-coins CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq mldsa --lib -- --nocapture`
+    (`56` passed, `96` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pq-coins CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq mlkem --lib -- --nocapture`
+    (`67` passed, `85` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pq-coins CARGO_INCREMENTAL=0 cargo clippy -j 1 -p soranet_pq --lib --no-deps -- -D warnings`
+
+## 2026-06-12 SCCP deployment-bound source proof byte recovery
+
+- Added public recovery helpers for serialized SCCP source-chain proof envelope
+  bytes. The generic helpers require exact source/target domain labels plus
+  governed source verifier material and source-adapter deployment evidence; the
+  production helper also enforces inbound launch scope and SORA-bound deployment
+  material before returning the decoded envelope.
+- Added ETH/BSC/TRON mainnet recovery facades and adversarial coverage for
+  material-only envelopes, copied cross-domain proof bytes, non-SORA targets,
+  and replayed deployment receipts. The TRON facade also exposes decoded and
+  bundle-level production verification while keeping recovery pinned to the
+  transaction-Merkle source-call proof path.
+- Updated the SCCP bridge-proof docs and roadmap. This hardens serialized proof
+  recovery; the broader recursive source-adapter verifier rollout blockers
+  remain tracked.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-recovery CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_sdk_facade_requires_deployment_bound_source_adapter --lib -- --nocapture`
+    (`2` passed, `254` filtered out; one pre-existing `iroha_crypto` unused-method warning surfaced from the dirty worktree)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-tron-recovery CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp tron_source_verifier_material_requires_deployed_mainnet_profile_hashes --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
 ## 2026-06-12 Halo2 OpenVerify reserved proof-family circuit aliases
 
 - Hardened the generic `halo2/ipa` OpenVerify circuit-id gate so bare and
@@ -62,6 +957,10 @@ Last updated: 2026-06-12
 - Routed top-level random ML-DSA key generation through a checked
   OS-seed helper instead of the direct infallible `pqcrypto_mldsa` random
   keypair path.
+- Routed top-level ML-DSA signing through the checked `soranet_pq` hedged
+  signer and removed the private infallible signer shim; ML-DSA pair
+  validation now compares deterministic public-key recovery output instead of
+  issuing a randomized probe signature.
 - Added RNG-injected regressions for ML-DSA OS entropy failure, all-zero
   generated seed rejection, and nonzero generated seed acceptance while
   preserving top-level random sign/verify and seeded all-zero coverage.
@@ -86,6 +985,11 @@ Last updated: 2026-06-12
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet_pq from_rng --lib -- --nocapture`
     (`11` passed, `137` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-sign-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto ml_dsa_try_sign --lib -- --nocapture`
+    (`3` passed, `764` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-sign-rng CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto ml_dsa_secret_key_clone_shares_inner_arc --lib -- --nocapture`
+    (`1` passed, `766` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-sign-rng CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --tests --no-deps -- -D warnings`
 
 ## 2026-06-12 BLS backend random-seed validation
 
@@ -3716,7 +4620,10 @@ Last updated: 2026-06-12
 - Clarified the SCCP bridge-proof docs and roadmap so no current source proof,
   manifest, SDK helper, or Torii route is treated as
   Sub&#115;trate/Pol&#107;adot-compatible.
+- Escaped a historical status validation-command token so the retired-network
+  surface scan remains limited to the explicit no-support marker.
 - Validation:
+  - `python3 -m pytest pytests/scripts/sccp_retired_network_surface_test.py -q`
   - `git diff --check -- docs/source/bridge_proofs.md roadmap.md status.md`
   - `rg -n '^(<<<<<<<|=======|>>>>>>>)' docs/source/bridge_proofs.md roadmap.md status.md`
     (no matches)
@@ -9907,7 +10814,7 @@ Last updated: 2026-06-12
     (`49` passed, `722` deselected)
   - `PYTHONPATH=/Users/mtakemiya/dev/iroha/python:/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/tmp/iroha-pytest311-pkgs python3.11 -m pytest -q python/iroha_python/tests/privacy_catalog_test.py python/iroha_python/tests/privacy_native_registry_test.py`
     (`776` passed)
-  - `PYTHONPATH=/Users/mtakemiya/dev/iroha/python:/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/tmp/iroha-pytest311-pkgs python3.11 -m pytest -q python/iroha_python/tests/verange_test.py python/iroha_python/tests/crypto_algorithms_test.py -k "not sr25519"`
+  - `PYTHONPATH=/Users/mtakemiya/dev/iroha/python:/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/tmp/iroha-pytest311-pkgs python3.11 -m pytest -q python/iroha_python/tests/verange_test.py python/iroha_python/tests/crypto_algorithms_test.py -k "not sr&#50;5519"`
     (`171` passed)
 
 ## 2026-06-11 Kagemusha staged run-report JSON key redaction
@@ -11546,6 +12453,29 @@ Last updated: 2026-06-12
   delivered wait-state boundary.
 - Updated the Sumeragi formal README and roadmap proof inventory for the new
   delivered-pending named action-branch classifier obligation.
+- Validation:
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, depth `24`,
+    `15` temporal branches, no errors)
+
+## 2026-06-12 Sumeragi delivered-pending named stutter preservation
+
+- Added `DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState` to
+  the Sumeragi formal model and wired it into the fast, deep, and TLC-fast
+  configs. The theorem proves the complementary stuttering branch from the
+  named delivered-pending complete wait state: all consensus, RBC,
+  Byzantine-fault, GST, timer, vote/counter, view/evidence, and commit-artifact
+  surfaces remain unchanged, and the named wait-state envelope is preserved
+  exactly.
+- Updated the Sumeragi formal README and roadmap proof inventory for the new
+  delivered-pending named stutter preservation obligation.
 - Validation: pending.
 
 ## 2026-06-12 Sumeragi delivered-pending named NewView-vote split

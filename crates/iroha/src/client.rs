@@ -9566,11 +9566,12 @@ impl Client {
     /// Builds transaction out of supplied instructions or IVM bytecode.
     ///
     /// Prefer [`Self::try_build_transaction`] when callers need to handle OS
-    /// entropy failures from configured transaction nonce generation.
+    /// entropy failures from configured transaction nonce generation or
+    /// signing failures from the configured signature backend.
     ///
     /// # Panics
     /// Panics if `transaction_add_nonce` is enabled and OS entropy is
-    /// unavailable while generating a transaction nonce.
+    /// unavailable while generating a transaction nonce, or if signing fails.
     pub fn build_transaction<Exec: Into<Executable>>(
         &self,
         instructions: Exec,
@@ -9583,7 +9584,8 @@ impl Client {
     /// Builds transaction out of supplied instructions or IVM bytecode.
     ///
     /// # Errors
-    /// Fails if configured transaction nonce generation cannot read OS entropy.
+    /// Fails if configured transaction nonce generation cannot read OS entropy,
+    /// or if the configured signature backend cannot sign the transaction.
     pub fn try_build_transaction<Exec: Into<Executable>>(
         &self,
         instructions: Exec,
@@ -9607,20 +9609,22 @@ impl Client {
 
         self.apply_transaction_defaults_with_rng(&mut tx_builder, rng)?;
 
-        Ok(tx_builder
+        tx_builder
             .with_metadata(metadata)
-            .sign(self.key_pair.private_key()))
+            .try_sign(self.key_pair.private_key())
+            .wrap_err("sign client transaction")
     }
 
     /// Builds a transaction from a collection of items convertible into `InstructionBox`.
     ///
     /// This avoids re-boxing already boxed instructions.
     /// Prefer [`Self::try_build_transaction_from_items`] when callers need to
-    /// handle OS entropy failures from configured transaction nonce generation.
+    /// handle OS entropy failures from configured transaction nonce generation
+    /// or signing failures from the configured signature backend.
     ///
     /// # Panics
     /// Panics if `transaction_add_nonce` is enabled and OS entropy is
-    /// unavailable while generating a transaction nonce.
+    /// unavailable while generating a transaction nonce, or if signing fails.
     pub fn build_transaction_from_items<I>(
         &self,
         instructions: impl IntoIterator<Item = I>,
@@ -9638,7 +9642,8 @@ impl Client {
     /// This avoids re-boxing already boxed instructions.
     ///
     /// # Errors
-    /// Fails if configured transaction nonce generation cannot read OS entropy.
+    /// Fails if configured transaction nonce generation cannot read OS entropy,
+    /// or if the configured signature backend cannot sign the transaction.
     pub fn try_build_transaction_from_items<I>(
         &self,
         instructions: impl IntoIterator<Item = I>,
@@ -9669,9 +9674,10 @@ impl Client {
 
         self.apply_transaction_defaults_with_rng(&mut tx_builder, rng)?;
 
-        Ok(tx_builder
+        tx_builder
             .with_metadata(metadata)
-            .sign(self.key_pair.private_key()))
+            .try_sign(self.key_pair.private_key())
+            .wrap_err("sign client transaction from instruction items")
     }
 
     /// Encode and hash a signed transaction once for later submission.
@@ -9689,12 +9695,29 @@ impl Client {
         }
     }
 
-    /// Signs transaction
+    /// Try to sign a transaction.
     ///
     /// # Errors
-    /// Fails if signature generation fails
+    /// Fails if the configured signature backend cannot sign the transaction.
+    pub fn try_sign_transaction(
+        &self,
+        transaction: TransactionBuilder,
+    ) -> Result<SignedTransaction> {
+        transaction
+            .try_sign(self.key_pair.private_key())
+            .wrap_err("sign client transaction builder")
+    }
+
+    /// Signs transaction.
+    ///
+    /// Prefer [`Self::try_sign_transaction`] when callers need to handle
+    /// signing failures from the configured signature backend.
+    ///
+    /// # Panics
+    /// Panics if the configured signature backend cannot sign the transaction.
     pub fn sign_transaction(&self, transaction: TransactionBuilder) -> SignedTransaction {
-        transaction.sign(self.key_pair.private_key())
+        self.try_sign_transaction(transaction)
+            .expect("failed to sign transaction")
     }
 
     /// Instructions API entry point. Submits one Iroha Special Instruction to `Iroha` peers.
@@ -19853,6 +19876,22 @@ mod tests {
             client.sign_transaction(tx)
         };
         assert_eq!(tx1.hash(), tx2.hash());
+    }
+
+    #[test]
+    fn try_sign_transaction_attaches_verifiable_signature() {
+        let client = client_with_base_url(base_url());
+        let builder = TransactionBuilder::new(client.chain.clone(), client.account.clone())
+            .with_instructions([Log::new(Level::INFO, "client checked signing".into())])
+            .with_metadata(Metadata::default());
+
+        let tx = client
+            .try_sign_transaction(builder)
+            .expect("client transaction signing should succeed");
+
+        tx.verify_signature()
+            .expect("client transaction signature must verify");
+        assert_eq!(tx.authority(), &client.account);
     }
 
     #[test]

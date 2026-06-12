@@ -21681,10 +21681,11 @@ mod debug_backend_tests {
 #[cfg(test)]
 mod stark_backend_tag_tests {
     use super::{
-        is_developer_only_backend_label, is_ivm_execution_backend,
+        ZK_BACKEND_STARK_FRI_V1, is_developer_only_backend_label, is_ivm_execution_backend,
         is_pending_production_backend_label, is_production_claim_backend_label,
         is_production_verify_backend_label, is_stark_fri_v1_backend,
-        is_trusted_setup_backend_label, production_verify_backend_tag, verify_backend,
+        is_trusted_setup_backend_label, production_verify_backend_tag,
+        stark_open_verify_circuit_id_matches_backend, verify_backend,
     };
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
     use iroha_data_model::zk::BackendTag;

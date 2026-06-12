@@ -2798,6 +2798,38 @@ public sealed class ToriiClientTests
         Assert.Equal("phone#retail", resolved.SignaturePayload!["policy_id"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData(" ABCD", "DEADBEEF", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature")]
+    [InlineData("ABCD", " DEADBEEF", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload_hex")]
+    [InlineData("ABCD", "DEADBEEF", """{"opening":{"signature":" ABCD"}}""", "identifier resolve response.signature_payload.opening.signature")]
+    [InlineData("ABCD", "DEADBEEF", """{"payload":{"opening":{"signature":"ABCD "}}}""", "identifier resolve response.signature_payload.payload.opening.signature")]
+    [InlineData("ABCD", "DEADBEEF", """{"attestation":{"signature":" ABCD"}}""", "identifier resolve response.signature_payload.attestation.signature")]
+    public async Task ResolveIdentifierAsyncRejectsPaddedSignatureReceiptFields(
+        string signature,
+        string signaturePayloadHex,
+        string signaturePayloadJson,
+        string expectedField)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(IdentifierResolveResponseJson(
+                signature,
+                signaturePayloadHex,
+                signaturePayloadJson)),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
+            new ToriiIdentifierResolveRequest
+            {
+                PolicyId = "phone#retail",
+                Input = "+15551234567",
+            }));
+
+        Assert.Contains(expectedField, error.Message);
+        Assert.Contains("whitespace", error.Message);
+    }
+
     [Fact]
     public async Task ResolveAccountAliasIndexAsyncReturnsTypedResponse()
     {
@@ -4323,6 +4355,28 @@ public sealed class ToriiClientTests
             CommitmentHex = VerifyingKeyCommitmentHex("halo2/ipa", vkBytes),
             Status = "Active",
         };
+    }
+
+    private static string IdentifierResolveResponseJson(
+        string signature,
+        string signaturePayloadHex,
+        string signaturePayloadJson)
+    {
+        return $$"""
+            {
+              "policy_id": "phone#retail",
+              "opaque_id": "opaque-1",
+              "receipt_hash": "receipt-1",
+              "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "account_id": "sorauﾛ1Nmerchant",
+              "resolved_at_ms": 1710000000000,
+              "expires_at_ms": 1710003600000,
+              "backend": "bfv-programmed-sha3-256-v1",
+              "signature": {{JsonSerializer.Serialize(signature)}},
+              "signature_payload_hex": {{JsonSerializer.Serialize(signaturePayloadHex)}},
+              "signature_payload": {{signaturePayloadJson}}
+            }
+            """;
     }
 
     private static string VerifyingKeyCommitmentHex(string backend, byte[] bytes)

@@ -763,6 +763,30 @@ mod tests {
     }
 
     #[test]
+    fn ffi_mlkem_decapsulate_rejects_all_zero_ciphertext() {
+        let suite = MlKemSuite::MlKem512;
+        let suite_id = c_uint::from(suite.kem_id());
+        let params = suite.parameters();
+        let (_, secret_key) = ffi_mlkem_keypair(suite);
+        let ciphertext = vec![0u8; params.ciphertext];
+        let mut shared_secret = vec![0u8; params.shared_secret];
+
+        let rc = unsafe {
+            soranet_mlkem_decapsulate(
+                suite_id,
+                secret_key.as_ptr(),
+                secret_key.len() as c_ulong,
+                ciphertext.as_ptr(),
+                ciphertext.len() as c_ulong,
+                shared_secret.as_mut_ptr(),
+                shared_secret.len() as c_ulong,
+            )
+        };
+
+        assert_eq!(rc, ERR_ENCODING);
+    }
+
+    #[test]
     fn ffi_mlkem_parameters_writes_lengths_and_rejects_null_output() {
         let suite = MlKemSuite::MlKem768;
         let params = suite.parameters();

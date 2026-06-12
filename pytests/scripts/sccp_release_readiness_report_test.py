@@ -2547,6 +2547,12 @@ def test_release_readiness_report_guards_bsc_route_config_canonical_manifest_gat
     )
     assert any(
         "SCCP BSC route-config canonical-manifest source inventory" in error
+        and "missing marker: function normalizeCanonicalManifestText(value, label)"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
         and "missing marker: route manifest chainIdHex must be canonical lowercase hex."
         in error
         for error in errors
@@ -2581,6 +2587,31 @@ def test_release_readiness_report_guards_bsc_route_config_canonical_manifest_gat
         "SCCP BSC route-config canonical-manifest source inventory" in error
         and str(sparse_test) in error
         and "missing marker: bscNetwork: \"BSC-TESTNET\"" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and 'missing marker: productionReady: "true"' in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and "missing marker: fullTomlReady: 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and "missing marker: disabledReason: 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and "missing marker: contractAddress: 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and "missing marker: settlement\\.contractAlias aliases disagree" in error
         for error in errors
     )
     assert any(
@@ -2660,12 +2691,26 @@ def test_release_readiness_report_guards_tron_route_config_canonical_manifest_ga
     )
     assert any(
         "SCCP TRON route-config canonical-manifest source inventory" in error
+        and "missing marker: function readOptionalCanonicalManifestText(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
         and "missing marker: post_deploy_production_blockers" in error
         for error in errors
     )
     assert any(
         "SCCP TRON route-config canonical-manifest source inventory" in error
         and "missing marker: route_canary_production_blockers" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and (
+            "missing marker: route manifest postDeployLiveEvidence.fullTomlReady "
+            "must be true or false"
+        )
+        in error
         for error in errors
     )
 
@@ -2687,6 +2732,42 @@ def test_release_readiness_report_guards_tron_route_config_canonical_manifest_ga
         "SCCP TRON route-config canonical-manifest source inventory" in error
         and str(sparse_test) in error
         and "missing marker: tronNetwork: \"TRON-MAINNET\"" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and 'missing marker: productionReady: "true"' in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and 'missing marker: postDeployReadbackChecked: "true"' in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and "missing marker: fullTomlReady: 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and "missing marker: disabledReason: 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and "missing marker: contractAddress: 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and "missing marker: settlement\\.contractAlias aliases disagree" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and 'missing marker: settlement_contract_address = "tron-settlement-v1"'
+        in error
         for error in errors
     )
     assert any(
@@ -3264,7 +3345,7 @@ def test_release_readiness_report_guards_active_launch_checklist_schema_gate_inv
     )
     assert any(
         "SCCP active-launch checklist schema source inventory" in error
-        and "missing marker: active EVM source adapter gate audit hashes must be empty"
+        and "missing marker: active EVM source adapter gate audit hashes must contain only evm_source_gate_hash"
         in error
         for error in errors
     )
@@ -5435,6 +5516,15 @@ def test_release_readiness_report_guards_unready_transparent_proof_config_gate_i
         in error
         for error in errors
     )
+    assert any(
+        "SCCP unready transparent-proof config-only source inventory" in error
+        and (
+            "missing marker: BSC route-config rejects malformed allow-unready "
+            "option values"
+        )
+        in error
+        for error in errors
+    )
 
     sparse_tron_test = tmp_path / "sccp_tron_taira_xor_deploy.test.mjs"
     sparse_tron_test.write_text(
@@ -5464,10 +5554,96 @@ def test_release_readiness_report_guards_unready_transparent_proof_config_gate_i
     assert any(
         "SCCP unready transparent-proof config-only source inventory" in error
         and (
+            "missing marker: TRON route-config rejects malformed allow-unready "
+            "option values"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP unready transparent-proof config-only source inventory" in error
+        and (
             "missing marker: /production-ready route manifests cannot enable "
             "--allow-unready/u"
         )
         in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_tron_deploy_operator_boolean_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin TRON operator boolean guards."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._tron_deploy_operator_boolean_gate_inventory_errors() == []
+
+    sparse_script = tmp_path / "sccp_tron_taira_xor_deploy.mjs"
+    sparse_script.write_text(
+        "function optionEnabled(options, key, fallback = false) {}\n",
+        encoding="utf-8",
+    )
+    errors = report._tron_deploy_operator_boolean_gate_inventory_errors(
+        (
+            (
+                sparse_script,
+                verifier.TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS[0][1],
+            ),
+        )
+    )
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and str(sparse_script) in error
+        and 'missing marker: if (options[key] === "true") return true;'
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and 'missing marker: throw new Error("--broadcast must be true or false");'
+        in error
+        for error in errors
+    )
+
+    sparse_test = tmp_path / "sccp_tron_taira_xor_deploy.test.mjs"
+    sparse_test.write_text(
+        "TRON deploy operator booleans reject malformed option values\n",
+        encoding="utf-8",
+    )
+    errors = report._tron_deploy_operator_boolean_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                verifier.TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS[1][1],
+            ),
+        )
+    )
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and str(sparse_test) in error
+        and "missing marker: /--force must be true or false/u" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and str(sparse_test) in error
+        and (
+            "missing marker: TRON route-manifest readiness booleans reject "
+            "malformed option values"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and "missing marker: /--production-ready must be true or false/u" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and 'missing marker: "require-optional-packages"' in error
         for error in errors
     )
 
@@ -10614,6 +10790,54 @@ def test_release_readiness_report_blocks_missing_unready_transparent_proof_confi
     }
 
 
+def test_release_readiness_report_blocks_missing_tron_deploy_operator_boolean_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when TRON operator boolean guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP TRON deploy operator boolean source inventory "
+        "sccp_tron_taira_xor_deploy.test.mjs missing marker: "
+        "/--force must be true or false/u"
+    )
+    monkeypatch.setattr(
+        report,
+        "_tron_deploy_operator_boolean_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["tron_deploy_operator_boolean_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["unready_transparent_proof_config_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+    assert readiness["source_inventory"]["launch_scope_constant_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+    assert readiness["source_inventory"]["proof_request_bundle_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
 def test_release_readiness_evidence_phase_accepts_pytest_runner_command_shape() -> None:
     """The transcript parser must accept the production corridor pytest command."""
 
@@ -13827,18 +14051,18 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
         ),
         (
             "source_adapter_gate.required",
-            True,
-            "active EVM source adapter gate summary must not be required",
+            False,
+            "active EVM source adapter gate summary must be required",
         ),
         (
             "source_adapter_gate.gate_hash",
-            fixed_hex32(0x53),
-            "active EVM source adapter gate hash must be empty",
+            "",
+            "active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string",
         ),
         (
             "source_adapter_gate.audit_hashes",
             {"unexpected_gate_hash": fixed_hex32(0x54)},
-            "active EVM source adapter gate audit hashes must be empty",
+            "active EVM source adapter gate audit hashes must contain only evm_source_gate_hash",
         ),
     )
 

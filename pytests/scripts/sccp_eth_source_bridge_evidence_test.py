@@ -466,6 +466,10 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
     )
     assert 'deployment_receipt_hash = "0x' + "aa" * 32 + '"' in rendered
     assert (
+        'evm_source_gate_hash = "0x' + module.eth_source_gate_hash(args).hex() + '"'
+        in rendered
+    )
+    assert (
         'source_bridge_network_id = "0x'
         + module.eth_source_bridge_network_id().hex()
         + '"'

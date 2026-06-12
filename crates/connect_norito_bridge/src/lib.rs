@@ -16458,7 +16458,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             kotoba: None,
             provenance: None,
         }
-        .signed(&key_pair);
+        .try_signed(&key_pair)
+        .map_err(|_| BridgeError::Governance)?;
         let manifest_provenance = manifest.provenance.clone().ok_or(BridgeError::Governance)?;
 
         let proposal = ProposeDeployContract {
@@ -16573,7 +16574,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             kotoba: None,
             provenance: None,
         }
-        .signed(&key_pair);
+        .try_signed(&key_pair)
+        .map_err(|_| BridgeError::Governance)?;
         let manifest_provenance = manifest.provenance.clone().ok_or(BridgeError::Governance)?;
 
         let proposal = ProposeDeployContract {

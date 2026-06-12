@@ -396,16 +396,18 @@ public sealed class ToriiClient : IDisposable
         return GetAsync<ToriiIdentifierPoliciesResponse>("/v1/identifier-policies", cancellationToken: cancellationToken);
     }
 
-    public Task<ToriiIdentifierResolveResponse> ResolveIdentifierAsync(
+    public async Task<ToriiIdentifierResolveResponse> ResolveIdentifierAsync(
         ToriiIdentifierResolveRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        return PostAsync<ToriiIdentifierResolveRequest, ToriiIdentifierResolveResponse>(
+        var response = await PostAsync<ToriiIdentifierResolveRequest, ToriiIdentifierResolveResponse>(
             "/v1/identifiers/resolve",
             request,
             cancellationToken: cancellationToken);
+        ValidateIdentifierResolveResponse(response);
+        return response;
     }
 
     public Task<ToriiAccountAliasIndexResolution?> ResolveAccountAliasIndexAsync(
@@ -1488,6 +1490,81 @@ public sealed class ToriiClient : IDisposable
         }
 
         ValidateOptionalBase64(response.SigningMessageBase64, $"{context}.signing_message_b64");
+    }
+
+    private static void ValidateIdentifierResolveResponse(ToriiIdentifierResolveResponse response)
+    {
+        ValidateExactHex(response.Signature, "identifier resolve response.signature");
+        ValidateExactHex(response.SignaturePayloadHex, "identifier resolve response.signature_payload_hex");
+        ValidateIdentifierReceiptSignaturePayload(
+            response.SignaturePayload,
+            "identifier resolve response.signature_payload");
+    }
+
+    private static void ValidateIdentifierReceiptSignaturePayload(JsonNode? payload, string context)
+    {
+        if (payload is not JsonObject payloadObject)
+        {
+            return;
+        }
+
+        ValidateOpeningSignature(payloadObject, context);
+        ValidateAttestationSignature(payloadObject, context);
+
+        if (payloadObject.TryGetPropertyValue("payload", out var nestedPayload)
+            && nestedPayload is JsonObject nestedPayloadObject)
+        {
+            ValidateOpeningSignature(nestedPayloadObject, $"{context}.payload");
+        }
+
+        if (payloadObject.TryGetPropertyValue("attestation", out var attestation)
+            && attestation is JsonObject attestationObject)
+        {
+            ValidateAttestationSignature(attestationObject, $"{context}.attestation");
+        }
+    }
+
+    private static void ValidateOpeningSignature(JsonObject payload, string context)
+    {
+        if (!payload.TryGetPropertyValue("opening", out var opening)
+            || opening is not JsonObject openingObject
+            || !openingObject.TryGetPropertyValue("signature", out var signature))
+        {
+            return;
+        }
+
+        ValidateExactHex(RequireJsonString(signature, $"{context}.opening.signature"), $"{context}.opening.signature");
+    }
+
+    private static void ValidateAttestationSignature(JsonObject payload, string context)
+    {
+        if (!payload.TryGetPropertyValue("signature", out var signature))
+        {
+            return;
+        }
+
+        ValidateExactHex(RequireJsonString(signature, $"{context}.signature"), $"{context}.signature");
+    }
+
+    private static void ValidateExactHex(string? value, string field)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new JsonException($"{field} must be a non-empty hex string.");
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must not contain surrounding whitespace.");
+        }
+
+        var body = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? value[2..]
+            : value;
+        if (body.Length == 0 || body.Length % 2 != 0 || !IsHex(body))
+        {
+            throw new JsonException($"{field} must be an exact hex string.");
+        }
     }
 
     private static void ValidateOptionalBase64(string? value, string field)

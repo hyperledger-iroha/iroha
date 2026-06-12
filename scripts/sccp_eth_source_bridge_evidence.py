@@ -38,11 +38,23 @@ SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1"
 SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID = "sccp-source-adapter-v1"
 SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET = "fastpq-lane-balanced"
 SCCP_EVM_GROTH16_BN254_PROOF_BACKEND = "evm-groth16-bn254-v1"
+SCCP_EVM_SOURCE_GATE_PREFIX = b"sccp:evm-family:source-gate:v1"
+SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER = b"sccp:evm:receipt-root-value:v1"
+SCCP_EVM_SOURCE_EVENT_ABI = b"SccpSourceEvent(bytes32)"
 ETH_SOURCE_PROOF_PLAN_CODE = 1
 ETH_FINALITY_MODEL_CODE = 1
 FASTPQ_BALANCED_TRACE_ROOT = 0x002A_247F_81C6_F850
 FASTPQ_BALANCED_LDE_ROOT = 0x6026_3388_DBBF_9B2A
 FASTPQ_BALANCED_OMEGA_COSET = 0x6AF3_25E8_25AD_5C18
+SCCP_EVM_MAX_RECEIPT_VALUE_BYTES = 16 * 1024
+SCCP_EVM_MAX_LOG_TOPICS = 4
+SCCP_EVM_MAX_HEADER_RLP_BYTES = 16 * 1024
+ETH_MAINNET_SLOTS_PER_EPOCH = 32
+ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD = 256
+ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES = 512
+ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 48
+ETH_SYNC_COMMITTEE_SIGNATURE_BYTES = 96
+ETH_MAX_SYNC_COMMITTEE_TRANSITIONS = 64
 
 ETH_SOURCE_TRUST_ANCHOR_ID = (
     "sccp:eth:source-trust-anchor:ethereum-mainnet-beacon-finalized-checkpoint:v1"
@@ -576,6 +588,121 @@ def eth_source_adapter_engine_deployment_record_hash(
     )
 
 
+def eth_source_gate_hash(args: argparse.Namespace) -> bytes:
+    """Compute Rust's canonical ETH EVM-family source gate hash."""
+
+    source_domain = _require_exact_u32(args.source_domain, "source_domain")
+    target_domain = _require_exact_u32(args.target_domain, "target_domain")
+    if source_domain != SCCP_DOMAIN_ETH:
+        raise ValueError("source_domain must be ETH")
+    if target_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("target_domain must be SORA")
+    source_material_hash = eth_source_verifier_material_record_hash(args)
+    deployment_hash = eth_source_adapter_engine_deployment_record_hash(args)
+    adapter_verifier_vk_hash = _require_nonzero_fixed_bytes(
+        args.adapter_verifier_vk_hash,
+        label="adapter_verifier_vk_hash",
+        byte_length=32,
+    )
+    deployment_receipt_hash = _require_nonzero_fixed_bytes(
+        args.deployment_receipt_hash,
+        label="deployment_receipt_hash",
+        byte_length=32,
+    )
+    bridge_address = _require_nonzero_fixed_bytes(
+        args.bridge_address,
+        label="bridge_address",
+        byte_length=20,
+    )
+    source_bridge_code_hash = _require_nonzero_fixed_bytes(
+        args.source_bridge_emitter_code_hash,
+        label="source_bridge_emitter_code_hash",
+        byte_length=32,
+    )
+    source_bridge_network_id, source_bridge_config_hash = _source_bridge_network_and_config(
+        args
+    )
+
+    payload = bytearray()
+    _push_u8(payload, 1)
+    _push_u32(payload, source_domain)
+    _push_u32(payload, target_domain)
+    _push_vec(payload, b"eth")
+    _push_u8(payload, ETH_SOURCE_PROOF_PLAN_CODE)
+    _push_u8(payload, ETH_FINALITY_MODEL_CODE)
+    _push_vec(payload, SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID.encode("utf-8"))
+    _push_vec(payload, SCCP_EVM_GROTH16_BN254_PROOF_BACKEND.encode("utf-8"))
+    payload.extend(source_material_hash)
+    payload.extend(deployment_hash)
+    payload.extend(adapter_verifier_vk_hash)
+    payload.extend(deployment_receipt_hash)
+    _push_vec(payload, ETH_SOURCE_TRUST_ANCHOR_ID.encode("utf-8"))
+    payload.extend(
+        _require_nonzero_fixed_bytes(
+            args.source_trust_anchor_hash,
+            label="source_trust_anchor_hash",
+            byte_length=32,
+        )
+    )
+    _push_vec(payload, ETH_CONSENSUS_VERIFIER_ID.encode("utf-8"))
+    payload.extend(
+        _require_nonzero_fixed_bytes(
+            args.consensus_verifier_hash,
+            label="consensus_verifier_hash",
+            byte_length=32,
+        )
+    )
+    _push_vec(payload, ETH_MESSAGE_INCLUSION_VERIFIER_ID.encode("utf-8"))
+    payload.extend(
+        _require_nonzero_fixed_bytes(
+            args.message_inclusion_verifier_hash,
+            label="message_inclusion_verifier_hash",
+            byte_length=32,
+        )
+    )
+    _push_vec(payload, ETH_FINALITY_POLICY_ID.encode("utf-8"))
+    payload.extend(
+        _require_nonzero_fixed_bytes(
+            args.finality_policy_hash,
+            label="finality_policy_hash",
+            byte_length=32,
+        )
+    )
+    _push_vec(payload, ETH_SOURCE_BRIDGE_EMITTER_ID.encode("utf-8"))
+    _push_vec(payload, bridge_address)
+    payload.extend(source_bridge_code_hash)
+    payload.extend(source_bridge_network_id)
+    _push_vec(payload, b"")
+    payload.extend(source_bridge_config_hash)
+    _push_vec(payload, SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER)
+    _push_vec(payload, SCCP_EVM_SOURCE_EVENT_ABI)
+    payload.extend(_keccak_256(SCCP_EVM_SOURCE_EVENT_ABI))
+    _push_u32(payload, SCCP_EVM_MAX_RECEIPT_VALUE_BYTES)
+    _push_u32(payload, SCCP_EVM_MAX_LOG_TOPICS)
+    _push_u32(payload, SCCP_EVM_MAX_HEADER_RLP_BYTES)
+    _push_vec(payload, b"sccp:evm:receipt-proof:v1")
+    for prefix in (
+        b"sccp:eth:sync-committee:v1",
+        b"sccp:eth:sync-committee-payload:v1",
+        b"sccp:eth:sync-committee-message:v1",
+        b"sccp:eth:sync-committee-aggregate:v1",
+        b"sccp:eth:sync-committee-transition-message:v1",
+        b"sccp:eth:sync-committee-transition-signature:v1",
+        b"sccp:eth:ssz-execution-payload-header:deneb-fulu:v1",
+        b"sccp:eth:ssz-beacon-block-header:v1",
+        b"sccp:eth:ssz-execution-payload-branch:deneb-fulu:v1",
+        ETH_SOURCE_BRIDGE_CONFIG_PREFIX,
+    ):
+        _push_vec(payload, prefix)
+    _push_u64(payload, ETH_MAINNET_SLOTS_PER_EPOCH)
+    _push_u64(payload, ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD)
+    _push_u32(payload, ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES)
+    _push_u32(payload, ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES)
+    _push_u32(payload, ETH_SYNC_COMMITTEE_SIGNATURE_BYTES)
+    _push_u32(payload, ETH_MAX_SYNC_COMMITTEE_TRANSITIONS)
+    return _prefixed_blake2b(SCCP_EVM_SOURCE_GATE_PREFIX, bytes(payload))
+
+
 def _toml_string(value: str) -> str:
     return json.dumps(value)
 
@@ -918,6 +1045,7 @@ def _deployment_lines(args: argparse.Namespace) -> Iterable[str]:
     yield _toml_line("finality_policy_id", ETH_FINALITY_POLICY_ID)
     yield _toml_line("finality_policy_hash", _hex(args.finality_policy_hash))
     yield _toml_line("deployment_receipt_hash", _hex(args.deployment_receipt_hash))
+    yield _toml_line("evm_source_gate_hash", _hex(eth_source_gate_hash(args)))
 
 
 def render_toml(args: argparse.Namespace) -> str:

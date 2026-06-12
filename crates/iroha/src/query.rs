@@ -42,9 +42,9 @@ struct ClientQueryRequestHead {
 
 impl ClientQueryRequestHead {
     #[cfg(test)]
-    fn assemble(&self, query: QueryRequest) -> DefaultRequestBuilder {
-        let body = self.sign_and_encode(query);
-        self.assemble_body(body)
+    fn assemble(&self, query: QueryRequest) -> Result<DefaultRequestBuilder, QueryError> {
+        let body = self.sign_and_encode(query)?;
+        Ok(self.assemble_body(body))
     }
 
     fn assemble_body(&self, body: Vec<u8>) -> DefaultRequestBuilder {
@@ -77,10 +77,12 @@ impl ClientQueryRequestHead {
         .body(body)
     }
 
-    fn sign_and_encode(&self, query: QueryRequest) -> Vec<u8> {
+    fn sign_and_encode(&self, query: QueryRequest) -> Result<Vec<u8>, QueryError> {
         let with_auth = query.with_authority(self.account_id.clone());
-        let query = with_auth.sign(&self.key_pair);
-        query.encode_versioned()
+        let query = with_auth
+            .try_sign(&self.key_pair)
+            .map_err(|err| QueryError::Other(eyre!("failed to sign query request: {err}")))?;
+        Ok(query.encode_versioned())
     }
 }
 
@@ -330,7 +332,7 @@ impl QueryExecutor for Client {
         let request_head = self.get_query_request_head();
 
         let request = QueryRequest::Singular(query);
-        let body = request_head.sign_and_encode(request);
+        let body = request_head.sign_and_encode(request)?;
         let make_request = || {
             if is_parameters_query {
                 Ok(request_head.assemble_body_with_accept(body.clone(), "application/json"))
@@ -357,7 +359,7 @@ impl QueryExecutor for Client {
         let request_head = self.get_query_request_head();
 
         let request = QueryRequest::Start(query);
-        let body = request_head.sign_and_encode(request);
+        let body = request_head.sign_and_encode(request)?;
         let make_request = || Ok(request_head.assemble_body(body.clone()));
         let response = retry_decode_with_send(make_request, decode_iterable_query_response)?;
 
@@ -380,7 +382,7 @@ impl QueryExecutor for Client {
         } = cursor;
 
         let request = QueryRequest::Continue(cursor);
-        let body = request_head.sign_and_encode(request);
+        let body = request_head.sign_and_encode(request)?;
         let make_request = || Ok(request_head.assemble_body(body.clone()));
         let response = retry_decode_with_send(make_request, decode_iterable_query_response)?;
 
@@ -417,6 +419,7 @@ mod tests {
             .assemble(QueryRequest::Singular(
                 SingularQueryBox::FindExecutorDataModel(FindExecutorDataModel),
             ))
+            .expect("sign query request")
             .build()
             .expect("request build");
 
@@ -569,7 +572,7 @@ impl Client {
         let request_head = self.get_query_request_head();
 
         let request = QueryRequest::Continue(cursor);
-        let body = request_head.sign_and_encode(request);
+        let body = request_head.sign_and_encode(request)?;
         let make_request = || Ok(request_head.assemble_body(body.clone()));
 
         let response = retry_decode_with_send(make_request, decode_query_response)?;
@@ -809,6 +812,7 @@ mod query_errors_handling {
             },
             move || {
                 head.assemble(query_request)
+                    .expect("sign query request")
                     .build()
                     .expect("request")
                     .send()

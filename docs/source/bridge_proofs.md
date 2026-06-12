@@ -2420,8 +2420,9 @@ regressions pin the same rejection path before audit gate hashes are
 recomputed. Public release-bundle verification also requires each lane's
 `source_adapter_gate.gate_hash` and cryptographic-evidence
 `source_adapter_gate_hash` to match the named final gate transcript
-(`solana_full_light_client_gate_hash`, `ton_full_light_client_gate_hash`,
-not just any role hash in the audit bundle. It also preserves the destination
+(`evm_source_gate_hash`, `solana_full_light_client_gate_hash`,
+`ton_full_light_client_gate_hash`, or `tron_dpos_source_gate_hash`), not just
+any role hash in the audit bundle. It also preserves the destination
 binding metadata comments emitted by the rollout helpers. EVM-family rollout
 snippets carry explicit destination network id, bridge wrapper address, and
 binding hash fields, so the all-lanes preflight recomputes the SORA -> ETH/BSC
@@ -2436,9 +2437,9 @@ leak into public readiness blockers. Imported EVM live source/destination
 summary runtime-bytecode metadata is reparsed with category-only diagnostics, so
 malformed copied bytecode cannot leak parser text into public TOML blockers.
 ETH/BSC source snippets likewise require the source live helper's RPC chain id,
-bridge address, runtime code-hash metadata, and replayable source bridge
-runtime-bytecode comment before source material can pass launch
-preflight. Solana, TON,
+bridge address, runtime code-hash metadata, replayable source bridge
+runtime-bytecode comment, and governed `evm_source_gate_hash` before source
+material can pass launch preflight. Solana, TON,
 carry explicit canonical destination binding key/hash fields, while TRON
 rollout snippets carry the binding hash, binding key, and destination network
 id derived from the governed TRON network id and destination verifier code/key
@@ -2662,6 +2663,10 @@ the raw TOML first. Public release-bundle
 verification also enforces source-adapter gate audit hash role separation, so
 gate evidence cannot be replayed from source material, source deployment,
 destination, route, or sibling audit digests in either embedded all-lanes view.
+For ETH/BSC rows, that public gate audit set is the single canonical
+`evm_source_gate_hash`; the active Ethereum release checklist requires it to be
+present, non-zero, and equal to the cryptographic-evidence gate hash before a
+bundle can be marked ready.
 It also records the user-prover SDK submission
 surface for every lane, separating the EVM/TRON Torii bridge-proof submit
 runtime-call envelopes that portal or mobile provers submit on-chain. Each
@@ -3386,6 +3391,28 @@ against exact governed source material and source-adapter deployment evidence,
 and the diagnostic variant relaxes only the destination manifest gate. Backend
 label drift, replayed deployment receipts, and source-adapter evidence mismatch
 still fail before the artifact is returned.
+Serialized source-chain proof envelope bytes now have the same governed recovery
+surface. Raw finality-proof bytes must decode to the expected source and target
+domains and pass the exact material plus source-adapter deployment gate before
+the recovered envelope is returned; production recovery also requires the
+inbound launch scope, SORA target, and deployment receipt binding. ETH/BSC/TRON
+mainnet helpers, plus audited Solana/TON mainnet helpers, keep material-only
+proofs, copied cross-domain proof bytes, non-SORA targets, and replayed
+deployment receipts fail-closed; the TRON facade also keeps production recovery
+on the transaction-Merkle source-call proof path instead of the retired
+receipt-MPT fixture path.
+Solana and TON audited source-adapter deployment builders attach the required
+full-light-client role hashes while deriving the same canonical gate hashes used
+by readiness. They reject non-lane material, all-zero role hashes, duplicate
+role hashes, and hashes replayed from existing source material before SDK or
+operator code can treat the deployment as production evidence.
+ETH/BSC source-adapter deployment readiness also derives a canonical
+`sccp:evm-family:source-gate:v1` transcript before opening the source lane.
+That gate binds the governed source bridge address/code hash, source material
+record hash, source-adapter deployment hash and receipt, adapter verifier
+commitment, receipt-log policy, and the chain-specific Ethereum beacon or BSC
+Parlia verifier prefixes. Target-domain drift, verifier-key replay,
+source-bridge runtime-code drift, and role-hash reuse leave the gate absent.
 
 Readiness reporting separates this material gate from the external verifier
 engine gate. `source_verifier_material_ready` can become true for exact

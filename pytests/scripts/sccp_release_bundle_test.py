@@ -1182,6 +1182,28 @@ def test_release_bundle_verifier_guards_bsc_route_config_canonical_manifest_inve
     verifier = load_verify_helpers()
     assert verifier._bsc_route_config_canonical_manifest_inventory_errors() == []
 
+    sparse_script = tmp_path / "sccp_bsc_taira_xor_deploy.mjs"
+    sparse_script.write_text(
+        "function canonicalRecordString(value, label) {}\n",
+        encoding="utf-8",
+    )
+    errors = verifier._bsc_route_config_canonical_manifest_inventory_errors(
+        (
+            (
+                sparse_script,
+                verifier.BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and str(sparse_script) in error
+        and "missing marker: function normalizeCanonicalManifestText(value, label)"
+        in error
+        for error in errors
+    )
+
     sparse_test = tmp_path / "sccp_bsc_taira_xor_deploy.test.mjs"
     sparse_test.write_text(
         "BSC route-config rejects malformed or foreign route manifests\n",
@@ -1205,6 +1227,31 @@ def test_release_bundle_verifier_guards_bsc_route_config_canonical_manifest_inve
     assert any(
         "SCCP BSC route-config canonical-manifest source inventory" in error
         and "missing marker: chainIdHex: \"0X61\"" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and 'missing marker: productionReady: "true"' in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and "missing marker: fullTomlReady: 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and "missing marker: disabledReason: 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and "missing marker: contractAddress: 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP BSC route-config canonical-manifest source inventory" in error
+        and "missing marker: settlement\\.contractAlias aliases disagree" in error
         for error in errors
     )
     assert any(
@@ -1295,12 +1342,26 @@ def test_release_bundle_verifier_guards_tron_route_config_canonical_manifest_inv
     )
     assert any(
         "SCCP TRON route-config canonical-manifest source inventory" in error
+        and "missing marker: function readOptionalCanonicalManifestText(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
         and "missing marker: POST_DEPLOY_LIVE_EVIDENCE_BLOCKER_KEYS" in error
         for error in errors
     )
     assert any(
         "SCCP TRON route-config canonical-manifest source inventory" in error
         and "missing marker: route manifest tronNetwork must be canonical lowercase text"
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and (
+            "missing marker: route manifest postDeployLiveEvidence.fullTomlReady "
+            "must be true or false"
+        )
         in error
         for error in errors
     )
@@ -1322,6 +1383,42 @@ def test_release_bundle_verifier_guards_tron_route_config_canonical_manifest_inv
         "SCCP TRON route-config canonical-manifest source inventory" in error
         and str(sparse_test) in error
         and "missing marker: sourceEventTransactionProductionBlockers: [" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and 'missing marker: productionReady: "true"' in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and 'missing marker: postDeployReadbackChecked: "true"' in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and "missing marker: fullTomlReady: 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and "missing marker: disabledReason: 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and "missing marker: contractAddress: 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and "missing marker: settlement\\.contractAlias aliases disagree" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON route-config canonical-manifest source inventory" in error
+        and 'missing marker: settlement_contract_address = "tron-settlement-v1"'
+        in error
         for error in errors
     )
     assert any(
@@ -1985,7 +2082,7 @@ def test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory
     )
     assert any(
         "SCCP active-launch checklist schema source inventory" in error
-        and "missing marker: active EVM source adapter gate hash must be empty"
+        and "missing marker: active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string"
         in error
         for error in errors
     )
@@ -2037,7 +2134,7 @@ def test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory
     assert any(
         "SCCP active-launch checklist schema source inventory" in error
         and str(sparse_report) in error
-        and "missing marker: active EVM source adapter gate audit hashes must be empty"
+        and "missing marker: active EVM source adapter gate audit hashes must contain only evm_source_gate_hash"
         in error
         for error in report_errors
     )
@@ -20497,7 +20594,7 @@ def test_release_bundle_verifier_recomputes_active_checklist_with_exact_metadata
         for blocker in item_by_id["governed_deployment_evidence"]["blockers"]
     )
     assert any(
-        "active EVM source adapter gate summary must not be required" in blocker
+        "active EVM source adapter gate summary must be required" in blocker
         for blocker in item_by_id["governed_deployment_evidence"]["blockers"]
     )
     assert any(
@@ -24247,11 +24344,12 @@ def test_release_bundle_verifier_rejects_source_gate_domain_policy_drift(
 
     def mutate_lanes(lanes: list[dict]) -> None:
         by_domain = {lane["domain"]: lane for lane in lanes}
-        open_gate = by_domain[1]["source_adapter_gate"]
-        open_gate["ready"] = False
-        open_gate["gate_hash"] = forged_gate_hash
-        open_gate["audit_hashes"] = {"operator_override": forged_gate_hash}
-        open_gate["blockers"] = ["operator override pending"]
+        eth_gate = by_domain[1]["source_adapter_gate"]
+        eth_gate["ready"] = False
+        eth_gate["gate_hash"] = forged_gate_hash
+        eth_gate["audit_hashes"] = {"operator_override": forged_gate_hash}
+        eth_gate["blockers"] = ["operator override pending"]
+        by_domain[2]["source_adapter_gate"]["required"] = False
         by_domain[3]["source_adapter_gate"]["required"] = False
 
     output_dir = build_ready_bundle(tmp_path)
@@ -24288,19 +24386,19 @@ def test_release_bundle_verifier_rejects_source_gate_domain_policy_drift(
         "readiness report embedded evidence lane domain 1 source_adapter_gate",
         "all-lanes summary lane domain 1 source_adapter_gate",
     ):
-        assert f"{label} ready must be true when gate is not required" in (
-            verified.stdout
-        )
-        assert f"{label} audit_hashes must be empty when gate is not required" in (
-            verified.stdout
-        )
-        assert f"{label} gate_hash must be empty when gate is not required" in (
-            verified.stdout
-        )
-        assert f"{label} blockers must be empty when gate is not required" in (
+        assert (
+            f"{label} audit_hashes contains unexpected field: operator_override"
+        ) in verified.stdout
+        assert (
+            f"{label} audit_hashes missing field: evm_source_gate_hash"
+        ) in verified.stdout
+        assert f"{label} ready must be true when gate is required" in verified.stdout
+        assert f"{label} blockers must be empty when gate is required" in (
             verified.stdout
         )
     for label in (
+        "readiness report embedded evidence lane domain 2 source_adapter_gate",
+        "all-lanes summary lane domain 2 source_adapter_gate",
         "readiness report embedded evidence lane domain 3 source_adapter_gate",
         "all-lanes summary lane domain 3 source_adapter_gate",
     ):
@@ -26489,7 +26587,7 @@ def test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift(
         row for row in report["cryptographic_evidence"] if row["domain"] == active_domain
     )
     active_row["route_canary_evidence_source"] = "operator_review_note"
-    active_row["source_adapter_gate_required"] = True
+    active_row["source_adapter_gate_required"] = False
     active_row["source_adapter_gate_hash"] = forged_hash
     active_row["source_adapter_gate_audit_hashes"] = {"operator_override": forged_hash}
     report_path.write_text(
@@ -26514,7 +26612,7 @@ def test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift(
     ) in verified.stdout
     assert (
         "readiness report cryptographic evidence row "
-        "source_adapter_gate_required must be false for this domain"
+        "source_adapter_gate_required must be true for this domain"
     ) in verified.stdout
     assert (
         "readiness report cryptographic_evidence does not match embedded lane evidence"
@@ -30500,6 +30598,15 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
         in error
         for error in errors
     )
+    assert any(
+        "SCCP unready transparent-proof config-only source inventory" in error
+        and (
+            "missing marker: BSC route-config rejects malformed allow-unready "
+            "option values"
+        )
+        in error
+        for error in errors
+    )
 
     sparse_tron_test = tmp_path / "sccp_tron_taira_xor_deploy.test.mjs"
     sparse_tron_test.write_text(
@@ -30521,6 +30628,15 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
         and (
             'missing marker: buildTairaXorRouteConfigToml(manifest, { '
             '"allow-unready": "true" })'
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP unready transparent-proof config-only source inventory" in error
+        and (
+            "missing marker: TRON route-config rejects malformed allow-unready "
+            "option values"
         )
         in error
         for error in errors
@@ -30570,6 +30686,101 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
     assert any(
         "SCCP unready transparent-proof config-only source inventory" in error
         and "contains forbidden environment override" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_tron_deploy_operator_boolean_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin TRON operator boolean guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._tron_deploy_operator_boolean_inventory_errors() == []
+
+    sparse_script = tmp_path / "sccp_tron_taira_xor_deploy.mjs"
+    sparse_script.write_text(
+        "function optionEnabled(options, key, fallback = false) {}\n",
+        encoding="utf-8",
+    )
+    errors = verifier._tron_deploy_operator_boolean_inventory_errors(
+        (
+            (
+                sparse_script,
+                verifier.TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS[0][1],
+            ),
+        )
+    )
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and str(sparse_script) in error
+        and 'missing marker: if (options[key] === "true") return true;'
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and 'missing marker: throw new Error("--broadcast must be true or false");'
+        in error
+        for error in errors
+    )
+
+    sparse_test = tmp_path / "sccp_tron_taira_xor_deploy.test.mjs"
+    sparse_test.write_text(
+        "TRON deploy operator booleans reject malformed option values\n",
+        encoding="utf-8",
+    )
+    errors = verifier._tron_deploy_operator_boolean_inventory_errors(
+        (
+            (
+                sparse_test,
+                verifier.TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS[1][1],
+            ),
+        )
+    )
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and str(sparse_test) in error
+        and "missing marker: /--force must be true or false/u" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and str(sparse_test) in error
+        and (
+            "missing marker: TRON route-manifest readiness booleans reject "
+            "malformed option values"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and "missing marker: /--production-ready must be true or false/u" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and 'missing marker: "require-optional-packages"' in error
+        for error in errors
+    )
+
+    verifier.TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS = (
+        (
+            sparse_test,
+            verifier.TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS[1][1],
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "SCCP TRON deploy operator boolean source inventory" in error
+        and "missing marker: /--force must be true or false/u" in error
         for error in verified["errors"]
     )
 

@@ -1855,10 +1855,14 @@ redistributable schemas, and official trust/revocation bundles.
   internally inconsistent ML-DSA secrets return `KeyGen` instead of panicking;
   ML-DSA seeded-keygen now rejects non-empty all-zero seed material before HKDF,
   random ML-DSA keygen draws checked OS seed material through the same
-  constructor instead of the infallible PQ random keypair path, HKDF expansion
+  constructor instead of the infallible PQ random keypair path and validates
+  generated public/secret key consistency before return, HKDF expansion
   propagates `Error::KeyGen` through the existing `Result` path instead of
-  relying on a panic-only assertion, and its S2 nonce offset conversion now uses
-  the same `Error::KeyGen` route instead of a const-conversion `expect`;
+  relying on a panic-only assertion, top-level ML-DSA signing delegates to the
+  checked SoraNet PQ hedged signer with RNG-injected failure and all-zero seed
+  regressions, direct ML-DSA backend signatures are validated before wrapper
+  construction, and its S2 nonce offset conversion now uses the same
+  `Error::KeyGen` route instead of a const-conversion `expect`;
   GOST deterministic nonce generation now feeds the domain tag, private scalar,
   message scalar, and optional extra entropy into HMAC-Streebog as separate
   components and streams the HMAC inner hash directly while preserving the
@@ -1976,7 +1980,8 @@ redistributable schemas, and official trust/revocation bundles.
   public-key, secret-key, and detached-signature material before backend use,
   reject all-zero deterministic `HedgedRngSeed` material before seeded keygen,
   reject all-zero caller/OS seed draws before `*_from_rng` keygen or signing,
-  and expose fallible public-key reconstruction from secret material;
+  reject all-zero generated backend coins before direct keypair/signing PQClean
+  calls, and expose fallible public-key reconstruction from secret material;
   BLS same-message aggregate and preaggregated verification now reject
   duplicate public keys and public-key aggregates that cancel to the identity
   before verification, and the public PoP-gated same-message wrappers reject
@@ -2065,8 +2070,10 @@ redistributable schemas, and official trust/revocation bundles.
 	  checked tag/payload accessors, so malformed compact state returns
 	  `ParseError` instead of relying on panic-only invariant accessors;
 	  `KeyPair::new` also reuses the checked public-key payload for ML-DSA
-	  pair validation instead of re-entering the compatibility
-	  `PublicKey::to_bytes()` helper after compact parsing has succeeded;
+	  pair validation and compares deterministic public-key recovery output
+	  instead of re-entering the compatibility `PublicKey::to_bytes()` helper
+	  or issuing a randomized probe signature after compact parsing has
+	  succeeded;
 	  `PublicKey::try_to_bytes()` is now public, giving downstream
 	  `Result`-returning paths a checked algorithm/payload accessor without
 	  relying on the infallible compatibility wrapper; the legacy signer-backed
@@ -2319,7 +2326,11 @@ redistributable schemas, and official trust/revocation bundles.
   return `Result` instead of panicking after validation, and deterministic
   ML-KEM keygen/encapsulation reject all-zero `HedgedRngSeed` material before
   seeded RNG construction while ML-KEM caller/OS seed draws reject all-zero
-  material before `*_from_rng` keygen or encapsulation and seeded
+  material before `*_from_rng` keygen or encapsulation, direct ML-KEM
+  keypair/encapsulation reject all-zero generated backend coins before PQClean,
+  direct ML-KEM keypair outputs validate generated public/secret consistency
+  before return, direct ML-KEM backend shared-secret and ciphertext outputs
+  reject all-zero material before wrapper construction, and seeded
   encapsulation preserves invalid-public-key preflight order;
   nonzero PQClean ML-KEM
   backend statuses now surface as
@@ -2371,7 +2382,8 @@ redistributable schemas, and official trust/revocation bundles.
   X25519 low-order admission;
   standalone ML-KEM public-key validation, secret-key validation,
   encapsulation, and decapsulation now reject all-zero public keys, all-zero
-  secret keys, all-zero embedded secret-key public keys, noncanonical 12-bit
+  secret keys, all-zero embedded secret-key public keys, all-zero secret-key
+  implicit-rejection seeds, all-zero ciphertexts, noncanonical 12-bit
   public-key coefficients, and noncanonical secret-key private coefficients,
   and secret-key validation plus decapsulation reject corrupted embedded `H(ek)`
   public-key hashes before implicit rejection can derive divergent transport
@@ -2621,7 +2633,9 @@ redistributable schemas, and official trust/revocation bundles.
   hedged seed construction now also accepts caller-supplied `TryCryptoRng`
   seed entropy, and ML-DSA keypair/signing plus ML-KEM keypair/encapsulation
   OS helpers delegate through the same fail-closed required-seed boundary
-  before deriving PQ material;
+  before deriving PQ material, with direct ML-DSA and ML-KEM backend-coin
+  boundaries also rejecting all-zero generated coin material before PQClean
+  calls;
   admission-token verifier construction exposes a
   fallible path that rejects malformed issuer public keys before fingerprint
   derivation or runtime state admission, and the compatibility constructor now
@@ -5079,7 +5093,37 @@ redistributable schemas, and official trust/revocation bundles.
     deterministic Ed25519 batch precheck is already implemented, and the
     crypto-layer direct/preparsed Ed25519 batch APIs now filter exact
     verify-cache hits before signature parsing; the thread-local exact
-    verify-ok cache also keeps two colliding entries per slot. The ML-DSA key
+    verify-ok cache also keeps two colliding entries per slot. Peer-trust gossip
+    entry signing now routes through `Signature::try_new` and skips logged
+    per-entry failures instead of unwinding the broadcast loop; local Sumeragi
+    consensus vote signing now routes through `Signature::try_new` and skips
+    logged vote-emission failures instead of unwinding the commit/precommit
+    path; contract
+    manifest provenance signing now exposes `ContractManifest::try_signed`, and
+    the CLI build/deploy, Torii app API deployment prep, and Connect Norito
+    governance propose-deploy bridge paths propagate signing failures through
+    existing `Result` surfaces; runtime-upgrade manifest provenance signing now
+    exposes `RuntimeUpgradeManifest::try_signed` while preserving canonical
+    payload stability after provenance attachment; queue-backed Soracloud
+    runtime mutation submissions and Nexus fee relay worker submissions now use
+    `TransactionBuilder::try_sign` helpers and return endpoint-specific `eyre`
+    context before acceptance/enqueueing on backend signing failure; CLI
+    contract simulation now
+    signs its locally built transaction through `TransactionBuilder::try_sign`
+    and returns a contextual command error on backend signing failure; Torii
+    proof-record signed-query construction now uses
+    `QueryRequestWithAuthority::try_sign`, and default streaming key material in
+    test/restored state construction uses nonzero deterministic seed material
+    under the all-zero seed admission policy; client query request body assembly
+    now uses `QueryRequestWithAuthority::try_sign` and returns a contextual
+    `QueryError` before HTTP dispatch on backend signing failure; client
+    transaction build/sign helpers now use `TransactionBuilder::try_sign` and
+    return contextual `eyre` errors from fallible construction/submission paths
+    while retaining compatibility wrappers for existing infallible callers;
+    split and IVM contract deploy CLI helpers now use
+    `TransactionBuilder::try_sign` for deploy-envelope transaction construction
+    and return contextual command errors on backend signing failure. The
+    ML-DSA key
     path now rejects inconsistent imported secrets and exposes
     `KeyPair::try_from_seed`, `KeyPair::try_random`,
     `KeyPair::try_random_with_algorithm`, `PublicKey::try_to_*`,

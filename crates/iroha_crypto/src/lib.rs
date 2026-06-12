@@ -2192,11 +2192,6 @@ impl MlDsaSecretKey {
         self.inner.secret.as_bytes().to_vec()
     }
 
-    fn sign(&self, payload: &[u8]) -> Vec<u8> {
-        self.try_sign(payload)
-            .expect("ML-DSA signing should succeed for a valid private key and payload")
-    }
-
     fn try_sign(&self, payload: &[u8]) -> Result<Vec<u8>, Error> {
         let mut rng = rand::rngs::OsRng;
         self.try_sign_with_rng(payload, &mut rng)
@@ -3531,8 +3526,8 @@ mod tests {
         assert_eq!(key.strong_count(), 2, "cloning increments strong count");
 
         let message = b"iroha:ml-dsa:test-arc-sharing";
-        let sig_original = key.sign(message);
-        let sig_clone = cloned.sign(message);
+        let sig_original = key.try_sign(message).expect("original ML-DSA signature");
+        let sig_clone = cloned.try_sign(message).expect("clone ML-DSA signature");
         Signature::from_bytes(&sig_original)
             .verify(&public, message)
             .expect("original ML-DSA signature should verify");
@@ -3554,7 +3549,7 @@ mod tests {
             .expect_err("ML-DSA signing RNG failure must fail closed");
 
         assert!(
-            matches!(err, Error::Signing(message) if message.contains("hedged RNG seed draw failed")),
+            matches!(err, Error::Signing(ref message) if message.contains("hedged RNG seed draw failed")),
             "unexpected error: {err:?}"
         );
     }
@@ -3569,7 +3564,7 @@ mod tests {
             .expect_err("all-zero ML-DSA signing seed material must fail closed");
 
         assert!(
-            matches!(err, Error::Signing(message) if message.contains("all-zero material")),
+            matches!(err, Error::Signing(ref message) if message.contains("all-zero material")),
             "unexpected error: {err:?}"
         );
     }

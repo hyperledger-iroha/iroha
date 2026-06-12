@@ -2664,7 +2664,9 @@ impl Run for BuildManifestArgs {
             let private: PrivateKey = hex_key.parse().wrap_err("invalid --sign-with")?;
             let kp =
                 KeyPair::from_private_key(private).wrap_err("derive signing keypair failed")?;
-            manifest = manifest.signed(&kp);
+            manifest = manifest
+                .try_signed(&kp)
+                .wrap_err("sign contract manifest failed")?;
         }
         let rendered = norito::json::to_json_pretty(&manifest)?;
         if let Some(path) = self.out {
@@ -5571,7 +5573,7 @@ mod tests {
 
     impl TestContext {
         fn new(account: AccountId) -> Self {
-            let key_pair = KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519);
+            let key_pair = KeyPair::from_seed(vec![0x42u8; 32], Algorithm::Ed25519);
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account,
@@ -5687,7 +5689,8 @@ impl Run for SimulateArgs {
         let tx = TransactionBuilder::new(chain_id, authority.clone())
             .with_metadata(metadata.clone())
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(code.clone())))
-            .sign(&private_key);
+            .try_sign(&private_key)
+            .wrap_err("sign simulated contract transaction failed")?;
 
         let decoded = ivm::ivm_cache::IvmCache::decode_stream(&code[summary.code_offset..])
             .map_err(|err| eyre!("instruction decode failed: {err}"))?;

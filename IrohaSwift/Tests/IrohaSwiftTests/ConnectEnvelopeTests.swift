@@ -38,6 +38,14 @@ final class ConnectEnvelopeTests: XCTestCase {
     func testDecodeSignResultOkRejectsConfusableAlgorithms() {
         let signature = Data(repeating: 0x55, count: 64).base64EncodedString()
         for algorithm in [
+            "",
+            " ",
+            " ed25519",
+            "ed25519 ",
+            "\ted25519",
+            "ed25519\n",
+            "\u{00A0}ed25519",
+            "ed25519\u{00A0}",
             "secp256k1",
             "ed\t25519",
             "ed\u{200B}25519",

@@ -178,6 +178,22 @@ def test_algorithm_labels_reject_surrounding_whitespace_across_public_api() -> N
                 call()
 
 
+@pytest.mark.parametrize(
+    "label",
+    [
+        "ed\00025519",
+        "ed\u001f25519",
+        "ed\u007f25519",
+        "ed\u200b25519",
+        "\u0435d25519",
+        "ed\uff0d25519",
+    ],
+)
+def test_algorithm_labels_reject_control_and_confusable_native_inputs(label: str) -> None:
+    with pytest.raises(ValueError, match="unsupported crypto algorithm"):
+        normalize_crypto_algorithm(label)
+
+
 def test_asset_definition_id_builds_canonical_address_from_domain_and_name() -> None:
     asset = crypto_module.AssetDefinitionId.from_domain_and_name("boi.is", "ds")
 

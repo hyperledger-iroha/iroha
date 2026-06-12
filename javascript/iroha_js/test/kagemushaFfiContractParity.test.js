@@ -1982,6 +1982,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
         "native.kagemushaRecursiveSpendCompactPaymentTokenFromBundle(",
         "native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(",
         "native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
+        "Object.is(blockHeight, -0)",
         "/\\b(?:archive|Norito|probe)\\b/i.test(error.message)",
         "toOwnedKagemushaArchiveBuffer",
         'const compactToken = toOwnedKagemushaArchiveBuffer(',
@@ -6021,6 +6022,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmRunner,
+    /--tests org\.hyperledger\.iroha\.sdk\.nexus\.NexusAppClientTest[\s\S]*--tests org\.hyperledger\.iroha\.android\.nexus\.NexusAppClientTest/,
+    "Kagemusha JVM SDK runner must exercise Kotlin and Android Nexus wallet signature-algorithm exactness tests",
+  );
+  assert.match(
+    jvmRunner,
     /--tests org\.hyperledger\.iroha\.sdk\.client\.stream\.ToriiEventStreamClientTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.client\.stream\.ToriiEventStreamClientTests/,
     "Kagemusha JVM SDK runner must exercise Kotlin and Android Torii event-stream verifier filter exactness tests",
   );
@@ -6085,8 +6091,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRunner,
-    /export VIRTUAL_ENV="\$\{VENV_DIR\}"[\s\S]*export PATH="\$\{VENV_DIR\}\/bin:\$\{PATH\}"[\s\S]*"\$\{VENV_DIR\}\/bin\/python" -m maturin develop --release[\s\S]*tests\/offline_cash_test\.py[\s\S]*tests\/test_address_format\.py/,
-    "Kagemusha Python SDK runner must activate the selected venv before maturin and run offline cash issuer-key exactness tests",
+    /export VIRTUAL_ENV="\$\{VENV_DIR\}"[\s\S]*export PATH="\$\{VENV_DIR\}\/bin:\$\{PATH\}"[\s\S]*"\$\{VENV_DIR\}\/bin\/python" -m maturin develop --release[\s\S]*tests\/test_nexus_app\.py[\s\S]*tests\/offline_cash_test\.py[\s\S]*tests\/test_address_format\.py/,
+    "Kagemusha Python SDK runner must activate the selected venv before maturin and run Nexus wallet signature and offline cash issuer-key exactness tests",
   );
   assert.match(
     pythonRunner,
@@ -6120,7 +6126,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRunner,
-    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives\|fromAccount rejects control and Unicode-confusable curve algorithm aliases\|offline cash configuration snapshot requires cached issuer key and ABI\|canonical request signing: rejects padded auth fields\|streamEvents rejects unsupported production backend event filters before fetch\|streamEvents rejects malformed verifying key event names before fetch\|streamEvents rejects malformed proof event hashes before fetch\|ZK-ACE verifier-key references reject padded selector metadata\|privacy proof envelopes preserve pending production backend tags\|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations\|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags\|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend\|verifyIdentifierResolutionReceipt matches shared receipt vectors[\s\S]*test\/address\.test\.js[\s\S]*test\/canonicalRequest\.test\.js[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/instructionBuilders\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/offlineCashLifecycle\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/toriiClient\.identifier\.test\.js[\s\S]*test\/toriiClient\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
-    "Kagemusha JavaScript SDK runner must exercise recursive spend, address exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, verifier-key exactness, identifier receipt exactness, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
+    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives\|fromAccount rejects control and Unicode-confusable curve algorithm aliases\|offline cash configuration snapshot requires cached issuer key and ABI\|canonical request signing: rejects padded auth fields\|streamEvents rejects unsupported production backend event filters before fetch\|streamEvents rejects malformed verifying key event names before fetch\|streamEvents rejects malformed proof event hashes before fetch\|ZK-ACE verifier-key references reject padded selector metadata\|privacy proof envelopes preserve pending production backend tags\|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations\|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags\|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend\|verifyIdentifierResolutionReceipt matches shared receipt vectors\|NexusAppClient rejects non-Ed25519 wallet signatures\|NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags[\s\S]*test\/address\.test\.js[\s\S]*test\/canonicalRequest\.test\.js[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/instructionBuilders\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/nexusAppClient\.test\.js[\s\S]*test\/offlineCashLifecycle\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/toriiClient\.identifier\.test\.js[\s\S]*test\/toriiClient\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
+    "Kagemusha JavaScript SDK runner must exercise recursive spend, address exactness, Nexus wallet signature exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, verifier-key exactness, identifier receipt exactness, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
   );
 });

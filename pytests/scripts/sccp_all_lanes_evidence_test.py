@@ -1541,10 +1541,18 @@ def complete_bundle(module):
             deployment["adapter_verifier_vk_hash"] = (
                 "0x" + eth_module.eth_source_adapter_verifier_vk_hash().hex()
             )
+            args = module._evm_source_bridge_args(material, deployment)
+            deployment["evm_source_gate_hash"] = (
+                "0x" + eth_module.eth_source_gate_hash(args).hex()
+            )
         if profile.chain == "bsc":
             bsc_module = module._load_sibling_module("sccp_bsc_source_bridge_evidence.py")
             deployment["adapter_verifier_vk_hash"] = (
                 "0x" + bsc_module.bsc_source_adapter_verifier_vk_hash().hex()
+            )
+            args = module._evm_source_bridge_args(material, deployment)
+            deployment["evm_source_gate_hash"] = (
+                "0x" + bsc_module.bsc_source_gate_hash(args).hex()
             )
         if profile.solana_full_light_client_audit_required:
             solana_module = module._load_sibling_module("sccp_solana_source_state_evidence.py")
@@ -2242,7 +2250,16 @@ def test_all_lanes_evidence_bundle_is_ready():
         assert lane["production_ready"] is True
         assert lane["blockers"] == []
         source_adapter_gate = lane["source_adapter_gate"]
-        if lane["chain"] == "sol":
+        if lane["chain"] in ("eth", "bsc"):
+            deployment = deployments_by_domain[lane["domain"]]
+            assert source_adapter_gate["required"] is True
+            assert source_adapter_gate["ready"] is True
+            assert source_adapter_gate["gate_hash"] == deployment[
+                "evm_source_gate_hash"
+            ]
+            assert set(source_adapter_gate["audit_hashes"]) == {"evm_source_gate_hash"}
+            assert source_adapter_gate["blockers"] == []
+        elif lane["chain"] == "sol":
             deployment = deployments_by_domain[lane["domain"]]
             assert source_adapter_gate["required"] is True
             assert source_adapter_gate["ready"] is True
@@ -2275,14 +2292,6 @@ def test_all_lanes_evidence_bundle_is_ready():
                 "tron_dpos_source_gate_hash"
             }
             assert source_adapter_gate["blockers"] == []
-        else:
-            assert source_adapter_gate == {
-                "required": False,
-                "ready": True,
-                "gate_hash": "",
-                "audit_hashes": {},
-                "blockers": [],
-            }
         evm_live_metadata = lane["evm_live_metadata"]
         if lane["chain"] == "eth":
             assert evm_live_metadata == {
@@ -6163,11 +6172,19 @@ def test_all_lanes_evidence_rejects_source_gate_audit_hash_role_reuse():
     tron_deployment["tron_dpos_source_gate_hash"] = tron_destination[
         "destination_binding_hash"
     ]
+    _, bsc_deployment, _ = by_domain[module.SCCP_DOMAIN_BSC]
+    bsc_deployment["evm_source_gate_hash"] = bsc_deployment[
+        "deployment_receipt_hash"
+    ]
 
     summary = module.validate_evidence_bundle(records)
 
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
+    assert (
+        "domain 2 (bsc): source adapter deployment role hash "
+        "evm_source_gate_hash must not reuse deployment_receipt_hash"
+    ) in blockers
     assert (
         "domain 3 (sol): source_adapter_gate hash role "
         "audit_hashes.solana_tower_replay_verifier_hash must not reuse "
@@ -6185,10 +6202,41 @@ def test_all_lanes_evidence_rejects_source_gate_audit_hash_role_reuse():
     ) in blockers
 
 
+def test_all_lanes_evidence_rejects_missing_evm_source_gate_hash():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+    records["sccp_source_adapter_engine_deployments"][eth_index].pop(
+        "evm_source_gate_hash"
+    )
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    blockers = "\n".join(summary["blockers"])
+    assert "domain 1 (eth): evm_source_gate_hash" in blockers
+    eth_gate = next(
+        lane["source_adapter_gate"]
+        for lane in summary["lanes"]
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    assert eth_gate["required"] is True
+    assert eth_gate["ready"] is False
+    assert "evm_source_gate_hash must be a non-zero 32-byte hex value" in (
+        "\n".join(eth_gate["blockers"])
+    )
+
+
 def test_all_lanes_evidence_recomputes_audit_and_tron_config_hashes():
     module = load_evidence_module()
     records = complete_bundle(module)
 
+    records["sccp_source_adapter_engine_deployments"][0][
+        "evm_source_gate_hash"
+    ] = hex32(0xAC)
+    records["sccp_source_adapter_engine_deployments"][1][
+        "evm_source_gate_hash"
+    ] = hex32(0xAD)
     records["sccp_source_adapter_engine_deployments"][2][
         "solana_full_light_client_gate_hash"
     ] = hex32(0xAB)
@@ -6205,16 +6253,28 @@ def test_all_lanes_evidence_recomputes_audit_and_tron_config_hashes():
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
     assert "domain 3 (sol): solana_full_light_client_gate_hash does not match" in blockers
+    assert "domain 1 (eth): evm_source_gate_hash does not match" in blockers
+    assert "domain 2 (bsc): evm_source_gate_hash does not match" in blockers
     assert "domain 4 (ton): ton_full_light_client_gate_hash does not match" in blockers
     assert "domain 5 (tron): TRON DPoS source gate cannot be recomputed" in blockers
     assert "domain 5 (tron): source_bridge_config_hash does not match" in blockers
     lanes = {lane["domain"]: lane for lane in summary["lanes"]}
+    eth_gate = lanes[module.SCCP_DOMAIN_ETH]["source_adapter_gate"]
+    bsc_gate = lanes[module.SCCP_DOMAIN_BSC]["source_adapter_gate"]
     sol_gate = lanes[module.SCCP_DOMAIN_SOL]["source_adapter_gate"]
     ton_gate = lanes[module.SCCP_DOMAIN_TON]["source_adapter_gate"]
     tron_gate = lanes[module.SCCP_DOMAIN_TRON]["source_adapter_gate"]
+    assert eth_gate["ready"] is False
+    assert bsc_gate["ready"] is False
     assert sol_gate["ready"] is False
     assert ton_gate["ready"] is False
     assert tron_gate["ready"] is False
+    assert "evm_source_gate_hash does not match" in "\n".join(
+        eth_gate["blockers"]
+    )
+    assert "evm_source_gate_hash does not match" in "\n".join(
+        bsc_gate["blockers"]
+    )
     assert "solana_full_light_client_gate_hash does not match" in "\n".join(
         sol_gate["blockers"]
     )
@@ -6249,7 +6309,11 @@ def test_all_lanes_evidence_redacts_source_gate_recompute_failures(
             tron_source_bridge_config_hash=fail_recompute,
         ),
         "sccp_eth_source_bridge_evidence.py": SimpleNamespace(
+            eth_source_gate_hash=fail_recompute,
             eth_source_bridge_config_hash=fail_recompute,
+        ),
+        "sccp_bsc_source_bridge_evidence.py": SimpleNamespace(
+            bsc_source_gate_hash=fail_recompute,
         ),
     }
 
@@ -6260,6 +6324,30 @@ def test_all_lanes_evidence_redacts_source_gate_recompute_failures(
     )
 
     cases = (
+        (
+            lambda material, deployment: module._check_evm_source_gate(
+                module.LANE_PROFILES[module.SCCP_DOMAIN_ETH],
+                material,
+                deployment,
+            ),
+            (
+                records["sccp_source_verifier_materials"][0],
+                records["sccp_source_adapter_engine_deployments"][0],
+            ),
+            "EVM source gate cannot be recomputed",
+        ),
+        (
+            lambda material, deployment: module._check_evm_source_gate(
+                module.LANE_PROFILES[module.SCCP_DOMAIN_BSC],
+                material,
+                deployment,
+            ),
+            (
+                records["sccp_source_verifier_materials"][1],
+                records["sccp_source_adapter_engine_deployments"][1],
+            ),
+            "EVM source gate cannot be recomputed",
+        ),
         (
             module._check_solana_full_light_client_gate,
             (
@@ -6343,6 +6431,7 @@ def test_all_lanes_evidence_rejects_lane_foreign_audit_fields():
     eth_deployment["solana_tower_replay_verifier_hash"] = hex32(0x90)
     eth_deployment["solana_full_light_client_gate_hash"] = hex32(0x91)
     solana_deployment = records["sccp_source_adapter_engine_deployments"][2]
+    solana_deployment["evm_source_gate_hash"] = hex32(0x96)
     solana_deployment["ton_masterchain_config_verifier_hash"] = hex32(0x92)
     solana_deployment["ton_full_light_client_gate_hash"] = hex32(0x93)
     bsc_deployment = records["sccp_source_adapter_engine_deployments"][1]
@@ -6362,6 +6451,10 @@ def test_all_lanes_evidence_rejects_lane_foreign_audit_fields():
     )
     assert (
         "domain 3 (sol): ton_masterchain_config_verifier_hash must be empty for this lane"
+        in blockers
+    )
+    assert (
+        "domain 3 (sol): evm_source_gate_hash must be empty for this lane"
         in blockers
     )
     assert (
@@ -6978,7 +7071,7 @@ def test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay():
     ) in blockers
 
 
-def test_all_lanes_release_checklist_rejects_non_required_source_gate_material():
+def test_all_lanes_release_checklist_rejects_evm_source_gate_policy_downgrade():
     module = load_evidence_module()
     lane = {
         "domain": module.SCCP_DOMAIN_ETH,
@@ -7017,6 +7110,9 @@ def test_all_lanes_release_checklist_rejects_non_required_source_gate_material()
 
     assert checklist["ready"] is False
     assert items["governed_deployment_evidence"]["ready"] is False
+    assert (
+        "domain 1 (eth): source adapter gate required flag must match lane policy"
+    ) in blockers
     assert (
         "domain 1 (eth): source adapter gate hash must be empty when not "
         "required"

@@ -497,6 +497,10 @@ def test_bsc_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
         in rendered
     )
     assert 'deployment_receipt_hash = "0x' + "aa" * 32 + '"' in rendered
+    assert (
+        'evm_source_gate_hash = "0x' + module.bsc_source_gate_hash(args).hex() + '"'
+        in rendered
+    )
     assert "source_bridge_network_id" not in rendered
     assert "source_bridge_owner_address" not in rendered
     assert "source_bridge_config_hash" not in rendered
@@ -518,6 +522,7 @@ def test_bsc_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
 
     testnet_rendered = module.render_toml(testnet_args)
     assert '# sccp_evm_source_rpc_chain_id = "97"' in testnet_rendered
+    assert "evm_source_gate_hash" not in testnet_rendered
     assert 'source_chain = "bsc-testnet"' in testnet_rendered
     assert (
         'source_trust_anchor_id = "sccp:bsc:source-trust-anchor:'

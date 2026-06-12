@@ -81,6 +81,7 @@ class LaneProfile:
     source_bridge_emitter_id: str = ""
     destination_verifier_key_hash_required: bool = False
     eth_source_bridge_config_required: bool = False
+    evm_source_gate_required: bool = False
     tron_source_bridge_config_required: bool = False
     solana_full_light_client_audit_required: bool = False
     ton_full_light_client_audit_required: bool = False
@@ -113,6 +114,7 @@ LANE_PROFILES: dict[int, LaneProfile] = {
         source_bridge_emitter_id="sccp:eth:source-bridge-emitter:ethereum-mainnet:v1",
         destination_verifier_key_hash_required=True,
         eth_source_bridge_config_required=True,
+        evm_source_gate_required=True,
     ),
     SCCP_DOMAIN_BSC: LaneProfile(
         domain=SCCP_DOMAIN_BSC,
@@ -130,6 +132,7 @@ LANE_PROFILES: dict[int, LaneProfile] = {
         route_allowlist_id="sccp:bsc:route-allowlist:bsc-mainnet:v1",
         source_bridge_emitter_id="sccp:bsc:source-bridge-emitter:bsc-mainnet:v1",
         destination_verifier_key_hash_required=True,
+        evm_source_gate_required=True,
     ),
     SCCP_DOMAIN_SOL: LaneProfile(
         domain=SCCP_DOMAIN_SOL,
@@ -210,6 +213,7 @@ TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS = (
     "ton_shard_accounts_dictionary_verifier_hash",
     "ton_full_light_client_gate_hash",
 )
+EVM_SOURCE_GATE_FIELDS = ("evm_source_gate_hash",)
 TRON_DPOS_SOURCE_GATE_FIELDS = ("tron_dpos_source_gate_hash",)
 EVM_SOURCE_BRIDGE_LIVE_COMMENT_FIELDS = (
     "_comment_evm_source_rpc_chain_id",
@@ -324,6 +328,7 @@ SOURCE_ADAPTER_DEPLOYMENT_ROLE_HASH_FIELDS = (
     "adapter_verifier_vk_hash",
     "deployment_receipt_hash",
 )
+EVM_SOURCE_GATE_ROLE_HASH_FIELDS = ("evm_source_gate_hash",)
 SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS = (
     "solana_tower_replay_verifier_hash",
     "solana_full_accountsdb_lattice_verifier_hash",
@@ -393,6 +398,7 @@ SOURCE_DEPLOYMENT_FIELDS = frozenset(
         "_comment_source_adapter_engine_deployment_hash",
         *SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS,
         *TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS,
+        *EVM_SOURCE_GATE_FIELDS,
         *TRON_DPOS_SOURCE_GATE_FIELDS,
     )
 )
@@ -1913,7 +1919,15 @@ def _check_deployment(
 
     if profile.eth_source_bridge_config_required:
         errors.extend(_check_eth_source_bridge_config_hash(material))
-    elif profile.tron_source_bridge_config_required:
+    if profile.evm_source_gate_required:
+        for field in EVM_SOURCE_GATE_FIELDS:
+            _expect_nonzero_hex(errors, record, field)
+        errors.extend(_check_evm_source_gate(profile, material, record))
+    else:
+        for field in EVM_SOURCE_GATE_FIELDS:
+            _expect_empty_hex_or_absent(errors, record, field)
+
+    if profile.tron_source_bridge_config_required:
         errors.extend(_check_tron_source_bridge_config_hash(material))
         for field in TRON_DPOS_SOURCE_GATE_FIELDS:
             _expect_nonzero_hex(errors, record, field)
@@ -1923,6 +1937,8 @@ def _check_deployment(
             _expect_empty_hex_or_absent(errors, record, field)
 
     deployment_role_hash_fields = SOURCE_ADAPTER_DEPLOYMENT_ROLE_HASH_FIELDS
+    if profile.evm_source_gate_required:
+        deployment_role_hash_fields += EVM_SOURCE_GATE_ROLE_HASH_FIELDS
     if profile.solana_full_light_client_audit_required:
         deployment_role_hash_fields += SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS
     if profile.ton_full_light_client_audit_required:
@@ -2341,6 +2357,36 @@ def _expected_route_allowlist_hash(
     )
 
 
+def _check_evm_source_gate(
+    profile: LaneProfile,
+    material: dict[str, Any],
+    deployment: dict[str, Any],
+) -> list[str]:
+    try:
+        module_name = (
+            "sccp_eth_source_bridge_evidence.py"
+            if profile.domain == SCCP_DOMAIN_ETH
+            else "sccp_bsc_source_bridge_evidence.py"
+        )
+        module = _load_sibling_module(module_name)
+        args = _evm_source_bridge_args(material, deployment)
+        expected = (
+            module.eth_source_gate_hash(args)
+            if profile.domain == SCCP_DOMAIN_ETH
+            else module.bsc_source_gate_hash(args)
+        )
+        configured = _required_hex_bytes(
+            deployment,
+            "evm_source_gate_hash",
+            byte_length=32,
+        )
+    except (SystemExit, ValueError, RuntimeError):
+        return ["EVM source gate cannot be recomputed"]
+    if expected != configured:
+        return ["evm_source_gate_hash does not match source and deployment material"]
+    return []
+
+
 def _check_solana_full_light_client_gate(
     material: dict[str, Any],
     deployment: dict[str, Any],
@@ -2447,7 +2493,15 @@ def _source_adapter_gate_summary(
     required_fields: tuple[str, ...]
     gate_field: str
     gate_checker: Callable[[dict[str, Any], dict[str, Any]], list[str]]
-    if profile.solana_full_light_client_audit_required:
+    if profile.evm_source_gate_required:
+        required_fields = EVM_SOURCE_GATE_FIELDS
+        gate_field = "evm_source_gate_hash"
+        gate_checker = lambda material, deployment: _check_evm_source_gate(
+            profile,
+            material,
+            deployment,
+        )
+    elif profile.solana_full_light_client_audit_required:
         required_fields = SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS
         gate_field = "solana_full_light_client_gate_hash"
         gate_checker = _check_solana_full_light_client_gate
@@ -5998,6 +6052,8 @@ def _source_adapter_gate_requirements(
     profile = LANE_PROFILES.get(domain)
     if profile is None:
         return "", ()
+    if profile.evm_source_gate_required:
+        return "evm_source_gate_hash", EVM_SOURCE_GATE_FIELDS
     if profile.solana_full_light_client_audit_required:
         return "solana_full_light_client_gate_hash", SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS
     if profile.ton_full_light_client_audit_required:

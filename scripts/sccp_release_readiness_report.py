@@ -1321,6 +1321,24 @@ def _sccp_unready_transparent_proof_config_gate_inventory_errors(
         ]
 
 
+def _tron_deploy_operator_boolean_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for TRON deploy operator booleans."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_tron_deploy_operator_boolean_inventory_errors")
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP TRON deploy operator boolean source inventory "
+            "cannot run release-bundle verifier helper"
+        ]
+
+
 def _ethereum_source_bridge_config_gate_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -4791,22 +4809,27 @@ def _active_launch_governed_deployment_metadata_blockers(
         return blockers + [f"{lane_label}: source adapter gate summary is missing"]
     if source_gate.get("ready") is not True:
         blockers.append(f"{lane_label}: source adapter gate summary must be ready")
-    if source_gate.get("required") is not False:
+    if source_gate.get("required") is not True:
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate summary must not be required"
+            f"{lane_label}: active EVM source adapter gate summary must be required"
         )
-    if source_gate.get("gate_hash") not in ("", None):
+    gate_hash = source_gate.get("gate_hash")
+    if not _is_nonzero_hex32(gate_hash):
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate hash must be empty"
+            f"{lane_label}: active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string"
         )
     audit_hashes = source_gate.get("audit_hashes")
     if not isinstance(audit_hashes, dict):
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate audit hashes must be empty"
+            f"{lane_label}: active EVM source adapter gate audit hashes must be an object"
         )
-    elif audit_hashes:
+    elif set(audit_hashes) != {"evm_source_gate_hash"}:
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate audit hashes must be empty"
+            f"{lane_label}: active EVM source adapter gate audit hashes must contain only evm_source_gate_hash"
+        )
+    elif audit_hashes.get("evm_source_gate_hash") != gate_hash:
+        blockers.append(
+            f"{lane_label}: active EVM source adapter gate hash must match audit hash evm_source_gate_hash"
         )
     return blockers
 
@@ -5249,6 +5272,9 @@ def _build_report(
     )
     unready_transparent_proof_config_gate_blockers = (
         _sccp_unready_transparent_proof_config_gate_inventory_errors()
+    )
+    tron_deploy_operator_boolean_gate_blockers = (
+        _tron_deploy_operator_boolean_gate_inventory_errors()
     )
     ethereum_source_bridge_config_gate_blockers = (
         _ethereum_source_bridge_config_gate_inventory_errors()
@@ -5833,7 +5859,15 @@ def _build_report(
                 else "blocked"
             ),
             "validation_blockers": unready_transparent_proof_config_gate_blockers,
-        }
+        },
+        "tron_deploy_operator_boolean_gate": {
+            "validation_status": (
+                "passed"
+                if not tron_deploy_operator_boolean_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": tron_deploy_operator_boolean_gate_blockers,
+        },
     }
     release_checklist = _active_launch_release_checklist(evidence, native_prover_bundle)
     failed_phases = [
@@ -5927,6 +5961,7 @@ def _build_report(
         and not readiness_markdown_invariants_gate_blockers
         and not retired_network_surface_gate_blockers
         and not unready_transparent_proof_config_gate_blockers
+        and not tron_deploy_operator_boolean_gate_blockers
     )
     blockers = _active_launch_blockers(evidence)
     blockers.extend(
@@ -6003,6 +6038,7 @@ def _build_report(
     blockers.extend(readiness_markdown_invariants_gate_blockers)
     blockers.extend(retired_network_surface_gate_blockers)
     blockers.extend(unready_transparent_proof_config_gate_blockers)
+    blockers.extend(tron_deploy_operator_boolean_gate_blockers)
     blockers.extend(
         f"production corridor phase {phase} is {phase_status[phase]}"
         for phase in failed_phases

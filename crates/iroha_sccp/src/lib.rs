@@ -476,6 +476,7 @@ const SCCP_SOLANA_PROOF_CONTEXT_PREFIX_V1: &[u8] = b"sccp:solana:proof-context:v
 const SCCP_SOLANA_FULL_LIGHT_CLIENT_GATE_PREFIX_V1: &[u8] =
     b"sccp:solana:full-light-client-gate:v1";
 const SCCP_TON_FULL_LIGHT_CLIENT_GATE_PREFIX_V1: &[u8] = b"sccp:ton:full-light-client-gate:v1";
+const SCCP_EVM_SOURCE_GATE_PREFIX_V1: &[u8] = b"sccp:evm-family:source-gate:v1";
 const SCCP_TON_SHARD_PROOF_PREFIX_V1: &[u8] = b"sccp:ton:shard-proof:v1";
 const SCCP_TON_VALIDATOR_SET_PREFIX_V1: &[u8] = b"sccp:ton:validator-set:v1";
 const SCCP_TON_VALIDATOR_SET_PAYLOAD_PREFIX_V1: &[u8] = b"sccp:ton:validator-set-payload:v1";
@@ -7824,7 +7825,7 @@ fn sccp_source_adapter_external_engines_ready_for_domain(_domain: u32) -> bool {
     false
 }
 
-fn sccp_evm_source_adapter_deployment_unblocks_production_for_domain(
+fn sccp_evm_source_adapter_deployment_fields_match_domain(
     domain: u32,
     material: &SccpSourceVerifierMaterialV1,
     deployment: &SccpSourceAdapterEngineDeploymentV1,
@@ -7844,6 +7845,14 @@ fn sccp_evm_source_adapter_deployment_unblocks_production_for_domain(
         && deployment.source_bridge_owner_address == material.source_bridge_owner_address
         && deployment.source_bridge_config_hash == material.source_bridge_config_hash
         && sccp_source_bridge_config_hash_is_production_ready(material)
+}
+
+fn sccp_evm_source_adapter_deployment_unblocks_production_for_domain(
+    domain: u32,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> bool {
+    sccp_evm_source_gate_hash_v1(domain, material, deployment).is_some()
 }
 
 fn sccp_source_adapter_deployment_unblocks_production_for_domain(
@@ -9681,6 +9690,171 @@ pub fn sccp_source_adapter_engine_deployment_hash(
         b"sccp:source-adapter-engine-deployment:v1",
         &canonical_sccp_source_adapter_engine_deployment_bytes(deployment),
     )
+}
+
+/// Audit hash for the ETH/BSC source-adapter deployment bundle.
+///
+/// This transcript binds the governed source bridge, receipt inclusion policy,
+/// consensus verifier material, and recursive source-adapter verifier
+/// commitment consumed by the EVM-family source-adapter production gate.
+pub fn sccp_evm_source_gate_hash_v1(
+    domain: u32,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<H256> {
+    if !matches!(domain, SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC)
+        || !sccp_evm_source_adapter_deployment_fields_match_domain(domain, material, deployment)
+        || !sccp_source_adapter_engine_deployment_matches_material(material, deployment)
+        || material.adapter_circuit_id != SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1
+    {
+        return None;
+    }
+
+    let source_bridge_emitter_address =
+        sccp_source_bridge_emitter_address_as_array(&material.source_bridge_emitter_address)?;
+    if !address20_is_nonzero(&source_bridge_emitter_address)
+        || !h256_is_nonzero(&material.source_bridge_emitter_code_hash)
+        || material.source_bridge_emitter_id != sccp_source_bridge_emitter_id_for_domain(domain)?
+    {
+        return None;
+    }
+
+    let mut out = Vec::new();
+    push_u8(&mut out, 1);
+    push_u32(&mut out, domain);
+    push_u32(&mut out, deployment.target_domain);
+    push_vec(&mut out, material.source_chain.as_bytes());
+    push_u8(
+        &mut out,
+        sccp_source_proof_plan_code(material.source_proof_plan),
+    );
+    push_u8(
+        &mut out,
+        sccp_proof_finality_model_code(material.finality_model),
+    );
+    push_vec(&mut out, material.adapter_circuit_id.as_bytes());
+    push_vec(&mut out, SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1.as_bytes());
+    out.extend_from_slice(&sccp_source_verifier_material_hash(material));
+    out.extend_from_slice(&sccp_source_adapter_engine_deployment_hash(deployment));
+    out.extend_from_slice(&deployment.adapter_verifier_vk_hash);
+    out.extend_from_slice(&deployment.deployment_receipt_hash);
+    push_vec(&mut out, material.source_trust_anchor_id.as_bytes());
+    out.extend_from_slice(&material.source_trust_anchor_hash);
+    push_vec(&mut out, material.consensus_verifier_id.as_bytes());
+    out.extend_from_slice(&material.consensus_verifier_hash);
+    push_vec(&mut out, material.message_inclusion_verifier_id.as_bytes());
+    out.extend_from_slice(&material.message_inclusion_verifier_hash);
+    push_vec(&mut out, material.finality_policy_id.as_bytes());
+    out.extend_from_slice(&material.finality_policy_hash);
+    push_vec(&mut out, material.source_bridge_emitter_id.as_bytes());
+    push_vec(&mut out, &material.source_bridge_emitter_address);
+    out.extend_from_slice(&material.source_bridge_emitter_code_hash);
+    out.extend_from_slice(&material.source_bridge_network_id);
+    push_vec(&mut out, &material.source_bridge_owner_address);
+    out.extend_from_slice(&material.source_bridge_config_hash);
+    push_vec(&mut out, SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER_V1);
+    push_vec(&mut out, SCCP_EVM_SOURCE_EVENT_ABI_V1);
+    out.extend_from_slice(&sccp_evm_source_event_topic_v1());
+    push_u32(
+        &mut out,
+        u32::try_from(SCCP_EVM_MAX_RECEIPT_VALUE_BYTES).expect("EVM receipt value bound fits u32"),
+    );
+    push_u32(
+        &mut out,
+        u32::try_from(SCCP_EVM_MAX_LOG_TOPICS).expect("EVM log topic bound fits u32"),
+    );
+    push_u32(
+        &mut out,
+        u32::try_from(SCCP_EVM_MAX_HEADER_RLP_BYTES).expect("EVM header bound fits u32"),
+    );
+
+    if domain == SCCP_DOMAIN_ETH {
+        push_vec(&mut out, SCCP_EVM_RECEIPT_PROOF_PREFIX_V1);
+        for prefix in [
+            SCCP_ETH_SYNC_COMMITTEE_PREFIX_V1,
+            SCCP_ETH_SYNC_COMMITTEE_PAYLOAD_PREFIX_V1,
+            SCCP_ETH_SYNC_COMMITTEE_MESSAGE_PREFIX_V1,
+            SCCP_ETH_SYNC_COMMITTEE_AGGREGATE_PREFIX_V1,
+            SCCP_ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_PREFIX_V1,
+            SCCP_ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_PREFIX_V1,
+            SCCP_ETH_SSZ_EXECUTION_PAYLOAD_HEADER_ID_V1,
+            SCCP_ETH_SSZ_BEACON_BLOCK_HEADER_ID_V1,
+            SCCP_ETH_SSZ_EXECUTION_PAYLOAD_BRANCH_ID_V1,
+            SCCP_ETH_SOURCE_BRIDGE_CONFIG_PREFIX_V1,
+        ] {
+            push_vec(&mut out, prefix);
+        }
+        push_u64(&mut out, SCCP_ETH_MAINNET_SLOTS_PER_EPOCH);
+        push_u64(&mut out, SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD);
+        push_u32(
+            &mut out,
+            u32::try_from(SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES)
+                .expect("ETH sync committee authority bound fits u32"),
+        );
+        push_u32(
+            &mut out,
+            u32::try_from(SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES)
+                .expect("ETH sync committee public-key byte length fits u32"),
+        );
+        push_u32(
+            &mut out,
+            u32::try_from(SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES)
+                .expect("ETH sync committee signature byte length fits u32"),
+        );
+        push_u32(
+            &mut out,
+            u32::try_from(SCCP_ETH_MAX_SYNC_COMMITTEE_TRANSITIONS)
+                .expect("ETH sync committee transition bound fits u32"),
+        );
+    } else {
+        push_vec(&mut out, SCCP_BSC_RECEIPT_PROOF_PREFIX_V1);
+        for prefix in [
+            SCCP_BSC_VALIDATOR_SET_PREFIX_V1,
+            SCCP_BSC_VALIDATOR_SET_PAYLOAD_PREFIX_V1,
+            SCCP_BSC_COMMIT_MESSAGE_PREFIX_V1,
+            SCCP_BSC_COMMIT_SEAL_PREFIX_V1,
+            SCCP_BSC_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1,
+            SCCP_BSC_VALIDATOR_SET_TRANSITION_SEAL_PREFIX_V1,
+            SCCP_BSC_VALIDATOR_SET_METADATA_PREFIX_V1,
+            SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1,
+        ] {
+            push_vec(&mut out, prefix);
+        }
+        push_vec(&mut out, &SCCP_BSC_VALIDATOR_SET_CONTRACT_ADDRESS);
+        push_u64(&mut out, SCCP_BSC_PARLIA_EPOCH_LENGTH_BLOCKS);
+        push_u64(&mut out, SCCP_BSC_VALIDATOR_SET_LENGTH_STORAGE_SLOT);
+        push_u64(&mut out, SCCP_BSC_VALIDATOR_STRUCT_STORAGE_SLOTS);
+        push_u32(
+            &mut out,
+            u32::try_from(SCCP_BSC_MAX_PARLIA_VALIDATORS).expect("BSC validator bound fits u32"),
+        );
+        push_u32(
+            &mut out,
+            u32::try_from(SCCP_BSC_PARLIA_EXTRA_SEAL_BYTES)
+                .expect("BSC extra seal byte length fits u32"),
+        );
+        push_u32(
+            &mut out,
+            u32::try_from(SCCP_BSC_MAX_VALIDATOR_SET_TRANSITIONS)
+                .expect("BSC validator-set transition bound fits u32"),
+        );
+    }
+
+    Some(prefixed_blake2b(SCCP_EVM_SOURCE_GATE_PREFIX_V1, &out))
+}
+
+pub fn sccp_eth_mainnet_source_gate_hash_from_deployment_v1(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<H256> {
+    sccp_evm_source_gate_hash_v1(SCCP_DOMAIN_ETH, material, deployment)
+}
+
+pub fn sccp_bsc_mainnet_source_gate_hash_from_deployment_v1(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<H256> {
+    sccp_evm_source_gate_hash_v1(SCCP_DOMAIN_BSC, material, deployment)
 }
 
 /// Audit hash for the remaining Solana full light-client verifier deployment bundle.
@@ -12803,6 +12977,132 @@ pub fn build_sccp_bsc_mainnet_source_adapter_deployment(
     deployment_receipt_hash: H256,
 ) -> Option<SccpSourceAdapterEngineDeploymentV1> {
     build_sccp_bsc_mainnet_source_adapter_deployment_v1(material, deployment_receipt_hash)
+}
+
+/// Build the Solana mainnet source-adapter deployment descriptor from governed material.
+pub fn build_sccp_solana_mainnet_source_adapter_deployment_v1(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    if material.source_domain != SCCP_DOMAIN_SOL {
+        return None;
+    }
+    sccp_source_adapter_engine_deployment_from_material_v1(material, deployment_receipt_hash)
+}
+
+/// Alias for the current Solana mainnet source-adapter deployment descriptor format.
+pub fn build_sccp_solana_mainnet_source_adapter_deployment(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    build_sccp_solana_mainnet_source_adapter_deployment_v1(material, deployment_receipt_hash)
+}
+
+/// Build the audited Solana mainnet source-adapter deployment descriptor.
+pub fn build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit_v1(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+    tower_replay_verifier_hash: H256,
+    full_accountsdb_lattice_verifier_hash: H256,
+    bank_fork_choice_verifier_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    let mut deployment =
+        build_sccp_solana_mainnet_source_adapter_deployment_v1(material, deployment_receipt_hash)?;
+    deployment.solana_tower_replay_verifier_hash = tower_replay_verifier_hash;
+    deployment.solana_full_accountsdb_lattice_verifier_hash = full_accountsdb_lattice_verifier_hash;
+    deployment.solana_bank_fork_choice_verifier_hash = bank_fork_choice_verifier_hash;
+    sccp_solana_full_light_client_gate_hash_from_deployment_v1(material, &deployment)
+        .map(|_| deployment)
+}
+
+/// Alias for the current audited Solana mainnet source-adapter deployment format.
+pub fn build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+    tower_replay_verifier_hash: H256,
+    full_accountsdb_lattice_verifier_hash: H256,
+    bank_fork_choice_verifier_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit_v1(
+        material,
+        deployment_receipt_hash,
+        tower_replay_verifier_hash,
+        full_accountsdb_lattice_verifier_hash,
+        bank_fork_choice_verifier_hash,
+    )
+}
+
+/// Build the TON mainnet source-adapter deployment descriptor from governed material.
+pub fn build_sccp_ton_mainnet_source_adapter_deployment_v1(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    if material.source_domain != SCCP_DOMAIN_TON {
+        return None;
+    }
+    sccp_source_adapter_engine_deployment_from_material_v1(material, deployment_receipt_hash)
+}
+
+/// Alias for the current TON mainnet source-adapter deployment descriptor format.
+pub fn build_sccp_ton_mainnet_source_adapter_deployment(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    build_sccp_ton_mainnet_source_adapter_deployment_v1(material, deployment_receipt_hash)
+}
+
+/// Build the audited TON mainnet source-adapter deployment descriptor.
+pub fn build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit_v1(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+    masterchain_config_verifier_hash: H256,
+    validator_set_transition_verifier_hash: H256,
+    shard_accounts_dictionary_verifier_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    let mut deployment =
+        build_sccp_ton_mainnet_source_adapter_deployment_v1(material, deployment_receipt_hash)?;
+    deployment.ton_masterchain_config_verifier_hash = masterchain_config_verifier_hash;
+    deployment.ton_validator_set_transition_verifier_hash = validator_set_transition_verifier_hash;
+    deployment.ton_shard_accounts_dictionary_verifier_hash =
+        shard_accounts_dictionary_verifier_hash;
+    sccp_ton_full_light_client_gate_hash_from_deployment_v1(material, &deployment)
+        .map(|_| deployment)
+}
+
+/// Alias for the current audited TON mainnet source-adapter deployment format.
+pub fn build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+    masterchain_config_verifier_hash: H256,
+    validator_set_transition_verifier_hash: H256,
+    shard_accounts_dictionary_verifier_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit_v1(
+        material,
+        deployment_receipt_hash,
+        masterchain_config_verifier_hash,
+        validator_set_transition_verifier_hash,
+        shard_accounts_dictionary_verifier_hash,
+    )
+}
+
+/// Build the TRON mainnet source-adapter deployment descriptor from governed material.
+pub fn build_sccp_tron_mainnet_source_adapter_deployment_v1(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    if material.source_domain != SCCP_DOMAIN_TRON {
+        return None;
+    }
+    sccp_source_adapter_engine_deployment_from_material_v1(material, deployment_receipt_hash)
+}
+
+/// Alias for the current TRON mainnet source-adapter deployment descriptor format.
+pub fn build_sccp_tron_mainnet_source_adapter_deployment(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    build_sccp_tron_mainnet_source_adapter_deployment_v1(material, deployment_receipt_hash)
 }
 
 fn sccp_source_adapter_target_domain_is_allowed_for_material(
@@ -31890,6 +32190,69 @@ pub fn recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
     )
 }
 
+/// Recover a Solana mainnet -> SORA source proof envelope from governed deployment material.
+pub fn recover_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if material.source_domain != SCCP_DOMAIN_SOL
+        || deployment.source_domain != SCCP_DOMAIN_SOL
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        SCCP_DOMAIN_SOL,
+        SCCP_DOMAIN_SORA,
+        proof_bytes,
+        material,
+        deployment,
+    )
+}
+
+/// Recover a TON mainnet -> SORA source proof envelope from governed deployment material.
+pub fn recover_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if material.source_domain != SCCP_DOMAIN_TON
+        || deployment.source_domain != SCCP_DOMAIN_TON
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        SCCP_DOMAIN_TON,
+        SCCP_DOMAIN_SORA,
+        proof_bytes,
+        material,
+        deployment,
+    )
+}
+
+/// Recover a TRON mainnet -> SORA source proof envelope from governed deployment material.
+pub fn recover_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if material.source_domain != SCCP_DOMAIN_TRON
+        || deployment.source_domain != SCCP_DOMAIN_TRON
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        SCCP_DOMAIN_TRON,
+        SCCP_DOMAIN_SORA,
+        proof_bytes,
+        material,
+        deployment,
+    )
+}
+
 pub fn decode_sccp_source_consensus_proof(
     proof_bytes: &[u8],
 ) -> Option<SccpSourceConsensusProofV1> {
@@ -35096,6 +35459,111 @@ pub fn verify_sccp_bsc_mainnet_source_chain_proof_envelope_production(
         && proof.target_domain == SCCP_DOMAIN_SORA
         && material.source_domain == SCCP_DOMAIN_BSC
         && deployment.source_domain == SCCP_DOMAIN_BSC
+        && deployment.target_domain == SCCP_DOMAIN_SORA
+        && verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+            proof, material, deployment,
+        )
+}
+
+/// Decode and verify a Solana mainnet -> SORA source proof against governed deployment material.
+pub fn verified_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
+    bundle: &NexusSccpMessageProofV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if sccp_message_source_domain(&bundle.payload) != SCCP_DOMAIN_SOL
+        || sccp_message_target_domain(&bundle.payload) != SCCP_DOMAIN_SORA
+        || material.source_domain != SCCP_DOMAIN_SOL
+        || deployment.source_domain != SCCP_DOMAIN_SOL
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        bundle, material, deployment,
+    )
+}
+
+/// Verify a decoded Solana mainnet -> SORA source proof against governed deployment material.
+pub fn verify_sccp_solana_mainnet_source_chain_proof_envelope_production(
+    proof: &SccpSourceChainProofEnvelopeV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> bool {
+    proof.source_domain == SCCP_DOMAIN_SOL
+        && proof.target_domain == SCCP_DOMAIN_SORA
+        && material.source_domain == SCCP_DOMAIN_SOL
+        && deployment.source_domain == SCCP_DOMAIN_SOL
+        && deployment.target_domain == SCCP_DOMAIN_SORA
+        && verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+            proof, material, deployment,
+        )
+}
+
+/// Decode and verify a TON mainnet -> SORA source proof against governed deployment material.
+pub fn verified_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
+    bundle: &NexusSccpMessageProofV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if sccp_message_source_domain(&bundle.payload) != SCCP_DOMAIN_TON
+        || sccp_message_target_domain(&bundle.payload) != SCCP_DOMAIN_SORA
+        || material.source_domain != SCCP_DOMAIN_TON
+        || deployment.source_domain != SCCP_DOMAIN_TON
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        bundle, material, deployment,
+    )
+}
+
+/// Verify a decoded TON mainnet -> SORA source proof against governed deployment material.
+pub fn verify_sccp_ton_mainnet_source_chain_proof_envelope_production(
+    proof: &SccpSourceChainProofEnvelopeV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> bool {
+    proof.source_domain == SCCP_DOMAIN_TON
+        && proof.target_domain == SCCP_DOMAIN_SORA
+        && material.source_domain == SCCP_DOMAIN_TON
+        && deployment.source_domain == SCCP_DOMAIN_TON
+        && deployment.target_domain == SCCP_DOMAIN_SORA
+        && verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+            proof, material, deployment,
+        )
+}
+
+/// Decode and verify a TRON mainnet -> SORA source proof against governed deployment material.
+pub fn verified_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
+    bundle: &NexusSccpMessageProofV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if sccp_message_source_domain(&bundle.payload) != SCCP_DOMAIN_TRON
+        || sccp_message_target_domain(&bundle.payload) != SCCP_DOMAIN_SORA
+        || material.source_domain != SCCP_DOMAIN_TRON
+        || deployment.source_domain != SCCP_DOMAIN_TRON
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        bundle, material, deployment,
+    )
+}
+
+/// Verify a decoded TRON mainnet -> SORA source proof against governed deployment material.
+pub fn verify_sccp_tron_mainnet_source_chain_proof_envelope_production(
+    proof: &SccpSourceChainProofEnvelopeV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> bool {
+    proof.source_domain == SCCP_DOMAIN_TRON
+        && proof.target_domain == SCCP_DOMAIN_SORA
+        && material.source_domain == SCCP_DOMAIN_TRON
+        && deployment.source_domain == SCCP_DOMAIN_TRON
         && deployment.target_domain == SCCP_DOMAIN_SORA
         && verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
             proof, material, deployment,
@@ -59835,6 +60303,57 @@ mod tests {
                 decode_fixed_hex_bytes::<32>(expected_deployment_hash)
                     .expect("EVM-family source adapter deployment vector")
             );
+            let gate_hash = sccp_evm_source_gate_hash_v1(domain, &material, &deployment)
+                .expect("EVM-family source gate hash");
+            assert!(h256_is_nonzero(&gate_hash));
+            if domain == SCCP_DOMAIN_ETH {
+                assert_eq!(
+                    sccp_eth_mainnet_source_gate_hash_from_deployment_v1(&material, &deployment),
+                    Some(gate_hash)
+                );
+                assert_eq!(
+                    sccp_bsc_mainnet_source_gate_hash_from_deployment_v1(&material, &deployment),
+                    None
+                );
+            } else {
+                assert_eq!(
+                    sccp_bsc_mainnet_source_gate_hash_from_deployment_v1(&material, &deployment),
+                    Some(gate_hash)
+                );
+                assert_eq!(
+                    sccp_eth_mainnet_source_gate_hash_from_deployment_v1(&material, &deployment),
+                    None
+                );
+            }
+
+            let mut wrong_target_deployment = deployment.clone();
+            wrong_target_deployment.target_domain = domain;
+            assert_eq!(
+                sccp_evm_source_gate_hash_v1(domain, &material, &wrong_target_deployment),
+                None,
+                "EVM source gate must reject non-SORA target deployments"
+            );
+            let mut replayed_vk_hash = deployment.clone();
+            replayed_vk_hash.adapter_verifier_vk_hash[0] ^= 0x01;
+            assert_eq!(
+                sccp_evm_source_gate_hash_v1(domain, &material, &replayed_vk_hash),
+                None,
+                "EVM source gate must reject verifier-key drift"
+            );
+            let mut replayed_source_bridge_code = deployment.clone();
+            replayed_source_bridge_code.source_bridge_emitter_code_hash[0] ^= 0x01;
+            assert_eq!(
+                sccp_evm_source_gate_hash_v1(domain, &material, &replayed_source_bridge_code),
+                None,
+                "EVM source gate must reject source bridge runtime-code drift"
+            );
+            let mut reused_deployment_receipt = deployment.clone();
+            reused_deployment_receipt.deployment_receipt_hash = deployment.adapter_verifier_vk_hash;
+            assert_eq!(
+                sccp_evm_source_gate_hash_v1(domain, &material, &reused_deployment_receipt),
+                None,
+                "EVM source gate must keep deployment receipt hashes role-separated"
+            );
         }
     }
 
@@ -62503,13 +63022,19 @@ mod tests {
         )
         .expect("Solana mainnet deployed source material");
         assert!(sccp_source_verifier_material_is_production_ready(&material));
-        let deployment =
-            sccp_source_adapter_engine_deployment_from_material_v1(&material, [0xE6; 32])
-                .expect("Solana source adapter deployment");
+        let deployment = build_sccp_solana_mainnet_source_adapter_deployment(&material, [0xE6; 32])
+            .expect("Solana source adapter deployment");
         assert!(sccp_source_adapter_engine_deployment_matches_material(
             &material,
             &deployment,
         ));
+        let ton_placeholder =
+            sccp_source_verifier_material_for_domain(SCCP_DOMAIN_TON).expect("TON placeholder");
+        assert!(
+            build_sccp_solana_mainnet_source_adapter_deployment(&ton_placeholder, [0xE6; 32],)
+                .is_none(),
+            "Solana deployment builder must reject non-Solana material"
+        );
 
         let readiness =
             sccp_source_adapter_engine_readiness_with_material_and_deployment_for_domain(
@@ -62548,10 +63073,48 @@ mod tests {
             "Solana deployment evidence must not open production before the full light-client predicates are deployed"
         );
 
-        let mut audited_deployment = deployment.clone();
-        audited_deployment.solana_tower_replay_verifier_hash = [0xB7; 32];
-        audited_deployment.solana_full_accountsdb_lattice_verifier_hash = [0xC8; 32];
-        audited_deployment.solana_bank_fork_choice_verifier_hash = [0xD9; 32];
+        assert!(
+            build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &material, [0xE6; 32], [0u8; 32], [0xC8; 32], [0xD9; 32],
+            )
+            .is_none(),
+            "audited Solana deployment builder must reject all-zero role hashes"
+        );
+        assert!(
+            build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &material, [0xE6; 32], [0xB7; 32], [0xB7; 32], [0xD9; 32],
+            )
+            .is_none(),
+            "audited Solana deployment builder must reject duplicate role hashes"
+        );
+        assert!(
+            build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &material,
+                [0xE6; 32],
+                material.source_state_verifier_hash,
+                [0xC8; 32],
+                [0xD9; 32],
+            )
+            .is_none(),
+            "audited Solana deployment builder must reject hashes reused from source material"
+        );
+        assert!(
+            build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &ton_placeholder,
+                [0xE6; 32],
+                [0xB7; 32],
+                [0xC8; 32],
+                [0xD9; 32],
+            )
+            .is_none(),
+            "audited Solana deployment builder must reject non-Solana material"
+        );
+        let audited_deployment =
+            build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &material, [0xE6; 32], [0xB7; 32], [0xC8; 32], [0xD9; 32],
+            )
+            .expect("audited Solana source adapter deployment");
+        assert_eq!(audited_deployment.deployment_receipt_hash, [0xE6; 32]);
         assert!(
             sccp_solana_full_light_client_gate_hash_from_deployment_v1(
                 &material,
@@ -62714,6 +63277,113 @@ mod tests {
                 &audited_deployment,
             )
             .is_some()
+        );
+        assert!(
+            verify_sccp_solana_mainnet_source_chain_proof_envelope_production(
+                &proof,
+                &material,
+                &audited_deployment,
+            ),
+            "Solana domain facade must verify exact audited source proofs"
+        );
+        assert!(
+            verified_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
+                &bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_some(),
+            "Solana domain facade must admit exact audited bundles"
+        );
+        let recovered_solana_source_proof =
+            recover_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &audited_deployment,
+            )
+            .expect("recover Solana audited source proof bytes");
+        assert_eq!(recovered_solana_source_proof.message_id, proof.message_id);
+        let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
+            SCCP_DOMAIN_SOL,
+            SCCP_DOMAIN_SORA,
+            711,
+            Some(&material),
+            None,
+        );
+        assert!(
+            verified_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
+                &material_only_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "Solana facade must reject source proofs that omit audited deployment evidence"
+        );
+        assert!(
+            recover_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
+                &material_only_bundle.finality_proof,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "Solana source proof byte recovery must reject material-only proofs"
+        );
+        let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_SOL, SCCP_DOMAIN_ETH, 712);
+        assert!(
+            verified_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_target_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "Solana facade must reject non-SORA destination bundles"
+        );
+        assert!(
+            recover_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_target_bundle.finality_proof,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "Solana source proof byte recovery must reject non-SORA targets"
+        );
+        let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_TON, SCCP_DOMAIN_SORA, 713);
+        assert!(
+            verified_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_source_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "Solana facade must reject non-Solana source bundles"
+        );
+        assert!(
+            recover_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_source_bundle.finality_proof,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "Solana source proof byte recovery must reject copied non-Solana proof bytes"
+        );
+        let mut replayed_receipt_deployment = audited_deployment.clone();
+        replayed_receipt_deployment.deployment_receipt_hash = [0xAB; 32];
+        assert!(
+            !verify_sccp_solana_mainnet_source_chain_proof_envelope_production(
+                &proof,
+                &material,
+                &replayed_receipt_deployment,
+            ),
+            "Solana facade must reject replayed deployment receipts"
+        );
+        assert!(
+            recover_sccp_solana_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &replayed_receipt_deployment,
+            )
+            .is_none(),
+            "Solana source proof byte recovery must reject replayed deployment receipts"
         );
         let consensus = source_consensus_proof_from_envelope(&proof);
         let SccpSourceAdapterProofV1::SolanaFinalizedTransaction(solana_adapter) =
@@ -63493,13 +64163,19 @@ mod tests {
         )
         .expect("TON mainnet deployed source material");
         assert!(sccp_source_verifier_material_is_production_ready(&material));
-        let deployment =
-            sccp_source_adapter_engine_deployment_from_material_v1(&material, [0x29; 32])
-                .expect("TON source adapter deployment");
+        let deployment = build_sccp_ton_mainnet_source_adapter_deployment(&material, [0x29; 32])
+            .expect("TON source adapter deployment");
         assert!(sccp_source_adapter_engine_deployment_matches_material(
             &material,
             &deployment,
         ));
+        let solana_placeholder =
+            sccp_source_verifier_material_for_domain(SCCP_DOMAIN_SOL).expect("Solana placeholder");
+        assert!(
+            build_sccp_ton_mainnet_source_adapter_deployment(&solana_placeholder, [0x29; 32],)
+                .is_none(),
+            "TON deployment builder must reject non-TON material"
+        );
 
         let readiness =
             sccp_source_adapter_engine_readiness_with_material_and_deployment_for_domain(
@@ -63526,10 +64202,48 @@ mod tests {
             "TON deployment evidence must not open production without audited full light-client predicates"
         );
 
-        let mut audited_deployment = deployment.clone();
-        audited_deployment.ton_masterchain_config_verifier_hash = [0x26; 32];
-        audited_deployment.ton_validator_set_transition_verifier_hash = [0x27; 32];
-        audited_deployment.ton_shard_accounts_dictionary_verifier_hash = [0x28; 32];
+        assert!(
+            build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &material, [0x29; 32], [0u8; 32], [0x27; 32], [0x28; 32],
+            )
+            .is_none(),
+            "audited TON deployment builder must reject all-zero role hashes"
+        );
+        assert!(
+            build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &material, [0x29; 32], [0x26; 32], [0x26; 32], [0x28; 32],
+            )
+            .is_none(),
+            "audited TON deployment builder must reject duplicate role hashes"
+        );
+        assert!(
+            build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &material,
+                [0x29; 32],
+                material.source_state_verifier_hash,
+                [0x27; 32],
+                [0x28; 32],
+            )
+            .is_none(),
+            "audited TON deployment builder must reject hashes reused from source material"
+        );
+        assert!(
+            build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &solana_placeholder,
+                [0x29; 32],
+                [0x26; 32],
+                [0x27; 32],
+                [0x28; 32],
+            )
+            .is_none(),
+            "audited TON deployment builder must reject non-TON material"
+        );
+        let audited_deployment =
+            build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &material, [0x29; 32], [0x26; 32], [0x27; 32], [0x28; 32],
+            )
+            .expect("audited TON source adapter deployment");
+        assert_eq!(audited_deployment.deployment_receipt_hash, [0x29; 32]);
         assert!(
             sccp_ton_full_light_client_gate_hash_from_deployment_v1(
                 &material,
@@ -63672,6 +64386,116 @@ mod tests {
                 &audited_deployment,
             )
             .is_some()
+        );
+        assert!(
+            verify_sccp_ton_mainnet_source_chain_proof_envelope_production(
+                &deployment_bound_proof,
+                &material,
+                &audited_deployment,
+            ),
+            "TON domain facade must verify exact audited source proofs"
+        );
+        assert!(
+            verified_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
+                &deployment_bound_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_some(),
+            "TON domain facade must admit exact audited bundles"
+        );
+        let recovered_ton_source_proof =
+            recover_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
+                &deployment_bound_bundle.finality_proof,
+                &material,
+                &audited_deployment,
+            )
+            .expect("recover TON audited source proof bytes");
+        assert_eq!(
+            recovered_ton_source_proof.message_id,
+            deployment_bound_proof.message_id,
+        );
+        let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
+            SCCP_DOMAIN_TON,
+            SCCP_DOMAIN_SORA,
+            710,
+            Some(&material),
+            None,
+        );
+        assert!(
+            verified_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
+                &material_only_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "TON facade must reject source proofs that omit audited deployment evidence"
+        );
+        assert!(
+            recover_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
+                &material_only_bundle.finality_proof,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "TON source proof byte recovery must reject material-only proofs"
+        );
+        let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_TON, SCCP_DOMAIN_ETH, 711);
+        assert!(
+            verified_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_target_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "TON facade must reject non-SORA destination bundles"
+        );
+        assert!(
+            recover_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_target_bundle.finality_proof,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "TON source proof byte recovery must reject non-SORA targets"
+        );
+        let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_SOL, SCCP_DOMAIN_SORA, 712);
+        assert!(
+            verified_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_source_bundle,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "TON facade must reject non-TON source bundles"
+        );
+        assert!(
+            recover_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_source_bundle.finality_proof,
+                &material,
+                &audited_deployment,
+            )
+            .is_none(),
+            "TON source proof byte recovery must reject copied non-TON proof bytes"
+        );
+        let mut replayed_receipt_deployment = audited_deployment.clone();
+        replayed_receipt_deployment.deployment_receipt_hash = [0xAB; 32];
+        assert!(
+            !verify_sccp_ton_mainnet_source_chain_proof_envelope_production(
+                &deployment_bound_proof,
+                &material,
+                &replayed_receipt_deployment,
+            ),
+            "TON facade must reject replayed deployment receipts"
+        );
+        assert!(
+            recover_sccp_ton_mainnet_source_chain_proof_envelope_for_production(
+                &deployment_bound_bundle.finality_proof,
+                &material,
+                &replayed_receipt_deployment,
+            )
+            .is_none(),
+            "TON source proof byte recovery must reject replayed deployment receipts"
         );
         let consensus = source_consensus_proof_from_envelope(&deployment_bound_proof);
         let SccpSourceAdapterProofV1::TonMasterchainShard(ton_adapter) = &consensus.adapter_proof
@@ -64225,9 +65049,8 @@ mod tests {
             sccp_source_verifier_material_hash(&changed_config_material),
             material_hash
         );
-        let deployment =
-            sccp_source_adapter_engine_deployment_from_material_v1(&material, [0x35; 32])
-                .expect("TRON source adapter deployment");
+        let deployment = build_sccp_tron_mainnet_source_adapter_deployment(&material, [0x35; 32])
+            .expect("TRON source adapter deployment");
         assert_eq!(
             deployment.source_bridge_config_hash,
             sample_tron_source_bridge_config_hash()
@@ -64430,6 +65253,138 @@ mod tests {
             )
             .is_some(),
             "TRON deployment-bound bundles can reach production admission only through transaction Merkle source-call proof"
+        );
+        assert!(
+            !verify_sccp_source_chain_proof_envelope_production_with_material(
+                &deployment_bound_proof,
+                &material,
+            ),
+            "TRON source material alone must not satisfy the production source-adapter gate"
+        );
+        assert!(
+            verify_sccp_tron_mainnet_source_chain_proof_envelope_production(
+                &deployment_bound_proof,
+                &material,
+                &deployment,
+            ),
+            "TRON facade must verify deployment-bound source proofs"
+        );
+        let recovered_tron_source_proof =
+            recover_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
+                &deployment_bound_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .expect("recover TRON deployment-bound source proof bytes");
+        assert_eq!(
+            recovered_tron_source_proof.message_id,
+            deployment_bound_proof.message_id,
+        );
+        assert!(
+            recover_sccp_source_chain_proof_envelope_with_material_and_deployment(
+                SCCP_DOMAIN_TRON,
+                SCCP_DOMAIN_SORA,
+                &deployment_bound_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_some(),
+            "structural source proof byte recovery must accept exact TRON deployment material"
+        );
+        assert!(
+            recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+                SCCP_DOMAIN_ETH,
+                SCCP_DOMAIN_SORA,
+                &deployment_bound_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "source proof byte recovery must reject copied TRON proof bytes under an ETH source label"
+        );
+        assert!(
+            verified_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
+                &deployment_bound_bundle,
+                &material,
+                &deployment,
+            )
+            .is_some(),
+            "TRON domain facade must admit exact deployment-bound bundles"
+        );
+        assert!(
+            verified_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
+                &bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "TRON facade must reject source proofs that omit deployment evidence"
+        );
+        assert!(
+            recover_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "TRON source proof byte recovery must reject material-only proofs"
+        );
+        let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_TRON, SCCP_DOMAIN_ETH, 710);
+        assert!(
+            verified_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_target_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "TRON facade must reject non-SORA destination bundles"
+        );
+        assert!(
+            recover_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_target_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "TRON source proof byte recovery must reject non-SORA targets"
+        );
+        let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 711);
+        assert!(
+            verified_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_source_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "TRON facade must reject non-TRON source bundles"
+        );
+        assert!(
+            recover_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_source_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "TRON source proof byte recovery must reject non-TRON proof bytes"
+        );
+        let mut replayed_receipt = deployment.clone();
+        replayed_receipt.deployment_receipt_hash = [0xAB; 32];
+        assert!(
+            !verify_sccp_tron_mainnet_source_chain_proof_envelope_production(
+                &deployment_bound_proof,
+                &material,
+                &replayed_receipt,
+            ),
+            "TRON facade must reject replayed deployment receipts"
+        );
+        assert!(
+            recover_sccp_tron_mainnet_source_chain_proof_envelope_for_production(
+                &deployment_bound_bundle.finality_proof,
+                &material,
+                &replayed_receipt,
+            )
+            .is_none(),
+            "TRON source proof byte recovery must reject replayed deployment receipts"
         );
 
         #[derive(Clone, Copy)]

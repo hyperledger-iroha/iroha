@@ -5367,7 +5367,13 @@ pub fn signed_find_proof_by_id(
     let req = QueryRequest::Singular(singular).with_authority(dto.authority.clone().into());
     // Build a temporary KeyPair from the private key. Public key derived within KeyPair::from
     let key_pair = iroha_crypto::KeyPair::from(dto.private_key.0.clone());
-    Ok(req.sign(&key_pair))
+    req.try_sign(&key_pair).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "failed to sign proof query: {err}"
+            )),
+        ))
+    })
 }
 
 /// POST /v1/zk/verify — minimal demo decode endpoint that accepts either Norito
@@ -28936,7 +28942,11 @@ fn prepare_contract_deployment(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
-    let manifest = verified.manifest.signed(signer);
+    let manifest = verified.manifest.try_signed(signer).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "failed to sign contract manifest: {err}"
+        )))
+    })?;
 
     Ok(PreparedContractDeployment {
         code_bytes,

@@ -3289,10 +3289,11 @@ impl Actor {
                 let block_build_started_at = Instant::now();
                 let new_block = builder
                     .with_confidential_features(conf_features)
-                    .sign_with_index(
+                    .try_sign_with_index(
                         self.common_config.key_pair.private_key(),
                         u64::from(local_validator_index),
                     )
+                    .map_err(|err| eyre!("failed to sign proposed block: {err}"))?
                     .unpack(|event| self.emit_pipeline_event(event));
                 let signed_block: SignedBlock = new_block.into();
                 let built_height = signed_block.header().height().get();

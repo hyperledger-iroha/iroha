@@ -371,6 +371,16 @@ def test_account_address_rejects_blank_or_padded_signing_algorithm_aliases(
         )
 
 
+@pytest.mark.parametrize("algorithm", [0, False, b"ed25519", ["ed25519"]])
+def test_account_address_rejects_non_string_signing_algorithm_aliases(algorithm: object) -> None:
+    with pytest.raises(AccountAddressError, match="signing algorithm must be a string"):
+        AccountAddress.from_account(
+            domain="wonderland",
+            public_key=bytes([0x11] * 32),
+            algorithm=algorithm,  # type: ignore[arg-type]
+        )
+
+
 @pytest.mark.parametrize(
     "algorithm",
     [

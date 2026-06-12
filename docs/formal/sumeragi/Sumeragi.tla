@@ -11040,6 +11040,83 @@ DeliveredPendingCompleteWaitStateNextStepMatchesNamedActionBranchStep ==
           /\ DeliveredPendingCompleteWaitState'
           /\ RbcDeliveredWithoutFinalityWaitsForCommitEvidence')
 
+DeliveredPendingCompleteWaitStateStutterStepKeepsWaitStateStep ==
+  (/\ DeliveredPendingCompleteWaitState
+   /\ [Next]_vars
+   /\ ~Next) =>
+    /\ DeliveredPendingCompleteWaitStateSpecStepClosesStep
+    /\ RbcDeliveredPendingSpecStepStuttersOrTakesCoveredHandoffStep
+    /\ RbcDeliveredPendingSpecStepStutterPreservesActionSurfaceStep
+    /\ RbcDeliveredPendingSpecStepStableCommitArtifactsCompleteWaitStateStep
+    /\ vars' = vars
+    /\ DeliveredPendingCompleteWaitState'
+    /\ RbcDeliveredWithoutFinalityWaitsForCommitEvidence'
+    /\ RbcDeliveredWithoutFinalityHasNoCommitCertificate'
+    /\ DeliverImpliesEvidence'
+    /\ ~committed'
+    /\ phase' = phase
+    /\ phase' \in {"Propose", "Prepare", "CommitVote", "NewView"}
+    /\ view' = view
+    /\ gst' = gst
+    /\ rbcState' = "Delivered"
+    /\ readyVotes' = readyVotes
+    /\ readyVotes' >= CommitQuorum
+    /\ chunkCount' = chunkCount
+    /\ chunkCount' >= MaxChunks
+    /\ headerSeen' = headerSeen
+    /\ headerSeen'
+    /\ digestValid' = digestValid
+    /\ digestValid'
+    /\ prepareVotes' = prepareVotes
+    /\ commitVotesHonest' = commitVotesHonest
+    /\ commitVotesByz' = commitVotesByz
+    /\ stakeSigned' = stakeSigned
+    /\ newViewVotes' = newViewVotes
+    /\ viewEvidenceVotes' = viewEvidenceVotes
+    /\ commitEvidenceVotes' = 0
+    /\ commitEvidenceStake' = 0
+    /\ commitView' = 0
+    /\ ~FinalityCertificateStackPresent'
+    /\ ~CanCommit(commitVotesHonest', commitVotesByz', stakeSigned', rbcState')
+    /\ ViewEvidenceIsCompleteOrEmpty'
+    /\ VoteCountersRespectRosterBudgets'
+    /\ StakeSignedMatchesVoteCounters'
+    /\ LiveStakeSignedIsBounded'
+    /\ CommitEvidenceIsBounded'
+    /\ CommitEvidenceIsCompleteOrEmpty'
+    /\ ~HonestPropose
+    /\ ~HonestPrepareVote
+    /\ ~HonestCommitVote
+    /\ ~ByzantineEquivocateCommit
+    /\ ~TimeoutTick
+    /\ ~HonestNewViewVote
+    /\ ~RbcInit
+    /\ ~RbcChunkGood
+    /\ ~RbcReadyGood
+    /\ ~RbcDeliverGood
+    /\ ~ByzantineFault
+    /\ ~GstElapsed
+    /\ (HonestProposeEnabled' <=> HonestProposeEnabled)
+    /\ (HonestPrepareVoteEnabled' <=> HonestPrepareVoteEnabled)
+    /\ (HonestCommitVoteEnabled' <=> HonestCommitVoteEnabled)
+    /\ (ByzantineCommitVoteEnabled' <=> ByzantineCommitVoteEnabled)
+    /\ (HonestNewViewVoteEnabled' <=> HonestNewViewVoteEnabled)
+    /\ (RbcInitEnabled' <=> RbcInitEnabled)
+    /\ (RbcChunkGoodEnabled' <=> RbcChunkGoodEnabled)
+    /\ (RbcReadyGoodEnabled' <=> RbcReadyGoodEnabled)
+    /\ (RbcDeliverGoodEnabled' <=> RbcDeliverGoodEnabled)
+    /\ (ByzantineFaultEnabled' <=> ByzantineFaultEnabled)
+    /\ (PostGstProgressEnabled' <=> PostGstProgressEnabled)
+    /\ (GstElapsedEnabled' <=> GstElapsedEnabled)
+    /\ (TimeoutTickEnabled' <=> TimeoutTickEnabled)
+    /\ (GstElapsedEnabled' <=> ~gst')
+    /\ (TimeoutTickEnabled' <=> (~gst' \/ ~PostGstProgressEnabled'))
+    /\ ~RbcInitEnabled'
+    /\ ~RbcChunkGoodEnabled'
+    /\ ~RbcReadyGoodEnabled'
+    /\ ~RbcDeliverGoodEnabled'
+    /\ ~ByzantineFaultEnabled'
+
 RbcStateChangeMatchesLocalExitClassificationStep ==
   (rbcState' # rbcState) =>
     /\ RbcStateOnlyChangesByProtocolOrFaultStep
@@ -11917,6 +11994,9 @@ DeliveredPendingCompleteWaitStateGstElapsedStepAlwaysKeepsWaitState ==
 
 DeliveredPendingCompleteWaitStateNextStepAlwaysMatchesNamedActionBranch ==
   [] [DeliveredPendingCompleteWaitStateNextStepMatchesNamedActionBranchStep]_vars
+
+DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState ==
+  [] [DeliveredPendingCompleteWaitStateStutterStepKeepsWaitStateStep]_vars
 
 RbcDeliveryEntryOnlyByDeliver ==
   [] [RbcDeliveryEntryOnlyByDeliverStep]_vars

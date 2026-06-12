@@ -134,6 +134,19 @@ fn pending_allows_stale_view_commit_qc_fetch(
         )
 }
 
+fn sign_vote_with_local_key(
+    chain_id: &iroha_data_model::ChainId,
+    mode_tag: &str,
+    private_key: &iroha_crypto::PrivateKey,
+    vote: &mut crate::sumeragi::consensus::Vote,
+) -> Result<(), iroha_crypto::Error> {
+    vote.bls_sig.clear();
+    let preimage = vote_preimage(chain_id, mode_tag, vote);
+    let signature = Signature::try_new(private_key, &preimage)?;
+    vote.bls_sig = signature.payload().to_vec();
+    Ok(())
+}
+
 #[derive(Debug)]
 pub(super) struct CommitResult {
     pub(super) id: u64,
@@ -5781,9 +5794,22 @@ impl Actor {
             bls_sig: Vec::new(),
         };
         let (_, mode_tag, _) = self.consensus_context_for_height(height);
-        let preimage = vote_preimage(&self.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
-        vote.bls_sig = signature.payload().to_vec();
+        if let Err(err) = sign_vote_with_local_key(
+            &self.common_config.chain,
+            mode_tag,
+            self.common_config.key_pair.private_key(),
+            &mut vote,
+        ) {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                signer,
+                error = %err,
+                "failed to sign local consensus vote; skipping vote"
+            );
+            return None;
+        }
         Some(vote)
     }
 
@@ -11169,6 +11195,37 @@ mod tests {
             Some(&signers),
             min_votes_for_commit
         ));
+    }
+
+    #[test]
+    fn sign_vote_with_local_key_attaches_verifiable_signature() {
+        let chain = "test-chain".parse::<ChainId>().expect("chain id");
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Prepare,
+            block_hash: sample_block(3, 0).hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 3,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: vec![0xAA; 4],
+        };
+
+        sign_vote_with_local_key(&chain, PERMISSIONED_TAG, key_pair.private_key(), &mut vote)
+            .expect("local vote signing succeeds");
+
+        assert!(!vote.bls_sig.is_empty());
+        assert_ne!(vote.bls_sig, vec![0xAA; 4]);
+        let preimage = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
+        Signature::from_bytes(&vote.bls_sig)
+            .verify(key_pair.public_key(), &preimage)
+            .expect("signed vote verifies against local key");
     }
 
     #[test]

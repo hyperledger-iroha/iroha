@@ -1236,6 +1236,25 @@ test("BSC route-config refuses allow-unready for production-ready manifests", ()
   );
 });
 
+test("BSC route-config rejects malformed allow-unready option values", () => {
+  const manifest = productionReadyRouteManifest();
+  for (const value of [" TRUE", "true ", "TRUE", true, false, 1, 0]) {
+    assert.throws(
+      () => buildBscTairaXorRouteConfigToml(manifest, { "allow-unready": value }),
+      /--allow-unready must be true or false/u,
+    );
+    assert.throws(
+      () =>
+        buildMergedBscTairaXorRouteConfigToml(
+          "[zk]\nother_setting = true\n",
+          manifest,
+          { "allow-unready": value },
+        ),
+      /--allow-unready must be true or false/u,
+    );
+  }
+});
+
 test("BSC route-config validates explorer URLs against the selected network", () => {
   const mainnetBindingHash = bscDestinationBindingHash({
     networkId: BSC_MAINNET_NETWORK_ID_HEX,
@@ -2018,6 +2037,14 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
     [{ destinationBinding: { networkIdHex: HASH_33 } }, /networkIdHex.*aliases disagree/u],
     [{ counterpartyDomain: 1 }, /counterpartyDomain/u],
     [{ verifierTarget: "TronContract" }, /verifierTarget/u],
+    [{ productionReady: "true" }, /productionReady must be true or false/u],
+    [{ productionReady: 1 }, /productionReady must be true or false/u],
+    [{ disabledReason: " disabled" }, /disabledReason.*canonical string/u],
+    [{ disabledReason: 1 }, /disabledReason.*canonical string/u],
+    [
+      { disabledReason: "disabled", disabled_reason: "different" },
+      /disabledReason aliases disagree/u,
+    ],
     [
       { bscTokenAddress: BSC_TOKEN_ADDRESS.toUpperCase() },
       /token address.*canonical lowercase hex/u,
@@ -2177,6 +2204,40 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       /Base58|alias/u,
     ],
     [
+      { settlement: { contractAddress: " contract-v1" } },
+      /settlement\.contractAddress.*canonical string/u,
+    ],
+    [
+      { settlement: { contractAddress: 1 } },
+      /settlement\.contractAddress.*canonical string/u,
+    ],
+    [
+      {
+        settlement: {
+          contractAddress: "contract-v1",
+          contract_address: "contract-v2",
+        },
+      },
+      /settlement\.contractAddress aliases disagree/u,
+    ],
+    [
+      { settlement: { contractAlias: " taira-bsc-xor" } },
+      /settlement\.contractAlias.*canonical string/u,
+    ],
+    [
+      { settlement: { contractAlias: 1 } },
+      /settlement\.contractAlias.*canonical string/u,
+    ],
+    [
+      {
+        settlement: {
+          contractAlias: "taira-bsc-xor",
+          contract_alias: "taira-bsc-xor-v2",
+        },
+      },
+      /settlement\.contractAlias aliases disagree/u,
+    ],
+    [
       { sourceBridgeAddress: BSC_BRIDGE_ADDRESS },
       /BSC source bridge address must not use multiple aliases in route manifest/u,
     ],
@@ -2187,6 +2248,14 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
     [
       { postDeployLiveEvidence: { full_toml_ready: true } },
       /fullTomlReady must not use multiple aliases in route manifest postDeployLiveEvidence/u,
+    ],
+    [
+      { postDeployLiveEvidence: { fullTomlReady: "true" } },
+      /postDeployLiveEvidence\.fullTomlReady\.fullTomlReady must be boolean/u,
+    ],
+    [
+      { postDeployLiveEvidence: { fullTomlReady: 1 } },
+      /postDeployLiveEvidence\.fullTomlReady\.fullTomlReady must be boolean/u,
     ],
     [
       { postDeployLiveEvidence: { source_bridge_config_hash: HASH_77 } },
@@ -2314,6 +2383,102 @@ test("BSC deploy command refuses to broadcast without explicit testnet confirmat
       ]),
     /confirm-testnet/u,
   );
+});
+
+test("BSC deploy command rejects malformed boolean switches before network use", async () => {
+  for (const value of [" TRUE", "true ", "TRUE", "1", "yes", "on", "false "]) {
+    await assert.rejects(
+      () =>
+        main([
+          "deploy",
+          "--verifier",
+          "missing-verifier.json",
+          "--broadcast",
+          value,
+        ]),
+      /--broadcast must be true or false/u,
+    );
+  }
+
+  await assert.rejects(
+    () =>
+      main([
+        "deploy",
+        "--bsc-network",
+        "mainnet",
+        "--verifier",
+        "missing-verifier.json",
+        "--broadcast",
+        "true",
+        "--confirm-network",
+        "taira_bsc_xor:mainnet",
+        "--confirm-mainnet",
+        " TRUE",
+      ]),
+    /--confirm-mainnet must be true or false/u,
+  );
+
+  const dir = await mkdtemp(join(tmpdir(), "bsc-deploy-boolean-"));
+  const diagnosticVerifierFile = join(dir, "diagnostic-verifier.json");
+  await writeFile(
+    diagnosticVerifierFile,
+    JSON.stringify(
+      verifierMaterial({
+        schema: "iroha-sccp-bsc-testnet-diagnostic-verifier-key/v1",
+        warning: "Generated diagnostic BSC testnet verifier material.",
+        verifierKeyHash: DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
+      }),
+    ),
+    "utf8",
+  );
+  await assert.rejects(
+    () =>
+      main([
+        "deploy",
+        "--verifier",
+        diagnosticVerifierFile,
+        "--broadcast",
+        "true",
+        "--confirm-testnet",
+        "taira_bsc_xor",
+        "--allow-diagnostic-verifier",
+        " TRUE",
+      ]),
+    /--allow-diagnostic-verifier must be true or false/u,
+  );
+
+  const envName = "SCCP_BSC_TEST_DEPLOYER_PRIVATE_KEY";
+  const previous = process.env[envName];
+  const verifierFile = join(dir, "verifier.json");
+  await writeFile(verifierFile, JSON.stringify(verifierMaterial()), "utf8");
+  try {
+    process.env[envName] = `0x${"11".repeat(32)}`;
+    await assert.rejects(
+      () =>
+        main([
+          "deploy",
+          "--verifier",
+          verifierFile,
+          "--broadcast",
+          "true",
+          "--confirm-testnet",
+          "taira_bsc_xor",
+          "--private-key-env",
+          envName,
+          "--rpc-url",
+          "http://127.0.0.1:8545",
+          "--allow-local-rpc",
+          " TRUE",
+        ]),
+      /--allow-local-rpc must be true or false/u,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env[envName];
+    } else {
+      process.env[envName] = previous;
+    }
+  }
 });
 
 test("BSC deploy command rejects missing signer and unsafe local RPC before network use", async () => {

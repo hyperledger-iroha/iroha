@@ -274,6 +274,38 @@ function normalizeNonEmptyText(value, label) {
   return value;
 }
 
+function readOptionalCanonicalManifestText(
+  record,
+  keys,
+  label,
+  { allowNull = false, mismatchMessage = "" } = {},
+) {
+  let selected;
+  let selectedKey = "";
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(record, key)) {
+      continue;
+    }
+    const value = record[key];
+    if (value === undefined) {
+      continue;
+    }
+    const normalized =
+      value === null && allowNull
+        ? null
+        : normalizeNonEmptyText(value, label);
+    if (selected !== undefined && selected !== normalized) {
+      throw new Error(
+        mismatchMessage ||
+          `${label} aliases disagree: ${selectedKey}=${selected} but ${key}=${normalized}`,
+      );
+    }
+    selected = normalized;
+    selectedKey = key;
+  }
+  return selected === undefined ? null : selected;
+}
+
 function isRecoveryPhraseShapedText(value) {
   if (typeof value !== "string") return false;
   const normalized = value.trim().replace(/\s+/gu, " ").toLowerCase();
@@ -3407,24 +3439,15 @@ function normalizeRouteManifestForConfig(manifest) {
   if (record.productionReady !== true && record.productionReady !== false) {
     throw new Error("route manifest productionReady must be true or false");
   }
-  const hasDisabledReason =
-    record.disabledReason !== undefined && record.disabledReason !== null;
-  const hasDisabledReasonSnake =
-    record.disabled_reason !== undefined && record.disabled_reason !== null;
-  if (
-    hasDisabledReason &&
-    hasDisabledReasonSnake &&
-    record.disabledReason !== record.disabled_reason
-  ) {
-    throw new Error("route manifest disabledReason and disabled_reason must match");
-  }
-  const disabledReason =
-    hasDisabledReason || hasDisabledReasonSnake
-      ? normalizeNonEmptyText(
-          hasDisabledReason ? record.disabledReason : record.disabled_reason,
-          "route manifest disabledReason",
-        )
-      : null;
+  const disabledReason = readOptionalCanonicalManifestText(
+    record,
+    ["disabledReason", "disabled_reason"],
+    "route manifest disabledReason",
+    {
+      allowNull: true,
+      mismatchMessage: "route manifest disabledReason and disabled_reason must match",
+    },
+  );
   if (productionReady && disabledReason) {
     throw new Error(
       "route manifest productionReady cannot be true when disabledReason is set",
@@ -3524,6 +3547,16 @@ function normalizeRouteManifestForConfig(manifest) {
   if (productionReady && !postDeployLiveEvidence) {
     throw new Error(
       "route manifest productionReady requires postDeployLiveEvidence",
+    );
+  }
+  if (
+    postDeployLiveEvidence &&
+    postDeployLiveEvidence.fullTomlReady !== undefined &&
+    postDeployLiveEvidence.fullTomlReady !== null &&
+    typeof postDeployLiveEvidence.fullTomlReady !== "boolean"
+  ) {
+    throw new Error(
+      "route manifest postDeployLiveEvidence.fullTomlReady must be true or false",
     );
   }
   if (productionReady && postDeployLiveEvidence.fullTomlReady !== true) {
@@ -3814,14 +3847,18 @@ function normalizeRouteManifestForConfig(manifest) {
       "route manifest tairaXorBurnRecord.vkRef.name",
     ),
     gasLimit,
-    settlementContractAddress:
-      settlement.contractAddress === undefined || settlement.contractAddress === null
-        ? null
-        : normalizeNonEmptyText(settlement.contractAddress, "route manifest settlement.contractAddress"),
-    settlementContractAlias:
-      settlement.contractAlias === undefined || settlement.contractAlias === null
-        ? null
-        : normalizeNonEmptyText(settlement.contractAlias, "route manifest settlement.contractAlias"),
+    settlementContractAddress: readOptionalCanonicalManifestText(
+      settlement,
+      ["contractAddress", "contract_address"],
+      "route manifest settlement.contractAddress",
+      { allowNull: true },
+    ),
+    settlementContractAlias: readOptionalCanonicalManifestText(
+      settlement,
+      ["contractAlias", "contract_alias"],
+      "route manifest settlement.contractAlias",
+      { allowNull: true },
+    ),
     postDeployLiveEvidence: postDeployLiveEvidence
       ? {
           fullTomlReady: postDeployLiveEvidence.fullTomlReady === true,
