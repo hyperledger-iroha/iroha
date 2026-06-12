@@ -45,6 +45,13 @@ class ZkAssetInstructionsTest {
         }
         assertFailsWith<IllegalArgumentException> {
             ConfidentialEncryptedPayload(
+                ephemeralPublicKey = ByteArray(32).also { it[0] = 1 },
+                nonce = fill(2, 24),
+                ciphertext = byteArrayOf(3),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialEncryptedPayload(
                 ephemeralPublicKey = fill(1, 31),
                 nonce = fill(2, 24),
                 ciphertext = byteArrayOf(3),

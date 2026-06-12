@@ -2,6 +2,14 @@
 
 Last updated: 2026-06-13
 
+
+## 2026-06-13 Confidential encrypted payload low-order key parity
+
+- Hardened Kotlin/JVM and Android Java `ConfidentialEncryptedPayload` validation to reject X25519 low-order ephemeral public keys with the same fixed-probe contributory check Rust uses, not only the all-zero key.
+- Added focused tests for a non-zero low-order X25519 key while preserving the Rust wire fixture and malformed decode coverage.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest ./gradlew :jvm:test --rerun-tasks --console=plain`
 ## 2026-06-13 Confidential encrypted payload SDK wire codec
 
 - Added Kotlin/JVM and Android Java `ConfidentialEncryptedPayload` v1 wire

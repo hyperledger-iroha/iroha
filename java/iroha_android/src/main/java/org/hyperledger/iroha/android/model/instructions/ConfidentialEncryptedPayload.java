@@ -3,10 +3,14 @@ package org.hyperledger.iroha.android.model.instructions;
 import java.io.ByteArrayOutputStream;
 import java.util.Arrays;
 import java.util.Objects;
+import org.bouncycastle.crypto.agreement.X25519Agreement;
+import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
+import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
 
 /** X25519/XChaCha20-Poly1305 encrypted note payload carried by {@code zk::Shield}. */
 public final class ConfidentialEncryptedPayload {
   public static final int VERSION_V1 = 1;
+  private static final byte[] LOW_ORDER_X25519_CHECK_PRIVATE_KEY = fill((byte) 1, 32);
 
   private final int version;
   private final byte[] ephemeralPublicKey;
@@ -29,8 +33,8 @@ public final class ConfidentialEncryptedPayload {
     this.version = version;
     this.ephemeralPublicKey =
         ZkInstructionUtils.fixedBytes(ephemeralPublicKey, 32, "ephemeralPublicKey");
-    if (ZkInstructionUtils.isAllZero(this.ephemeralPublicKey)) {
-      throw new IllegalArgumentException("ephemeralPublicKey must not be all zero");
+    if (isLowOrderX25519PublicKey(this.ephemeralPublicKey)) {
+      throw new IllegalArgumentException("ephemeralPublicKey must not be low-order");
     }
     this.nonce = ZkInstructionUtils.fixedBytes(nonce, 24, "nonce");
     this.ciphertext = ZkInstructionUtils.copyNonEmpty(ciphertext, "ciphertext");
@@ -158,6 +162,31 @@ public final class ConfidentialEncryptedPayload {
 
   private static void write(final ByteArrayOutputStream out, final byte[] bytes) {
     out.write(bytes, 0, bytes.length);
+  }
+
+  private static boolean isLowOrderX25519PublicKey(final byte[] publicKey) {
+    final X25519PublicKeyParameters peer =
+        new X25519PublicKeyParameters(
+            ZkInstructionUtils.fixedBytes(publicKey, 32, "ephemeralPublicKey"), 0);
+    final X25519PrivateKeyParameters probe =
+        new X25519PrivateKeyParameters(LOW_ORDER_X25519_CHECK_PRIVATE_KEY, 0);
+    final X25519Agreement agreement = new X25519Agreement();
+    final byte[] shared = new byte[32];
+    try {
+      agreement.init(probe);
+      agreement.calculateAgreement(peer, shared, 0);
+      return ZkInstructionUtils.isAllZero(shared);
+    } catch (final IllegalStateException ignored) {
+      return true;
+    } finally {
+      Arrays.fill(shared, (byte) 0);
+    }
+  }
+
+  private static byte[] fill(final byte value, final int size) {
+    final byte[] bytes = new byte[size];
+    Arrays.fill(bytes, value);
+    return bytes;
   }
 
   private static final class Varint {

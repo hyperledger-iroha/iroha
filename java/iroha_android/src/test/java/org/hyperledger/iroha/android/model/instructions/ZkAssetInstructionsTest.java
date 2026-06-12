@@ -40,6 +40,9 @@ public final class ZkAssetInstructionsTest {
 
     expectThrows(() -> new ConfidentialEncryptedPayload(2, fill(1, 32), fill(2, 24), new byte[] {3}));
     expectThrows(() -> new ConfidentialEncryptedPayload(new byte[32], fill(2, 24), new byte[] {3}));
+    final byte[] nonZeroLowOrder = new byte[32];
+    nonZeroLowOrder[0] = 1;
+    expectThrows(() -> new ConfidentialEncryptedPayload(nonZeroLowOrder, fill(2, 24), new byte[] {3}));
     expectThrows(() -> new ConfidentialEncryptedPayload(fill(1, 31), fill(2, 24), new byte[] {3}));
     expectThrows(() -> new ConfidentialEncryptedPayload(fill(1, 32), fill(2, 23), new byte[] {3}));
     expectThrows(() -> new ConfidentialEncryptedPayload(fill(1, 32), fill(2, 24), new byte[0]));

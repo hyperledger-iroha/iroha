@@ -3,9 +3,14 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
 import java.util.Base64
+import java.util.Arrays
+import org.bouncycastle.crypto.agreement.X25519Agreement
+import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
+import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 
 private val U128_MAX: BigInteger = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE)
 private const val PROOF_ATTACHMENT_MAX_BYTES: Int = 64 * 1024 * 1024
+private val LOW_ORDER_X25519_CHECK_PRIVATE_KEY = ByteArray(32) { 1 }
 
 /** Shielded asset registration mode accepted by `zk::RegisterZkAsset`. */
 enum class ZkAssetMode(@JvmField val bridgeCode: Int, @JvmField val wireName: String) {
@@ -38,7 +43,9 @@ class ConfidentialEncryptedPayload @JvmOverloads constructor(
 
     init {
         require(version == VERSION_V1) { "version must be $VERSION_V1" }
-        require(!isAllZero(_ephemeralPublicKey)) { "ephemeralPublicKey must not be all zero" }
+        require(!isLowOrderX25519PublicKey(_ephemeralPublicKey)) {
+            "ephemeralPublicKey must not be low-order"
+        }
     }
 
     val ephemeralPublicKey: ByteArray get() = _ephemeralPublicKey.copyOf()
@@ -558,6 +565,22 @@ private fun copyNonEmpty(value: ByteArray?, name: String): ByteArray {
 }
 
 private fun isAllZero(bytes: ByteArray): Boolean = bytes.all { it.toInt() == 0 }
+
+private fun isLowOrderX25519PublicKey(publicKey: ByteArray): Boolean {
+    val peer = X25519PublicKeyParameters(fixedBytes(publicKey, 32, "ephemeralPublicKey"), 0)
+    val probe = X25519PrivateKeyParameters(LOW_ORDER_X25519_CHECK_PRIVATE_KEY, 0)
+    val agreement = X25519Agreement()
+    val shared = ByteArray(32)
+    return try {
+        agreement.init(probe)
+        agreement.calculateAgreement(peer, shared, 0)
+        isAllZero(shared)
+    } catch (_: IllegalStateException) {
+        true
+    } finally {
+        Arrays.fill(shared, 0.toByte())
+    }
+}
 
 internal fun flattenFixed32(values: List<ByteArray>): ByteArray {
     val out = ByteArray(values.size * 32)
