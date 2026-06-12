@@ -4628,10 +4628,29 @@ impl Actor {
             return Ok(());
         }
         let mut missing_indices = request.missing_indices;
+        let total_chunks = session.total_chunks();
+        let Ok(total_chunks_len) = usize::try_from(total_chunks) else {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunkRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        };
+        if missing_indices.is_empty() || missing_indices.len() > total_chunks_len {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunkRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        }
         missing_indices.sort_unstable();
-        missing_indices.dedup();
-        missing_indices.retain(|idx| *idx < session.total_chunks());
-        if missing_indices.is_empty() {
+        let has_duplicate = missing_indices.windows(2).any(|pair| pair[0] == pair[1]);
+        let has_out_of_range = missing_indices
+            .last()
+            .is_some_and(|idx| *idx >= total_chunks);
+        if has_duplicate || has_out_of_range {
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::RbcChunkRequest,
                 super::status::ConsensusMessageOutcome::Dropped,
@@ -4730,6 +4749,21 @@ impl Actor {
                 super::status::ConsensusMessageKind::RbcChunk,
                 super::status::ConsensusMessageOutcome::Dropped,
                 super::status::ConsensusMessageReason::PayloadTooLarge,
+            );
+            return Ok(());
+        }
+        if chunk_idx >= RBC_MAX_TOTAL_CHUNKS {
+            warn!(
+                height = chunk_height,
+                view = chunk_view,
+                idx = chunk_idx,
+                max_chunks = RBC_MAX_TOTAL_CHUNKS,
+                "dropping RBC chunk with impossible chunk index"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunk,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
             );
             return Ok(());
         }
@@ -6575,16 +6609,44 @@ impl Actor {
         if !deliver.ready_signatures.is_empty() {
             let max_ready = signature_topology.as_ref().len();
             if deliver.ready_signatures.len() > max_ready {
-                debug!(
+                warn!(
                     height = deliver.height,
                     view = deliver.view,
                     sender = deliver.sender,
                     ready_entries = deliver.ready_signatures.len(),
                     max_ready,
-                    "truncating oversized RBC DELIVER READY bundle"
+                    "dropping RBC DELIVER with oversized READY bundle"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcDeliver,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidPayload,
+                );
+                return Ok(());
             }
-            for entry in deliver.ready_signatures.iter().take(max_ready) {
+            let mut bundle_senders = BTreeSet::new();
+            for entry in &deliver.ready_signatures {
+                let sender_in_range = usize::try_from(entry.sender)
+                    .ok()
+                    .is_some_and(|idx| idx < max_ready);
+                if !sender_in_range || !bundle_senders.insert(entry.sender) {
+                    warn!(
+                        height = deliver.height,
+                        view = deliver.view,
+                        sender = deliver.sender,
+                        ready_sender = entry.sender,
+                        max_ready,
+                        "dropping RBC DELIVER with malformed READY bundle"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcDeliver,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::InvalidPayload,
+                    );
+                    return Ok(());
+                }
+            }
+            for entry in &deliver.ready_signatures {
                 let ready = RbcReady {
                     block_hash: deliver.block_hash,
                     height: deliver.height,

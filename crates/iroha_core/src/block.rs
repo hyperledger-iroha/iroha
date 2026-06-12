@@ -14222,6 +14222,79 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_keep_voting_block_rejects_duplicate_da_storage_ticket() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let mut params = Parameters::default();
+            params.sumeragi.da_enabled = true;
+            world.parameters = Cell::new(params);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+
+            let make_record = |sequence: u64, tag: u8| {
+                DaCommitmentRecord::new(
+                    LaneId::new(0),
+                    1,
+                    sequence,
+                    BlobDigest::new([tag; 32]),
+                    ManifestDigest::new([tag; 32]),
+                    DaProofScheme::MerkleSha256,
+                    Hash::prehashed([tag; 32]),
+                    None,
+                    None,
+                    RetentionClass::default(),
+                    StorageTicketId::new([0xDD; 32]),
+                    Signature::from_bytes(&[tag; 64]),
+                )
+            };
+            let bundle = DaCommitmentBundle::new(vec![make_record(1, 0xC1), make_record(2, 0xC2)]);
+            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_commitments(Some(bundle))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected DA commitment duplicate-storage-ticket rejection");
+            };
+            assert!(matches!(
+                err.as_ref(),
+                BlockValidationError::DaCommitmentBundle(
+                    DaCommitmentValidationError::DuplicateStorageTicket { lane, epoch, sequence }
+                ) if *lane == LaneId::new(0) && *epoch == 1 && *sequence == 2
+            ));
+        }
+
+        #[test]
         fn validate_keep_voting_block_rejects_da_commitment_hash_mismatch() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();

@@ -289,12 +289,14 @@ impl DaReceiptCursorIndex {
         block_height: u64,
         records: &[DaCommitmentRecord],
     ) -> Result<Vec<(LaneEpoch, u64)>, DaReceiptCursorError> {
+        let mut candidate = self.clone();
         let mut advanced = Vec::new();
         for record in records {
             let lane_epoch = LaneEpoch::new(record.lane_id, record.epoch);
-            self.record(lane_epoch, record.sequence, block_height)?;
+            candidate.record(lane_epoch, record.sequence, block_height)?;
             advanced.push((lane_epoch, record.sequence));
         }
+        *self = candidate;
         Ok(advanced)
     }
 
@@ -447,7 +449,9 @@ pub fn plan_committable_receipts(
     let mut grouped: BTreeMap<LaneEpoch, BTreeMap<u64, DaReceiptEntry>> = BTreeMap::new();
     for entry in receipts {
         if lane_config.entry(entry.lane_epoch.lane_id).is_none() {
-            continue;
+            return Err(DaReceiptQueueError::UnknownLane {
+                lane: entry.lane_epoch.lane_id,
+            });
         }
 
         let key = iroha_data_model::da::commitment::DaCommitmentKey {
@@ -722,6 +726,43 @@ mod tests {
     }
 
     #[test]
+    fn receipt_cursor_record_bundle_rolls_back_when_later_record_regresses() {
+        let lane0_epoch = LaneEpoch::new(LaneId::new(0), 1);
+        let lane1_epoch = LaneEpoch::new(LaneId::new(1), 1);
+        let mut index = DaReceiptCursorIndex::default();
+        let initial_lane0 = sample_record(&sample_receipt(0, 1, 1), 1);
+        let initial_lane1 = sample_record(&sample_receipt(1, 1, 3), 3);
+        index
+            .record_bundle(1, &[initial_lane0, initial_lane1])
+            .expect("initial receipt cursor records");
+
+        let advancing_lane0 = sample_record(&sample_receipt(0, 1, 2), 2);
+        let regressing_lane1 = sample_record(&sample_receipt(1, 1, 2), 2);
+        let err = index
+            .record_bundle(2, &[advancing_lane0, regressing_lane1])
+            .expect_err("later receipt cursor regression must fail");
+        assert!(matches!(
+            err,
+            DaReceiptCursorError::Regression {
+                lane,
+                observed: 2,
+                recorded: 3,
+                ..
+            } if lane == LaneId::new(1)
+        ));
+        assert_eq!(index.highest(lane0_epoch), Some(1));
+        assert_eq!(index.highest(lane1_epoch), Some(3));
+        assert_eq!(
+            index
+                .by_lane_epoch
+                .get(&lane0_epoch)
+                .expect("lane0 cursor")
+                .last_block_height,
+            1
+        );
+    }
+
+    #[test]
     fn load_receipt_entries_reads_spool() {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
@@ -804,6 +845,31 @@ mod tests {
         assert!(matches!(
             result,
             Err(DaReceiptQueueError::MissingSequence { expected: 2, .. })
+        ));
+    }
+
+    #[test]
+    fn plan_committable_receipts_rejects_unknown_lane() {
+        let known_lane = LaneId::new(0);
+        let unknown_lane = LaneId::new(7);
+        let receipt = sample_receipt(unknown_lane.as_u32(), 1, 1);
+        let entry = DaReceiptEntry {
+            lane_epoch: LaneEpoch::new(unknown_lane, 1),
+            sequence: 1,
+            manifest_hash: ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
+            receipt,
+        };
+        let lane_config = lane_config_for(known_lane);
+
+        let result = plan_committable_receipts(
+            &lane_config,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            vec![entry],
+        );
+        assert!(matches!(
+            result,
+            Err(DaReceiptQueueError::UnknownLane { lane }) if lane == unknown_lane
         ));
     }
 

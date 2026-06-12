@@ -21,6 +21,8 @@ use sha2::{Digest as _, Sha256};
 
 use crate::panic_hook;
 
+use super::main_loop::RBC_MAX_TOTAL_CHUNKS;
+
 /// Persisted metadata describing the node software that produced the snapshot.
 #[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
 pub struct SoftwareManifest {
@@ -1219,6 +1221,16 @@ fn persisted_payload_bytes(
     }
 }
 
+fn roster_has_duplicates(roster: &[PeerId]) -> bool {
+    let mut seen = BTreeSet::new();
+    for peer in roster {
+        if !seen.insert(peer) {
+            return true;
+        }
+    }
+    false
+}
+
 pub(super) fn validate_allocations(session: &PersistedSession) -> Result<(), &'static str> {
     if session.lane_allocations.is_empty() && session.dataspace_allocations.is_empty() {
         return Ok(());
@@ -1303,14 +1315,23 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
 
     let expected = session.total_chunks as usize;
     if expected == 0 {
-        if !session.chunk_digests.is_empty() {
-            return Err("chunk digest count mismatch");
-        }
-        return if session.chunks.is_empty() {
-            Ok(())
-        } else {
-            Err("non-empty chunk list with zero expected chunks")
-        };
+        return Err("zero total chunks");
+    }
+    if session.total_chunks > RBC_MAX_TOTAL_CHUNKS {
+        return Err("total chunks exceeds cap");
+    }
+    if !session.ready_signatures.is_empty() && session.session_roster.is_empty() {
+        return Err("READY metadata without session roster");
+    }
+    if (session.delivered
+        || session.deliver_sender.is_some()
+        || session.deliver_signature.is_some())
+        && session.session_roster.is_empty()
+    {
+        return Err("DELIVER metadata without session roster");
+    }
+    if roster_has_duplicates(&session.session_roster) {
+        return Err("duplicate session roster peer");
     }
     if !session.chunk_digests.is_empty() && session.chunk_digests.len() != expected {
         return Err("chunk digest count mismatch");
@@ -1471,7 +1492,7 @@ mod tests {
             epoch: 0,
             block_header: None,
             leader_signature: None,
-            total_chunks: 0,
+            total_chunks: 1,
             encoding: RbcEncoding::Plain,
             chunk_size_bytes: 0,
             payload_size_bytes: 0,
@@ -2291,8 +2312,19 @@ mod tests {
             manifest.clone(),
         );
 
+        let mut zero_total_clean = sample_persisted_session(base_key, chain_hash, manifest.clone());
+        zero_total_clean.total_chunks = 0;
+        assert_persisted_session_rejected_and_deleted(
+            "zero total without chunks",
+            base_key,
+            zero_total_clean,
+            chain_hash,
+            manifest.clone(),
+        );
+
         let mut zero_total_with_digest =
             sample_persisted_session(base_key, chain_hash, manifest.clone());
+        zero_total_with_digest.total_chunks = 0;
         zero_total_with_digest.chunk_digests.push([0x11; 32]);
         assert_persisted_session_rejected_and_deleted(
             "zero total with digest",
@@ -2304,6 +2336,7 @@ mod tests {
 
         let mut zero_total_with_chunk =
             sample_persisted_session(base_key, chain_hash, manifest.clone());
+        zero_total_with_chunk.total_chunks = 0;
         zero_total_with_chunk.chunks.push(PersistedChunk {
             idx: 0,
             bytes: vec![0xAA],
@@ -2312,6 +2345,16 @@ mod tests {
             "zero total with chunk",
             base_key,
             zero_total_with_chunk,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut over_cap_total = sample_persisted_session(base_key, chain_hash, manifest.clone());
+        over_cap_total.total_chunks = RBC_MAX_TOTAL_CHUNKS.saturating_add(1);
+        assert_persisted_session_rejected_and_deleted(
+            "total chunks above cap",
+            base_key,
+            over_cap_total,
             chain_hash,
             manifest.clone(),
         );
@@ -2356,7 +2399,8 @@ mod tests {
         );
 
         let mut empty_ready_signature =
-            sample_persisted_session(base_key, chain_hash, manifest.clone());
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xB0, 8);
+        empty_ready_signature.session_roster.push(test_peer_id(1));
         empty_ready_signature.ready_signatures.push(PersistedReady {
             sender: 0,
             signature: Vec::new(),
@@ -2369,7 +2413,36 @@ mod tests {
             manifest.clone(),
         );
 
-        let mut duplicate_ready = sample_persisted_session(base_key, chain_hash, manifest.clone());
+        let mut ready_without_roster =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xB1, 8);
+        ready_without_roster.ready_signatures.push(PersistedReady {
+            sender: 0,
+            signature: vec![0x01],
+        });
+        assert_persisted_session_rejected_and_deleted(
+            "ready metadata without roster",
+            base_key,
+            ready_without_roster,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut duplicate_roster =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xB9, 8);
+        let duplicate_peer = test_peer_id(1);
+        duplicate_roster.session_roster.push(duplicate_peer.clone());
+        duplicate_roster.session_roster.push(duplicate_peer);
+        assert_persisted_session_rejected_and_deleted(
+            "duplicate session roster",
+            base_key,
+            duplicate_roster,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut duplicate_ready =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xB2, 8);
+        duplicate_ready.session_roster.push(test_peer_id(1));
         duplicate_ready.ready_signatures.push(PersistedReady {
             sender: 0,
             signature: vec![0x01],
@@ -2386,7 +2459,8 @@ mod tests {
             manifest.clone(),
         );
 
-        let mut ready_sender_oob = sample_persisted_session(base_key, chain_hash, manifest.clone());
+        let mut ready_sender_oob =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xB3, 8);
         ready_sender_oob.session_roster.push(test_peer_id(1));
         ready_sender_oob.ready_signatures.push(PersistedReady {
             sender: 1,
@@ -2401,7 +2475,7 @@ mod tests {
         );
 
         let mut deliver_sender_oob =
-            sample_persisted_session(base_key, chain_hash, manifest.clone());
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xB4, 8);
         deliver_sender_oob.session_roster.push(test_peer_id(1));
         deliver_sender_oob.delivered = true;
         deliver_sender_oob.deliver_sender = Some(1);
@@ -2414,8 +2488,24 @@ mod tests {
             manifest.clone(),
         );
 
+        let mut delivered_without_roster =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xB5, 8);
+        delivered_without_roster.delivered = true;
+        delivered_without_roster.deliver_sender = Some(0);
+        delivered_without_roster.deliver_signature = Some(vec![0x01]);
+        assert_persisted_session_rejected_and_deleted(
+            "deliver metadata without roster",
+            base_key,
+            delivered_without_roster,
+            chain_hash,
+            manifest.clone(),
+        );
+
         let mut delivered_missing_signature =
-            sample_persisted_session(base_key, chain_hash, manifest.clone());
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xB6, 8);
+        delivered_missing_signature
+            .session_roster
+            .push(test_peer_id(1));
         delivered_missing_signature.delivered = true;
         delivered_missing_signature.deliver_sender = Some(0);
         assert_persisted_session_rejected_and_deleted(
@@ -2427,7 +2517,10 @@ mod tests {
         );
 
         let mut delivered_empty_signature =
-            sample_persisted_session(base_key, chain_hash, manifest.clone());
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xB7, 8);
+        delivered_empty_signature
+            .session_roster
+            .push(test_peer_id(1));
         delivered_empty_signature.delivered = true;
         delivered_empty_signature.deliver_sender = Some(0);
         delivered_empty_signature.deliver_signature = Some(Vec::new());
@@ -2440,7 +2533,8 @@ mod tests {
         );
 
         let mut stale_deliver_metadata =
-            sample_persisted_session(base_key, chain_hash, manifest.clone());
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xB8, 8);
+        stale_deliver_metadata.session_roster.push(test_peer_id(1));
         stale_deliver_metadata.delivered = false;
         stale_deliver_metadata.deliver_sender = Some(0);
         stale_deliver_metadata.deliver_signature = Some(vec![0x01]);
@@ -2640,9 +2734,10 @@ mod tests {
         session.record_deliver(0, vec![0xAA; 64]);
         let chain_hash = test_chain_hash();
         let manifest = test_manifest();
+        let roster = vec![test_peer_id(1)];
 
         let outcome = store
-            .persist_session(key, &session, &chain_hash, &manifest, &[])
+            .persist_session(key, &session, &chain_hash, &manifest, &roster)
             .expect("persist session");
         match outcome.pressure {
             StorePressure::SoftLimit { sessions, bytes } => {
@@ -3069,7 +3164,8 @@ mod tests {
         session.record_deliver(0, vec![0xAA; 64]);
         let chain_hash = test_chain_hash();
         let manifest = test_manifest();
-        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+        let roster = vec![test_peer_id(1)];
+        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
         persisted.chunks.clear();
 
         store

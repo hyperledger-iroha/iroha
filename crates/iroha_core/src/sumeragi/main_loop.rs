@@ -201,7 +201,7 @@ pub(crate) mod test_time {
 }
 
 /// Hard cap on RBC chunks per payload to bound memory usage (default chunk size 64 KiB → 64 MiB cap).
-const RBC_MAX_TOTAL_CHUNKS: u32 = 1024;
+pub(super) const RBC_MAX_TOTAL_CHUNKS: u32 = 1024;
 /// Reserve room for headers/signatures when RBC is disabled so `BlockCreated` frames
 /// stay under the consensus topic cap.
 const NON_RBC_FRAME_HEADROOM_BYTES: usize = 8 * 1024;

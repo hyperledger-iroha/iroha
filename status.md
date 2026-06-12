@@ -2,12 +2,263 @@
 
 Last updated: 2026-06-12
 
+## 2026-06-12 DA committed-duplicate rejection
+
+- Hardened state-backed DA commitment validation so inbound blocks cannot reuse
+  an already committed `(lane, epoch, sequence)`, manifest hash, or storage
+  ticket under a fresh commitment record before DA shard cursors advance.
+- Added stable storage-ticket lookup to the ledger-derived DA commitment index
+  with first-wins semantics matching manifest lookup, while preserving
+  per-lane lookup for historical duplicate data during recovery.
+- Hardened local proposal work detection and bundle filtering so duplicate-only
+  DA spool records that already exist in the committed index do not wake or
+  build an invalid proposal.
+- Added adversarial state regressions for cross-block manifest and storage
+  ticket reuse, a feature-gated proposal-work regression for duplicate-only
+  spool contents, and refreshed the branch-replacement cursor fixture so it uses
+  unique DA manifests/tickets before asserting stale-cursor behavior.
+- Testing:
+  - `cargo test -p iroha_core --lib validate_da_shard_cursors_rejects_committed -- --nocapture`
+  - `cargo test -p iroha_core --lib commitment_store -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_commitment_bundle -- --nocapture`
+  - `cargo test -p iroha_core --lib block_and_revert_requires_fresh_da_shard_cursor -- --nocapture`
+  - `cargo test -p iroha_core --lib da_shard_cursor -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_keep_voting_block_rejects_duplicate_da -- --nocapture`
+  - `cargo test -p iroha_core --lib internal_proposal_work_ --features sumeragi-main-loop-tests -- --nocapture`
+
+## 2026-06-12 Torii DA selector consistency
+
+- Hardened Torii DA commitment list/proof lookup so a request carrying a
+  `manifest_hash` plus lane/epoch/sequence selectors must describe the same
+  committed record. Conflicting selectors now return no commitment instead of
+  letting the manifest silently override the tuple.
+- Targeted list requests with incomplete tuples no longer fall back to a full
+  commitment listing, avoiding ambiguous query results for partial selectors.
+- Applied the same fail-closed selector matching to DA pin-intent list/prove
+  lookups across storage ticket, alias, manifest, and lane/epoch/sequence
+  selectors.
+- Added Torii handler regressions for conflicting manifest/tuple proof requests,
+  conflicting list selectors, partial tuple list requests, and pin-intent
+  ticket/tuple conflicts.
+- Testing:
+  - `cargo test -p iroha_torii --lib prove_handler_returns_none_for_conflicting_commitment_selectors --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --lib da::commitments --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --lib da::pin_intents --features app_api -- --nocapture`
+
+## 2026-06-12 DA confidential-compute inbound validation
+
+- Moved confidential-compute DA policy enforcement into
+  `validate_commitment_bundle`, so inbound blocks now reject confidential lanes
+  that are missing required key policy metadata or carry invalid confidential
+  digests before shard cursors advance.
+- Added a DA bundle regression for a confidential lane marked in lane metadata
+  without the required key policy, and reran the direct confidential validator
+  and state hydration coverage.
+- Testing:
+  - `cargo test -p iroha_core --lib validate_commitment_bundle -- --nocapture`
+  - `cargo test -p iroha_core --lib confidential_compute -- --nocapture`
+  - `cargo test -p iroha_core --lib rejects_missing_policy -- --nocapture`
+
+## 2026-06-12 RBC pre-INIT chunk index guard
+
+- Hardened RBC chunk ingress so chunks with indexes at or above the global
+  `RBC_MAX_TOTAL_CHUNKS` cap are dropped before they can create or inflate a
+  pre-INIT pending stash. Such indexes can never become valid because INIT
+  sessions are capped to the same maximum.
+- Added a feature-gated Sumeragi regression proving an impossible-index chunk
+  does not create a pending RBC stash entry when no INIT/session exists yet.
+- Testing:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests handle_rbc_chunk_rejects_impossible_index_before_stash -- --nocapture`
+  - `cargo test -p iroha_core --lib main_loop::rbc -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 RBC DELIVER bundled READY validation
+
+- Hardened RBC DELIVER ingress so embedded READY bundles are rejected when they
+  exceed the roster size, contain duplicate READY senders, or reference sender
+  indexes outside the active signature topology. DELIVER no longer silently
+  truncates oversized READY bundles.
+- Added a feature-gated Sumeragi regression that starts from a valid, locally
+  signed DELIVER and re-signs duplicate-sender, overlong, and out-of-range
+  READY-bundle variants, asserting they do not deliver or enter the pending
+  stash.
+- Testing:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests handle_rbc_deliver_rejects_malformed_ready_bundles -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 RBC chunk repair request validation
+
+- Hardened inbound RBC chunk repair requests so `missing_indices` must be
+  non-empty, bounded by the session chunk count, unique, and in range before a
+  peer receives chunk data; malformed requests are now dropped instead of being
+  silently sorted, deduplicated, or filtered into a valid shape.
+- Extended the feature-gated Sumeragi chunk-request regression with empty,
+  duplicate-index, out-of-range, and overlong adversarial requests alongside
+  the existing invalid-session metadata cases.
+- Testing:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests handle_rbc_chunk_request_rejects_malformed_requests_and_session_metadata -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 RBC pending-stash cap accounting coverage
+
+- Added focused pending-RBC unit coverage for stashed READY and DELIVER control
+  messages so byte accounting, accepted-message retention, oversized-message
+  drops, and per-kind drop counters stay pinned under adversarial pre-INIT
+  traffic.
+- Testing:
+  - `cargo test -p iroha_core --lib pending_rbc -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 RBC persisted-session hardening
+
+- Hardened the RBC chunk store so restart recovery rejects and deletes
+  persisted sessions with zero total chunks or a total chunk count above the
+  runtime hard cap before they reach `RbcSession` reconstruction.
+- Required persisted READY and DELIVER evidence to carry the session roster
+  needed to bind sender indexes, while still allowing chunk-only incomplete
+  sessions without evidence to survive restart recovery.
+- Expanded adversarial store validation coverage for clean zero-total
+  snapshots, over-cap chunk counts, READY metadata without a roster, DELIVER
+  metadata without a roster, duplicate persisted rosters, and malformed
+  READY/DELIVER cases on positive chunk-count snapshots.
+- Testing:
+  - `cargo test -p iroha_core --lib rbc_store -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_sampling -- --nocapture`
+  - `cargo test -p iroha_core --lib main_loop::rbc -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
 ## 2026-06-12 Rustfmt edition default
 
 - Set the repository rustfmt configuration to default to Rust edition 2024,
   matching the workspace edition and contributor formatting guidance.
 - Testing:
   - `cargo fmt --all --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 DA pin-intent bundle validation on inbound blocks
+
+- Hardened inbound block validation so embedded DA pin-intent bundles must pass
+  the same lane, owner, alias, sequence, storage-ticket, manifest-hash, and
+  bundle-version checks used by proposal/replay sanitization before a block can
+  enter the `ValidBlock` path.
+- Extended pin-intent sanitization to reject duplicate storage tickets and
+  duplicate manifest hashes, and added telemetry labels for unsupported bundle
+  versions plus the new duplicate-ticket and duplicate-manifest rejection
+  reasons.
+- Replaced the all-zero default/test streaming identity seed with deterministic
+  non-zero seed material so strict Ed25519 seeded-key validation does not panic
+  during state construction.
+- Testing:
+  - `cargo test -p iroha_core --lib da_pin_intent -- --nocapture`
+  - `cargo test -p iroha_core --lib proof_policy_tests -- --nocapture`
+  - `cargo test -p iroha_core --lib pin_store -- --nocapture`
+  - `cargo test -p iroha_torii --lib pin_intents -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 DA commitment storage-ticket validation
+
+- Hardened DA commitment bundle validation so storage tickets must be non-zero
+  and unique within the committed bundle, matching the manifest and lane-key
+  uniqueness rules already enforced before inbound blocks enter the
+  `ValidBlock` path.
+- Added validator regressions for duplicate and zero storage tickets, plus an
+  inbound block regression that rejects a forged DA commitment bundle with two
+  records pointing at the same storage ticket.
+- Testing:
+  - `cargo test -p iroha_core --lib validate_commitment_bundle -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_keep_voting_block_rejects_duplicate_da_storage_ticket -- --nocapture`
+  - `cargo test -p iroha_core --lib da_commitment -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_keep_voting_block_rejects_duplicate_da_manifest -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 DA receipt planner unknown-lane rejection
+
+- Changed DA receipt planning to fail closed when a spooled receipt references a
+  lane that is not present in the active lane catalog. The error variant and
+  docs already described this behavior, but the implementation previously
+  skipped those receipts silently during proposal assembly.
+- Added a regression for unknown-lane receipts alongside the existing gap,
+  sealed/stale, duplicate-manifest, duplicate-ticket, and commitment alignment
+  receipt queue tests.
+- Testing:
+  - `cargo test -p iroha_core --lib plan_committable_receipts -- --nocapture`
+  - `cargo test -p iroha_core --lib da::receipts -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 DA cursor bundle updates are transactional
+
+- Hardened DA shard cursor and DA receipt cursor bundle updates to validate and
+  advance on cloned candidate indexes before committing changes. If a later
+  record in the same bundle regresses or references an invalid lane, earlier
+  candidate advances are rolled back instead of partially mutating state.
+- Added adversarial rollback coverage for shard cursor records and receipt
+  cursor records where the first record can advance but a later record fails.
+- Testing:
+  - `cargo test -p iroha_core --lib record_records -- --nocapture`
+  - `cargo test -p iroha_core --lib da::shard_cursor -- --nocapture`
+  - `cargo test -p iroha_core --lib receipt_cursor_record_bundle_rolls_back_when_later_record_regresses -- --nocapture`
+  - `cargo test -p iroha_core --lib da::receipts -- --nocapture`
+  - `cargo test -p iroha_core --lib da_shard_cursor -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 DA proof bundle-length verification
+
+- Hardened DA commitment proof verification so the proof-advertised bundle
+  length must match the referenced committed bundle length. Tampering with the
+  `bundle_len` field now fails before Merkle path validation.
+- Added a core proof tamper regression and reran Torii DA commitment
+  proof/list/verify handlers to keep API-level proof behavior covered.
+- Testing:
+  - `cargo test -p iroha_core --lib da::proofs -- --nocapture`
+  - `cargo test -p iroha_torii --lib verify_handler_rejects_bundle_len_mismatch -- --nocapture`
+  - `cargo test -p iroha_torii --lib da::commitments -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 DA commitment manifest lookup stability
+
+- Hardened `DaCommitmentStore` manifest indexing so a later distinct
+  commitment with a duplicate manifest hash no longer overwrites the first
+  manifest lookup entry. Lane/epoch/sequence lookup still indexes the later
+  record, but manifest-based query/prove behavior remains first-seen and stable.
+- Added a store regression for duplicate manifest lookup stability and cleaned
+  Torii DA commitment proof fixtures so proof-roundtrip tests use unique
+  manifest hashes.
+- Testing:
+  - `cargo test -p iroha_core --lib commitment_store -- --nocapture`
+  - `cargo test -p iroha_torii --lib da::commitments -- --nocapture`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-12 DA helper regression sweep
+
+- Ran the compiled core DA module sweep after the commitment, proof, receipt,
+  cursor, pin-intent, confidential-compute, replay-cache, and DA gate hardening
+  changes. The latest filter covered 103 DA/Sumeragi DA helper tests.
+- Testing:
+  - `cargo test -p iroha_core --lib da:: -- --nocapture`
+  - `cargo fmt --all -- --check`
   - `git diff --check`
   - `git diff --quiet -- Cargo.lock`
 

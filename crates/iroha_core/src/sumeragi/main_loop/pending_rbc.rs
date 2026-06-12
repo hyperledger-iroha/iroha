@@ -520,10 +520,45 @@ mod tests {
     };
 
     use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::block::BlockHeader;
+    use iroha_data_model::block::{BlockHeader, consensus::RbcReadySignature};
 
-    use super::{Actor, PendingRbcMessages};
+    use super::{Actor, PendingRbcMessages, rbc_deliver_stash_bytes, rbc_ready_stash_bytes};
+    use crate::sumeragi::consensus::{RbcDeliver, RbcReady};
     use crate::sumeragi::{main_loop::RbcSession, rbc_store::SessionKey};
+
+    fn sample_block_hash(tag: &[u8]) -> HashOf<BlockHeader> {
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(tag))
+    }
+
+    fn sample_ready(signature_len: usize) -> RbcReady {
+        RbcReady {
+            block_hash: sample_block_hash(b"pending-rbc-ready"),
+            height: 7,
+            view: 2,
+            epoch: 3,
+            roster_hash: Hash::new(b"pending-rbc-ready-roster"),
+            chunk_root: Hash::new(b"pending-rbc-ready-root"),
+            sender: 1,
+            signature: vec![0xA5; signature_len],
+        }
+    }
+
+    fn sample_deliver(signature_len: usize, ready_signature_len: usize) -> RbcDeliver {
+        RbcDeliver {
+            block_hash: sample_block_hash(b"pending-rbc-deliver"),
+            height: 8,
+            view: 3,
+            epoch: 4,
+            roster_hash: Hash::new(b"pending-rbc-deliver-roster"),
+            chunk_root: Hash::new(b"pending-rbc-deliver-root"),
+            sender: 2,
+            signature: vec![0xB6; signature_len],
+            ready_signatures: vec![RbcReadySignature {
+                sender: 1,
+                signature: vec![0xC7; ready_signature_len],
+            }],
+        }
+    }
 
     #[test]
     fn take_pending_rbc_slot_inserts_entry() {
@@ -593,5 +628,67 @@ mod tests {
         assert_eq!(pending.len(), 2);
         assert!(pending.contains_key(&key_a));
         assert!(pending.contains_key(&key_b));
+    }
+
+    #[test]
+    fn push_ready_capped_accounts_and_drops_oversized_ready() {
+        let now = Instant::now();
+        let mut pending = PendingRbcMessages::new(now);
+        let accepted = sample_ready(16);
+        let accepted_size = rbc_ready_stash_bytes(&accepted);
+
+        let (inserted, dropped_bytes) =
+            pending.push_ready_capped(accepted.clone(), accepted_size, now);
+
+        assert!(inserted);
+        assert_eq!(dropped_bytes, 0);
+        assert_eq!(pending.ready, vec![accepted]);
+        assert_eq!(pending.pending_bytes(), accepted_size);
+        assert_eq!(pending.drop_breakdown(), (0, 0, 0, 0));
+
+        let oversized = sample_ready(32);
+        let oversized_size = rbc_ready_stash_bytes(&oversized);
+        let (inserted, dropped_bytes) =
+            pending.push_ready_capped(oversized, accepted_size, now + Duration::from_millis(1));
+
+        assert!(!inserted);
+        assert_eq!(dropped_bytes, oversized_size);
+        assert_eq!(pending.ready.len(), 1);
+        assert_eq!(pending.pending_bytes(), accepted_size);
+        assert_eq!(
+            pending.drop_breakdown(),
+            (0, 1, 0, u64::try_from(oversized_size).unwrap())
+        );
+    }
+
+    #[test]
+    fn push_deliver_capped_accounts_and_drops_oversized_deliver() {
+        let now = Instant::now();
+        let mut pending = PendingRbcMessages::new(now);
+        let accepted = sample_deliver(16, 8);
+        let accepted_size = rbc_deliver_stash_bytes(&accepted);
+
+        let (inserted, dropped_bytes) =
+            pending.push_deliver_capped(accepted.clone(), accepted_size, now);
+
+        assert!(inserted);
+        assert_eq!(dropped_bytes, 0);
+        assert_eq!(pending.deliver, vec![accepted]);
+        assert_eq!(pending.pending_bytes(), accepted_size);
+        assert_eq!(pending.drop_breakdown(), (0, 0, 0, 0));
+
+        let oversized = sample_deliver(32, 16);
+        let oversized_size = rbc_deliver_stash_bytes(&oversized);
+        let (inserted, dropped_bytes) =
+            pending.push_deliver_capped(oversized, accepted_size, now + Duration::from_millis(1));
+
+        assert!(!inserted);
+        assert_eq!(dropped_bytes, oversized_size);
+        assert_eq!(pending.deliver.len(), 1);
+        assert_eq!(pending.pending_bytes(), accepted_size);
+        assert_eq!(
+            pending.drop_breakdown(),
+            (0, 0, 1, u64::try_from(oversized_size).unwrap())
+        );
     }
 }

@@ -823,10 +823,12 @@ impl Actor {
                 #[cfg(not(feature = "telemetry"))]
                 let _ = cache_outcome;
                 value.is_some_and(|bundle| {
+                    let committed = self.state.da_commitments();
                     bundle.commitments.iter().any(|record| {
                         let key =
                             iroha_data_model::da::commitment::DaCommitmentKey::from_record(record);
                         !da_rbc.da.sealed_commitments.contains(&key)
+                            && !committed.contains_record_identity(record)
                     })
                 })
             }
@@ -3076,6 +3078,19 @@ impl Actor {
                                     record,
                                 );
                             if da_rbc.da.sealed_commitments.contains(&key) {
+                                continue;
+                            }
+                            let already_committed = {
+                                let committed = self.state.da_commitments();
+                                committed.contains_record_identity(record)
+                            };
+                            if already_committed {
+                                warn!(
+                                    lane = record.lane_id.as_u32(),
+                                    epoch = record.epoch,
+                                    sequence = record.sequence,
+                                    "dropping DA commitment already present in the committed index before sealing bundle"
+                                );
                                 continue;
                             }
                             let policy = lane_config.manifest_policy(record.lane_id);
