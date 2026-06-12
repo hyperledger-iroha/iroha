@@ -24,12 +24,11 @@ use iroha_data_model::{
     name::Name,
     permission::Permission,
     prelude::*,
-    proof::{VerifyingKeyId, VerifyingKeyRecord},
+    proof::{ProofAttachment, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
 };
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
-use iroha_zkp_halo2::confidential;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
@@ -38,19 +37,18 @@ const ASSET_HIDDEN_BACKEND: &str = "halo2/ipa";
 const ASSET_HIDDEN_TEST_CIRCUIT: &str = "halo2/ipa:asset-hidden-transfer-public-test";
 const ASSET_HIDDEN_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 
-fn derive_test_nullifier(
-    nk: &[u8; 32],
-    rho: &[u8; 32],
-    asset_id: &str,
-    chain_id: &str,
-) -> [u8; 32] {
-    confidential::derive_nullifier(nk, rho, asset_id.as_bytes(), chain_id.as_bytes())
-}
-
 fn scalar_word(value: u64) -> [u8; 32] {
     let mut bytes = [0u8; 32];
     bytes[..8].copy_from_slice(&value.to_le_bytes());
     bytes
+}
+
+fn encrypted_payload(seed: u8) -> ConfidentialEncryptedPayload {
+    let mut nonce = [0_u8; 24];
+    nonce.fill(seed);
+    let mut ciphertext = b"zk-ledger-scaffold-payload-v1".to_vec();
+    ciphertext.extend_from_slice(&[seed; 32]);
+    ConfidentialEncryptedPayload::new([1_u8; 32], nonce, ciphertext)
 }
 
 fn asset_hidden_asset_set_root() -> [u8; 32] {
@@ -1602,7 +1600,7 @@ fn shield_rejected_when_policy_disallows() {
         owner.clone(),
         100u128,
         [3u8; 32],
-        ConfidentialEncryptedPayload::default(),
+        encrypted_payload(3),
     );
     let res = stx2.world.executor().clone().execute_instruction(
         &mut stx2,
@@ -1771,7 +1769,7 @@ fn zk_transfer_rejected_when_policy_transparent() {
         owner.clone(),
         100u128,
         [5u8; 32],
-        ConfidentialEncryptedPayload::default(),
+        encrypted_payload(5),
     );
     stx2.world
         .executor()
@@ -1840,15 +1838,10 @@ fn zk_transfer_rejected_when_policy_transparent() {
 fn shield_burns_and_unshield_mints() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let chain_id = ChainId::from("iroha-test-chain");
+    let mut state = State::new_with_chain(World::new(), kura, query, chain_id.clone());
+    state.zk.halo2.enabled = true;
+    state.zk.verify_timeout = std::time::Duration::ZERO;
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -1859,24 +1852,63 @@ fn shield_burns_and_unshield_mints() {
         "zcoin".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
+    let transfer_vk_name = "transfer_vk";
+    let transfer_vk_id = VerifyingKeyId::new(ASSET_HIDDEN_BACKEND, transfer_vk_name);
+    let transfer_vk_record =
+        confidential_v2::confidential_transfer_v2_vk_record(transfer_vk_name, 1)
+            .expect("confidential transfer v2 verifying key record");
+    let unshield_vk_name = "unshield_vk";
+    let unshield_vk_id = VerifyingKeyId::new(ASSET_HIDDEN_BACKEND, unshield_vk_name);
+    let unshield_vk_record =
+        confidential_v2::confidential_unshield_v2_vk_record(unshield_vk_name, 1)
+            .expect("confidential unshield v2 verifying key record");
+    let spend_key = [7u8; 32];
+    let rho = [11u8; 32];
+    let diversifier = confidential_v2::derive_confidential_diversifier_v2(b"ledger-unshield");
+    let owner_tag =
+        confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(&spend_key, diversifier)
+            .expect("owner tag");
+    let unshield_amount = 250u128;
+    let note_commitment = confidential_v2::derive_confidential_note_v2(
+        &asset_def_id.to_string(),
+        unshield_amount,
+        rho,
+        owner_tag,
+    )
+    .expect("confidential note commitment");
 
     // Setup: register domain/account/asset and mint
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
+        Grant::account_permission(
+            Permission::new("CanManageVerifyingKeys".parse().unwrap(), Json::new(())),
+            owner.clone(),
+        )
+        .into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
         )
         .into(),
         Mint::asset_numeric(1000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
+        iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+            id: transfer_vk_id.clone(),
+            record: transfer_vk_record,
+        }
+        .into(),
+        iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+            id: unshield_vk_id.clone(),
+            record: unshield_vk_record.clone(),
+        }
+        .into(),
         iroha_data_model::isi::zk::RegisterZkAsset::new(
             asset_def_id.clone(),
             iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
             true,
             true,
-            None,
-            None,
+            Some(transfer_vk_id),
+            Some(unshield_vk_id.clone()),
             None,
         )
         .into(),
@@ -1893,8 +1925,8 @@ fn shield_burns_and_unshield_mints() {
         asset_def_id.clone(),
         owner.clone(),
         400u128,
-        [1u8; 32],
-        ConfidentialEncryptedPayload::default(),
+        note_commitment,
+        encrypted_payload(1),
     );
     let ib: InstructionBox = shield.into();
     stx.world
@@ -1923,12 +1955,38 @@ fn shield_burns_and_unshield_mints() {
         assert_eq!(zk_state.commitments.len(), 1);
     }
 
+    let root = confidential_v2::compute_confidential_root_v2(&[note_commitment])
+        .expect("single-note confidential root");
+    let vk_box = unshield_vk_record
+        .key
+        .clone()
+        .expect("inline unshield verifying key");
+    let proof = confidential_v2::build_confidential_unshield_proof_v2(
+        &chain_id,
+        &asset_def_id.to_string(),
+        &spend_key,
+        &[note_commitment],
+        &[confidential_v2::ConfidentialUnshieldInputV2 {
+            amount: unshield_amount,
+            rho,
+            diversifier,
+            leaf_index: 0,
+        }],
+        unshield_amount,
+        root,
+        &unshield_vk_record.circuit_id,
+        &vk_box,
+    )
+    .expect("confidential unshield proof");
+    let nullifier = proof.nullifiers[0];
+    let mut attachment = ProofAttachment::new_ref(
+        ASSET_HIDDEN_BACKEND.into(),
+        proof.proof,
+        unshield_vk_id.clone(),
+    );
+    attachment.vk_commitment = Some(unshield_vk_record.commitment);
+
     // Unshield 250
-    let nk = [7u8; 32];
-    let rho = [11u8; 32];
-    let asset_id_str = asset_def_id.to_string();
-    let chain_id = "iroha-test-chain";
-    let nullifier = derive_test_nullifier(&nk, &rho, &asset_id_str, chain_id);
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -1936,10 +1994,10 @@ fn shield_burns_and_unshield_mints() {
     let unshield = iroha_data_model::isi::zk::Unshield::new(
         asset_def_id.clone(),
         owner.clone(),
-        250u128,
+        unshield_amount,
         vec![nullifier],
-        native_ipa_attachment(),
-        None,
+        attachment.clone(),
+        Some(root),
     );
     let ib2: InstructionBox = unshield.into();
     stx2.world
@@ -1971,10 +2029,10 @@ fn shield_burns_and_unshield_mints() {
     let repeat = iroha_data_model::isi::zk::Unshield::new(
         asset_def_id.clone(),
         owner.clone(),
-        1u128,
+        unshield_amount,
         vec![nullifier],
-        native_ipa_attachment(),
-        None,
+        attachment,
+        Some(root),
     );
     let res = stx3
         .world
@@ -2134,7 +2192,7 @@ fn zk_roots_are_bounded_in_world_state() {
             owner.clone(),
             100u128,
             note,
-            ConfidentialEncryptedPayload::default(),
+            encrypted_payload(i),
         )
         .into();
         stx.world
@@ -2315,7 +2373,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
             owner.clone(),
             100u128,
             commitment,
-            ConfidentialEncryptedPayload::default(),
+            encrypted_payload(h as u8),
         )
         .into();
         stx.world

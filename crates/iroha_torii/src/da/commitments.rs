@@ -548,6 +548,51 @@ mod tests {
     }
 
     #[test]
+    fn prove_builds_merkle_proof_when_stale_duplicate_is_filtered_from_index() {
+        let mut store = DaCommitmentStore::default();
+        let first = sample_record(1, 1, 1);
+        let mut stale_duplicate = first.clone();
+        stale_duplicate.manifest_hash = ManifestDigest::new([0x55; 32]);
+        stale_duplicate.storage_ticket = StorageTicketId::new([0x66; 32]);
+        let later = sample_record(2, 3, 4);
+
+        store.insert_bundle(7, DaCommitmentBundle::new(vec![first]));
+        store.insert_bundle(
+            8,
+            DaCommitmentBundle::new(vec![stale_duplicate.clone(), later.clone()]),
+        );
+
+        let request = DaCommitmentProofRequest {
+            lane_id: Some(2),
+            epoch: Some(3),
+            sequence: Some(4),
+            ..DaCommitmentProofRequest::default()
+        };
+        let proof = build_proof_from_store(&store, &request)
+            .expect("proof should use the raw committed bundle");
+        assert_eq!(proof.location.block_height, 8);
+        assert_eq!(proof.location.index_in_bundle, 1);
+        assert_eq!(proof.commitment, later);
+
+        let bundle = store
+            .bundle_at(proof.location.block_height)
+            .expect("committed bundle present");
+        assert_eq!(bundle.commitments.as_slice(), &[stale_duplicate, later]);
+        let mut header = BlockHeader::new(
+            NonZeroU64::new(proof.location.block_height).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        header.set_da_commitments_hash(Some(bundle.canonical_hash()));
+        let config = lane_config_with_entries(&[(LaneId::new(2), DaProofScheme::MerkleSha256)]);
+
+        assert!(verify_da_commitment_proof(&proof, bundle, &header, &config).is_ok());
+    }
+
+    #[test]
     fn prove_returns_none_for_absent_and_partial_lookup_keys() {
         let store = store_with_records();
         let absent_manifest = DaCommitmentProofRequest {

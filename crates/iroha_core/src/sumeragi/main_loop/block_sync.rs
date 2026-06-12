@@ -8302,7 +8302,7 @@ impl Actor {
         let session_metadata_matches = session
             .is_some_and(|session| self.rbc_session_metadata_matches_progress_slot(key, session));
         let session_has_authoritative_payload = session.is_some_and(|session| {
-            self.rbc_session_has_authoritative_payload_for_progress(key, session)
+            self.rbc_session_has_verified_or_local_payload_for_progress(key, session)
         });
         let expected_payload_hash = session.and_then(|session| session.payload_hash());
         let body_identity = Self::block_body_response_payload_identity(response);
@@ -15730,6 +15730,28 @@ mod allow_uncertified_block_sync_roster_tests {
             },
         );
         assert_payload_case(
+            "roster_update_no_roster_proof_keeps_hintless_flag_but_marks_unproven_requester",
+            FetchPendingResponsesBatchPayloadKind::RosterBlockSyncUpdate,
+            false,
+            true,
+            false,
+            FetchPendingBlockPriority::Background,
+            false,
+            ExpectedPayload {
+                exact_body_companion: false,
+                hintless_allowed: false,
+                payload_message: FetchPendingResponsesBatchPayloadMessage::BlockSyncUpdate,
+                created_companion: false,
+                payload_pos: 1,
+                created_companion_pos: 0,
+                created_companion_before_payload: true,
+                payload_force_bypass_arg: false,
+                payload_allow_hintless_arg: true,
+                payload_roster_proof_arg: false,
+                payload_consensus_priority_arg: false,
+            },
+        );
+        assert_payload_case(
             "plain_created_with_hintless_bypass",
             FetchPendingResponsesBatchPayloadKind::BlockCreated,
             false,
@@ -15748,6 +15770,28 @@ mod allow_uncertified_block_sync_roster_tests {
                 payload_force_bypass_arg: true,
                 payload_allow_hintless_arg: true,
                 payload_roster_proof_arg: true,
+                payload_consensus_priority_arg: false,
+            },
+        );
+        assert_payload_case(
+            "plain_created_with_hintless_bypass_without_roster_proof_marks_unproven_requester",
+            FetchPendingResponsesBatchPayloadKind::BlockCreated,
+            false,
+            true,
+            false,
+            FetchPendingBlockPriority::Background,
+            false,
+            ExpectedPayload {
+                exact_body_companion: false,
+                hintless_allowed: false,
+                payload_message: FetchPendingResponsesBatchPayloadMessage::BlockCreated,
+                created_companion: false,
+                payload_pos: 1,
+                created_companion_pos: 0,
+                created_companion_before_payload: true,
+                payload_force_bypass_arg: true,
+                payload_allow_hintless_arg: true,
+                payload_roster_proof_arg: false,
                 payload_consensus_priority_arg: false,
             },
         );
