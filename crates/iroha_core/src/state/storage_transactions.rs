@@ -73,6 +73,14 @@ impl TransactionsStorage {
         }
     }
 
+    /// Return the latest committed block height recorded by transaction storage.
+    pub(crate) fn latest_height(&self) -> usize {
+        self.latest_block
+            .load()
+            .as_ref()
+            .map_or(0, |block| block.height.get())
+    }
+
     /// Create block to aggregate updates
     pub fn block(&self) -> TransactionsBlock<'_> {
         self.block_impl(false)
@@ -672,6 +680,21 @@ mod tests {
         let mut block = storage.block();
         insert_keys(&mut block, &[key], value);
         block.commit().unwrap();
+    }
+
+    #[test]
+    fn latest_height_tracks_committed_block() {
+        let [key] = get_keys();
+        let [value] = get_values();
+        let storage = TransactionsStorage::new();
+
+        assert_eq!(storage.latest_height(), 0);
+
+        let mut block = storage.block();
+        insert_keys(&mut block, &[key], value);
+        block.commit().unwrap();
+
+        assert_eq!(storage.latest_height(), value.get());
     }
 
     #[test]

@@ -1,6 +1,19 @@
 # Status
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
+
+## 2026-06-12 Bridge proof fixture height regression
+
+- Reworked the direct WSV test height helper to derive its next block height
+  from transaction storage instead of a global raw-pointer cache, avoiding
+  stale height reuse when test-local `State` addresses are recycled.
+- Added focused coverage for the transaction-storage latest-height accessor and
+  query helper height selection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --test iroha_core_group_01 submit_configured_eth_source_adapter_proof_ignores -- --nocapture`
+  - `cargo test -p iroha_core --lib next_height_for_state_uses_transaction_storage_height -- --nocapture`
+  - `cargo test -p iroha_core --lib latest_height_tracks_committed_block -- --nocapture`
 
 ## 2026-06-11 ZK-ACE and Soracloud fixture regression fixes
 
