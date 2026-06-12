@@ -319,13 +319,21 @@ echo $ANDROID_NDK_HOME  # must point to NDK 28+
 **Build the .so files:**
 
 ```bash
+# Default developer build: privacy proof builders stay fail-closed.
 ./gradlew :client-android:buildNativeLibs
+
+# Production-gated build: only use after the privacy production gate evidence is complete.
+./gradlew :client-android:buildNativeLibs -PprivacyProductionEnabled=true
 ```
 
 This Gradle task:
 1. Reads `iroha.dir` from `local.properties`
 2. Runs `cargo ndk` for `arm64-v8a` and `x86_64` targets
 3. Copies `libconnect_norito_bridge.so` into `client-android/src/main/jniLibs/`
+
+The production-gated form passes `--features privacy-production-enabled` to
+`connect_norito_bridge`; the default form intentionally omits that feature so
+unaudited native proving remains disabled.
 
 First build takes ~5-10 minutes (compiles all Rust dependencies). Incremental builds are faster.
 

@@ -3,6 +3,13 @@
 Last updated: 2026-06-13
 
 
+## 2026-06-13 Android native bridge production feature build documentation
+
+- Updated `kotlin/README.md` to document the default fail-closed `buildNativeLibs` command and the explicit `-PprivacyProductionEnabled=true` production-gated command that passes `--features privacy-production-enabled` to `connect_norito_bridge`.
+- Validation passed:
+  - `./gradlew :client-android:tasks -PprivacyProductionEnabled=true --console=plain`
+  - `git diff --check -- kotlin/README.md kotlin/client-android/build.gradle.kts`
+
 ## 2026-06-13 Confidential encrypted payload Rust low-order vector coverage
 
 - Extended the Rust `ConfidentialEncryptedPayload` validation regression test to cover a non-zero low-order X25519 ephemeral public key in addition to the all-zero key, matching the Kotlin/JVM and Android Java adversarial coverage.
