@@ -2,6 +2,22 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 - ZK Roots JVM Client and Merkle Providers
+
+- Added Kotlin/JVM and Java Android `ConfidentialAssetToriiClient` wrappers for
+  `POST /v1/zk/roots`, with exact JSON request bodies, non-null empty-string
+  latest roots, canonical lowercase 32-byte root hex, and root-count `height`
+  validation.
+- Added fail-closed Torii Merkle-path providers plus local zk_assets Merkle-path
+  providers for audited frontier material. The local path verifier uses the
+  Pasta-field `poseidon_pair` compressor from confidential-v2, pads to the
+  fixed depth-16 tree, and rejects non-canonical scalar nodes instead of falling
+  back to a different hash.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :jvm:compileJava --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
 ## 2026-06-13 - ZK Asset JVM Instruction Surface
 
 - Added Kotlin/JVM and Java Android typed builders for `RegisterZkAsset`,

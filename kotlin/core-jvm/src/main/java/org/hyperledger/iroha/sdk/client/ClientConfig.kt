@@ -107,6 +107,9 @@ class ClientConfig private constructor(builder: Builder) {
     fun toOfflineToriiClient(executor: HttpTransportExecutor): OfflineToriiClient =
         OfflineToriiClient.builder().executor(executor).baseUri(baseUri).timeout(requestTimeout).defaultHeaders(defaultHeaders).observers(observers).build()
 
+    fun toConfidentialAssetToriiClient(executor: HttpTransportExecutor): ConfidentialAssetToriiClient =
+        ConfidentialAssetToriiClient.builder().executor(executor).baseUri(baseUri).timeout(requestTimeout).defaultHeaders(defaultHeaders).observers(observers).build()
+
     fun toSubscriptionToriiClient(executor: HttpTransportExecutor): SubscriptionToriiClient =
         SubscriptionToriiClient.builder().executor(executor).baseUri(baseUri).timeout(requestTimeout).defaultHeaders(defaultHeaders).observers(observers).build()
 

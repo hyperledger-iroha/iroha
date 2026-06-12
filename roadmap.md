@@ -165,8 +165,12 @@ and completed history lives in [`status.md`](./status.md).
   parity inventory. Kotlin/JVM and Android Java now also expose typed
   `RegisterZkAsset`, `Shield`, and `Unshield` builders plus native
   signed-transaction wrappers that preserve private change outputs and return
-  canonical versioned transaction bytes with native hashes; remaining SDK gap is
-  live root/Merkle acquisition and audited end-to-end localnet coverage.
+  canonical versioned transaction bytes with native hashes. The JVM roots/Merkle
+  slice now exposes typed `/v1/zk/roots` clients and local zk_assets path
+  providers for audited frontier material; remaining SDK gaps are
+  confidential-v2 note derivation/decryption after canonical derivation
+  confirmation, Torii-backed path acquisition when the node endpoint exists,
+  and audited end-to-end localnet coverage.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,
