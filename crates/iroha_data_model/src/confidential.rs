@@ -83,7 +83,23 @@ fn read_varint(bytes: &[u8]) -> Result<(usize, usize), NoritoError> {
             .checked_shl(shift_u32)
             .ok_or_else(|| NoritoError::Message("ciphertext length overflow".to_owned()))?;
         if byte & 0x80 == 0 {
-            return Ok((value, idx + 1));
+            let encoded_len = idx + 1;
+            if encoded_len > 1 {
+                let min_shift = 7usize
+                    .checked_mul(encoded_len - 1)
+                    .ok_or_else(|| NoritoError::Message("ciphertext length overflow".into()))?;
+                let min_value = 1usize
+                    .checked_shl(u32::try_from(min_shift).map_err(|_| {
+                        NoritoError::Message("ciphertext length overflow".to_owned())
+                    })?)
+                    .ok_or_else(|| NoritoError::Message("ciphertext length overflow".into()))?;
+                if value < min_value {
+                    return Err(NoritoError::Message(
+                        "non-canonical ciphertext length".into(),
+                    ));
+                }
+            }
+            return Ok((value, encoded_len));
         }
         shift += 7;
         if shift >= usize::BITS as usize {
@@ -630,6 +646,23 @@ mod tests {
             .expect_err("empty confidential ciphertext must fail");
         assert!(
             err.to_string().contains("ciphertext must not be empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn encrypted_payload_decode_rejects_noncanonical_ciphertext_length() {
+        let mut payload = Vec::new();
+        payload.push(CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1);
+        payload.extend_from_slice(&[7u8; 32]);
+        payload.extend_from_slice(&[2u8; 24]);
+        payload.extend_from_slice(&[0x83, 0x00]);
+        payload.extend_from_slice(&[3, 4, 5]);
+
+        let err = ConfidentialEncryptedPayload::decode_from_slice(&payload)
+            .expect_err("non-canonical confidential ciphertext length must fail");
+        assert!(
+            err.to_string().contains("non-canonical ciphertext length"),
             "unexpected error: {err}"
         );
     }

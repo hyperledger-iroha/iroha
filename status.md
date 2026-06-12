@@ -3,6 +3,16 @@
 Last updated: 2026-06-13
 
 
+## 2026-06-13 Confidential encrypted payload Rust canonical length hardening
+
+- Hardened the Rust `ConfidentialEncryptedPayload` decoder to reject non-canonical ciphertext-length varints, matching the Kotlin/JVM and Android Java SDK wire decoders and keeping malformed Shield payloads fail-closed at the data-model boundary.
+- Added an adversarial raw-envelope decode test for a two-byte overlong encoding of a short ciphertext length.
+- Validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_data_model encrypted_payload --lib`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
 ## 2026-06-13 Confidential encrypted payload low-order key parity
 
 - Hardened Kotlin/JVM and Android Java `ConfidentialEncryptedPayload` validation to reject X25519 low-order ephemeral public keys with the same fixed-probe contributory check Rust uses, not only the all-zero key.
