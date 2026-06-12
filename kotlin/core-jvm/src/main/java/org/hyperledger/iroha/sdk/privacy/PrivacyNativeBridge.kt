@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.privacy
 
+import org.hyperledger.iroha.sdk.norito.NoritoAdapters
+import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import java.util.Collections
 
 /** Raw Norito V1 privacy proof bridge backed by `connect_norito_bridge`. */
@@ -36,6 +38,8 @@ class PrivacyNativeBridge private constructor() {
         private const val PRIVACY_SCHEMA_BUILD_PROOF_RESULT: Int = 0x42
         private const val PRIVACY_SCHEMA_VERIFY_PROOF_RESULT: Int = 0x56
         private const val PRIVACY_CRC64_REFLECTED_POLY: Long = -3932672073523589310L
+        private const val CONFIDENTIAL_TRANSFER_ALGORITHM_ID: String = "confidential-transfer-v2"
+        private const val UNSHIELD_ALGORITHM_ID: String = "unshield"
         private const val LIBRARY_NAME = "connect_norito_bridge"
         private val PRIVACY_NORITO_MAGIC = byteArrayOf(
             'N'.code.toByte(),
@@ -47,6 +51,108 @@ class PrivacyNativeBridge private constructor() {
         private val PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE =
             buildPrivacyNativeAvailabilityProbeArchive()
         private val nativeAvailable: Boolean = loadLibrary()
+
+        internal data class NativeGateStatus(
+            val key: String,
+            val passed: Boolean,
+        )
+
+        internal data class NativeProductionGate(
+            val version: String,
+            val ready: Boolean,
+            val gates: List<NativeGateStatus>,
+            val requiredGates: List<String>,
+            val missing: List<String>,
+            val auditReferences: List<String>,
+        )
+
+        internal data class NativeCapability(
+            val algorithmId: String,
+            val proofFamily: String,
+            val backendFamily: String,
+            val sdkEntrypoints: List<String>,
+            val plannedEntrypoints: List<String>,
+            val productionReady: Boolean,
+            val productionGate: NativeProductionGate,
+        )
+
+        internal data class NativeCapabilities(
+            val version: Int,
+            val gateVersion: String,
+            val algorithms: List<NativeCapability>,
+        )
+
+        private val nativeGateStatusAdapter =
+            NoritoAdapters.struct(
+                listOf(
+                    NoritoAdapters.field("key", NoritoAdapters.stringAdapter()),
+                    NoritoAdapters.field("passed", NoritoAdapters.boolAdapter()),
+                ),
+            ) { fields ->
+                NativeGateStatus(
+                    key = fields.stringField("key"),
+                    passed = fields.booleanField("passed"),
+                )
+            }
+
+        private val nativeProductionGateAdapter =
+            NoritoAdapters.struct(
+                listOf(
+                    NoritoAdapters.field("version", NoritoAdapters.stringAdapter()),
+                    NoritoAdapters.field("ready", NoritoAdapters.boolAdapter()),
+                    NoritoAdapters.field("gates", NoritoAdapters.sequence(nativeGateStatusAdapter)),
+                    NoritoAdapters.field("required_gates", NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                    NoritoAdapters.field("missing", NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                    NoritoAdapters.field("audit_references", NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                ),
+            ) { fields ->
+                NativeProductionGate(
+                    version = fields.stringField("version"),
+                    ready = fields.booleanField("ready"),
+                    gates = fields.listField("gates"),
+                    requiredGates = fields.listField("required_gates"),
+                    missing = fields.listField("missing"),
+                    auditReferences = fields.listField("audit_references"),
+                )
+            }
+
+        private val nativeCapabilityAdapter =
+            NoritoAdapters.struct(
+                listOf(
+                    NoritoAdapters.field("algorithm_id", NoritoAdapters.stringAdapter()),
+                    NoritoAdapters.field("proof_family", NoritoAdapters.stringAdapter()),
+                    NoritoAdapters.field("backend_family", NoritoAdapters.stringAdapter()),
+                    NoritoAdapters.field("sdk_entrypoints", NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                    NoritoAdapters.field("planned_entrypoints", NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                    NoritoAdapters.field("production_ready", NoritoAdapters.boolAdapter()),
+                    NoritoAdapters.field("production_gate", nativeProductionGateAdapter),
+                ),
+            ) { fields ->
+                NativeCapability(
+                    algorithmId = fields.stringField("algorithm_id"),
+                    proofFamily = fields.stringField("proof_family"),
+                    backendFamily = fields.stringField("backend_family"),
+                    sdkEntrypoints = fields.listField("sdk_entrypoints"),
+                    plannedEntrypoints = fields.listField("planned_entrypoints"),
+                    productionReady = fields.booleanField("production_ready"),
+                    productionGate = fields.objectField("production_gate"),
+                )
+            }
+
+        private val nativeCapabilitiesAdapter =
+            NoritoAdapters.struct(
+                listOf(
+                    NoritoAdapters.field("version", NoritoAdapters.uint(32)),
+                    NoritoAdapters.field("gate_version", NoritoAdapters.stringAdapter()),
+                    NoritoAdapters.field("algorithms", NoritoAdapters.sequence(nativeCapabilityAdapter)),
+                ),
+            ) { fields ->
+                NativeCapabilities(
+                    version = fields.uintField("version"),
+                    gateVersion = fields.stringField("gate_version"),
+                    algorithms = fields.listField("algorithms"),
+                )
+            }
 
         @JvmStatic
         fun isNativeAvailable(): Boolean = nativeAvailable
@@ -504,8 +610,72 @@ class PrivacyNativeBridge private constructor() {
             }
         }
 
-        internal fun privacyCapabilities(bridgeAvailable: Boolean): PrivacyCapabilities =
-            PrivacyCapabilities.failClosed(bridgeAvailable)
+        internal fun privacyCapabilities(bridgeAvailable: Boolean): PrivacyCapabilities {
+            if (!bridgeAvailable || !nativeAvailable) {
+                return PrivacyCapabilities.failClosed(bridgeAvailable)
+            }
+            return privacyCapabilitiesFromNative(bridgeAvailable) { nativeCapabilities() }
+        }
+
+        internal fun privacyCapabilitiesFromNative(
+            bridgeAvailable: Boolean,
+            nativeCapabilitiesOutput: () -> ByteArray?,
+        ): PrivacyCapabilities =
+            try {
+                val archive = requireNativeOutput(
+                    invokeNativeOutput("privacy capabilities", nativeCapabilitiesOutput),
+                    "privacy capabilities",
+                    PRIVACY_SCHEMA_CAPABILITIES_RESULT,
+                )
+                privacyCapabilitiesFromArchive(archive, bridgeAvailable)
+            } catch (_: RuntimeException) {
+                PrivacyCapabilities.failClosed(bridgeAvailable)
+            } catch (_: LinkageError) {
+                PrivacyCapabilities.failClosed(bridgeAvailable)
+            }
+
+        internal fun privacyCapabilitiesFromArchive(
+            archive: ByteArray,
+            bridgeAvailable: Boolean = true,
+        ): PrivacyCapabilities =
+            try {
+                val native = decodeNativeCapabilities(archive)
+                PrivacyCapabilities.fromNative(native, bridgeAvailable)
+            } catch (_: RuntimeException) {
+                PrivacyCapabilities.failClosed(bridgeAvailable)
+            }
+
+        private fun decodeNativeCapabilities(archive: ByteArray): NativeCapabilities =
+            nativeCapabilitiesAdapter.decodeArchive(archive)
+
+        @Suppress("UNCHECKED_CAST")
+        private fun <T> Any.decodeArchive(archive: ByteArray): T =
+            NoritoCodec.decode(archive, this as org.hyperledger.iroha.sdk.norito.TypeAdapter<T>, null)
+
+        private fun Map<String, Any?>.stringField(name: String): String =
+            this[name] as? String ?: throw IllegalArgumentException("missing native capability string field $name")
+
+        private fun Map<String, Any?>.booleanField(name: String): Boolean =
+            this[name] as? Boolean ?: throw IllegalArgumentException("missing native capability bool field $name")
+
+        private fun Map<String, Any?>.uintField(name: String): Int {
+            val value = this[name] as? Long
+                ?: throw IllegalArgumentException("missing native capability uint field $name")
+            require(value in 0..Int.MAX_VALUE.toLong()) {
+                "native capability uint field $name is out of range"
+            }
+            return value.toInt()
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        private fun <T> Map<String, Any?>.listField(name: String): List<T> =
+            (this[name] as? List<T>)
+                ?: throw IllegalArgumentException("missing native capability list field $name")
+
+        @Suppress("UNCHECKED_CAST")
+        private fun <T> Map<String, Any?>.objectField(name: String): T =
+            this[name] as? T
+                ?: throw IllegalArgumentException("missing native capability object field $name")
 
         @JvmStatic
         private external fun nativeBridgeAbiVersion(): Int
@@ -544,6 +714,35 @@ class PrivacyNativeBridge private constructor() {
                     productionReady = false,
                     productionGate = PrivacyProductionGate.failClosed(),
                 )
+
+            internal fun fromNative(
+                native: NativeCapabilities,
+                bridgeAvailable: Boolean,
+            ): PrivacyCapabilities {
+                if (
+                    native.version != PRIVACY_FFI_VERSION_V1 ||
+                    native.gateVersion != PRODUCTION_GATE_VERSION
+                ) {
+                    return failClosed(bridgeAvailable)
+                }
+                val algorithmsById = native.algorithms.associateBy { it.algorithmId }
+                if (algorithmsById.size != native.algorithms.size) {
+                    return failClosed(bridgeAvailable)
+                }
+                val confidentialTransfer = algorithmsById[CONFIDENTIAL_TRANSFER_ALGORITHM_ID]
+                    ?: return failClosed(bridgeAvailable)
+                val unshield = algorithmsById[UNSHIELD_ALGORITHM_ID]
+                    ?: return failClosed(bridgeAvailable)
+                val productionGate = PrivacyProductionGate.fromNativeRows(
+                    listOf(confidentialTransfer, unshield),
+                )
+                return PrivacyCapabilities(
+                    kotlinSdkAvailable = true,
+                    bridgeAvailable = bridgeAvailable,
+                    productionReady = productionGate.ready,
+                    productionGate = productionGate,
+                )
+            }
         }
     }
 
@@ -639,6 +838,59 @@ class PrivacyNativeBridge private constructor() {
                     missing = MISSING_REASONS,
                     auditReferences = EMPTY_AUDIT_REFERENCES,
                 )
+
+            internal fun fromNativeRows(rows: List<NativeCapability>): PrivacyProductionGate {
+                if (
+                    rows.isEmpty() ||
+                    rows.any { it.productionGate.version != PRODUCTION_GATE_VERSION }
+                ) {
+                    return failClosed()
+                }
+                val ready = rows.all { row ->
+                    row.productionReady &&
+                        row.plannedEntrypoints.isEmpty() &&
+                        row.productionGate.ready
+                }
+                val auditReferences = stableDistinct(rows.flatMap { it.productionGate.auditReferences })
+                val aggregateReady = ready &&
+                    REQUIRED_GATES.all { key -> nativeGatePassed(rows, key) } &&
+                    auditReferences.isNotEmpty()
+                val missing = stableDistinct(rows.flatMap { it.productionGate.missing })
+                return PrivacyProductionGate(
+                    version = PRODUCTION_GATE_VERSION,
+                    ready = aggregateReady,
+                    realProving = nativeGatePassed(rows, "real_proving"),
+                    realVerification = nativeGatePassed(rows, "real_verification"),
+                    chainAdmission = nativeGatePassed(rows, "chain_admission"),
+                    sdkParity = nativeGatePassed(rows, "sdk_parity"),
+                    walletState = nativeGatePassed(rows, "wallet_state"),
+                    witnessPrivacyChecks = nativeGatePassed(rows, "witness_privacy_checks"),
+                    deterministicTests = nativeGatePassed(rows, "deterministic_tests"),
+                    negativeAdversarialTests = nativeGatePassed(rows, "negative_adversarial_tests"),
+                    replayNullifierTests = nativeGatePassed(rows, "replay_nullifier_tests"),
+                    fuzzing = nativeGatePassed(rows, "fuzzing"),
+                    parserFuzzing = nativeGatePassed(rows, "parser_fuzzing"),
+                    verifierFuzzing = nativeGatePassed(rows, "verifier_fuzzing"),
+                    performanceGates = nativeGatePassed(rows, "performance_gates"),
+                    externalAudit = nativeGatePassed(rows, "external_audit"),
+                    requiredGates = REQUIRED_GATES,
+                    missing = if (aggregateReady) EMPTY_AUDIT_REFERENCES else stableDistinct(
+                        missing.ifEmpty { MISSING_REASONS },
+                    ),
+                    auditReferences = stableDistinct(auditReferences),
+                )
+            }
+
+            private fun nativeGatePassed(rows: List<NativeCapability>, key: String): Boolean =
+                rows.all { row ->
+                    key !in row.productionGate.requiredGates ||
+                        row.productionGate.gates.any { status ->
+                            status.key == key && status.passed
+                        }
+                }
+
+            private fun stableDistinct(values: List<String>): List<String> =
+                Collections.unmodifiableList(values.distinct())
         }
     }
 }

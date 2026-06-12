@@ -32,12 +32,14 @@ public final class PrivacyNativeBridgeTest {
   private static void exposesStableFailClosedErrorCodes() {
     assert PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION == 7;
     assert PrivacyNativeBridge.PRIVACY_FFI_VERSION_V1 == 1;
+    assert PrivacyNativeBridge.STATUS_OK == 0;
     assert PrivacyNativeBridge.STATUS_ERROR == 1;
     assert PrivacyNativeBridge.ERROR_NULL_POINTER == 1;
     assert PrivacyNativeBridge.ERROR_MALFORMED_NORITO == 2;
     assert PrivacyNativeBridge.ERROR_UNSUPPORTED_ALGORITHM == 3;
     assert PrivacyNativeBridge.ERROR_PRODUCTION_DISABLED == 4;
     assert PrivacyNativeBridge.ERROR_INVALID_REQUEST == 5;
+    assert PrivacyNativeBridge.ERROR_PROVING_FAILED == 6;
     assert PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES == 64 * 1024 * 1024;
   }
 

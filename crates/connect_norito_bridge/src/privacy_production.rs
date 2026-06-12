@@ -116,7 +116,10 @@ impl Zeroize for PrivacyConfidentialWitnessV1 {
     }
 }
 
-fn privacy_fixed_32(field: &str, bytes: &[u8]) -> Result<[u8; PRIVACY_CONFIDENTIAL_BYTES_32], String> {
+fn privacy_fixed_32(
+    field: &str,
+    bytes: &[u8],
+) -> Result<[u8; PRIVACY_CONFIDENTIAL_BYTES_32], String> {
     bytes
         .try_into()
         .map_err(|_| format!("{field} must be {PRIVACY_CONFIDENTIAL_BYTES_32} bytes"))
@@ -124,7 +127,9 @@ fn privacy_fixed_32(field: &str, bytes: &[u8]) -> Result<[u8; PRIVACY_CONFIDENTI
 
 fn privacy_require_32(field: &str, bytes: &[u8]) -> Result<(), String> {
     if bytes.len() != PRIVACY_CONFIDENTIAL_BYTES_32 {
-        return Err(format!("{field} must be {PRIVACY_CONFIDENTIAL_BYTES_32} bytes"));
+        return Err(format!(
+            "{field} must be {PRIVACY_CONFIDENTIAL_BYTES_32} bytes"
+        ));
     }
     Ok(())
 }
@@ -395,7 +400,10 @@ fn privacy_dispatch_build(
     }
 }
 
-fn privacy_dispatch_verify(request: &PrivacyProofRequestV1, vk_box: VkBoxResult) -> PrivacyProofResultV1 {
+fn privacy_dispatch_verify(
+    request: &PrivacyProofRequestV1,
+    vk_box: VkBoxResult,
+) -> PrivacyProofResultV1 {
     let vk_box = match vk_box {
         Ok(vk_box) => vk_box,
         Err(message) => {
@@ -538,6 +546,54 @@ pub(crate) mod test_fixtures {
         }
     }
 
+    pub(super) fn overflowing_unshield_witness() -> PrivacyConfidentialWitnessV1 {
+        let spend_key = [0xA1_u8; 32];
+        let input_0_rho = [0xB1_u8; 32];
+        let input_1_rho = [0xB2_u8; 32];
+        let input_0_diversifier =
+            derive_confidential_diversifier_v2(b"unshield-v3-overflow-input-0");
+        let input_1_diversifier =
+            derive_confidential_diversifier_v2(b"unshield-v3-overflow-input-1");
+        let input_0_owner_tag =
+            derive_confidential_owner_tag_v2_with_diversifier(&spend_key, input_0_diversifier)
+                .expect("input 0 owner tag");
+        let input_1_owner_tag =
+            derive_confidential_owner_tag_v2_with_diversifier(&spend_key, input_1_diversifier)
+                .expect("input 1 owner tag");
+        let tree_commitments = vec![
+            derive_confidential_note_v2(TEST_ASSET_ID, u128::MAX, input_0_rho, input_0_owner_tag)
+                .expect("input 0 commitment"),
+            derive_confidential_note_v2(TEST_ASSET_ID, 1, input_1_rho, input_1_owner_tag)
+                .expect("input 1 commitment"),
+        ];
+        let root = compute_confidential_root_v2(&tree_commitments).expect("root");
+
+        PrivacyConfidentialWitnessV1 {
+            chain_id: TEST_CHAIN_ID.to_owned(),
+            asset_definition_id: TEST_ASSET_ID.to_owned(),
+            spend_key: spend_key.to_vec(),
+            tree_commitments: tree_commitments.iter().map(|node| node.to_vec()).collect(),
+            inputs: vec![
+                PrivacyConfidentialNoteWitnessV1 {
+                    amount: u128::MAX,
+                    rho: input_0_rho.to_vec(),
+                    diversifier: input_0_diversifier.to_vec(),
+                    leaf_index: 0,
+                },
+                PrivacyConfidentialNoteWitnessV1 {
+                    amount: 1,
+                    rho: input_1_rho.to_vec(),
+                    diversifier: input_1_diversifier.to_vec(),
+                    leaf_index: 1,
+                },
+            ],
+            transfer_outputs: Vec::new(),
+            unshield_change: Vec::new(),
+            public_amount: 0,
+            root_hint: root.to_vec(),
+        }
+    }
+
     pub(super) fn encode_witness(witness: &PrivacyConfidentialWitnessV1) -> Vec<u8> {
         norito::to_bytes(witness).expect("encode confidential witness")
     }
@@ -554,7 +610,8 @@ pub(crate) mod test_fixtures {
 #[cfg(test)]
 mod tests {
     use super::test_fixtures::{
-        encode_witness, valid_transfer_witness, valid_unshield_witness,
+        encode_witness, overflowing_unshield_witness, valid_transfer_witness,
+        valid_unshield_witness,
     };
     use super::*;
     use crate::{
@@ -599,7 +656,10 @@ mod tests {
         assert!(build.public_inputs.is_empty());
 
         let verify = privacy_production_dispatch(
-            &verify_request(PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID, build.proof.clone()),
+            &verify_request(
+                PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
+                build.proof.clone(),
+            ),
             PrivacyProofOperationV1::Verify,
         );
         assert_eq!(verify.status, PRIVACY_FFI_STATUS_OK);
@@ -622,7 +682,10 @@ mod tests {
         assert!(build.public_inputs.is_empty());
 
         let verify = privacy_production_dispatch(
-            &verify_request(PRIVACY_CONFIDENTIAL_UNSHIELD_ALGORITHM_ID, build.proof.clone()),
+            &verify_request(
+                PRIVACY_CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
+                build.proof.clone(),
+            ),
             PrivacyProofOperationV1::Verify,
         );
         assert_eq!(verify.status, PRIVACY_FFI_STATUS_OK);
@@ -634,7 +697,10 @@ mod tests {
     fn cross_algorithm_proof_does_not_verify() {
         let transfer_witness = encode_witness(&valid_transfer_witness());
         let transfer = privacy_production_dispatch(
-            &build_request(PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID, transfer_witness),
+            &build_request(
+                PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
+                transfer_witness,
+            ),
             PrivacyProofOperationV1::Build,
         );
         assert!(!transfer.proof.is_empty());
@@ -653,7 +719,10 @@ mod tests {
     fn undecodable_witness_fails_closed_without_leaking_witness() {
         let secret = b"native-witness-never-echo-1a2b3c";
         let build = privacy_production_dispatch(
-            &build_request(PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID, secret.to_vec()),
+            &build_request(
+                PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
+                secret.to_vec(),
+            ),
             PrivacyProofOperationV1::Build,
         );
         assert_eq!(build.status, PRIVACY_FFI_STATUS_ERROR);
@@ -662,7 +731,9 @@ mod tests {
         assert!(!build.verified);
         let serialized = norito::to_bytes(&build).expect("encode result");
         assert!(
-            !serialized.windows(secret.len()).any(|window| window == secret),
+            !serialized
+                .windows(secret.len())
+                .any(|window| window == secret),
             "invalid-witness result must not echo witness bytes"
         );
     }
@@ -682,6 +753,25 @@ mod tests {
         );
         assert_eq!(build.status, PRIVACY_FFI_STATUS_ERROR);
         assert_eq!(build.error_code, PRIVACY_FFI_ERROR_PROVING_FAILED);
+        assert!(build.proof.is_empty());
+    }
+
+    #[test]
+    fn overflowing_unshield_input_sum_returns_proving_failed() {
+        let build = privacy_production_dispatch(
+            &build_request(
+                PRIVACY_CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
+                encode_witness(&overflowing_unshield_witness()),
+            ),
+            PrivacyProofOperationV1::Build,
+        );
+        assert_eq!(build.status, PRIVACY_FFI_STATUS_ERROR);
+        assert_eq!(build.error_code, PRIVACY_FFI_ERROR_PROVING_FAILED);
+        assert!(
+            build.message.contains("input amount sum overflows u128"),
+            "unexpected overflow bridge error: {}",
+            build.message
+        );
         assert!(build.proof.is_empty());
     }
 

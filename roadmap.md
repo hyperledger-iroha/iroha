@@ -141,7 +141,15 @@ and completed history lives in [`status.md`](./status.md).
   and privacy native bridge tests, while the Android Java harness runs
   recursive spend, canonical request auth, Offline Cash lifecycle, Offline Note
   V2, Offline Note, privacy native bridge, and transaction-builder archive
-  tests. The focused runner now also executes the Kotlin/JVM and Android Java
+  tests. Kotlin/JVM and Android Java privacy capability APIs must continue
+  deriving bridge readiness from the native Norito capability archive when the
+  bridge is loaded, while malformed, duplicate, incomplete, or absent evidence
+  keeps the SDK capability surface fail-closed. Privacy proof dispatch must keep
+  the `privacy-production-enabled` feature opt-in, preserve default
+  production-disabled serialized results, and retain focused coverage for real
+  confidential-transfer-v2/unshield proving, verification, and checked unshield
+  input-sum overflow rejection. The focused runner now also executes the
+  Kotlin/JVM and Android Java
   account-literal, canonical request auth, and Offline Cash issuer-key
   exactness tests, plus Torii event-stream verifier-filter, signing-algorithm,
   verifier-key backend/instruction, and verifier record-description/status

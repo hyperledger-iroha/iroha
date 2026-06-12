@@ -2,6 +2,25 @@
 
 Last updated: 2026-06-12
 
+## 2026-06-12 Privacy proof production dispatch hardening
+
+- Added the opt-in `privacy-production-enabled` native bridge feature for the
+  confidential-transfer-v2 and unshield proof builders, with default builds
+  still returning the serialized production-disabled privacy result.
+- Hardened confidential proof witness/circuit material with zeroization and
+  changed unshield v3 input aggregation to reject `u128` overflow instead of
+  wrapping before proof generation.
+- Kotlin/JVM and Java Android privacy capability APIs now derive readiness from
+  the native Norito capability archive when the bridge is actually loaded, while
+  malformed, missing, duplicate, or incomplete capability evidence remains
+  fail-closed.
+- Validation passed:
+  - `cargo check -p connect_norito_bridge --features privacy-production-enabled`
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled overflowing_unshield_input_sum_returns_proving_failed -- --nocapture`
+  - `cargo test -p iroha_core --features zk-halo2-ipa generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change --lib -- --nocapture`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest ./gradlew :jvm:test --console=plain`
+
 ## 2026-06-12 Kagemusha evidence helper future-skew guard
 
 - Hardened `scripts/kagemusha_lineage_proof_evidence.py` and

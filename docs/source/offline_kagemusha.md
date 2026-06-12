@@ -1453,6 +1453,16 @@ The confidential-transfer-v2 and unshield prover builders use the same
 process-local optimization for canonical circuits: they reuse cached derived
 Halo2 IPA proving keys for canonical verifier-key envelopes and retain the
 existing arbitrary-key derivation path for noncanonical test/custom keys.
+The native privacy bridge keeps those builders fail-closed by default and
+dispatches to the real Halo2 IPA prover/verifier only when
+`privacy-production-enabled` is compiled in. Android production builds must pass
+that feature to the cargo-ndk bridge build only after the production gate
+evidence is complete. Kotlin/JVM and Java Android derive their public privacy
+readiness booleans from the native Norito capability archive when the bridge is
+loaded; malformed, duplicate, incomplete, or missing native evidence keeps the
+SDK capability surface fail-closed. Unshield v3 also rejects overflowing input
+amount sums before proving, so malformed witness archives return the proving
+failure status instead of wrapping the private total.
 The Offline recursive prover and chain verifier require the literal
 `offline-note-recursive` circuit id; alias spellings such as
 `halo2/ipa:offline-note-recursive` are rejected before proof generation or
