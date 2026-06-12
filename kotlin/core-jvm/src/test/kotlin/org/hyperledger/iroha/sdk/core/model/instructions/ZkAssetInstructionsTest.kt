@@ -67,6 +67,46 @@ class ZkAssetInstructionsTest {
     }
 
     @Test
+    fun confidentialEncryptedPayloadMatchesRustWireFixture() {
+        val ephemeral = hex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+        val nonce = hex("a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7")
+        val ciphertext = hex("436f6e666964656e7469616c5061796c6f61645631")
+        val serialized = hex(
+            "01000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" +
+                "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b715" +
+                "436f6e666964656e7469616c5061796c6f61645631",
+        )
+        val payload = ConfidentialEncryptedPayload(
+            ephemeralPublicKey = ephemeral,
+            nonce = nonce,
+            ciphertext = ciphertext,
+        )
+
+        assertContentEquals(serialized, payload.toWireBytes())
+        assertEquals(payload, ConfidentialEncryptedPayload.fromWireBytes(serialized))
+        val exposedWire = payload.toWireBytes()
+        exposedWire[0] = 0
+        assertContentEquals(serialized, payload.toWireBytes())
+
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialEncryptedPayload.fromWireBytes(serialized.copyOf(serialized.size - 1))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialEncryptedPayload.fromWireBytes(serialized + byteArrayOf(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialEncryptedPayload.fromWireBytes(
+                byteArrayOf(0) + ephemeral + nonce + byteArrayOf(ciphertext.size.toByte()) + ciphertext,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialEncryptedPayload.fromWireBytes(
+                byteArrayOf(1) + ephemeral + nonce + byteArrayOf(0x95.toByte(), 0) + ciphertext,
+            )
+        }
+    }
+
+    @Test
     fun proofAttachmentValidatesBackendAndJsonShape() {
         val attachment = ProofAttachment(
             backend = "halo2/ipa",
@@ -313,4 +353,11 @@ class ZkAssetInstructionsTest {
         )
 
     private fun fill(value: Int, size: Int): ByteArray = ByteArray(size) { value.toByte() }
+
+    private fun hex(value: String): ByteArray {
+        require(value.length % 2 == 0)
+        return ByteArray(value.length / 2) { index ->
+            value.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
+    }
 }

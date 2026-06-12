@@ -19,7 +19,8 @@ and completed history lives in [`status.md`](./status.md).
   local providers limited to audited caller-supplied frontier material.
 - Confidential-v2 SDK note derivation and encrypted note payload handling now
   exist for Kotlin/JVM and Android Java, with Rust-vector parity for owner tags,
-  note commitments, nullifiers, asset tags, and chain tags plus a shared
+  note commitments, nullifiers, asset tags, and chain tags, Rust-fixture parity
+  for the `ConfidentialEncryptedPayload` wire envelope, and a shared
   deterministic X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Keep
   the higher-level wallet flows pinned to this contract when wiring shield-note
   recovery into production clients.

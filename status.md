@@ -2,6 +2,18 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Confidential encrypted payload SDK wire codec
+
+- Added Kotlin/JVM and Android Java `ConfidentialEncryptedPayload` v1 wire
+  encode/decode helpers for the Rust envelope layout: `version | ephemeral |
+  nonce | compact ciphertext length | ciphertext`.
+- Pinned both SDKs to the existing Rust `fixtures/confidential/encrypted_payload_v1.json`
+  positive vector and added malformed decode coverage for truncation, trailing
+  bytes, unsupported versions, and non-canonical compact lengths.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
 ## 2026-06-13 Confidential note payload encryption SDK contract
 
 - Defined the mobile SDK confidential-v2 note plaintext contract behind the

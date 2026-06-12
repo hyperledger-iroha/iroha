@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import java.io.ByteArrayOutputStream
 import java.math.BigInteger
 import java.util.Base64
 
@@ -52,6 +53,18 @@ class ConfidentialEncryptedPayload @JvmOverloads constructor(
 
     fun ciphertextBytes(): ByteArray = ciphertext
 
+    fun toWireBytes(): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(version)
+        out.write(_ephemeralPublicKey)
+        out.write(_nonce)
+        writeCompactVarint(_ciphertext.size, out)
+        out.write(_ciphertext)
+        return out.toByteArray()
+    }
+
+    fun wireBytes(): ByteArray = toWireBytes()
+
     override fun equals(other: Any?): Boolean =
         other is ConfidentialEncryptedPayload &&
             version == other.version &&
@@ -69,6 +82,29 @@ class ConfidentialEncryptedPayload @JvmOverloads constructor(
 
     companion object {
         const val VERSION_V1: Int = 1
+
+        @JvmStatic
+        fun fromWireBytes(bytes: ByteArray?): ConfidentialEncryptedPayload {
+            require(bytes != null) { "bytes must be provided" }
+            require(bytes.size >= 1 + 32 + 24) { "confidential encrypted payload is truncated" }
+            val version = bytes[0].toInt() and 0xff
+            val ephemeral = bytes.copyOfRange(1, 33)
+            val nonce = bytes.copyOfRange(33, 57)
+            val (ciphertextLength, lengthBytes) = readCompactVarint(bytes, 57)
+            val ciphertextStart = 57 + lengthBytes
+            val ciphertextEnd = ciphertextStart + ciphertextLength
+            require(ciphertextEnd <= bytes.size) { "confidential encrypted payload ciphertext is truncated" }
+            require(ciphertextEnd == bytes.size) { "confidential encrypted payload has trailing bytes" }
+            return ConfidentialEncryptedPayload(
+                version,
+                ephemeral,
+                nonce,
+                bytes.copyOfRange(ciphertextStart, ciphertextEnd),
+            )
+        }
+
+        @JvmStatic
+        fun decodeWire(bytes: ByteArray?): ConfidentialEncryptedPayload = fromWireBytes(bytes)
     }
 }
 
@@ -533,6 +569,38 @@ internal fun flattenFixed32(values: List<ByteArray>): ByteArray {
 }
 
 internal fun optionalBytes(value: ByteArray?): ByteArray = value?.copyOf() ?: ByteArray(0)
+
+private fun writeCompactVarint(value: Int, out: ByteArrayOutputStream) {
+    require(value >= 0) { "compact varint value must be non-negative" }
+    var remaining = value
+    while (true) {
+        var byte = remaining and 0x7f
+        remaining = remaining ushr 7
+        if (remaining != 0) byte = byte or 0x80
+        out.write(byte)
+        if (remaining == 0) return
+    }
+}
+
+private fun readCompactVarint(bytes: ByteArray, offset: Int): Pair<Int, Int> {
+    var value = 0
+    var shift = 0
+    var cursor = offset
+    while (cursor < bytes.size && shift < 28) {
+        val byte = bytes[cursor].toInt() and 0xff
+        value = value or ((byte and 0x7f) shl shift)
+        cursor += 1
+        if (byte and 0x80 == 0) {
+            val encodedBytes = cursor - offset
+            require(encodedBytes == 1 || value >= (1 shl (7 * (encodedBytes - 1)))) {
+                "non-canonical confidential encrypted payload length"
+            }
+            return value to encodedBytes
+        }
+        shift += 7
+    }
+    throw IllegalArgumentException("invalid confidential encrypted payload length")
+}
 
 private fun StringBuilder.appendJsonString(value: String) {
     append('"')
