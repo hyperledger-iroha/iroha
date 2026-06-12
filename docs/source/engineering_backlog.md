@@ -1332,6 +1332,19 @@ redistributable schemas, and official trust/revocation bundles.
   supplied public input bounds before rejecting zero-round requests, so
   oversized input-bound metadata cannot be hidden by invalid direct refresh
   counts.
+  Bounded full-bootstrap linear-transform, raw-sample, and sample-switch bound
+  helpers now preflight public artifact metadata before rounded-capacity errors
+  while leaving full key-entry validation behind the capacity gate.
+  Direct no-artifact bounded full-bootstrap execution and bound helpers now
+  preflight FullBootstrapV1 key/material metadata before rounded-capacity
+  errors, and artifact-aware bounded full-bootstrap prefix execution/bound
+  helpers share that key/material preflight before concrete artifact or
+  ciphertext validation.
+  Bounded raw-sample coefficient-zero repack and owner diagnostic helpers now
+  reject malformed raw-sample metadata before rounded-capacity errors.
+  Bounded raw-sample extraction and sample-switch execution helpers now do the
+  same for sample/key metadata and key/sample consistency before inspecting
+  ciphertexts or full switch-key entries.
   Exact and bounded multiply bound propagation now
   rejects oversized public input/output bounds before validating
   caller-supplied relinearization key material. Soracloud exact and
@@ -1840,10 +1853,12 @@ redistributable schemas, and official trust/revocation bundles.
   ML-DSA public-key reconstruction from private-key material now has a
   fallible API, and `KeyPair::from_private_key` uses it so length-valid but
   internally inconsistent ML-DSA secrets return `KeyGen` instead of panicking;
-  ML-DSA seeded-keygen HKDF expansion now propagates `Error::KeyGen` through
-  the existing `Result` path instead of relying on a panic-only assertion, and
-  its S2 nonce offset conversion now uses the same `Error::KeyGen` route
-  instead of a const-conversion `expect`;
+  ML-DSA seeded-keygen now rejects non-empty all-zero seed material before HKDF,
+  random ML-DSA keygen draws checked OS seed material through the same
+  constructor instead of the infallible PQ random keypair path, HKDF expansion
+  propagates `Error::KeyGen` through the existing `Result` path instead of
+  relying on a panic-only assertion, and its S2 nonce offset conversion now uses
+  the same `Error::KeyGen` route instead of a const-conversion `expect`;
   GOST deterministic nonce generation now feeds the domain tag, private scalar,
   message scalar, and optional extra entropy into HMAC-Streebog as separate
   components and streams the HMAC inner hash directly while preserving the
@@ -1861,9 +1876,15 @@ redistributable schemas, and official trust/revocation bundles.
   regeneration utility now use `KeyPair::try_from_seed`, returning existing
   bridge/key-derivation errors instead of panic-only seed expansion;
   GOST random scalar sampling and per-signature extra entropy now also use
-  checked OS fills, while both BLS backends derive random keys from checked OS
-  seed material and the default w3f backend seeds its key-splitting/signing RNGs
-  only after checked OS fills, leaving the compatibility `os_rng()` adapter
+  checked OS fills, random scalar sampling rejects all-zero OS material before
+  retry-budget exhaustion, per-signature entropy rejects all-zero OS material
+  before falling back to deterministic nonce derivation, and GOST deterministic
+  key generation rejects non-empty all-zero seed material before scalar sampling, while both BLS backends derive
+  random keys from checked OS
+  seed material after rejecting all-zero OS seed output and the default w3f
+  backend seeds its key-splitting/signing RNGs only after checked OS fills,
+  with both backend test/clippy lanes pinned in release-readiness validation
+  while leaving the compatibility `os_rng()` adapter
   test-only; P2P SoraNet runtime handshakes now seed their local `StdRng`
   through `SeedableRng::try_from_os_rng` and surface entropy-source failures as
   `HandshakeSoranet` instead of panicking; Taikai ingest-edge drift jitter now
@@ -1917,7 +1938,9 @@ redistributable schemas, and official trust/revocation bundles.
   wrapper no longer falls back to an empty private-key payload if checked export
   fails, secp256k1 message signing now exposes
   `try_sign` and routes `Signature::try_new` through the fallible helper,
-  direct secp256k1 verification maps malformed and all-zero compact signatures
+  deterministic secp256k1 key generation now rejects explicit all-zero
+  32-byte seed material before DRBG expansion, direct secp256k1 verification
+  maps malformed and all-zero compact signatures
   to `Error::BadSignature`, the compatibility `sign` helper no longer falls
   back to an empty signature if checked signing fails, and
   secp256k1 recoverable prehash signing now checks the low-S recovery-id parity
@@ -1930,7 +1953,9 @@ redistributable schemas, and official trust/revocation bundles.
   payload if that invariant is broken, and routes the OpenSSL bridge through
   that fallible exporter before DER parsing, SM2 signature decoding now rejects
   all-zero and zero-scalar encodings before backend parsing, and SM2 verifier
-  boundaries map malformed signature material to `Error::BadSignature`,
+  boundaries map malformed signature material to `Error::BadSignature`, SM2
+  random private-key generation now rejects all-zero RNG seed material
+  immediately before scalar parsing or retry-budget exhaustion,
   generic ML-DSA public/private key import and direct batch verification now
   reject all-zero public-key, private-key, and detached-signature material before
   backend parsing,
@@ -1949,6 +1974,8 @@ redistributable schemas, and official trust/revocation bundles.
   SoraNet PQ ML-DSA helpers now apply the same secret-key consistency check to
   direct validation and direct/OS-backed signing, reject all-zero standalone
   public-key, secret-key, and detached-signature material before backend use,
+  reject all-zero deterministic `HedgedRngSeed` material before seeded keygen,
+  reject all-zero caller/OS seed draws before `*_from_rng` keygen or signing,
   and expose fallible public-key reconstruction from secret material;
   BLS same-message aggregate and preaggregated verification now reject
   duplicate public keys and public-key aggregates that cancel to the identity
@@ -1966,13 +1993,17 @@ redistributable schemas, and official trust/revocation bundles.
   test targets while the default w3f `bls` all-targets corridor is also green
   after removing an unused panic-only secret-key wrapper. The default w3f BLS
   backend now exposes fallible secret reload, signing, and public-key derivation
-  helpers, both BLS backends expose checked keypair generation, the public
-  backend helper names `keypair` and `sign` now return `Result`, and the w3f
-  stored-secret `public_key` helper is fallible too. SM2 top-level random
+  helpers, both BLS backends expose checked keypair generation and reject
+  non-empty all-zero deterministic seed material before deriving a secret, the
+  public backend helper names `keypair` and `sign` now return `Result`, and the
+  w3f stored-secret `public_key` helper is fallible too. SM2 top-level random
   key generation now routes through `Sm2PrivateKey::try_random`, fallible
   `TryCryptoRng` byte draws, and bounded scalar validation before returning
-  key material. Top-level BLS keygen, signing, proof-of-possession proving, and
-  public-key derivation route through checked paths on `Result`-returning APIs;
+  key material, while SM2 deterministic seed derivation rejects non-empty
+  all-zero seed material and validates distinguishing identifiers before
+  hashing candidates. Top-level BLS keygen, signing, proof-of-possession
+  proving, and public-key derivation route through checked paths on
+  `Result`-returning APIs;
   BLS VRF proof construction now returns `Result`, rejects invalid stored
   secret scalars before signing for both Normal and Small variants, and uses
   checked compressed-proof decoding so malformed G1/G2 proof encodings fail
@@ -2200,15 +2231,23 @@ redistributable schemas, and official trust/revocation bundles.
 							  SoraNet client and relay
 							  handshake construction now also uses fallible `TryCryptoRng` draws for nonce,
 							  Noise secret, and client ML-KEM seed material, returning labelled
-							  `HarnessError::RandomBytes` failures; SoraNet PoW and Argon2 puzzle
+							  `HarnessError::RandomBytes` failures and rejects all-zero generated
+							  material before nonce, Noise, or ML-KEM seed state can be emitted;
+							  SoraNet PoW and Argon2 puzzle
 							  ticket minting now also uses fallible `TryCryptoRng` draws and preserves
 							  labelled nonce-generation failures through `MintError::RandomBytes` and
-							  the p2p challenge wrapper; SoraNet admission-token minting and SoraFS
+							  the p2p challenge wrapper, with all-zero nonce draws rejected as inert
+							  random material; SoraNet admission-token minting and SoraFS
 							  proof-token minting now also use fallible `TryCryptoRng` draws and return
 							  labelled `MintError::RandomBytes` failures for admission-token nonce and
-							  proof-token id generation; SoraNet request blinding nonce generation now
+							  proof-token id generation, including all-zero random draws; SoraNet
+							  request blinding nonce generation now
 							  also accepts fallible `TryCryptoRng` inputs and reports entropy failures
-							  through `BlindingError::RandomBytes`; P2P handshake hello
+							  through `BlindingError::RandomBytes`, while all-zero generated nonces fail
+							  through the existing weak-input gate; AEAD convenience encryption now keeps
+							  caller-supplied nonce compatibility unchanged while generated
+							  `encrypt_easy`/`encrypt_easy_into` nonces reject inert all-zero material
+							  through `Error::InertNonce`; P2P handshake hello
 							  construction now also extracts local peer key metadata through checked accessors and reports
 						  malformed local keys through a dedicated handshake error, while multisig
 						  members expose a fallible checked algorithm accessor for result-returning
@@ -2261,7 +2300,9 @@ redistributable schemas, and official trust/revocation bundles.
 								  embedding advert/admission bytes;
 							  X25519 public-key decoders for hybrid KEM keys, hybrid ephemeral ciphertext
 				  keys, and the standalone key-exchange surface now reject low-order encodings
-  before ECDH while retaining all-zero shared-secret fallback checks, and
+  before ECDH through the shared standalone X25519 predicate, with standalone
+  regressions covering every distinct dalek-torsion-derived Montgomery
+  encoding while retaining all-zero shared-secret fallback checks, and
   X25519 session-key derivation now maps HKDF expansion failures through the
   shared-secret `Result` path instead of using a panic-only assertion; SoraNet
   PQ ML-KEM key generation now exposes checked direct and seeded constructors,
@@ -2271,9 +2312,16 @@ redistributable schemas, and official trust/revocation bundles.
   instead of panicking after checked generation; hybrid key-generation,
   encapsulation, and SoraFS hybrid payload envelope paths now consume fallible
   `TryCryptoRng` draws and return labelled RNG errors before key, ciphertext,
-  or AEAD nonce material is emitted; the public direct and seeded
+  or AEAD nonce material is emitted, while hybrid generated X25519 secret and
+  ML-KEM seed draws now reject all-zero material before key generation or
+  encapsulation can derive transport keys; the public direct and seeded
   `generate_mlkem_keypair*` wrappers now
-  return `Result` instead of panicking after validation; nonzero PQClean ML-KEM
+  return `Result` instead of panicking after validation, and deterministic
+  ML-KEM keygen/encapsulation reject all-zero `HedgedRngSeed` material before
+  seeded RNG construction while ML-KEM caller/OS seed draws reject all-zero
+  material before `*_from_rng` keygen or encapsulation and seeded
+  encapsulation preserves invalid-public-key preflight order;
+  nonzero PQClean ML-KEM
   backend statuses now surface as
   `MlKemError::BackendFailure` through keygen, encapsulation, and decapsulation
   `Result` paths instead of panic-only assertions, and ML-KEM 12-bit
@@ -2330,7 +2378,9 @@ redistributable schemas, and official trust/revocation bundles.
   keys; hybrid envelope constructors and Norito streaming Kyber key-material,
   fingerprint, session, snapshot, encapsulation, and decapsulation admission now
   also reject all-zero ML-KEM public or secret key material before accepting
-  fingerprints, transport state, or envelope keys;
+  fingerprints, transport state, or envelope keys, and Norito streaming
+  generated X25519 ephemeral secrets plus GCK wrap nonces reject all-zero
+  material before key-update or content-key update state is emitted;
   changing the streaming ML-KEM profile on key material or live sessions now
   clears configured Kyber public keys, fingerprints, and local decapsulation
   secrets before any later HPKE use, and direct local ephemeral-payload
@@ -4606,10 +4656,12 @@ redistributable schemas, and official trust/revocation bundles.
     isolation and hardening the RBC sidecar cooldown fixture.
   - The later 2026-05-03 restarted-peer commit-QC recovery fix is covered by
     focused block-body response regressions and the confidential downtime plus
-    timeout localnet scenario, now passing without the restarted-peer catch-up
-    waiver warning. Rerun the full `cargo test -p iroha_core --lib` corridor
-    after the next main-loop edit or before opening the next full workspace
-    sweep.
+    timeout localnet scenario, which now enforces restarted-peer non-empty
+    height catch-up before final balance checks.
+  - The 2026-06-12 `cargo test -p iroha_core --lib -- --nocapture` rerun is
+    green (`4647` passed, `0` failed, `262` ignored; finished in `11832.87s`)
+    after the retained-summary DA/RBC evidence hardening and default-feature
+    STARK-only fixture gating.
   - For the next consensus change, rerun the same broad window so the collector
     fallback, exact-frontier repair, cached-target, vote replay, roster
     recovery, future-new-view, and model-backed reschedule fixtures continue to
@@ -4631,9 +4683,9 @@ redistributable schemas, and official trust/revocation bundles.
     into an arbitrary pipeline unless a new bug requires more than the active
     plus one-future-slot abstraction.
 - Reopen the wider validation corridor after the recent focused `iroha_core`, `iroha_torii`, and `iroha_data_model` test additions.
-  - `cargo test -p iroha_core --lib` is green as of 2026-05-03; rerun it only
-    after the next core/consensus change or before opening the full workspace
-    corridor.
+  - `cargo test -p iroha_core --lib -- --nocapture` is green as of 2026-06-12
+    (`4647` passed, `262` ignored); rerun it only after the next core/consensus
+    change or before opening the full workspace corridor.
   - `cargo test -p iroha_torii` is green as of 2026-05-03 after fixing the
     macOS attachment-sanitizer subprocess wrapper path; rerun it after the next
     Torii/API change or before opening the full workspace corridor.

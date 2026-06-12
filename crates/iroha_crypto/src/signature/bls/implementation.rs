@@ -240,7 +240,23 @@ fn checked_os_entropy(context: &str, len: usize) -> Result<Zeroizing<Vec<u8>>, E
     OsRng
         .try_fill_bytes(seed.as_mut_slice())
         .map_err(|err| Error::KeyGen(format!("BLS OS RNG failed during {context}: {err}")))?;
+    ensure_bls_seed_material_not_all_zero(context, seed.as_slice())?;
     Ok(seed)
+}
+
+fn bls_seed_material_is_all_zero(seed: &[u8]) -> bool {
+    !seed.is_empty() && seed.iter().all(|&byte| byte == 0)
+}
+
+fn bls_seed_material_all_zero_error(context: &str) -> Error {
+    Error::KeyGen(format!("BLS {context} seed material must not be all zero"))
+}
+
+fn ensure_bls_seed_material_not_all_zero(context: &str, seed: &[u8]) -> Result<(), Error> {
+    if bls_seed_material_is_all_zero(seed) {
+        return Err(bls_seed_material_all_zero_error(context));
+    }
+    Ok(())
 }
 
 fn ensure_distinct_messages(messages: &[&[u8]]) -> Result<(), Error> {
@@ -284,6 +300,12 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
                 ManagedSecretKey::new(&secret)
             }
             KeyGenOption::UseSeed(ref mut seed) => {
+                if bls_seed_material_is_all_zero(seed) {
+                    seed.zeroize();
+                    return Err(bls_seed_material_all_zero_error(
+                        "deterministic key generation",
+                    ));
+                }
                 let salt = b"BLS-SIG-KEYGEN-SALT-";
                 let secret_key_size = u8::try_from(C::Engine::SECRET_KEY_SIZE)
                     .map_err(|_| Error::KeyGen("BLS secret-key size overflow".into()))?;

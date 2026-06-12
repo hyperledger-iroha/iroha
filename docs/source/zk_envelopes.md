@@ -285,7 +285,15 @@ Verifier behavior (native STARK)
   guardrails additionally bind decoded `OpenVerifyEnvelope.circuit_id` values to
   the requested backend label: concrete native Halo2 labels must normalize to the
   same circuit, and the generic `halo2/ipa` envelope entry point rejects
-  cross-family circuit ids before verifier dispatch.
+  cross-family or trusted-setup circuit ids, including bare and Halo2-prefixed
+  forms such as `kzg`, `halo2/ipa:kzg`, and `halo2/ipa:stark/fri`, before
+  verifier dispatch.
+- STARK `OpenVerifyEnvelope` construction, preverification, and guardrails bind
+  circuit ids to the selected STARK family as well: the generic `stark/fri`
+  entry point rejects circuit ids that advertise another proof family, including
+  slash and colon forms such as `halo2/...`, `halo2:...`, and `kzg:...`, and
+  profile-specific STARK backends reject decoded circuit ids that advertise a
+  different STARK profile or the generic `stark/fri:` prefix.
 - Generic STARK `OpenVerifyEnvelope` construction and verification reserve the
   ZK-ACE and BFV full-bootstrap circuit ids for their dedicated wrappers. BFV
   full-bootstrap native AIR proofs must use the BFV-specific verifier path so

@@ -10,7 +10,7 @@ use zeroize::{Zeroize, Zeroizing};
 #[cfg(feature = "rand")]
 use rand::rngs::OsRng;
 #[cfg(feature = "rand")]
-use rand_core::TryRngCore;
+use rand_core::TryCryptoRng;
 
 use crate::{Error, KeyGenOption, ParseError};
 
@@ -457,9 +457,16 @@ impl Ed25519Sha512 {
 
     #[cfg(feature = "rand")]
     fn random_private_key() -> Result<PrivateKey, Error> {
+        Self::random_private_key_from_rng(&mut OsRng)
+    }
+
+    #[cfg(feature = "rand")]
+    fn random_private_key_from_rng<R>(rng: &mut R) -> Result<PrivateKey, Error>
+    where
+        R: TryCryptoRng,
+    {
         let mut seed = Zeroizing::new([0u8; 32]);
-        OsRng
-            .try_fill_bytes(seed.as_mut())
+        rng.try_fill_bytes(seed.as_mut())
             .map_err(|err| Error::KeyGen(format!("Ed25519 OS RNG failed: {err}")))?;
         validate_ed25519_seed_not_all_zero(&seed).map_err(|err| Error::KeyGen(err.to_string()))?;
         Ok(PrivateKey::from_bytes(&seed))
@@ -748,6 +755,8 @@ mod test {
         traits::{Identity, IsIdentity},
     };
     use ed25519_dalek::Verifier;
+    #[cfg(feature = "rand")]
+    use rand_core::TryRngCore;
     use sha2::{Digest, Sha256, Sha512};
 
     const MESSAGE_1: &[u8] = b"This is a dummy message for use with tests";
@@ -783,6 +792,32 @@ mod test {
     ];
     const ED25519_INVALID_ENCODING: [u8; 32] = [0x02; 32];
 
+    #[cfg(feature = "rand")]
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    #[cfg(feature = "rand")]
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "rand")]
+    impl TryCryptoRng for FixedTryRng {}
+
     #[test]
     fn create_new_keys() {
         let (p, s) = Ed25519Sha512::keypair(KeyGenOption::Random);
@@ -799,6 +834,27 @@ mod test {
         let signature = Ed25519Sha512::sign(message, &sk);
 
         Ed25519Sha512::verify(message, &signature, &pk).expect("signature verifies");
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn random_private_key_from_rng_rejects_all_zero_seed_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+
+        assert!(matches!(
+            Ed25519Sha512::random_private_key_from_rng(&mut rng),
+            Err(Error::KeyGen(message)) if message.contains("all zero")
+        ));
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn random_private_key_from_rng_accepts_nonzero_seed_material() {
+        let mut rng = FixedTryRng { byte: 0x42 };
+
+        let signing_key = Ed25519Sha512::random_private_key_from_rng(&mut rng)
+            .expect("nonzero Ed25519 random seed material must produce a key");
+        assert_eq!(signing_key.to_bytes(), [0x42; 32]);
     }
 
     #[test]

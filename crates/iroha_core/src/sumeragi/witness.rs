@@ -1411,7 +1411,7 @@ mod tests {
         );
         apply_fastpq_transcript_digests(&reversed);
         {
-            let g = slot().lock().unwrap();
+            let g = lock_slot();
             let stored = g
                 .fastpq_transcripts
                 .get(&batch_hash)
@@ -1431,7 +1431,7 @@ mod tests {
         );
         apply_fastpq_transcript_digests(&finalized);
         {
-            let g = slot().lock().unwrap();
+            let g = lock_slot();
             let stored = g
                 .fastpq_transcripts
                 .get(&batch_hash)
@@ -1559,7 +1559,7 @@ mod tests {
         finalized.insert(batch_hash, vec![finalized_transcript]);
         apply_fastpq_transcript_digests(&finalized);
 
-        let g = slot().lock().unwrap();
+        let g = lock_slot();
         let stored = g
             .fastpq_transcripts
             .get(&batch_hash)

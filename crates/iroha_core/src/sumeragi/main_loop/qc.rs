@@ -799,7 +799,7 @@ impl Actor {
                 .get(&key)
                 .is_some_and(|session| {
                     !session.is_invalid()
-                        && self.rbc_session_has_authoritative_payload_for_progress(key, session)
+                        && self.rbc_session_has_verified_or_local_payload_for_progress(key, session)
                 });
         if !authoritative_payload {
             return false;

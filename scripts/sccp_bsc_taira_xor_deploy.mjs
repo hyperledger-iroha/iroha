@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-// Purpose: compile, deploy, configure, and evidence-check the BSC testnet
-// contracts for the TAIRA XOR SCCP bridge without persisting operator keys.
+// Purpose: compile, deploy, configure, and evidence-check the BSC testnet and
+// mainnet contracts for the TAIRA XOR SCCP bridge without persisting operator
+// keys.
 // Safe default: no transaction is broadcast unless the command includes
 // `--broadcast true --bsc-network testnet --confirm-network taira_bsc_xor:testnet`.
 //
 // Prerequisites:
 // - Node.js 18+.
 // - `solc` and `ethers` on NODE_PATH for compile/deploy/evidence commands.
-// - A funded BSC testnet deployer key supplied only through an environment
+// - A funded BSC deployer key supplied only through an environment
 //   variable such as SCCP_BSC_DEPLOYER_PRIVATE_KEY.
 import { createRequire } from "node:module";
 import {
@@ -69,6 +70,14 @@ export const BSC_NETWORK_PROFILES = Object.freeze({
     defaultRpcUrl: DEFAULT_BSC_RPC_URL,
     explorerUrl: "https://testnet.bscscan.com",
     explorerHost: "testnet.bscscan.com",
+    deploymentEvidenceOut:
+      "artifacts/sccp-bsc/taira-bsc-xor-deployment.evidence.json",
+    routeManifestOut: "artifacts/sccp-bsc/taira-bsc-xor-route.manifest.json",
+    routeConfigOut: "artifacts/sccp-bsc/taira-bsc-xor-route.torii.toml",
+    routeFullConfigOut:
+      "artifacts/sccp-bsc/taira-bsc-xor-route.full-taira-config.toml",
+    nativeBundleOut:
+      "artifacts/sccp-bsc/bsc-testnet-native-evm-prover-bundle.json",
   }),
   mainnet: Object.freeze({
     key: "mainnet",
@@ -80,6 +89,16 @@ export const BSC_NETWORK_PROFILES = Object.freeze({
     defaultRpcUrl: DEFAULT_BSC_MAINNET_RPC_URL,
     explorerUrl: "https://bscscan.com",
     explorerHost: "bscscan.com",
+    deploymentEvidenceOut:
+      "artifacts/sccp-bsc/taira-bsc-mainnet-xor-deployment.evidence.json",
+    routeManifestOut:
+      "artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.manifest.json",
+    routeConfigOut:
+      "artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.torii.toml",
+    routeFullConfigOut:
+      "artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.full-taira-config.toml",
+    nativeBundleOut:
+      "artifacts/sccp-bsc/bsc-mainnet-native-evm-prover-bundle.json",
   }),
 });
 export const BSC_EVM_GROTH16_BACKEND = "evm-groth16-bn254-v1";
@@ -97,16 +116,30 @@ const SMOKE_FIXTURE_G2 = Object.freeze([
 const SMOKE_FIXTURE_IC = Object.freeze(
   Array.from({ length: 10 }, () => SMOKE_FIXTURE_G1).flat(),
 );
-const BN254_FIELD_MODULUS = BigInt(
-  "21888242871839275222246405745257275088548364400416034343698204186575808495617",
+const BN254_BASE_FIELD_MODULUS = BigInt(
+  "21888242871839275222246405745257275088696311157297823662689037894645226208583",
 );
+const BN254_TWIST_B_COEFFICIENT = Object.freeze([
+  BigInt(
+    "19485874751759354771024239261021720505790618469301721065564631296452457478373",
+  ),
+  BigInt(
+    "266929791119991161246907387137283842545076965332900288569378510910307636690",
+  ),
+]);
 export const DEPLOYMENT_EVIDENCE_SCHEMA =
   "iroha-sccp-bsc-taira-xor-deployment-evidence/v1";
 export const ROUTE_MANIFEST_SCHEMA =
   "iroha-sccp-taira-xor-route-manifest-draft/v1";
+export const PRODUCTION_REQUIREMENTS_SCHEMA =
+  "iroha-sccp-bsc-taira-xor-production-requirements/v1";
+export const TAIRA_BURN_RECORD_CONTRACT_SCHEMA =
+  "iroha-sccp-taira-xor-burn-record-contract/v1";
 export const DEFAULT_ARTIFACTS_OUT = "artifacts/sccp-bsc/contracts";
 export const DEFAULT_EVIDENCE_OUT =
   "artifacts/sccp-bsc/taira-bsc-xor-deployment.evidence.json";
+export const DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT =
+  "artifacts/sccp-bsc/taira-bsc-xor-burn-record.contract.json";
 export const DEFAULT_ROUTE_MANIFEST_OUT =
   "artifacts/sccp-bsc/taira-bsc-xor-route.manifest.json";
 export const DEFAULT_ROUTE_CONFIG_OUT =
@@ -117,8 +150,15 @@ export const DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT =
   "artifacts/sccp-bsc/bsc-testnet-native-evm-prover-bundle.json";
 export const DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT =
   "artifacts/sccp-bsc/native-prover";
+export const DEFAULT_PRODUCTION_REQUIREMENTS_OUT =
+  "artifacts/sccp-bsc/taira-bsc-xor-production-requirements.json";
 export const CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT = "artifacts/sccp-bsc";
 export const DEFAULT_PRIVATE_KEY_ENV = "SCCP_BSC_DEPLOYER_PRIVATE_KEY";
+export const TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES = 32;
+export const TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
+export const SCCP_BSC_JSON_INPUT_MAX_BYTES = 12 * 1024 * 1024;
+export const SCCP_BSC_TEXT_INPUT_MAX_BYTES = 8 * 1024 * 1024;
+export const SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES = 512 * 1024 * 1024;
 
 const DESTINATION_BINDING_LABEL = "iroha:sccp:evm-destination-binding:v1";
 const SECRET_KEY_PATTERN =
@@ -201,10 +241,7 @@ const NATIVE_EVM_PROVER_AUDIT_OPTION_KEYS = Object.freeze({
     "audit-cross-sdk-fixture-parity",
     "audit-cross-sdk-parity",
   ],
-  native_prover_self_test: [
-    "audit-native-prover-self-test",
-    "audit-self-test",
-  ],
+  native_prover_self_test: ["audit-native-prover-self-test", "audit-self-test"],
   no_wasm_no_remote_scan: [
     "audit-no-wasm-no-remote-scan",
     "audit-no-wasm-scan",
@@ -302,11 +339,13 @@ function repoPath(...segments) {
 
 function usage() {
   return `Usage:
-  node scripts/sccp_bsc_taira_xor_deploy.mjs compile [--out ${DEFAULT_ARTIFACTS_OUT}]
-  node scripts/sccp_bsc_taira_xor_deploy.mjs deploy --verifier <verifier-key.json> --broadcast true --confirm-testnet ${CONFIRMATION_TEXT} [--allow-diagnostic-verifier true] [--private-key-env ${DEFAULT_PRIVATE_KEY_ENV}] [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
-  node scripts/sccp_bsc_taira_xor_deploy.mjs evidence --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
-  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --cross-sdk-fixture-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-fixture-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs compile [--out ${DEFAULT_ARTIFACTS_OUT}]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs deploy --bsc-network testnet|mainnet --verifier <verifier-key.json> --broadcast true --confirm-network ${ROUTE_ID}:testnet|${ROUTE_ID}:mainnet [--confirm-mainnet true] [--private-key-env ${DEFAULT_PRIVATE_KEY_ENV}] [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs evidence --bsc-network testnet|mainnet --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>] [--production-ready true --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --cross-sdk-fixture-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-fixture-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs self-test
 
 Required optional packages for compile/deploy/evidence: solc and ethers. The
@@ -315,7 +354,8 @@ has installed its temporary dependencies, or install equivalent local packages.
 
 This helper writes only public deployment evidence and public prover-bundle
 metadata. It reads deployer key material only from the named environment
-variable at runtime and never writes it.`;
+variable at runtime and never writes it. Diagnostic verifier material is refused
+by deploy unless --allow-diagnostic-verifier true is supplied explicitly.`;
 }
 
 const trim = (value) => String(value ?? "").trim();
@@ -343,16 +383,16 @@ const parseBoolean = (value) =>
   ["1", "true", "yes", "on"].includes(trim(value).toLowerCase());
 
 export function normalizeBscNetworkProfile(value = "testnet") {
-  const normalized = trim(value || "testnet").toLowerCase().replace(/_/gu, "-");
+  const normalized = trim(value || "testnet")
+    .toLowerCase()
+    .replace(/_/gu, "-");
   if (
     !normalized ||
     ["testnet", "bsc-testnet", "chapel", "bsc-chapel"].includes(normalized)
   ) {
     return BSC_NETWORK_PROFILES.testnet;
   }
-  if (
-    ["mainnet", "bsc-mainnet", "bnb-mainnet", "bsc"].includes(normalized)
-  ) {
+  if (["mainnet", "bsc-mainnet", "bnb-mainnet", "bsc"].includes(normalized)) {
     return BSC_NETWORK_PROFILES.mainnet;
   }
   throw new Error("--bsc-network must be testnet or mainnet.");
@@ -365,6 +405,233 @@ const bscNetworkProfileFromOptions = (options = {}) =>
       process.env.SCCP_BSC_NETWORK ??
       "testnet",
   );
+
+const productionRequirementInput = ({
+  id,
+  kind,
+  placeholder,
+  requiredBy,
+  description,
+}) => ({
+  id,
+  kind,
+  placeholder,
+  requiredBy,
+  description,
+});
+
+export function bscProductionRequirements(options = {}) {
+  const profile = bscNetworkProfileFromOptions(options);
+  const mainnetConfirmation =
+    profile.key === "mainnet" ? " --confirm-mainnet true" : "";
+  const routeManifestConfirmation =
+    profile.key === "mainnet"
+      ? `--confirm-mainnet true --confirm-network ${ROUTE_ID}`
+      : `--confirm-testnet ${ROUTE_ID}`;
+  const deploymentEvidenceOut = defaultDeploymentEvidenceOut(profile);
+  const routeManifestOut = defaultRouteManifestOut(profile);
+  const nativeBundleOut = defaultNativeEvmProverBundleOut(profile);
+  return {
+    schema: PRODUCTION_REQUIREMENTS_SCHEMA,
+    routeId: ROUTE_ID,
+    assetKey: ASSET_KEY,
+    bsc: {
+      network: profile.key,
+      chain: profile.chain,
+      chainIdHex: profile.chainIdHex,
+      networkIdHex: profile.networkIdHex,
+      explorerUrl: profile.explorerUrl,
+      explorerHost: profile.explorerHost,
+    },
+    commands: {
+      requirements:
+        `node scripts/sccp_bsc_taira_xor_deploy.mjs requirements --bsc-network ${profile.key} ` +
+        `--out ${defaultProductionRequirementsOut(profile)}`,
+      deploy:
+        `node scripts/sccp_bsc_taira_xor_deploy.mjs deploy --bsc-network ${profile.key} ` +
+        `--verifier <production-verifier-key.json> --broadcast true ` +
+        `--confirm-network ${profile.confirmNetwork}${mainnetConfirmation}`,
+      evidence:
+        `node scripts/sccp_bsc_taira_xor_deploy.mjs evidence --bsc-network ${profile.key} ` +
+        "--token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr>",
+      routeManifest:
+        `node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${deploymentEvidenceOut} ` +
+        `--taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} ` +
+        "--settlement-asset-definition-id <canonical-asset-definition-id> " +
+        "--proof-artifact-hash <0x...> --proving-key-hash <0x...> " +
+        `--native-prover-bundle ${nativeBundleOut} ` +
+        "--source-bridge-config-hash <0x...> " +
+        "--source-event-transaction-id <0x...> " +
+        "--source-event-explorer-url <url> " +
+        "--route-canary-evidence-hash <0x...> " +
+        "--route-canary-transaction-id <0x...> " +
+        "--route-canary-explorer-url <url> " +
+        "--full-toml-ready true --offline-full-toml-sha256 <0x...> " +
+        "--production-ready true --live-readback-checked true " +
+        `${routeManifestConfirmation} --out ${routeManifestOut}`,
+      nativeProverBundle:
+        "node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle " +
+        `--route-manifest ${routeManifestOut} ` +
+        `--artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} ` +
+        "--proof-artifact <relative-circuit.r1cs> " +
+        "--proving-key <relative-circuit.zkey> " +
+        "--verifier-key <relative-verifier-key.json> " +
+        "--cross-sdk-fixture-parity <relative-cross-sdk-parity.json> " +
+        "--native-prover-self-test <relative-native-self-test.json> " +
+        "--javascript-implementation <relative-js-implementation> " +
+        "--swift-implementation <relative-swift-implementation> " +
+        "--kotlin-implementation <relative-kotlin-implementation> " +
+        "--java-android-implementation <relative-java-android-implementation> " +
+        "--dotnet-implementation <relative-dotnet-implementation> " +
+        "--audit-circuit-security <hex-or-relative-file> " +
+        "--audit-native-implementation <hex-or-relative-file> " +
+        "--audit-reproducible-build <hex-or-relative-file> " +
+        "--audit-no-wasm-no-remote-scan <hex-or-relative-file> " +
+        `--out ${nativeBundleOut} ` +
+        `--attach-route-manifest-out ${routeManifestOut}`,
+      routeConfig: `node scripts/sccp_bsc_taira_xor_deploy.mjs route-config --manifest ${routeManifestOut}`,
+    },
+    inputs: [
+      productionRequirementInput({
+        id: "production-groth16-verifier-key-json",
+        kind: "file",
+        placeholder: "<production-verifier-key.json>",
+        requiredBy: ["deploy", "native-prover-bundle"],
+        description:
+          "BN254 Groth16 verifier key JSON whose hash is not in the diagnostic denylist.",
+      }),
+      productionRequirementInput({
+        id: `${profile.key}-funded-bsc-deployer`,
+        kind: "operator-environment",
+        placeholder: `<${profile.key}-deployer-signing-env>`,
+        requiredBy: ["deploy"],
+        description:
+          "Funded BSC deployer configured outside generated reports for the selected network.",
+      }),
+      productionRequirementInput({
+        id: `${profile.key}-bsc-rpc-endpoint`,
+        kind: "url",
+        placeholder: `<${profile.key}-bsc-rpc-url>`,
+        requiredBy: ["deploy", "evidence"],
+        description:
+          "Selected BSC RPC endpoint used for deployment and contract readback.",
+      }),
+      productionRequirementInput({
+        id: "production-route-manifest",
+        kind: "file",
+        placeholder: routeManifestOut,
+        requiredBy: ["native-prover-bundle", "route-config"],
+        description:
+          "Production route manifest bound to BSC deployment evidence, TAIRA route publication, and live canary evidence.",
+      }),
+      productionRequirementInput({
+        id: "taira-burn-record-contract",
+        kind: "file",
+        placeholder: DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT,
+        requiredBy: ["route-manifest"],
+        description:
+          "Compiled TAIRA burn-record IVM contract artifact used by the BSC route manifest.",
+      }),
+      productionRequirementInput({
+        id: "post-deploy-live-evidence",
+        kind: "hashes-and-urls",
+        placeholder:
+          "--source-bridge-config-hash/--source-event-transaction-id/--route-canary-evidence-hash/--route-canary-transaction-id/--offline-full-toml-sha256",
+        requiredBy: ["route-manifest"],
+        description:
+          "Live post-deploy source-event, route-canary, and merged full-config evidence for production-ready route manifests.",
+      }),
+      productionRequirementInput({
+        id: "native-prover-artifact-root",
+        kind: "directory",
+        placeholder: DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT,
+        requiredBy: ["native-prover-bundle"],
+        description:
+          "Canonical artifact root containing native EVM prover inputs and implementation evidence.",
+      }),
+      productionRequirementInput({
+        id: "burn-record-proof-artifact",
+        kind: "file",
+        placeholder: "<relative-circuit.r1cs>",
+        requiredBy: ["native-prover-bundle"],
+        description:
+          "Production burn-record proof artifact referenced relative to the artifact root.",
+      }),
+      productionRequirementInput({
+        id: "burn-record-proving-key",
+        kind: "file",
+        placeholder: "<relative-circuit.zkey>",
+        requiredBy: ["native-prover-bundle"],
+        description:
+          "Production burn-record proving key referenced relative to the artifact root.",
+      }),
+      productionRequirementInput({
+        id: "cross-sdk-fixture-parity-report",
+        kind: "file",
+        placeholder: "<relative-cross-sdk-parity.json>",
+        requiredBy: ["native-prover-bundle"],
+        description:
+          "Cross-SDK fixture parity report covering JavaScript, Swift, Kotlin, Java Android, and .NET bindings.",
+      }),
+      productionRequirementInput({
+        id: "native-prover-self-test-report",
+        kind: "file",
+        placeholder: "<relative-native-self-test.json>",
+        requiredBy: ["native-prover-bundle"],
+        description:
+          "Native EVM prover self-test report bound to the selected BSC network.",
+      }),
+      ...[
+        ["javascript-sdk-implementation", "<relative-js-implementation>"],
+        ["swift-sdk-implementation", "<relative-swift-implementation>"],
+        ["kotlin-sdk-implementation", "<relative-kotlin-implementation>"],
+        [
+          "java-android-sdk-implementation",
+          "<relative-java-android-implementation>",
+        ],
+        ["dotnet-sdk-implementation", "<relative-dotnet-implementation>"],
+      ].map(([id, placeholder]) =>
+        productionRequirementInput({
+          id,
+          kind: "file-or-directory",
+          placeholder,
+          requiredBy: ["native-prover-bundle"],
+          description: `${id.replace(/-/gu, " ")} evidence.`,
+        }),
+      ),
+      ...[
+        "audit-circuit-security",
+        "audit-native-implementation",
+        "audit-reproducible-build",
+        "audit-no-wasm-no-remote-scan",
+      ].map((id) =>
+        productionRequirementInput({
+          id,
+          kind: "hash-or-file",
+          placeholder: "<hex-or-relative-file>",
+          requiredBy: ["native-prover-bundle"],
+          description: `${id.replace(/-/gu, " ")} evidence.`,
+        }),
+      ),
+      productionRequirementInput({
+        id: "taira-peer-config-targets",
+        kind: "operator-environment",
+        placeholder: "<taira-peer-config-targets>",
+        requiredBy: ["route-config"],
+        description:
+          "TAIRA peer configuration targets that will receive the generated route stanza.",
+      }),
+    ],
+    requiredReports: [
+      "route-preflight",
+      "peer-config-audit",
+      "smoke-readiness",
+      "production-material-inventory",
+      "live-ui-video-proof",
+    ],
+    deniedVerifierKeyHashes: [...SCCP_BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES],
+  };
+}
 
 function requireBscNetworkConfirmation(options, profile, action) {
   const modern = trim(options["confirm-network"]);
@@ -394,9 +661,23 @@ function requireBscNetworkConfirmation(options, profile, action) {
 const defaultBscRpcUrl = (profile) => profile.defaultRpcUrl;
 
 const defaultDeploymentEvidenceOut = (profile) =>
+  profile.deploymentEvidenceOut ?? DEFAULT_EVIDENCE_OUT;
+
+const defaultRouteManifestOut = (profile) =>
+  profile.routeManifestOut ?? DEFAULT_ROUTE_MANIFEST_OUT;
+
+const defaultRouteConfigOut = (profile, { fullConfigMode = false } = {}) =>
+  fullConfigMode
+    ? profile.routeFullConfigOut ?? DEFAULT_ROUTE_FULL_CONFIG_OUT
+    : profile.routeConfigOut ?? DEFAULT_ROUTE_CONFIG_OUT;
+
+const defaultNativeEvmProverBundleOut = (profile) =>
+  profile.nativeBundleOut ?? DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT;
+
+const defaultProductionRequirementsOut = (profile) =>
   profile.key === "mainnet"
-    ? "artifacts/sccp-bsc/taira-bsc-mainnet-xor-deployment.evidence.json"
-    : DEFAULT_EVIDENCE_OUT;
+    ? "artifacts/sccp-bsc/taira-bsc-mainnet-xor-production-requirements.json"
+    : DEFAULT_PRODUCTION_REQUIREMENTS_OUT;
 
 const bscNativeProverBundleId = (profile) =>
   profile.key === "mainnet"
@@ -767,16 +1048,38 @@ function normalizeUint256Array(value, label, expectedLength) {
 
 function normalizeBn254FieldElement(value, label) {
   const parsed = BigInt(value);
-  if (parsed < 0n || parsed >= BN254_FIELD_MODULUS) {
+  if (parsed < 0n || parsed >= BN254_BASE_FIELD_MODULUS) {
     throw new Error(`${label} must be a BN254 field element.`);
   }
   return parsed;
 }
 
 function bn254Mod(value) {
-  const remainder = value % BN254_FIELD_MODULUS;
-  return remainder >= 0n ? remainder : remainder + BN254_FIELD_MODULUS;
+  const remainder = value % BN254_BASE_FIELD_MODULUS;
+  return remainder >= 0n ? remainder : remainder + BN254_BASE_FIELD_MODULUS;
 }
+
+function bn254Fp2Add(left, right) {
+  return [bn254Mod(left[0] + right[0]), bn254Mod(left[1] + right[1])];
+}
+
+function bn254Fp2Mul(left, right) {
+  return [
+    bn254Mod(left[0] * right[0] - left[1] * right[1]),
+    bn254Mod(left[0] * right[1] + left[1] * right[0]),
+  ];
+}
+
+function bn254Fp2Square(value) {
+  return bn254Fp2Mul(value, value);
+}
+
+function bn254Fp2Cube(value) {
+  return bn254Fp2Mul(bn254Fp2Square(value), value);
+}
+
+const sameBn254Fp2 = (left, right) =>
+  left[0] === right[0] && left[1] === right[1];
 
 function assertBn254G1Point(point, label) {
   if (point.length !== 2) {
@@ -792,9 +1095,32 @@ function assertBn254G1Point(point, label) {
   }
 }
 
+function assertBn254G2Point(point, label) {
+  if (point.length !== 4) {
+    throw new Error(`${label} must contain four BN254 G2 coordinates.`);
+  }
+  const x = [
+    normalizeBn254FieldElement(point[0], `${label}.x.c0`),
+    normalizeBn254FieldElement(point[1], `${label}.x.c1`),
+  ];
+  const y = [
+    normalizeBn254FieldElement(point[2], `${label}.y.c0`),
+    normalizeBn254FieldElement(point[3], `${label}.y.c1`),
+  ];
+  if (x[0] === 0n && x[1] === 0n && y[0] === 0n && y[1] === 0n) {
+    throw new Error(`${label} must not be the BN254 G2 point at infinity.`);
+  }
+  const expected = bn254Fp2Add(bn254Fp2Cube(x), BN254_TWIST_B_COEFFICIENT);
+  if (!sameBn254Fp2(bn254Fp2Square(y), expected)) {
+    throw new Error(`${label} must be on the BN254 G2 twist curve.`);
+  }
+}
+
 function assertBn254G1VectorPairs(values, label) {
   if (values.length % 2 !== 0) {
-    throw new Error(`${label} must contain complete BN254 G1 coordinate pairs.`);
+    throw new Error(
+      `${label} must contain complete BN254 G1 coordinate pairs.`,
+    );
   }
   for (let offset = 0; offset < values.length; offset += 2) {
     assertBn254G1Point(
@@ -815,47 +1141,75 @@ const isNormalizedSmokeFixtureGroth16VerifierMaterial = (material) =>
   sameVector(material.delta2, SMOKE_FIXTURE_G2) &&
   sameVector(material.ic, SMOKE_FIXTURE_IC);
 
+function normalizeVerifierCoordinates(material) {
+  return {
+    alpha1: normalizeUint256Array(
+      pickField(
+        material,
+        ["alpha1", "configuredAlpha1", "vk_alpha_1"],
+        "alpha1",
+      ),
+      "alpha1",
+      2,
+    ),
+    beta2: normalizeUint256Array(
+      pickField(material, ["beta2", "configuredBeta2", "vk_beta_2"], "beta2"),
+      "beta2",
+      4,
+    ),
+    gamma2: normalizeUint256Array(
+      pickField(
+        material,
+        ["gamma2", "configuredGamma2", "vk_gamma_2"],
+        "gamma2",
+      ),
+      "gamma2",
+      4,
+    ),
+    delta2: normalizeUint256Array(
+      pickField(
+        material,
+        ["delta2", "configuredDelta2", "vk_delta_2"],
+        "delta2",
+      ),
+      "delta2",
+      4,
+    ),
+    ic: normalizeUint256Array(
+      pickField(material, ["ic", "configuredIc", "vk_ic", "IC"], "ic"),
+      "ic",
+      20,
+    ),
+  };
+}
+
+function bscGroth16VerifierKeyHashFromCoordinates(material) {
+  return bytesToHex(
+    keccak_256(
+      concatBytes(
+        [
+          ...material.alpha1,
+          ...material.beta2,
+          ...material.gamma2,
+          ...material.delta2,
+          ...material.ic,
+        ].map((value) => abiWordUint(value)),
+      ),
+    ),
+  );
+}
+
+export function bscGroth16VerifierKeyHash(material) {
+  return bscGroth16VerifierKeyHashFromCoordinates(
+    normalizeVerifierCoordinates(material),
+  );
+}
+
 export function isSmokeFixtureGroth16VerifierMaterial(material) {
   try {
-    return isNormalizedSmokeFixtureGroth16VerifierMaterial({
-      alpha1: normalizeUint256Array(
-        pickField(
-          material,
-          ["alpha1", "configuredAlpha1", "vk_alpha_1"],
-          "alpha1",
-        ),
-        "alpha1",
-        2,
-      ),
-      beta2: normalizeUint256Array(
-        pickField(material, ["beta2", "configuredBeta2", "vk_beta_2"], "beta2"),
-        "beta2",
-        4,
-      ),
-      gamma2: normalizeUint256Array(
-        pickField(
-          material,
-          ["gamma2", "configuredGamma2", "vk_gamma_2"],
-          "gamma2",
-        ),
-        "gamma2",
-        4,
-      ),
-      delta2: normalizeUint256Array(
-        pickField(
-          material,
-          ["delta2", "configuredDelta2", "vk_delta_2"],
-          "delta2",
-        ),
-        "delta2",
-        4,
-      ),
-      ic: normalizeUint256Array(
-        pickField(material, ["ic", "configuredIc", "vk_ic", "IC"], "ic"),
-        "ic",
-        20,
-      ),
-    });
+    return isNormalizedSmokeFixtureGroth16VerifierMaterial(
+      normalizeVerifierCoordinates(material),
+    );
   } catch (_error) {
     return false;
   }
@@ -901,49 +1255,21 @@ export function normalizeVerifierMaterial(
     ),
     "expectedVerifierKeyHash",
   );
-  const normalizedMaterial = {
-    alpha1: normalizeUint256Array(
-      pickField(
-        material,
-        ["alpha1", "configuredAlpha1", "vk_alpha_1"],
-        "alpha1",
-      ),
-      "alpha1",
-      2,
-    ),
-    beta2: normalizeUint256Array(
-      pickField(material, ["beta2", "configuredBeta2", "vk_beta_2"], "beta2"),
-      "beta2",
-      4,
-    ),
-    gamma2: normalizeUint256Array(
-      pickField(
-        material,
-        ["gamma2", "configuredGamma2", "vk_gamma_2"],
-        "gamma2",
-      ),
-      "gamma2",
-      4,
-    ),
-    delta2: normalizeUint256Array(
-      pickField(
-        material,
-        ["delta2", "configuredDelta2", "vk_delta_2"],
-        "delta2",
-      ),
-      "delta2",
-      4,
-    ),
-    ic: normalizeUint256Array(
-      pickField(material, ["ic", "configuredIc", "vk_ic", "IC"], "ic"),
-      "ic",
-      20,
-    ),
-  };
+  const normalizedMaterial = normalizeVerifierCoordinates(material);
   const fixtureShaped =
     isNormalizedSmokeFixtureGroth16VerifierMaterial(normalizedMaterial);
   assertBn254G1Point(normalizedMaterial.alpha1, "alpha1");
+  assertBn254G2Point(normalizedMaterial.beta2, "beta2");
+  assertBn254G2Point(normalizedMaterial.gamma2, "gamma2");
+  assertBn254G2Point(normalizedMaterial.delta2, "delta2");
   assertBn254G1VectorPairs(normalizedMaterial.ic, "ic");
+  const computedVerifierKeyHash =
+    bscGroth16VerifierKeyHashFromCoordinates(normalizedMaterial);
+  if (expectedVerifierKeyHash !== computedVerifierKeyHash) {
+    throw new Error(
+      `expectedVerifierKeyHash must match Solidity verifyingKeyHash() ${computedVerifierKeyHash}.`,
+    );
+  }
   const diagnosticVerifierReasons = [
     diagnosticFlagReason(material, "verifier material"),
     fixtureShaped
@@ -975,6 +1301,10 @@ function hasOwn(record, key) {
 
 function ownValue(record, key) {
   return hasOwn(record, key) ? record[key] : undefined;
+}
+
+function hasAnyOwnManifestKey(record, keys) {
+  return isRecord(record) && keys.some((key) => hasOwn(record, key));
 }
 
 function canonicalRecordString(value, label) {
@@ -1187,6 +1517,7 @@ export function canonicalBscNativeEvmProverBundleHash(bundle) {
           provingKeyHash: bundle.provingKeyHash,
           verifierKey: bundle.verifierKey,
           verifierKeyHash: bundle.verifierKeyHash,
+          verifierKeyArtifactHash: bundle.verifierKeyArtifactHash,
           destinationBindingHash: bundle.destinationBindingHash,
           noWasm: bundle.noWasm,
           remoteProverRequired: bundle.remoteProverRequired,
@@ -1288,7 +1619,9 @@ function normalizeCanonicalStringList(value, label) {
       entry.length === 0 ||
       entry.trim() !== entry
     ) {
-      throw new Error(`${label}[${index}] must be a non-empty canonical string.`);
+      throw new Error(
+        `${label}[${index}] must be a non-empty canonical string.`,
+      );
     }
     return entry;
   });
@@ -1533,6 +1866,87 @@ function requireOptionalPackage(name) {
   }
 }
 
+const parseJsonStringToken = (text, start) => {
+  let index = start + 1;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === '"') {
+      return {
+        value: JSON.parse(text.slice(start, index + 1)),
+        end: index,
+      };
+    }
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    index += 1;
+  }
+  return null;
+};
+
+const nextNonWhitespaceIndex = (text, start) => {
+  let index = start;
+  while (index < text.length && /\s/u.test(text[index])) {
+    index += 1;
+  }
+  return index;
+};
+
+const duplicateJsonObjectKeyReason = (text, label) => {
+  const stack = [];
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === '"') {
+      const token = parseJsonStringToken(text, index);
+      if (!token) {
+        return "";
+      }
+      const current = stack.at(-1);
+      if (
+        current?.type === "object" &&
+        current.expectingKey === true &&
+        text[nextNonWhitespaceIndex(text, token.end + 1)] === ":"
+      ) {
+        if (current.keys.has(token.value)) {
+          return `${label} contains a duplicate JSON object key.`;
+        }
+        current.keys.add(token.value);
+        current.expectingKey = false;
+      }
+      index = token.end;
+      continue;
+    }
+    if (char === "{") {
+      stack.push({ type: "object", keys: new Set(), expectingKey: true });
+      continue;
+    }
+    if (char === "[") {
+      stack.push({ type: "array" });
+      continue;
+    }
+    if (char === "}" || char === "]") {
+      stack.pop();
+      continue;
+    }
+    if (char === ",") {
+      const current = stack.at(-1);
+      if (current?.type === "object") {
+        current.expectingKey = true;
+      }
+    }
+  }
+  return "";
+};
+
+export const parseJsonWithoutDuplicateKeys = (text, label = "JSON file") => {
+  const duplicateReason = duplicateJsonObjectKeyReason(text, label);
+  if (duplicateReason) {
+    throw new Error(duplicateReason);
+  }
+  return JSON.parse(text);
+};
+
 async function readJson(pathName, label = "JSON file") {
   let text;
   const resolved = resolve(pathName);
@@ -1544,12 +1958,21 @@ async function readJson(pathName, label = "JSON file") {
     if (!info.isFile()) {
       throw new Error("path must be a regular file");
     }
+    if (info.size > SCCP_BSC_JSON_INPUT_MAX_BYTES) {
+      throw new Error(
+        `path is ${info.size} bytes; maximum allowed is ${SCCP_BSC_JSON_INPUT_MAX_BYTES} bytes`,
+      );
+    }
     text = await readFile(resolved, "utf8");
   } catch (error) {
     throw new Error(`${label} could not be read: ${error.message}`);
   }
   try {
-    return JSON.parse(text);
+    const parsed = parseJsonWithoutDuplicateKeys(text, label);
+    if (!isRecord(parsed)) {
+      throw new Error(`${label} must be a JSON object.`);
+    }
+    return parsed;
   } catch (error) {
     throw new Error(`${label} is not valid JSON: ${error.message}`);
   }
@@ -1564,6 +1987,11 @@ async function readText(pathName, label = "text file") {
     }
     if (!info.isFile()) {
       throw new Error("path must be a regular file");
+    }
+    if (info.size > SCCP_BSC_TEXT_INPUT_MAX_BYTES) {
+      throw new Error(
+        `path is ${info.size} bytes; maximum allowed is ${SCCP_BSC_TEXT_INPUT_MAX_BYTES} bytes`,
+      );
     }
     return await readFile(resolved, "utf8");
   } catch (error) {
@@ -1674,6 +2102,11 @@ async function readArtifactUnderRoot(root, value, label) {
     if (!info.isFile()) {
       throw new Error("path must be a regular file");
     }
+    if (info.size > SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES) {
+      throw new Error(
+        `path is ${info.size} bytes; maximum allowed is ${SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES} bytes`,
+      );
+    }
     const [rootRealPath, targetRealPath] = await Promise.all([
       realpath(root),
       realpath(target),
@@ -1752,11 +2185,12 @@ function dominantByteFrequency(bytes) {
 
 function u32le(bytes, offset) {
   return (
-    bytes[offset] |
-    (bytes[offset + 1] << 8) |
-    (bytes[offset + 2] << 16) |
-    (bytes[offset + 3] << 24)
-  ) >>> 0;
+    (bytes[offset] |
+      (bytes[offset + 1] << 8) |
+      (bytes[offset + 2] << 16) |
+      (bytes[offset + 3] << 24)) >>>
+    0
+  );
 }
 
 function u64leSafe(bytes, offset) {
@@ -1864,7 +2298,10 @@ function assertProductionProofMaterialShape(artifact, label, kind = null) {
     throw new Error(
       `${label} looks like placeholder proof material: byte 0x${dominant.byte
         .toString(16)
-        .padStart(2, "0")} dominates ${dominant.count} of ${bytes.length} bytes.`,
+        .padStart(
+          2,
+          "0",
+        )} dominates ${dominant.count} of ${bytes.length} bytes.`,
     );
   }
   const uniqueBytes = new Set();
@@ -1885,10 +2322,64 @@ function assertProductionProofMaterialShape(artifact, label, kind = null) {
   );
 }
 
+function parseBscVerifierKeyArtifact(artifact, profile) {
+  if (extname(artifact.path).toLowerCase() !== ".json") {
+    throw new Error(
+      `verifier key must be a production Groth16 verifier JSON artifact; received ${artifact.path}.`,
+    );
+  }
+  let material;
+  try {
+    material = parseJsonWithoutDuplicateKeys(
+      artifact.bytes.toString("utf8"),
+      "verifier key",
+    );
+  } catch (error) {
+    throw new Error(
+      `verifier key must be valid duplicate-free JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const normalized = normalizeVerifierMaterial(material, profile);
+  if (normalized.fixtureShaped) {
+    throw new Error(
+      "verifier key uses deterministic smoke-test Groth16 fixture material.",
+    );
+  }
+  if (normalized.diagnosticVerifierReasons.length > 0) {
+    throw new Error(
+      `verifier key uses diagnostic BSC verifier material: ${normalized.diagnosticVerifierReasons.join("; ")}.`,
+    );
+  }
+  return normalized;
+}
+
+function assertProductionAuditHashLiteral(value, label) {
+  const normalized = normalizeHex32(value, label);
+  const bytes = Buffer.from(normalized.slice(2), "hex");
+  if (bytes.every((byte) => byte === 0)) {
+    throw new Error(`${label} must not be the zero hash.`);
+  }
+  const repeatedPatternLength = repeatedPrefixPatternLength(bytes, 16);
+  if (repeatedPatternLength > 0) {
+    throw new Error(
+      `${label} looks like placeholder audit hash: repeated ${repeatedPatternLength}-byte pattern.`,
+    );
+  }
+  const arithmeticDelta = constantByteDelta(bytes);
+  if (arithmeticDelta !== null) {
+    throw new Error(
+      `${label} looks like placeholder audit hash: arithmetic byte sequence with step ${arithmeticDelta}.`,
+    );
+  }
+  return normalized;
+}
+
 async function normalizeAuditHashOrFile(root, value, label) {
   const text = normalizeNonEmptyText(value, label);
   if (/^(?:0x)?[0-9a-f]{64}$/iu.test(text)) {
-    return normalizeHex32(text, label);
+    return assertProductionAuditHashLiteral(text, label);
   }
   if (text.startsWith("0x")) {
     throw new Error(`${label} must be a 32-byte hex hash or artifact file.`);
@@ -2121,7 +2612,8 @@ function buildNativeEvmProverBundleObject({
     proving_key: provingKey.path,
     proving_key_hash: provingKey.sha256,
     verifier_key: verifierKey.path,
-    verifier_key_hash: verifierKey.sha256,
+    verifier_key_hash: routeBinding.verifierKeyHash,
+    verifier_key_artifact_hash: verifierKey.sha256,
     destination_binding_hash: routeBinding.destinationBindingHash,
     no_wasm: true,
     remote_prover_required: false,
@@ -2153,8 +2645,11 @@ function attachNativeProverBundleToManifest(manifest, bundle) {
   const nativeEvmProverBundleHash =
     canonicalBscNativeEvmProverBundleHash(normalizedBundle);
   const destinationRollout = {
-    ...(readFirstRecord(manifest, "destinationRollout", "destination_rollout") ??
-      {}),
+    ...(readFirstRecord(
+      manifest,
+      "destinationRollout",
+      "destination_rollout",
+    ) ?? {}),
     proofArtifactHash: bundle.proof_artifact_hash,
     provingKeyHash: bundle.proving_key_hash,
     nativeEvmProverBundleHash,
@@ -2168,6 +2663,13 @@ function attachNativeProverBundleToManifest(manifest, bundle) {
     nativeEvmProverBundle: bundle,
     destinationRollout,
   };
+}
+
+function bscProfileFromNativeEvmProverBundle(bundle) {
+  return bundle?.bundle_id === SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 ||
+    bundle?.chain === BSC_NETWORK_PROFILES.mainnet.chain
+    ? BSC_NETWORK_PROFILES.mainnet
+    : BSC_NETWORK_PROFILES.testnet;
 }
 
 export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
@@ -2232,7 +2734,11 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
   });
   const binding = routeSource.binding;
   const profile = BSC_NETWORK_PROFILES[binding.bscNetwork];
-  if (binding.proofArtifactHash && binding.proofArtifactHash !== proofArtifact.sha256) {
+  const verifierMaterial = parseBscVerifierKeyArtifact(verifierKey, profile);
+  if (
+    binding.proofArtifactHash &&
+    binding.proofArtifactHash !== proofArtifact.sha256
+  ) {
     throw new Error(
       "proof artifact hash does not match route/deployment evidence.",
     );
@@ -2242,9 +2748,9 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
       "proving key hash does not match route/deployment evidence.",
     );
   }
-  if (binding.verifierKeyHash !== verifierKey.sha256) {
+  if (binding.verifierKeyHash !== verifierMaterial.expectedVerifierKeyHash) {
     throw new Error(
-      "verifier key hash does not match route/deployment evidence.",
+      "verifier key material hash does not match route/deployment evidence.",
     );
   }
   const bundle = buildNativeEvmProverBundleObject({
@@ -2257,9 +2763,13 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
     sdkArtifacts,
     auditHashes,
   });
-  const descriptor = validateBscNativeEvmProverBundleForProfile(bundle, profile, {
-    expectedDestinationBindingHash: binding.destinationBindingHash,
-  });
+  const descriptor = validateBscNativeEvmProverBundleForProfile(
+    bundle,
+    profile,
+    {
+      expectedDestinationBindingHash: binding.destinationBindingHash,
+    },
+  );
   parseBscNativeProverParityFixtureForProfile(
     parityFixture.bytes.toString("utf8"),
     descriptor,
@@ -2318,7 +2828,7 @@ async function compileBscContracts({ writeOut = null } = {}) {
   const solc = requireOptionalPackage("solc");
   const sources = {};
   for (const [key, sourcePath] of Object.entries(CONTRACT_SOURCES)) {
-    sources[key] = { content: await readFile(sourcePath, "utf8") };
+    sources[key] = { content: await readText(sourcePath, `${key} source`) };
   }
   const input = {
     language: "Solidity",
@@ -2587,6 +3097,835 @@ export function buildDeploymentEvidence({
   };
 }
 
+function normalizeBscRouteEvidenceProfile(record, options = {}) {
+  const profile = bscNetworkProfileFromOptions({
+    ...options,
+    "bsc-network":
+      options["bsc-network"] ??
+      readFirstString(record, "bscNetwork", "bsc_network", "network") ??
+      readFirstString(record, "chain"),
+  });
+  const routeId = readRequiredString(
+    record,
+    ["routeId", "route_id"],
+    "BSC deployment evidence routeId",
+  );
+  if (routeId !== ROUTE_ID) {
+    throw new Error(`BSC deployment evidence routeId must be ${ROUTE_ID}.`);
+  }
+  const assetKey = readRequiredString(
+    record,
+    ["assetKey", "asset_key"],
+    "BSC deployment evidence assetKey",
+  );
+  if (assetKey !== ASSET_KEY) {
+    throw new Error(`BSC deployment evidence assetKey must be ${ASSET_KEY}.`);
+  }
+  const chain = readFirstString(record, "chain");
+  if (chain && chain !== profile.chain) {
+    throw new Error(`BSC deployment evidence chain must be ${profile.chain}.`);
+  }
+  const chainIdHex = readFirstString(record, "chainIdHex", "chain_id_hex");
+  if (chainIdHex && chainIdHex !== profile.chainIdHex) {
+    throw new Error(
+      `BSC deployment evidence chainIdHex must be ${profile.chainIdHex}.`,
+    );
+  }
+  const networkIdHex = readFirstString(record, "networkIdHex", "network_id_hex");
+  if (networkIdHex && normalizeHex32(networkIdHex) !== profile.networkIdHex) {
+    throw new Error(
+      `BSC deployment evidence networkIdHex must be ${profile.networkIdHex}.`,
+    );
+  }
+  return profile;
+}
+
+function normalizeBscDeploymentEvidenceForRouteManifest(record, options = {}) {
+  if (!isRecord(record)) {
+    throw new Error("BSC deployment evidence must be a JSON object.");
+  }
+  const reason = unsafeSecretReason(record, "BSC deployment evidence");
+  if (reason) {
+    throw new Error(reason);
+  }
+  const schema = readFirstString(record, "schema");
+  if (schema && schema !== DEPLOYMENT_EVIDENCE_SCHEMA) {
+    throw new Error(
+      `BSC deployment evidence schema must be ${DEPLOYMENT_EVIDENCE_SCHEMA}.`,
+    );
+  }
+  const profile = normalizeBscRouteEvidenceProfile(record, options);
+  const rollout =
+    readFirstRecord(record, "destinationRollout", "destination_rollout") ?? {};
+  const binding =
+    readFirstRecord(record, "destinationBinding", "destination_binding") ?? {};
+  const address = (label, keys, extraSources = []) =>
+    readRequiredConsistentNormalizedString(
+      [
+        { record, keys, pathName: "BSC deployment evidence" },
+        ...extraSources,
+      ],
+      `BSC deployment evidence ${label}`,
+      (value, fieldLabel) => normalizeCanonicalEvmAddress(value, fieldLabel),
+    );
+  const addresses = {
+    token: address("token address", [
+      "bscTokenAddress",
+      "bsc_token_address",
+      "tairaXorTokenAddress",
+      "taira_xor_token_address",
+      "tokenAddress",
+      "token_address",
+    ]),
+    bridge: address(
+      "bridge address",
+      [
+        "bscBridgeAddress",
+        "bsc_bridge_address",
+        "tairaXorBridgeAddress",
+        "taira_xor_bridge_address",
+        "bridgeAddress",
+        "bridge_address",
+      ],
+      [
+        {
+          record: rollout,
+          keys: ["destinationBridgeAddress", "destination_bridge_address"],
+          pathName: "BSC deployment evidence destinationRollout",
+        },
+      ],
+    ),
+    sourceBridge: address("source bridge address", [
+      "sccpBscSourceBridgeAddress",
+      "sccp_bsc_source_bridge_address",
+      "bscSourceBridgeAddress",
+      "bsc_source_bridge_address",
+      "sourceBridgeAddress",
+      "source_bridge_address",
+    ]),
+    verifier: address(
+      "verifier address",
+      [
+        "bscVerifierAddress",
+        "bsc_verifier_address",
+        "destinationVerifierAddress",
+        "destination_verifier_address",
+        "verifierAddress",
+        "verifier_address",
+      ],
+      [
+        {
+          record: rollout,
+          keys: ["verifierIdentity", "verifier_identity"],
+          pathName: "BSC deployment evidence destinationRollout",
+        },
+      ],
+    ),
+  };
+  if (new Set(Object.values(addresses)).size !== 4) {
+    throw new Error(
+      "BSC deployment evidence token, bridge, source bridge, and verifier addresses must be distinct.",
+    );
+  }
+  const verifierCodeHash = readRequiredConsistentNormalizedString(
+    [
+      {
+        record,
+        keys: ["verifierCodeHash", "verifier_code_hash"],
+        pathName: "BSC deployment evidence",
+      },
+      {
+        record: rollout,
+        keys: ["verifierCodeHash", "verifier_code_hash"],
+        pathName: "BSC deployment evidence destinationRollout",
+      },
+    ],
+    "BSC deployment evidence verifierCodeHash",
+    (value, label) => normalizeCanonicalHex32(value, label),
+  );
+  const verifierKeyHash = readRequiredConsistentNormalizedString(
+    [
+      {
+        record,
+        keys: ["verifierKeyHash", "verifier_key_hash"],
+        pathName: "BSC deployment evidence",
+      },
+      {
+        record: rollout,
+        keys: ["verifierKeyHash", "verifier_key_hash"],
+        pathName: "BSC deployment evidence destinationRollout",
+      },
+    ],
+    "BSC deployment evidence verifierKeyHash",
+    (value, label) => normalizeCanonicalHex32(value, label),
+  );
+  const destinationBindingKey = bscDestinationBindingKey({
+    networkId: profile.networkIdHex,
+    verifierAddress: addresses.verifier,
+    bridgeAddress: addresses.bridge,
+    verifierCodeHash,
+    verifierKeyHash,
+  });
+  const destinationBindingHash = bscDestinationBindingHash({
+    networkId: profile.networkIdHex,
+    verifierAddress: addresses.verifier,
+    bridgeAddress: addresses.bridge,
+    verifierCodeHash,
+    verifierKeyHash,
+  });
+  const declaredBindingHash = readConsistentNormalizedString(
+    [
+      {
+        record,
+        keys: ["destinationBindingHash", "destination_binding_hash"],
+        pathName: "BSC deployment evidence",
+      },
+      {
+        record: rollout,
+        keys: ["destinationBindingHash", "destination_binding_hash"],
+        pathName: "BSC deployment evidence destinationRollout",
+      },
+      {
+        record: binding,
+        keys: ["bindingHash", "binding_hash"],
+        pathName: "BSC deployment evidence destinationBinding",
+      },
+    ],
+    "BSC deployment evidence destinationBindingHash",
+    (value, label) => normalizeCanonicalHex32(value, label),
+  );
+  if (declaredBindingHash && declaredBindingHash !== destinationBindingHash) {
+    throw new Error(
+      "BSC deployment evidence destinationBindingHash does not match computed binding hash.",
+    );
+  }
+  const declaredBindingKey = readConsistentNormalizedString(
+    [
+      {
+        record,
+        keys: ["destinationBindingKey", "destination_binding_key"],
+        pathName: "BSC deployment evidence",
+      },
+      {
+        record: rollout,
+        keys: ["destinationBindingKey", "destination_binding_key"],
+        pathName: "BSC deployment evidence destinationRollout",
+      },
+      {
+        record: binding,
+        keys: ["key", "destinationBindingKey", "destination_binding_key"],
+        pathName: "BSC deployment evidence destinationBinding",
+      },
+    ],
+    "BSC deployment evidence destinationBindingKey",
+    (value) => normalizeNonEmptyText(value, "BSC deployment evidence destinationBindingKey"),
+  );
+  if (declaredBindingKey && declaredBindingKey !== destinationBindingKey) {
+    throw new Error(
+      "BSC deployment evidence destinationBindingKey does not match computed binding key.",
+    );
+  }
+  return {
+    profile,
+    rollout,
+    binding,
+    addresses,
+    verifierCodeHash,
+    verifierKeyHash,
+    destinationBindingKey,
+    destinationBindingHash,
+  };
+}
+
+function normalizeBscTairaBurnRecordContract(contract, options = {}) {
+  if (!isRecord(contract)) {
+    throw new Error("TAIRA burn-record contract must be a JSON object.");
+  }
+  const reason = unsafeSecretReason(contract, "TAIRA burn-record contract");
+  if (reason) {
+    throw new Error(reason);
+  }
+  const schema = readRequiredString(
+    contract,
+    ["schema"],
+    "TAIRA burn-record contract schema",
+  );
+  if (schema !== TAIRA_BURN_RECORD_CONTRACT_SCHEMA) {
+    throw new Error(
+      `TAIRA burn-record contract schema must be ${TAIRA_BURN_RECORD_CONTRACT_SCHEMA}.`,
+    );
+  }
+  const routeId = readFirstString(contract, "routeId", "route_id");
+  if (routeId && routeId !== ROUTE_ID) {
+    throw new Error(`TAIRA burn-record contract routeId must be ${ROUTE_ID}.`);
+  }
+  const assetKey = readFirstString(contract, "assetKey", "asset_key");
+  if (assetKey && assetKey !== ASSET_KEY) {
+    throw new Error(`TAIRA burn-record contract assetKey must be ${ASSET_KEY}.`);
+  }
+  const artifact = normalizeStrictBase64(
+    readRequiredString(
+      contract,
+      ["contractArtifactB64", "contract_artifact_b64", "artifactB64", "artifact_b64"],
+      "TAIRA burn-record contract artifact",
+    ),
+    "TAIRA burn-record contract artifact",
+  );
+  if (
+    artifact.bytes.length < TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES ||
+    artifact.bytes.length > TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES
+  ) {
+    throw new Error(
+      `TAIRA burn-record contract artifact must decode to ${TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES}-${TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES} bytes.`,
+    );
+  }
+  const artifactSha256 = bytesToHex(sha256(new Uint8Array(artifact.bytes)));
+  const declaredArtifactSha256 = normalizeCanonicalHex32(
+    readRequiredString(
+      contract,
+      ["artifactSha256", "artifact_sha256"],
+      "TAIRA burn-record contract artifactSha256",
+    ),
+    "TAIRA burn-record contract artifactSha256",
+  );
+  if (declaredArtifactSha256 !== artifactSha256) {
+    throw new Error(
+      "TAIRA burn-record contract artifactSha256 does not match artifact bytes.",
+    );
+  }
+  const vkRef =
+    readFirstRecord(contract, "vkRef", "vk_ref") ??
+    readFirstRecord(contract, "verifierKeyRef", "verifier_key_ref") ??
+    {};
+  const vkBackend = readRequiredConsistentNormalizedString(
+    [
+      {
+        record: options,
+        keys: ["vk-backend", "vkBackend"],
+        pathName: "route-manifest options",
+      },
+      {
+        record: vkRef,
+        keys: ["backend"],
+        pathName: "TAIRA burn-record contract vkRef",
+      },
+    ],
+    "TAIRA burn-record contract vkRef.backend",
+    (value, label) => normalizeVerifierKeyRefText(value, label),
+  );
+  const vkName = readRequiredConsistentNormalizedString(
+    [
+      {
+        record: options,
+        keys: ["vk-name", "vkName"],
+        pathName: "route-manifest options",
+      },
+      {
+        record: vkRef,
+        keys: ["name"],
+        pathName: "TAIRA burn-record contract vkRef",
+      },
+    ],
+    "TAIRA burn-record contract vkRef.name",
+    (value, label) => normalizeVerifierKeyRefText(value, label),
+  );
+  return {
+    contractArtifactB64: artifact.text,
+    artifactSha256,
+    codeHash: normalizeCanonicalHex32(
+      readRequiredString(
+        contract,
+        ["codeHash", "code_hash"],
+        "TAIRA burn-record contract codeHash",
+      ),
+      "TAIRA burn-record contract codeHash",
+    ),
+    vkRef: {
+      backend: vkBackend,
+      name: vkName,
+    },
+  };
+}
+
+function readOptionalBscRouteHash(options, record, rollout, optionKeys, recordKeys, label) {
+  return (
+    readConsistentNormalizedString(
+      [
+        { record: options, keys: optionKeys, pathName: "route-manifest options" },
+        { record, keys: recordKeys, pathName: "BSC deployment evidence" },
+        {
+          record: rollout,
+          keys: recordKeys,
+          pathName: "BSC deployment evidence destinationRollout",
+        },
+      ],
+      label,
+      (value, fieldLabel) => normalizeCanonicalHex32(value, fieldLabel),
+    ) || null
+  );
+}
+
+async function readBscRouteManifestNativeProverBundle(options, {
+  profile,
+  verifierKeyHash,
+  proofArtifactHash,
+  provingKeyHash,
+  destinationBindingHash,
+  productionReady,
+}) {
+  const bundlePath = optionValue(options, [
+    "native-prover-bundle",
+    "native-evm-prover-bundle",
+    "bsc-native-prover-bundle",
+    "bsc-native-evm-prover-bundle",
+  ]);
+  if (!bundlePath) {
+    if (productionReady) {
+      throw new Error(
+        "production-ready BSC route manifests require --native-prover-bundle.",
+      );
+    }
+    return null;
+  }
+  const bundle = await readJson(bundlePath, "BSC native EVM prover bundle");
+  const reason = unsafeSecretReason(bundle, "BSC native EVM prover bundle");
+  if (reason) {
+    throw new Error(reason);
+  }
+  const normalized = validateBscNativeEvmProverBundleForProfile(bundle, profile, {
+    expectedDestinationBindingHash: destinationBindingHash,
+  });
+  if (normalized.verifierKeyHash !== verifierKeyHash) {
+    throw new Error(
+      "BSC native EVM prover bundle verifierKeyHash must match route verifierKeyHash.",
+    );
+  }
+  if (proofArtifactHash && normalized.proofArtifactHash !== proofArtifactHash) {
+    throw new Error(
+      "BSC native EVM prover bundle proofArtifactHash must match route proofArtifactHash.",
+    );
+  }
+  if (provingKeyHash && normalized.provingKeyHash !== provingKeyHash) {
+    throw new Error(
+      "BSC native EVM prover bundle provingKeyHash must match route provingKeyHash.",
+    );
+  }
+  return { bundle: normalized, hash: canonicalBscNativeEvmProverBundleHash(normalized) };
+}
+
+function bscPostDeployRecordSources(evidence, liveEvidence) {
+  const sources = [];
+  const liveRecord =
+    readFirstRecord(liveEvidence, "postDeployLiveEvidence", "post_deploy_live_evidence") ??
+    (isRecord(liveEvidence) ? liveEvidence : null);
+  const evidenceRecord =
+    readFirstRecord(evidence, "postDeployLiveEvidence", "post_deploy_live_evidence") ??
+    null;
+  if (liveRecord) {
+    sources.push({
+      record: liveRecord,
+      pathName: "BSC live evidence postDeployLiveEvidence",
+    });
+  }
+  if (evidenceRecord) {
+    sources.push({
+      record: evidenceRecord,
+      pathName: "BSC deployment evidence postDeployLiveEvidence",
+    });
+  }
+  return sources;
+}
+
+function hasBscPostDeployEvidence(evidence, liveEvidence, options = {}) {
+  const optionKeys = [
+    "full-toml-ready",
+    "source-bridge-config-hash",
+    "source-event-transaction-id",
+    "source-event-explorer-url",
+    "route-canary-evidence-hash",
+    "route-canary-transaction-id",
+    "route-canary-explorer-url",
+    "offline-full-toml-sha256",
+  ];
+  return (
+    bscPostDeployRecordSources(evidence, liveEvidence).length > 0 ||
+    optionKeys.some((key) => options[key] !== undefined && options[key] !== "")
+  );
+}
+
+function readBscPostDeployString(options, sources, optionKeys, recordKeys, label, normalizeValue) {
+  const allSources = [
+    { record: options, keys: optionKeys, pathName: "route-manifest options" },
+    ...sources.map((source) => ({
+      ...source,
+      keys: recordKeys,
+    })),
+  ];
+  assertSingleStringAliasPerSource(allSources, label);
+  return readConsistentNormalizedString(allSources, label, normalizeValue);
+}
+
+function normalizeBscPostDeployEvidence(
+  evidence,
+  liveEvidence,
+  options = {},
+  { profile, requireFullTomlReady = false } = {},
+) {
+  if (!hasBscPostDeployEvidence(evidence, liveEvidence, options)) {
+    return null;
+  }
+  const sources = bscPostDeployRecordSources(evidence, liveEvidence);
+  const booleanSources = sources.map((source) => ({
+    ...source,
+    keys: ["fullTomlReady", "full_toml_ready"],
+  }));
+  for (const source of booleanSources) {
+    assertSingleValueAlias(
+      source.record,
+      source.keys,
+      source.pathName,
+      "postDeployLiveEvidence.fullTomlReady",
+    );
+  }
+  let fullTomlReady =
+    options["full-toml-ready"] === undefined
+      ? false
+      : optionEnabled(options, "full-toml-ready", false);
+  if (options["full-toml-ready"] === undefined) {
+    let selected;
+    for (const source of booleanSources) {
+      const value = readConsistentBoolean(
+        source.record,
+        source.keys,
+        `${source.pathName}.fullTomlReady`,
+      );
+      if (selected === undefined && hasAnyOwnManifestKey(source.record, source.keys)) {
+        selected = value;
+      } else if (
+        hasAnyOwnManifestKey(source.record, source.keys) &&
+        selected !== value
+      ) {
+        throw new Error("postDeployLiveEvidence.fullTomlReady sources disagree.");
+      }
+    }
+    fullTomlReady = selected === true;
+  }
+  const sourceBridgeConfigHash = readBscPostDeployString(
+    options,
+    sources,
+    ["source-bridge-config-hash"],
+    ["sourceBridgeConfigHash", "source_bridge_config_hash"],
+    "postDeployLiveEvidence.sourceBridgeConfigHash",
+    (value, label) => normalizeCanonicalHex32(value, label),
+  );
+  const sourceEventTransactionId = readBscPostDeployString(
+    options,
+    sources,
+    ["source-event-transaction-id"],
+    ["sourceEventTransactionId", "source_event_transaction_id"],
+    "postDeployLiveEvidence.sourceEventTransactionId",
+    (value, label) => normalizeCanonicalHex32(value, label),
+  );
+  const routeCanaryEvidenceHash = readBscPostDeployString(
+    options,
+    sources,
+    ["route-canary-evidence-hash"],
+    ["routeCanaryEvidenceHash", "route_canary_evidence_hash"],
+    "postDeployLiveEvidence.routeCanaryEvidenceHash",
+    (value, label) => normalizeCanonicalHex32(value, label),
+  );
+  const routeCanaryTransactionId = readBscPostDeployString(
+    options,
+    sources,
+    ["route-canary-transaction-id"],
+    ["routeCanaryTransactionId", "route_canary_transaction_id"],
+    "postDeployLiveEvidence.routeCanaryTransactionId",
+    (value, label) => normalizeCanonicalHex32(value, label),
+  );
+  const offlineFullTomlSha256 = readBscPostDeployString(
+    options,
+    sources,
+    ["offline-full-toml-sha256"],
+    ["offlineFullTomlSha256", "offline_full_toml_sha256"],
+    "postDeployLiveEvidence.offlineFullTomlSha256",
+    (value, label) => normalizeCanonicalHex32(value, label),
+  );
+  if (requireFullTomlReady && !fullTomlReady) {
+    throw new Error("postDeployLiveEvidence.fullTomlReady must be true.");
+  }
+  if (fullTomlReady && !offlineFullTomlSha256) {
+    throw new Error(
+      "postDeployLiveEvidence.fullTomlReady requires postDeployLiveEvidence.offlineFullTomlSha256.",
+    );
+  }
+  const sourceEventExplorerUrl = readBscPostDeployString(
+    options,
+    sources,
+    ["source-event-explorer-url"],
+    [
+      "sourceEventExplorerUrl",
+      "source_event_explorer_url",
+      "sourceEventTransactionUrl",
+      "source_event_transaction_url",
+    ],
+    "postDeployLiveEvidence.sourceEventExplorerUrl",
+    (value, label) =>
+      normalizeBscExplorerTxUrl(value, label, sourceEventTransactionId, profile),
+  );
+  const routeCanaryExplorerUrl = readBscPostDeployString(
+    options,
+    sources,
+    ["route-canary-explorer-url"],
+    [
+      "routeCanaryExplorerUrl",
+      "route_canary_explorer_url",
+      "routeCanaryTransactionUrl",
+      "route_canary_transaction_url",
+    ],
+    "postDeployLiveEvidence.routeCanaryExplorerUrl",
+    (value, label) =>
+      normalizeBscExplorerTxUrl(value, label, routeCanaryTransactionId, profile),
+  );
+  if (sourceBridgeConfigHash === routeCanaryEvidenceHash) {
+    throw new Error(
+      "postDeployLiveEvidence sourceBridgeConfigHash and routeCanaryEvidenceHash must be distinct.",
+    );
+  }
+  if (sourceEventTransactionId === routeCanaryTransactionId) {
+    throw new Error(
+      "postDeployLiveEvidence sourceEventTransactionId and routeCanaryTransactionId must be distinct.",
+    );
+  }
+  return {
+    fullTomlReady,
+    sourceBridgeConfigHash,
+    sourceEventTransactionId,
+    sourceEventExplorerUrl,
+    routeCanaryEvidenceHash,
+    routeCanaryTransactionId,
+    routeCanaryExplorerUrl,
+    offlineFullTomlSha256: offlineFullTomlSha256 || null,
+  };
+}
+
+export async function buildBscTairaXorRouteManifestDraft({
+  options = {},
+  evidence,
+  tairaContract,
+  liveEvidence = null,
+  createdAt = new Date().toISOString(),
+} = {}) {
+  const routeEvidence = normalizeBscDeploymentEvidenceForRouteManifest(
+    evidence,
+    options,
+  );
+  const { profile, rollout, addresses, verifierCodeHash, verifierKeyHash } =
+    routeEvidence;
+  const productionReady = optionEnabled(options, "production-ready", false);
+  if (productionReady) {
+    const confirmed =
+      profile.key === "testnet"
+        ? options["confirm-testnet"] === ROUTE_ID
+        : optionEnabled(options, "confirm-mainnet", false) &&
+          options["confirm-network"] === ROUTE_ID;
+    if (!confirmed) {
+      throw new Error(
+        profile.key === "testnet"
+          ? `production-ready BSC testnet route manifests require --confirm-testnet ${ROUTE_ID}.`
+          : `production-ready BSC mainnet route manifests require --confirm-mainnet true --confirm-network ${ROUTE_ID}.`,
+      );
+    }
+    if (!optionEnabled(options, "live-readback-checked", false)) {
+      throw new Error(
+        "production-ready BSC route manifests require --live-readback-checked true.",
+      );
+    }
+  }
+  const burnRecord = normalizeBscTairaBurnRecordContract(tairaContract, options);
+  const nativeBundle = await readBscRouteManifestNativeProverBundle(options, {
+    profile,
+    verifierKeyHash,
+    proofArtifactHash: null,
+    provingKeyHash: null,
+    destinationBindingHash: routeEvidence.destinationBindingHash,
+    productionReady: false,
+  });
+  const proofArtifactHash =
+    readOptionalBscRouteHash(
+      options,
+      evidence,
+      rollout,
+      ["proof-artifact-hash", "prover-artifact-hash", "circuit-artifact-hash"],
+      [
+        "proofArtifactHash",
+        "proof_artifact_hash",
+        "proverArtifactHash",
+        "prover_artifact_hash",
+        "circuitArtifactHash",
+        "circuit_artifact_hash",
+      ],
+      "BSC route proofArtifactHash",
+    ) ?? nativeBundle?.bundle.proofArtifactHash ?? null;
+  const provingKeyHash =
+    readOptionalBscRouteHash(
+      options,
+      evidence,
+      rollout,
+      ["proving-key-hash"],
+      ["provingKeyHash", "proving_key_hash"],
+      "BSC route provingKeyHash",
+    ) ?? nativeBundle?.bundle.provingKeyHash ?? null;
+  if (Boolean(proofArtifactHash) !== Boolean(provingKeyHash)) {
+    throw new Error(
+      "BSC route proofArtifactHash and provingKeyHash must be supplied together.",
+    );
+  }
+  if (nativeBundle) {
+    if (nativeBundle.bundle.proofArtifactHash !== proofArtifactHash) {
+      throw new Error(
+        "BSC native EVM prover bundle proofArtifactHash must match route proofArtifactHash.",
+      );
+    }
+    if (nativeBundle.bundle.provingKeyHash !== provingKeyHash) {
+      throw new Error(
+        "BSC native EVM prover bundle provingKeyHash must match route provingKeyHash.",
+      );
+    }
+  } else if (productionReady) {
+    throw new Error(
+      "production-ready BSC route manifests require --native-prover-bundle.",
+    );
+  }
+  if (productionReady && (!proofArtifactHash || !provingKeyHash)) {
+    throw new Error(
+      "production-ready BSC route manifests require proofArtifactHash and provingKeyHash.",
+    );
+  }
+  const postDeployLiveEvidence = normalizeBscPostDeployEvidence(
+    evidence,
+    liveEvidence,
+    options,
+    { profile, requireFullTomlReady: productionReady },
+  );
+  if (productionReady && !postDeployLiveEvidence) {
+    throw new Error(
+      "production-ready BSC route manifests require postDeployLiveEvidence.",
+    );
+  }
+  const diagnosticVerifierReasons = [
+    diagnosticFlagReason(evidence, "BSC deployment evidence"),
+    diagnosticFlagReason(rollout, "BSC deployment evidence destinationRollout"),
+    isKnownDiagnosticBscVerifierKeyHash(verifierKeyHash)
+      ? `verifierKeyHash=${verifierKeyHash} is a known diagnostic BSC verifier key hash`
+      : "",
+  ].filter(Boolean);
+  const nativeEvmProverBundleHash = nativeBundle?.hash ?? null;
+  const manifest = {
+    schema: ROUTE_MANIFEST_SCHEMA,
+    createdAt,
+    routeId: ROUTE_ID,
+    assetKey: ASSET_KEY,
+    bscNetwork: profile.key,
+    chain: profile.chain,
+    chainIdHex: profile.chainIdHex,
+    networkIdHex: profile.networkIdHex,
+    explorerUrl: profile.explorerUrl,
+    explorerHost: profile.explorerHost,
+    counterpartyDomain: SCCP_DOMAIN_BSC,
+    counterpartyAccountCodecKey: "evm_hex",
+    counterpartyAccountCodec: 2,
+    verifierTarget: "EvmContract",
+    productionReady,
+    ...(diagnosticVerifierReasons.length > 0
+      ? {
+          diagnosticVerifier: true,
+          verifierMaterialWarnings: diagnosticVerifierReasons,
+        }
+      : {}),
+    ...(productionReady
+      ? { postDeployReadbackChecked: true }
+      : {
+          disabledReason:
+            diagnosticVerifierReasons.length > 0
+              ? "BSC verifier material is diagnostic and must be replaced before production readiness."
+              : "Route manifest draft is not production-ready until BSC contract readback, native prover, TAIRA route publication, and live canary evidence are complete.",
+        }),
+    bscTokenAddress: addresses.token,
+    bscBridgeAddress: addresses.bridge,
+    sccpBscSourceBridgeAddress: addresses.sourceBridge,
+    bscVerifierAddress: addresses.verifier,
+    ...(proofArtifactHash ? { proofArtifactHash } : {}),
+    ...(provingKeyHash ? { provingKeyHash } : {}),
+    ...(nativeEvmProverBundleHash ? { nativeEvmProverBundleHash } : {}),
+    ...(nativeBundle ? { nativeEvmProverBundle: nativeBundle.bundle } : {}),
+    destinationRollout: {
+      version: 1,
+      destinationNetworkId: profile.networkIdHex,
+      sourceDomain: SCCP_DOMAIN_SORA,
+      targetDomain: SCCP_DOMAIN_BSC,
+      verifierIdentity: addresses.verifier,
+      verifierBackend: BSC_EVM_GROTH16_BACKEND,
+      proofFamily: SCCP_PROOF_FAMILY_STARK_FRI,
+      verifierCodeHash,
+      verifierKeyHash,
+      ...(proofArtifactHash ? { proofArtifactHash } : {}),
+      ...(provingKeyHash ? { provingKeyHash } : {}),
+      ...(nativeEvmProverBundleHash ? { nativeEvmProverBundleHash } : {}),
+      ...(nativeBundle ? { nativeEvmProverBundle: nativeBundle.bundle } : {}),
+      destinationBridgeAddress: addresses.bridge,
+      destinationBindingHash: routeEvidence.destinationBindingHash,
+      destinationBindingKey: routeEvidence.destinationBindingKey,
+    },
+    destinationBinding: {
+      version: 1,
+      key: routeEvidence.destinationBindingKey,
+      sourceDomain: SCCP_DOMAIN_SORA,
+      targetDomain: SCCP_DOMAIN_BSC,
+      bindingHash: routeEvidence.destinationBindingHash,
+      networkIdHex: profile.networkIdHex,
+    },
+    tairaXorBurnRecord: {
+      settlementAssetDefinitionId: normalizeCanonicalAssetDefinitionId(
+        readRequiredConsistentNormalizedString(
+          [
+            {
+              record: options,
+              keys: ["settlement-asset-definition-id", "settlementAssetDefinitionId"],
+              pathName: "route-manifest options",
+            },
+            {
+              record: evidence,
+              keys: ["settlementAssetDefinitionId", "settlement_asset_definition_id"],
+              pathName: "BSC deployment evidence",
+            },
+          ],
+          "--settlement-asset-definition-id",
+          (value, label) => normalizeNonEmptyText(value, label),
+        ),
+        "--settlement-asset-definition-id",
+      ),
+      contractArtifactB64: burnRecord.contractArtifactB64,
+      artifactSha256: burnRecord.artifactSha256,
+      codeHash: burnRecord.codeHash,
+      vkRef: burnRecord.vkRef,
+      gasLimit: normalizePositiveSafeInteger(
+        options["gas-limit"],
+        "--gas-limit",
+        2_000_000,
+      ),
+    },
+    settlement: {
+      submitPath: "/v1/bridge/messages",
+      mode: "finalize_inbound",
+      routeId: ROUTE_ID,
+      assetKey: ASSET_KEY,
+    },
+    ...(postDeployLiveEvidence ? { postDeployLiveEvidence } : {}),
+  };
+  normalizeRouteManifestForConfig(manifest);
+  return manifest;
+}
+
 function normalizeVerifierKeyRefText(value, label) {
   const normalized = normalizeNonEmptyText(value, label);
   if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(normalized)) {
@@ -2753,8 +4092,7 @@ function assertSingleValueAlias(record, keys, pathName, label) {
     }
     const value = ownValue(record, key);
     return (
-      (typeof value === "string" && value.trim()) ||
-      typeof value === "boolean"
+      (typeof value === "string" && value.trim()) || typeof value === "boolean"
     );
   });
   if (presentKeys.length > 1) {
@@ -2949,19 +4287,20 @@ function normalizeRouteManifestForConfig(manifest) {
     readFirstString(record, "bscNetwork", "bsc_network", "network") ||
     readFirstString(record, "chain") ||
     "testnet";
-  if (bscNetworkText !== bscNetworkText.toLowerCase() || bscNetworkText.includes("_")) {
-    throw new Error("route manifest bscNetwork must be canonical lowercase text.");
+  if (
+    bscNetworkText !== bscNetworkText.toLowerCase() ||
+    bscNetworkText.includes("_")
+  ) {
+    throw new Error(
+      "route manifest bscNetwork must be canonical lowercase text.",
+    );
   }
   const bscNetwork = normalizeBscTestnetKey(
     bscNetworkText,
     "route manifest bscNetwork",
   );
   const bscProfile = BSC_NETWORK_PROFILES[bscNetwork];
-  const chain = readRequiredString(
-    record,
-    ["chain"],
-    "route manifest chain",
-  );
+  const chain = readRequiredString(record, ["chain"], "route manifest chain");
   if (chain !== chain.toLowerCase()) {
     throw new Error("route manifest chain must be canonical lowercase text.");
   }
@@ -2973,8 +4312,13 @@ function normalizeRouteManifestForConfig(manifest) {
     ["chainIdHex", "chain_id_hex"],
     "route manifest chainIdHex",
   );
-  if (/^0X/u.test(chainIdHex) || /[A-F]/u.test(chainIdHex.replace(/^0x/u, ""))) {
-    throw new Error("route manifest chainIdHex must be canonical lowercase hex.");
+  if (
+    /^0X/u.test(chainIdHex) ||
+    /[A-F]/u.test(chainIdHex.replace(/^0x/u, ""))
+  ) {
+    throw new Error(
+      "route manifest chainIdHex must be canonical lowercase hex.",
+    );
   }
   if (chainIdHex !== bscProfile.chainIdHex) {
     throw new Error(
@@ -3297,10 +4641,8 @@ function normalizeRouteManifestForConfig(manifest) {
     ];
     assertSingleStringAliasPerSource(sources, label);
     return (
-      readConsistentNormalizedString(
-        sources,
-        label,
-        (value, fieldLabel) => normalizeCanonicalHex32(value, fieldLabel),
+      readConsistentNormalizedString(sources, label, (value, fieldLabel) =>
+        normalizeCanonicalHex32(value, fieldLabel),
       ) || null
     );
   };
@@ -3315,10 +4657,10 @@ function normalizeRouteManifestForConfig(manifest) {
       "circuit_artifact_hash",
     ],
   );
-  const provingKeyHash = optionalRouteHash(
-    "route manifest provingKeyHash",
-    ["provingKeyHash", "proving_key_hash"],
-  );
+  const provingKeyHash = optionalRouteHash("route manifest provingKeyHash", [
+    "provingKeyHash",
+    "proving_key_hash",
+  ]);
   const declaredNativeEvmProverBundleHash = optionalRouteHash(
     "route manifest nativeEvmProverBundleHash",
     [
@@ -3565,8 +4907,8 @@ function normalizeRouteManifestForConfig(manifest) {
       postDeployLiveEvidenceProductionBlockers(postDeployLiveEvidence);
     if (productionReady && postDeployProductionBlockers.length > 0) {
       throw new Error(
-        "route manifest productionReady requires empty postDeployLiveEvidence "
-          + `production blockers: ${postDeployProductionBlockers.join("; ")}.`,
+        "route manifest productionReady requires empty postDeployLiveEvidence " +
+          `production blockers: ${postDeployProductionBlockers.join("; ")}.`,
       );
     }
     const sourceBridgeConfigHash = readRequiredConsistentNormalizedString(
@@ -4217,11 +5559,65 @@ async function commandEvidence(options) {
   };
 }
 
+async function commandRouteManifest(options) {
+  const evidence = await readJson(
+    options.evidence ?? options["deployment-evidence"] ?? DEFAULT_EVIDENCE_OUT,
+    "BSC deployment evidence",
+  );
+  const tairaContract = await readJson(
+    options["taira-contract"] ?? DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT,
+    "TAIRA burn-record contract",
+  );
+  const liveEvidence = options["live-evidence"]
+    ? await readJson(options["live-evidence"], "BSC live route evidence")
+    : null;
+  const manifest = await buildBscTairaXorRouteManifestDraft({
+    options,
+    evidence,
+    tairaContract,
+    liveEvidence,
+  });
+  const out = resolve(
+    options.out ??
+      defaultRouteManifestOut(
+        BSC_NETWORK_PROFILES[manifest.bscNetwork] ?? BSC_NETWORK_PROFILES.testnet,
+      ),
+  );
+  assertBscCanonicalProductionOutputSafe(out, manifest, "BSC route manifest");
+  await writeJsonNoSecrets(out, manifest);
+  return {
+    ok: true,
+    wrote: out,
+    routeId: manifest.routeId,
+    assetKey: manifest.assetKey,
+    bscNetwork: manifest.bscNetwork,
+    productionReady: manifest.productionReady,
+    bscBridgeAddress: manifest.bscBridgeAddress,
+    bscTokenAddress: manifest.bscTokenAddress,
+    bscVerifierAddress: manifest.bscVerifierAddress,
+    destinationBindingHash: manifest.destinationRollout.destinationBindingHash,
+    proofArtifactHash: manifest.proofArtifactHash ?? null,
+    provingKeyHash: manifest.provingKeyHash ?? null,
+    nativeEvmProverBundleHash: manifest.nativeEvmProverBundleHash ?? null,
+    offlineFullTomlSha256:
+      manifest.postDeployLiveEvidence?.offlineFullTomlSha256 ?? null,
+    settlementAssetDefinitionId:
+      manifest.tairaXorBurnRecord.settlementAssetDefinitionId,
+    nextStep: manifest.productionReady
+      ? "Generate the TAIRA route config from this manifest, deploy it to every public peer, rerun peer audit/smoke-readiness/production gate, then capture live UI video proof."
+      : "Attach production verifier/proof/native-prover/live evidence, rerun route-manifest with production-ready confirmations, then generate and deploy the TAIRA route config.",
+  };
+}
+
 async function commandRouteConfig(options) {
   const manifest = await readJson(
     options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT,
     "BSC route manifest",
   );
+  const profile =
+    BSC_NETWORK_PROFILES[
+      readFirstValue(manifest, "bscNetwork", "bsc_network", "network")
+    ] ?? BSC_NETWORK_PROFILES.testnet;
   const baseConfigPath = options["base-config"] ?? null;
   const toml = baseConfigPath
     ? buildMergedBscTairaXorRouteConfigToml(
@@ -4232,22 +5628,22 @@ async function commandRouteConfig(options) {
     : buildBscTairaXorRouteConfigToml(manifest, options);
   const outPath =
     options.out ??
-    (baseConfigPath ? DEFAULT_ROUTE_FULL_CONFIG_OUT : DEFAULT_ROUTE_CONFIG_OUT);
+    defaultRouteConfigOut(profile, { fullConfigMode: Boolean(baseConfigPath) });
   assertBscCanonicalProductionOutputSafe(
     outPath,
     manifest,
     "BSC route config manifest",
   );
-  const out = await writeTextNoSecrets(
-    outPath,
-    toml,
-    0o644,
-  );
+  const out = await writeTextNoSecrets(outPath, toml, 0o644);
+  const renderedTomlSha256 = bytesToHex(sha256(textEncoder.encode(toml)));
+  const fullConfigMode = Boolean(baseConfigPath);
   return {
     ok: true,
     wrote: out,
-    mode: baseConfigPath ? "merged-full-config" : "overlay",
+    mode: fullConfigMode ? "merged-full-config" : "overlay",
     baseConfig: baseConfigPath ? resolve(baseConfigPath) : null,
+    renderedTomlSha256,
+    offlineFullTomlSha256: fullConfigMode ? renderedTomlSha256 : null,
     routeId: readFirstValue(manifest, "routeId", "route_id") ?? null,
     assetKey: readFirstValue(manifest, "assetKey", "asset_key") ?? null,
     productionReady:
@@ -4265,7 +5661,8 @@ async function commandRouteConfig(options) {
 
 async function commandNativeProverBundle(options) {
   const result = await buildBscNativeEvmProverBundleFromArtifacts(options);
-  const out = resolve(options.out ?? DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT);
+  const profile = bscProfileFromNativeEvmProverBundle(result.bundle);
+  const out = resolve(options.out ?? defaultNativeEvmProverBundleOut(profile));
   assertBscCanonicalProductionOutputSafe(
     out,
     result.bundle,
@@ -4306,6 +5703,28 @@ async function commandNativeProverBundle(options) {
     verifiedSdks: result.verifiedSdks,
     nextStep:
       "Attach this nativeEvmProverBundle to the production BSC route manifest, regenerate the TAIRA route config, redeploy every public peer, then rerun the BSC SCCP production gates.",
+  };
+}
+
+async function commandRequirements(options) {
+  const profile = bscNetworkProfileFromOptions(options);
+  const requirements = bscProductionRequirements(options);
+  if (!options.out) {
+    return requirements;
+  }
+  const out = resolve(options.out);
+  await writeJsonNoSecrets(out, requirements);
+  return {
+    ok: true,
+    wrote: out,
+    schema: requirements.schema,
+    routeId: requirements.routeId,
+    assetKey: requirements.assetKey,
+    bscNetwork: profile.key,
+    inputCount: requirements.inputs.length,
+    requiredReports: requirements.requiredReports,
+    nextStep:
+      "Fill every public requirement with production artifacts/evidence, then run deploy, native-prover-bundle, route-config, peer audit, smoke readiness, production gate, and live video proof.",
   };
 }
 
@@ -4371,10 +5790,14 @@ export async function main(argv = process.argv.slice(2)) {
       return commandDeploy(options);
     case "evidence":
       return commandEvidence(options);
+    case "route-manifest":
+      return commandRouteManifest(options);
     case "native-prover-bundle":
       return commandNativeProverBundle(options);
     case "route-config":
       return commandRouteConfig(options);
+    case "requirements":
+      return commandRequirements(options);
     case "self-test":
       return commandSelfTest();
     default:

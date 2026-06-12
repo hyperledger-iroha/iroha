@@ -15,6 +15,14 @@ use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
+fn encrypted_payload(seed: u8) -> iroha_data_model::confidential::ConfidentialEncryptedPayload {
+    let mut nonce = [0_u8; 24];
+    nonce.fill(seed);
+    let mut ciphertext = b"zk-roots-get-cap-payload-v1".to_vec();
+    ciphertext.extend_from_slice(&[seed; 32]);
+    iroha_data_model::confidential::ConfidentialEncryptedPayload::new([1_u8; 32], nonce, ciphertext)
+}
+
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -161,13 +169,13 @@ fn zk_roots_get_respects_cap_and_max() {
             .unwrap();
     }
     // Multiple shields to exceed cap
-    for _ in 0..16 {
+    for i in 0_u8..16 {
         let ib: InstructionBox = iroha_data_model::isi::zk::Shield::new(
             asset_def_id.clone(),
             owner.clone(),
             100u128,
             [7u8; 32],
-            iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+            encrypted_payload(i),
         )
         .into();
         stx.world

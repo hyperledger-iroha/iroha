@@ -129,6 +129,12 @@ pub enum DaCommitmentValidationError {
 /// Errors returned when a DA pin intent violates invariants.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DaPinIntentValidationError {
+    /// Pin intent bundle version is unsupported.
+    #[error("unsupported DA pin-intent bundle version {version}")]
+    UnsupportedVersion {
+        /// Version carried by the bundle.
+        version: u16,
+    },
     /// Lane referenced by the pin intent is not present in the configured catalog.
     #[error("lane {lane} not present in the configured lane catalog")]
     UnknownLane {
@@ -152,6 +158,30 @@ pub enum DaPinIntentValidationError {
     /// Duplicate `(lane, epoch, sequence)` pin intent found.
     #[error("duplicate DA pin intent detected for lane {lane}, epoch {epoch}, sequence {sequence}")]
     DuplicateIntent {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+    },
+    /// Duplicate storage ticket found.
+    #[error(
+        "duplicate DA pin-intent storage ticket detected for lane {lane}, epoch {epoch}, sequence {sequence}"
+    )]
+    DuplicateStorageTicket {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+    },
+    /// Duplicate manifest hash found.
+    #[error(
+        "duplicate DA pin-intent manifest hash detected for lane {lane}, epoch {epoch}, sequence {sequence}"
+    )]
+    DuplicateManifest {
         /// Lane identifier that failed validation.
         lane: LaneId,
         /// Epoch that failed validation.
@@ -268,6 +298,8 @@ pub fn sanitize_pin_intents(
     Vec<DaPinIntentValidationError>,
 ) {
     let mut seen = BTreeSet::new();
+    let mut seen_tickets = BTreeSet::new();
+    let mut seen_manifests = BTreeSet::new();
     let mut kept = Vec::new();
     let mut rejected = Vec::new();
 
@@ -361,10 +393,56 @@ pub fn sanitize_pin_intents(
             continue;
         }
 
+        if !seen_tickets.insert(intent.storage_ticket) {
+            rejected.push(DaPinIntentValidationError::DuplicateStorageTicket {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+            });
+            continue;
+        }
+
+        if !seen_manifests.insert(intent.manifest_hash) {
+            rejected.push(DaPinIntentValidationError::DuplicateManifest {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+            });
+            continue;
+        }
+
         kept.push(intent);
     }
 
     (kept, rejected)
+}
+
+/// Validate a DA pin-intent bundle before accepting an inbound block.
+///
+/// Unlike local spool ingestion, inbound block validation is fail-closed:
+/// invalid pin intents reject the block instead of being dropped during apply.
+///
+/// # Errors
+///
+/// Returns the first [`DaPinIntentValidationError`] observed in the bundle.
+pub fn validate_pin_intent_bundle(
+    bundle: &iroha_data_model::da::pin_intent::DaPinIntentBundle,
+    lane_config: &LaneConfig,
+    account_exists: impl Fn(&AccountId) -> bool,
+) -> Result<(), DaPinIntentValidationError> {
+    if bundle.version != iroha_data_model::da::pin_intent::DaPinIntentBundle::VERSION_V1 {
+        return Err(DaPinIntentValidationError::UnsupportedVersion {
+            version: bundle.version,
+        });
+    }
+
+    let (_kept, rejected) =
+        sanitize_pin_intents(bundle.intents.clone(), lane_config, account_exists);
+    if let Some(error) = rejected.into_iter().next() {
+        return Err(error);
+    }
+
+    Ok(())
 }
 
 /// Validate commitment bundle invariants before embedding into a block.
@@ -421,7 +499,10 @@ pub fn validate_commitment_bundle(
 #[cfg(test)]
 mod proof_policy_tests {
     use iroha_data_model::{
-        da::{pin_intent::DaPinIntent, types::StorageTicketId},
+        da::{
+            pin_intent::{DaPinIntent, DaPinIntentBundle},
+            types::StorageTicketId,
+        },
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
@@ -496,6 +577,76 @@ mod proof_policy_tests {
             DaPinIntentValidationError::DuplicateIntent { lane, epoch, sequence }
                 if *lane == lane_id && *epoch == 2 && *sequence == 4
         )));
+    }
+
+    #[test]
+    fn sanitize_pin_intents_rejects_duplicate_ticket_and_manifest() {
+        let lane_config = LaneConfig::default();
+        let lane = lane_config.primary().lane_id;
+        let first = intent(lane, 1, 1, [0x11; 32], [0x21; 32]);
+        let duplicate_ticket = intent(lane, 1, 2, [0x12; 32], [0x21; 32]);
+        let duplicate_manifest = intent(lane, 1, 3, [0x11; 32], [0x23; 32]);
+
+        let (kept, rejected) = sanitize_pin_intents(
+            [first.clone(), duplicate_ticket, duplicate_manifest],
+            &lane_config,
+            |_| true,
+        );
+
+        assert_eq!(kept, vec![first]);
+        assert!(rejected.iter().any(|err| matches!(
+            err,
+            DaPinIntentValidationError::DuplicateStorageTicket {
+                lane: seen_lane,
+                epoch: 1,
+                sequence: 2
+            } if *seen_lane == lane
+        )));
+        assert!(rejected.iter().any(|err| matches!(
+            err,
+            DaPinIntentValidationError::DuplicateManifest {
+                lane: seen_lane,
+                epoch: 1,
+                sequence: 3
+            } if *seen_lane == lane
+        )));
+    }
+
+    #[test]
+    fn validate_pin_intent_bundle_rejects_unsupported_version() {
+        let lane_config = LaneConfig::default();
+        let lane = lane_config.primary().lane_id;
+        let mut bundle = DaPinIntentBundle::new(vec![intent(lane, 1, 1, [1; 32], [2; 32])]);
+        bundle.version = DaPinIntentBundle::VERSION_V1 + 1;
+
+        let err = validate_pin_intent_bundle(&bundle, &lane_config, |_| true)
+            .expect_err("unsupported pin intent bundle version must fail");
+        assert!(matches!(
+            err,
+            DaPinIntentValidationError::UnsupportedVersion { version }
+                if version == DaPinIntentBundle::VERSION_V1 + 1
+        ));
+    }
+
+    #[test]
+    fn validate_pin_intent_bundle_rejects_duplicate_ticket() {
+        let lane_config = LaneConfig::default();
+        let lane = lane_config.primary().lane_id;
+        let bundle = DaPinIntentBundle::new(vec![
+            intent(lane, 1, 1, [0x31; 32], [0x41; 32]),
+            intent(lane, 1, 2, [0x32; 32], [0x41; 32]),
+        ]);
+
+        let err = validate_pin_intent_bundle(&bundle, &lane_config, |_| true)
+            .expect_err("duplicate pin intent ticket must fail");
+        assert!(matches!(
+            err,
+            DaPinIntentValidationError::DuplicateStorageTicket {
+                lane: seen_lane,
+                epoch: 1,
+                sequence: 2
+            } if seen_lane == lane
+        ));
     }
 
     #[test]

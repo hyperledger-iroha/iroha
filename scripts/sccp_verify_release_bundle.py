@@ -4226,6 +4226,17 @@ SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS = (
             "`evm-groth16-bn254-v1`, and `tron-groth16-bn254-v1`)",
         ),
     ),
+    (
+        "crates/iroha_torii/src/openapi.rs",
+        (
+            "fn sccp_capabilities_operation() -> Map",
+            "fn sccp_manifests_operation() -> Map",
+            "Discover SCCP proof capabilities.",
+            "Discover SCCP proof manifests.",
+            "SCCP \\\n             will not support Sub&#115;trate/Pol&#107;adot networks for now.",
+            "SCCP will not \\\n             support Sub&#115;trate/Pol&#107;adot networks for now.",
+        ),
+    ),
 )
 SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_FORBIDDEN_MARKERS = ()
 SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
@@ -5096,8 +5107,10 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _required_record_summary_unknown_field_blocker(",
             "f\"{lane_label}: required record summary\"",
             "def _active_launch_evm_live_metadata_blockers(",
+            "def _active_launch_source_record_hash_role_blockers(",
             "source live eth_chainId must be",
             "destination live eth_chainId must be",
+            "source verifier material hash must not reuse source adapter engine deployment hash",
             "active EVM source adapter gate summary must not be ",
             "active EVM source adapter gate hash must be empty",
             "active EVM source adapter gate audit hashes must be ",
@@ -5135,7 +5148,10 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def test_release_readiness_report_blocks_missing_active_launch_checklist_schema_gate",
             "def test_release_readiness_report_compares_checklist_ready_exactly",
             "def test_active_launch_evm_live_metadata_requires_canonical_decimal_chain_id",
-            'for noncanonical_chain_id in ("0x1", "01", " 1", "1 ", 1):',
+            "noncanonical_chain_ids = (",
+            '"\\uff11",',
+            '"\\u0661",',
+            "assert absent_blocker not in blockers",
             "def test_release_readiness_report_blocks_malformed_active_route_allowlist_binding",
             "def test_release_readiness_report_blocks_malformed_active_governed_deployment_metadata",
             "source_record_hashes.hash_reuse",
@@ -5143,13 +5159,22 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "source_adapter_gate.gate_hash",
             "source_adapter_gate.audit_hashes",
             "route_allowlist.hash_mismatch",
+            "expected_match_flag_exactness_cases = (",
+            "expected_destination_match_flag_exactness_cases = (",
             "route_allowlist.expected_route_allowlist_hash_matches",
             "def test_release_readiness_report_blocks_malformed_active_route_canary_metadata",
+            "receipt_block_number_exactness_cases = (",
+            "route_canary_evidence_bound_exactness_cases = (",
+            "route_canary_receipt_finalized_exactness_cases = (",
+            "route_canary_status_exactness_cases = (",
+            "route_canary_evidence_source_exactness_cases = (",
+            "route_canary_hex32_exactness_cases = (",
             "route canary block receipts root must be a canonical non-zero bytes32 hex string",
             "route canary receipt block must be finalized",
             "route allowlist source verifier material hash must not reuse source adapter engine deployment hash",
             "governed deployment source verifier material hash must not reuse source adapter engine deployment hash",
             "def test_release_readiness_report_blocks_malformed_active_required_record_metadata",
+            "required_record_flag_exactness_cases = (",
             "domain.string",
             "chain.padded",
             "production_ready.string",
@@ -5165,11 +5190,31 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
         (
             "def test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory",
             "def test_release_bundle_active_evm_metadata_rejects_noncanonical_chain_id",
-            'for noncanonical_chain_id in ("0x1", "01", " 1", "1 ", 1):',
+            "noncanonical_chain_ids = (",
+            '"\\uff11",',
+            '"\\u0661",',
+            "assert absent_blocker not in blockers",
             "def test_release_bundle_verifier_rejects_missing_active_launch_checklist_schema_inventory_gate",
             "def test_release_bundle_verifier_rejects_readiness_boolean_type_drift",
             "def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_canary_source",
+            "def test_release_bundle_verifier_recomputes_active_route_canary_receipt_block_number_exactly",
+            "def test_release_bundle_verifier_recomputes_active_route_canary_status_exactly",
+            "def test_release_bundle_verifier_recomputes_active_route_canary_evidence_bound_exactly",
+            "def test_release_bundle_verifier_recomputes_active_route_canary_receipt_finalized_exactly",
+            "def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift",
+            "receipt_block_number_exactness_cases = (",
+            "route_canary_receipt_block_number_exactness_cases = (",
+            "route_canary_evidence_bound_exactness_cases = (",
+            "route_canary_receipt_finalized_exactness_cases = (",
+            "route_canary_status_exactness_cases = (",
+            "route_canary_evidence_source_exactness_cases = (",
+            "route_canary_hex32_exactness_cases = (",
+            "def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_role_reuse",
+            "expected_match_flag_exactness_cases = (",
+            "def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_and_role_reuse",
+            "expected_destination_match_flag_exactness_cases = (",
             "def test_release_bundle_verifier_recomputes_active_required_record_identity_scalars",
+            "required_record_flag_exactness_cases = (",
             "domain.string",
             "chain.padded",
             "production_ready.string",
@@ -6956,6 +7001,8 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
         (
             "test_release_bundle_verifier_guards_release_native_prover_bundle_schema_inventory",
             "test_release_bundle_verifier_rejects_missing_release_native_prover_bundle_schema_inventory_gate",
+            "test_release_bundle_native_evm_prover_bundle_rejects_boolean_type_drift",
+            "native_bundle_boolean_exactness_cases = (",
             "test_release_bundle_rejects_malformed_copied_native_evm_summary_before_render",
             "test_release_bundle_rejects_blocked_copied_native_evm_summary_before_render",
             "test_release_bundle_rejects_malformed_copied_native_evm_artifacts_before_render",
@@ -6998,6 +7045,8 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
         (
             "test_release_readiness_report_guards_release_native_prover_bundle_schema_gate_inventory",
             "test_release_readiness_report_blocks_missing_release_native_prover_bundle_schema_gate",
+            "test_release_readiness_report_blocks_wasm_or_remote_native_evm_prover_bundle",
+            "native_bundle_boolean_exactness_cases = (",
             "test_release_readiness_report_blocks_native_evm_prover_unknown_root_and_audit_fields",
             "test_release_readiness_report_blocks_native_evm_prover_malformed_unknown_field_names",
             "test_release_readiness_report_blocks_native_evm_prover_malformed_duplicate_json_keys",
@@ -7437,8 +7486,19 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "def _cryptographic_evidence_row_schema_errors(",
             "domain must be an integer",
             "chain must be a non-empty ",
+            "route_canary_evidence_source must be {expected_canary_source}",
             "route_canary_evidence_bound must be a boolean",
+            "route_canary_evidence_bound must be true for finalized",
             "route_canary_receipt_block_finalized must be a boolean or null",
+            "route_canary_receipt_block_finalized must be true for finalized",
+            "route_canary_receipt_block_number must be a positive u32 integer",
+            "route_canary_block_number must be a positive u64 integer",
+            "route_canary_block_timestamp must be a non-negative u64 integer",
+            "def _cryptographic_evidence_source_adapter_gate_schema_errors(",
+            "source_adapter_gate_required must be false for this domain",
+            "source_adapter_gate_required must be true for this domain",
+            "source_adapter_gate_hash must be empty when gate is not required",
+            "source_adapter_gate_audit_hashes must be empty when gate is not required",
             "source_adapter_gate_required must be a boolean",
             "source_adapter_gate_audit_hashes must be an object",
             "def _cryptographic_evidence_lane_binding_errors(",
@@ -7471,10 +7531,21 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "def _cryptographic_evidence_row_bundle_errors(",
             "domain must be an integer",
             "chain must be a non-empty string with no surrounding whitespace",
+            "route_canary_evidence_source must be {expected_source}",
             "route_canary_evidence_bound",
             "source_adapter_gate_required",
             "route_canary_receipt_block_finalized must be true, false, or null",
+            "route_canary_evidence_bound must be true for finalized",
+            "route_canary_receipt_block_finalized must be true for",
             "route_canary_receipt_block_number",
+            "route_canary_receipt_block_number must be null or a positive u32 integer",
+            "route_canary_block_number must be null or a positive u64 integer",
+            "route_canary_block_timestamp must be null or a non-negative u64 integer",
+            "def _cryptographic_evidence_source_adapter_gate_bundle_errors(",
+            "source_adapter_gate_required must be false for this domain",
+            "source_adapter_gate_required must be true for this domain",
+            "source_adapter_gate_hash must be empty when gate is not required",
+            "source_adapter_gate_audit_hashes must be empty when gate is not required",
             "def _cryptographic_evidence_lane_binding_bundle_errors(",
             "must cover every embedded lane",
             "must match {lane_label}",
@@ -7490,8 +7561,14 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_missing_release_public_crypto_evidence_binding_inventory_gate",
             "test_release_bundle_rejects_unknown_copied_crypto_evidence_before_render",
             "test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render",
+            "test_release_bundle_rejects_unbound_copied_crypto_evidence_before_render",
+            "test_release_bundle_rejects_oversized_copied_crypto_evidence_receipt_before_render",
+            "test_release_bundle_rejects_oversized_copied_tron_crypto_evidence_before_render",
+            "test_release_bundle_rejects_copied_crypto_source_adapter_gate_drift_before_render",
+            "evm_message_proof_accepted_transaction for finalized ",
             "test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render",
             "test_release_bundle_verifier_rejects_unbound_crypto_evidence",
+            "test_release_bundle_verifier_rejects_false_crypto_evidence_bound_with_canary_hash",
             "test_release_bundle_verifier_rejects_crypto_evidence_hash_drift",
             "test_release_bundle_verifier_expected_crypto_evidence_preserves_malformed_values",
             "test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes",
@@ -7503,6 +7580,11 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_crypto_evidence_malformed_source_adapter_gate_audit_keys",
             "test_release_bundle_verifier_suppresses_crypto_evidence_malformed_markdown_leaks",
             "test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile",
+            "bsc_route_canary_semantic_cases = (",
+            "route_canary_receipt_block_number must be a positive u32 integer",
+            "test_release_bundle_verifier_rejects_tron_crypto_profile_block_metadata_drift",
+            "tron_block_metadata_cases = (",
+            "test_release_bundle_verifier_rejects_crypto_source_adapter_gate_policy_drift",
             "test_release_bundle_verifier_rejects_crypto_evidence_malformed_unknown_fields",
             "source_adapter_gate_audit_hashes must be an object",
             "route_canary_receipt_block_finalized must be a boolean or null",
@@ -7528,6 +7610,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
         "scripts/sccp_verify_release_bundle.py",
         (
             "def _expected_submission_surfaces(report:",
+            "def _expected_submission_surface_required_phases(",
             "USER_PROVER_REQUIRED_LANE_BACKENDS",
             "USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK",
             "def _submission_surface_inventory_errors(",
@@ -7540,6 +7623,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "sdk_helper_symbols_by_sdk contains SDK key with",
             "def _submission_surface_required_phase_blocker(",
             "required_phases contains phase with",
+            "required_phases must match expected phases",
             "def _submission_surface_lanes_blocker(",
             "lanes contains Markdown-unsafe character",
             "def _submission_surface_proof_backend_blocker(",
@@ -7594,6 +7678,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "required helper:",
             "contains SDK key with",
             "contains phase with",
+            "required_phases must match expected phases",
             "lanes contains Markdown-unsafe character",
             "proof_backend contains Markdown-unsafe character",
             "must match expected submission text",
@@ -7625,6 +7710,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_missing_required_submission_surface_helper",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper_map_keys",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_required_phases",
+            "test_release_bundle_verifier_rejects_submission_surface_exact_phase_drift",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_unknown_fields",
             "test_release_bundle_verifier_redacts_public_renderer_errors",
             "test_release_bundle_redacts_builder_recompute_and_renderer_errors",
@@ -7709,7 +7795,7 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "ARTIFACT_FIELDS",
             "def _artifact_row_errors(",
             "_unknown_public_field_errors(artifact, label, ARTIFACT_FIELDS)",
-            "bytes must be a non-negative integer",
+            "bytes must be a positive integer",
             "sha256 must be a canonical SHA-256 hex string",
             "def _bundled_artifact_integrity_errors(",
             "artifact byte length mismatch",
@@ -7750,10 +7836,10 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def _artifact_errors(",
             "\"manifest artifact\"",
             "_native_evm_prover_field_name_blocker(",
-            "manifest artifact bytes must be a non-negative integer",
+            "manifest artifact bytes must be a positive integer",
             "manifest artifact sha256 must be a canonical SHA-256 hex string",
             "f\"{label} artifact\"",
-            "artifact bytes must be a non-negative integer",
+            "artifact bytes must be a positive integer",
             "artifact sha256 must be a canonical SHA-256 hex string",
         ),
     ),
@@ -7785,9 +7871,10 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def test_release_bundle_verifier_rejects_unknown_artifact_fields",
             "def test_release_bundle_verifier_rejects_malformed_artifact_fields",
             "def test_release_bundle_verifier_rejects_artifact_field_type_drift",
+            "def test_release_bundle_verifier_rejects_zero_artifact_byte_counts",
             "def test_release_bundle_verifier_rejects_artifact_digest_text_drift",
             "operator_attestation",
-            "readiness report input artifact bytes must be a non-negative integer",
+            "readiness report input artifact bytes must be a positive integer",
             "readiness report input artifact sha256 must be a canonical SHA-256 hex string",
             "def test_release_bundle_rejects_malformed_copied_artifacts_before_render",
             "secret-token-duplicate-artifact",
@@ -9223,6 +9310,19 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
         ),
     },
 }
+
+
+def _expected_submission_surface_required_phases(
+    lanes: str,
+    proof_backend: str,
+) -> list[str]:
+    phases = list(USER_PROVER_SDK_PHASES)
+    if lanes == "eth,bsc":
+        phases.append("dotnet-sdk")
+    if proof_backend in USER_PROVER_CONTRACT_SMOKE_BACKENDS:
+        phases.append("contract-smoke")
+    phases.append("core-admission")
+    return phases
 RELEASE_CHECKLIST_KEYS = {"ready", "items"}
 RELEASE_CHECKLIST_ITEM_KEYS = {"id", "title", "ready", "blockers"}
 RELEASE_CHECKLIST_ITEM_IDS = {
@@ -9699,8 +9799,8 @@ def _artifact_errors(bundle_dir: Path, artifact: dict[str, Any]) -> list[str]:
     expected_hash = artifact.get("sha256")
     actual_bytes = path.stat().st_size
     actual_hash = _sha256(path)
-    if type(expected_bytes) is not int or expected_bytes < 0:
-        errors.append("manifest artifact bytes must be a non-negative integer")
+    if type(expected_bytes) is not int or expected_bytes <= 0:
+        errors.append("manifest artifact bytes must be a positive integer")
     elif expected_bytes != actual_bytes:
         errors.append(
             f"manifest artifact byte length mismatch: expected {expected_bytes}, got {actual_bytes}"
@@ -9818,8 +9918,8 @@ def _check_report_artifact(
             )
         )
     expected_bytes = artifact.get("bytes")
-    if type(expected_bytes) is not int or expected_bytes < 0:
-        errors.append(f"{label} artifact bytes must be a non-negative integer")
+    if type(expected_bytes) is not int or expected_bytes <= 0:
+        errors.append(f"{label} artifact bytes must be a positive integer")
     expected_hash = artifact.get("sha256")
     if not _is_canonical_sha256_text(expected_hash):
         errors.append(
@@ -12082,6 +12182,29 @@ def _active_launch_evm_live_metadata_blockers(
     return blockers
 
 
+def _active_launch_source_record_hash_role_blockers(
+    lane_label: str,
+    source_hashes: dict[str, Any],
+    evidence_label: str,
+) -> list[str]:
+    """Return blockers for reused active-launch source record hash roles."""
+
+    source_verifier_material_hash = source_hashes.get("source_verifier_material_hash")
+    source_adapter_engine_deployment_hash = source_hashes.get(
+        "source_adapter_engine_deployment_hash"
+    )
+    if (
+        _is_nonzero_hex32(source_verifier_material_hash)
+        and _is_nonzero_hex32(source_adapter_engine_deployment_hash)
+        and source_verifier_material_hash == source_adapter_engine_deployment_hash
+    ):
+        return [
+            f"{lane_label}: {evidence_label} source verifier material hash must "
+            "not reuse source adapter engine deployment hash"
+        ]
+    return []
+
+
 def _active_launch_route_canary_metadata_blockers(
     lane_label: str,
     canary: dict[str, Any],
@@ -12155,6 +12278,13 @@ def _active_launch_governed_deployment_metadata_blockers(
                 f"{lane_label}: governed deployment {field_label} must be a "
                 "canonical non-zero bytes32 hex string"
             )
+    blockers.extend(
+        _active_launch_source_record_hash_role_blockers(
+            lane_label,
+            source_hashes,
+            "governed deployment",
+        )
+    )
 
     destination_binding = lane.get("destination_binding")
     if not isinstance(destination_binding, dict):
@@ -12275,6 +12405,13 @@ def _active_launch_route_allowlist_binding_blockers(
                 f"{lane_label}: route allowlist {field_label} must be a canonical "
                 "non-zero bytes32 hex string"
             )
+    blockers.extend(
+        _active_launch_source_record_hash_role_blockers(
+            lane_label,
+            source_hashes,
+            "route allowlist",
+        )
+    )
     if not _is_nonzero_hex32(destination_binding.get("destination_binding_hash")):
         blockers.append(
             f"{lane_label}: route allowlist destination binding hash must be a "
@@ -15429,12 +15566,10 @@ def _expected_submission_surfaces(report: dict[str, Any]) -> list[dict[str, Any]
         sdk_order = tuple(
             sdk for sdk in (*USER_PROVER_SDK_PHASES, "dotnet-sdk") if sdk in helper_sets
         )
-        required_phases = list(USER_PROVER_SDK_PHASES)
-        if lanes == "eth,bsc":
-            required_phases.append("dotnet-sdk")
-        if proof_backend in USER_PROVER_CONTRACT_SMOKE_BACKENDS:
-            required_phases.append("contract-smoke")
-        required_phases.append("core-admission")
+        required_phases = _expected_submission_surface_required_phases(
+            lanes,
+            proof_backend,
+        )
         blockers = [
             f"{phase} is {phase_status.get(phase, 'missing')}"
             for phase in required_phases
@@ -15660,6 +15795,41 @@ def _integer_field_errors(
     return []
 
 
+def _positive_u32_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+) -> list[str]:
+    if field not in payload:
+        return []
+    value = payload.get(field)
+    if type(value) is int and value > 0xFFFF_FFFF:
+        return [f"{label} {field} must be a positive u32 integer"]
+    return []
+
+
+def _u64_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    *,
+    positive: bool,
+) -> list[str]:
+    if field not in payload:
+        return []
+    value = payload.get(field)
+    if type(value) is int and value > 0xFFFF_FFFF_FFFF_FFFF:
+        if field == "route_canary_block_number" and positive:
+            return [f"{label} route_canary_block_number must be a positive u64 integer"]
+        if field == "route_canary_block_timestamp" and not positive:
+            return [
+                f"{label} route_canary_block_timestamp must be a non-negative u64 integer"
+            ]
+        qualifier = "positive " if positive else "non-negative "
+        return [f"{label} {field} must be a {qualifier}u64 integer"]
+    return []
+
+
 def _expected_u32_field_errors(
     label: str,
     payload: dict[str, Any],
@@ -15686,6 +15856,119 @@ def _true_field_errors(
     if field in payload and payload.get(field) is not True:
         return [f"{label} {field} must be true"]
     return []
+
+
+def _cryptographic_evidence_source_adapter_gate_schema_errors(
+    row: dict[str, Any],
+    audit_hashes: Any,
+) -> list[str]:
+    errors: list[str] = []
+    semantic_audit_hashes: dict[str, Any] = {}
+    errors.extend(
+        _empty_or_nonzero_fixed_hex_field_errors(
+            "readiness report cryptographic evidence row",
+            row,
+            "source_adapter_gate_hash",
+            byte_length=32,
+            type_label="bytes32",
+        )
+    )
+    if isinstance(audit_hashes, dict):
+        for field, value in sorted(audit_hashes.items()):
+            key_blocker = _source_adapter_gate_audit_key_blocker(field)
+            if key_blocker is not None:
+                errors.append(key_blocker)
+                continue
+            semantic_audit_hashes[field] = value
+            errors.extend(
+                _nonzero_fixed_hex_field_errors(
+                    "readiness report cryptographic evidence row "
+                    "source_adapter_gate_audit_hashes",
+                    audit_hashes,
+                    field,
+                    byte_length=32,
+                    type_label="bytes32",
+                )
+            )
+    if row.get("source_adapter_gate_required") is True:
+        gate_hash = row.get("source_adapter_gate_hash")
+        expected_audit_keys = ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN.get(
+            row.get("domain")
+        )
+        if expected_audit_keys is None:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_required must be false for this domain"
+            )
+        elif isinstance(audit_hashes, dict):
+            for key in sorted(set(semantic_audit_hashes) - expected_audit_keys):
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    "source_adapter_gate_audit_hashes contains unexpected "
+                    f"field: {key}"
+                )
+            for key in sorted(expected_audit_keys - set(semantic_audit_hashes)):
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"source_adapter_gate_audit_hashes missing field: {key}"
+                )
+        if not gate_hash:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_hash must not be empty when required"
+            )
+        if not semantic_audit_hashes:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_audit_hashes must not be empty when required"
+            )
+        if (
+            _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
+            and isinstance(audit_hashes, dict)
+            and semantic_audit_hashes
+            and gate_hash not in set(semantic_audit_hashes.values())
+        ):
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_hash must match one "
+                "source_adapter_gate_audit_hashes value"
+            )
+        expected_gate_key = ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN.get(
+            row.get("domain")
+        )
+        expected_gate_hash = (
+            semantic_audit_hashes.get(expected_gate_key)
+            if expected_gate_key is not None and isinstance(audit_hashes, dict)
+            else None
+        )
+        if (
+            expected_gate_key is not None
+            and _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
+            and _is_canonical_fixed_hex_text(expected_gate_hash, byte_length=32)
+            and gate_hash != expected_gate_hash
+        ):
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_hash must match "
+                f"source_adapter_gate_audit_hashes.{expected_gate_key}"
+            )
+    elif row.get("source_adapter_gate_required") is False:
+        if row.get("domain") in ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_required must be true for this domain"
+            )
+        if row.get("source_adapter_gate_hash") not in (None, ""):
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_hash must be empty when gate is not required"
+            )
+        if audit_hashes:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_audit_hashes must be empty when gate is not required"
+            )
+    return errors
 
 
 def _cryptographic_evidence_row_schema_errors(
@@ -15831,8 +16114,113 @@ def _cryptographic_evidence_row_schema_errors(
             "source_adapter_gate_audit_hashes must be an object"
         )
         audit_hashes = {}
-    semantic_audit_hashes: dict[str, Any] = {}
+    if row.get("domain") == SCCP_DOMAIN_BSC and row.get("route_canary_evidence_hash"):
+        for field in (
+            "route_canary_transaction_hash",
+            "route_canary_receipt_block_hash",
+            "route_canary_block_receipts_root",
+            "route_canary_message_id",
+        ):
+            errors.extend(
+                _nonzero_fixed_hex_field_errors(
+                    "readiness report cryptographic evidence row",
+                    row,
+                    field,
+                    byte_length=32,
+                    type_label="bytes32",
+                )
+            )
+        errors.extend(
+            _integer_field_errors(
+                "readiness report cryptographic evidence row",
+                row,
+                "route_canary_receipt_block_number",
+                positive=True,
+            )
+        )
+        errors.extend(
+            _positive_u32_field_errors(
+                "readiness report cryptographic evidence row",
+                row,
+                "route_canary_receipt_block_number",
+            )
+        )
+        route_canary_source = row.get("route_canary_evidence_source")
+        if (
+            not isinstance(route_canary_source, str)
+            or not route_canary_source
+            or route_canary_source.strip() != route_canary_source
+        ):
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "route_canary_evidence_source must be a non-empty string "
+                "with no surrounding whitespace"
+            )
+        else:
+            expected_canary_source = ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN.get(
+                SCCP_DOMAIN_BSC
+            )
+            if route_canary_source != expected_canary_source:
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"route_canary_evidence_source must be {expected_canary_source}"
+                )
+        if row.get("route_canary_evidence_bound") is not True:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "route_canary_evidence_bound must be true for finalized "
+                "EVM route canary evidence"
+            )
+        if row.get("route_canary_receipt_block_finalized") is not True:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "route_canary_receipt_block_finalized must be true for finalized "
+                "EVM route canary evidence"
+            )
+    errors.extend(
+        _cryptographic_evidence_source_adapter_gate_schema_errors(row, audit_hashes)
+    )
     if row.get("domain") != ACTIVE_LAUNCH_DOMAIN:
+        if row.get("domain") == SCCP_DOMAIN_TRON:
+            errors.extend(
+                _integer_field_errors(
+                    "readiness report cryptographic evidence row",
+                    row,
+                    "route_canary_block_number",
+                    positive=True,
+                )
+            )
+            errors.extend(
+                _u64_field_errors(
+                    "readiness report cryptographic evidence row",
+                    row,
+                    "route_canary_block_number",
+                    positive=True,
+                )
+            )
+            errors.extend(
+                _integer_field_errors(
+                    "readiness report cryptographic evidence row",
+                    row,
+                    "route_canary_block_timestamp",
+                    positive=False,
+                )
+            )
+            errors.extend(
+                _u64_field_errors(
+                    "readiness report cryptographic evidence row",
+                    row,
+                    "route_canary_block_timestamp",
+                    positive=False,
+                )
+            )
+        elif row.get("domain") in ALL_LANES_CHAIN_BY_DOMAIN:
+            for field in ("route_canary_block_number", "route_canary_block_timestamp"):
+                if field in row and row.get(field) is not None:
+                    errors.append(
+                        "readiness report cryptographic evidence row "
+                        f"{field} must be null for non-TRON lanes"
+                    )
         return errors
     for field in (
         "source_verifier_material_hash",
@@ -15900,6 +16288,19 @@ def _cryptographic_evidence_row_schema_errors(
                 positive=True,
             )
         )
+        errors.extend(
+            _positive_u32_field_errors(
+                "readiness report cryptographic evidence row",
+                row,
+                "route_canary_receipt_block_number",
+            )
+        )
+        if row.get("route_canary_evidence_bound") is not True:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "route_canary_evidence_bound must be true for finalized "
+                "EVM route canary evidence"
+            )
         if row.get("route_canary_receipt_block_finalized") is not True:
             errors.append(
                 "readiness report cryptographic evidence row "
@@ -15927,7 +16328,23 @@ def _cryptographic_evidence_row_schema_errors(
             )
         )
         errors.extend(
+            _u64_field_errors(
+                "readiness report cryptographic evidence row",
+                row,
+                "route_canary_block_number",
+                positive=True,
+            )
+        )
+        errors.extend(
             _integer_field_errors(
+                "readiness report cryptographic evidence row",
+                row,
+                "route_canary_block_timestamp",
+                positive=False,
+            )
+        )
+        errors.extend(
+            _u64_field_errors(
                 "readiness report cryptographic evidence row",
                 row,
                 "route_canary_block_timestamp",
@@ -15941,110 +16358,6 @@ def _cryptographic_evidence_row_schema_errors(
                     "readiness report cryptographic evidence row "
                     f"{field} must be null for non-TRON lanes"
                 )
-    errors.extend(
-        _empty_or_nonzero_fixed_hex_field_errors(
-            "readiness report cryptographic evidence row",
-            row,
-            "source_adapter_gate_hash",
-            byte_length=32,
-            type_label="bytes32",
-        )
-    )
-    if isinstance(audit_hashes, dict):
-        for field, value in sorted(audit_hashes.items()):
-            key_blocker = _source_adapter_gate_audit_key_blocker(field)
-            if key_blocker is not None:
-                errors.append(key_blocker)
-                continue
-            semantic_audit_hashes[field] = value
-            errors.extend(
-                _nonzero_fixed_hex_field_errors(
-                    "readiness report cryptographic evidence row "
-                    "source_adapter_gate_audit_hashes",
-                    audit_hashes,
-                    field,
-                    byte_length=32,
-                    type_label="bytes32",
-                )
-            )
-    if row.get("source_adapter_gate_required") is True:
-        gate_hash = row.get("source_adapter_gate_hash")
-        expected_audit_keys = ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN.get(
-            row.get("domain")
-        )
-        if expected_audit_keys is None:
-            errors.append(
-                "readiness report cryptographic evidence row "
-                "source_adapter_gate_required must be false for this domain"
-            )
-        elif isinstance(audit_hashes, dict):
-            for key in sorted(set(semantic_audit_hashes) - expected_audit_keys):
-                errors.append(
-                    "readiness report cryptographic evidence row "
-                    "source_adapter_gate_audit_hashes contains unexpected "
-                    f"field: {key}"
-                )
-            for key in sorted(expected_audit_keys - set(semantic_audit_hashes)):
-                errors.append(
-                    "readiness report cryptographic evidence row "
-                    f"source_adapter_gate_audit_hashes missing field: {key}"
-                )
-        if not gate_hash:
-            errors.append(
-                "readiness report cryptographic evidence row "
-                "source_adapter_gate_hash must not be empty when required"
-            )
-        if not semantic_audit_hashes:
-            errors.append(
-                "readiness report cryptographic evidence row "
-                "source_adapter_gate_audit_hashes must not be empty when required"
-            )
-        if (
-            _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
-            and isinstance(audit_hashes, dict)
-            and semantic_audit_hashes
-            and gate_hash not in set(semantic_audit_hashes.values())
-        ):
-            errors.append(
-                "readiness report cryptographic evidence row "
-                "source_adapter_gate_hash must match one "
-                "source_adapter_gate_audit_hashes value"
-            )
-        expected_gate_key = ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN.get(
-            row.get("domain")
-        )
-        expected_gate_hash = (
-            semantic_audit_hashes.get(expected_gate_key)
-            if expected_gate_key is not None and isinstance(audit_hashes, dict)
-            else None
-        )
-        if (
-            expected_gate_key is not None
-            and _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
-            and _is_canonical_fixed_hex_text(expected_gate_hash, byte_length=32)
-            and gate_hash != expected_gate_hash
-        ):
-            errors.append(
-                "readiness report cryptographic evidence row "
-                "source_adapter_gate_hash must match "
-                f"source_adapter_gate_audit_hashes.{expected_gate_key}"
-            )
-    elif row.get("source_adapter_gate_required") is False:
-        if row.get("domain") in ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN:
-            errors.append(
-                "readiness report cryptographic evidence row "
-                "source_adapter_gate_required must be true for this domain"
-            )
-        if row.get("source_adapter_gate_hash") not in (None, ""):
-            errors.append(
-                "readiness report cryptographic evidence row "
-                "source_adapter_gate_hash must be empty when gate is not required"
-            )
-        if audit_hashes:
-            errors.append(
-                "readiness report cryptographic evidence row "
-                "source_adapter_gate_audit_hashes must be empty when gate is not required"
-            )
     return errors
 
 
@@ -16461,6 +16774,22 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
                 "readiness report user prover submission surface row "
                 "required_phases missing required phase: contract-smoke"
             )
+        lanes = row.get("lanes")
+        expected_backend = (
+            USER_PROVER_REQUIRED_LANE_BACKENDS.get(lanes)
+            if isinstance(lanes, str)
+            else None
+        )
+        if isinstance(lanes, str) and expected_backend is not None:
+            expected_required_phases = _expected_submission_surface_required_phases(
+                lanes,
+                expected_backend,
+            )
+            if semantic_required_phases != expected_required_phases:
+                errors.append(
+                    "readiness report user prover submission surface row "
+                    "required_phases must match expected phases"
+                )
     if "validation_status" in row and row.get("validation_status") not in {
         "passed",
         "blocked",
@@ -16556,6 +16885,21 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
                             f"{label} lanes {lanes} sdk_helper_symbols "
                             f"missing required helper: {helper}"
                         )
+        required_phases = row.get("required_phases")
+        if isinstance(lanes, str) and isinstance(expected_backend, str):
+            expected_required_phases = _expected_submission_surface_required_phases(
+                lanes,
+                expected_backend,
+            )
+            if (
+                isinstance(required_phases, list)
+                and all(isinstance(phase, str) for phase in required_phases)
+                and required_phases != expected_required_phases
+            ):
+                errors.append(
+                    f"{label} required_phases must match expected phases "
+                    f"for lanes {lanes}"
+                )
     for lanes in USER_PROVER_REQUIRED_LANE_BACKENDS:
         if lanes not in seen_lanes:
             errors.append(f"{label} missing required lanes row: {lanes}")

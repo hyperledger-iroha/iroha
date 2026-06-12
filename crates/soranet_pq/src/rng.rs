@@ -15,9 +15,9 @@ pub struct HedgedRngSeed {
     seed: [u8; 32],
 }
 
-/// Error returned when a required operating-system entropy draw fails.
+/// Error returned when a required seed draw fails or returns inert material.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-#[error("operating-system RNG failed while drawing hedged RNG seed material")]
+#[error("hedged RNG seed draw failed or returned all-zero material")]
 pub struct RngError;
 
 /// Whether a hedged RNG construction successfully mixed live OS entropy.
@@ -70,7 +70,7 @@ impl HedgedRngSeed {
     /// Draw a fresh seed using the operating system RNG.
     ///
     /// # Errors
-    /// Returns [`RngError`] when the OS RNG cannot supply seed material.
+    /// Returns [`RngError`] when the OS RNG cannot supply nonzero seed material.
     pub fn from_os() -> Result<Self, RngError> {
         let mut os = OsRng;
         Self::from_rng(&mut os)
@@ -79,10 +79,14 @@ impl HedgedRngSeed {
     /// Draw a fresh seed from a caller-supplied cryptographic RNG.
     ///
     /// # Errors
-    /// Returns [`RngError`] when the supplied RNG cannot provide seed material.
+    /// Returns [`RngError`] when the supplied RNG cannot provide nonzero seed
+    /// material.
     pub fn from_rng<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<Self, RngError> {
         let mut buf = Zeroizing::new([0_u8; 32]);
         rng.try_fill_bytes(buf.as_mut()).map_err(|_| RngError)?;
+        if buf.iter().all(|&byte| byte == 0) {
+            return Err(RngError);
+        }
         Ok(Self { seed: *buf })
     }
 
@@ -90,6 +94,12 @@ impl HedgedRngSeed {
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.seed
+    }
+
+    /// Return whether the seed material is the inert all-zero value.
+    #[must_use]
+    pub fn is_all_zero(&self) -> bool {
+        self.seed.iter().all(|&byte| byte == 0)
     }
 }
 
@@ -133,7 +143,8 @@ pub fn deterministic_chacha20_rng(
 /// [`hedged_chacha20_rng`] with an explicit [`HedgedRngSeed`].
 ///
 /// # Errors
-/// Returns [`RngError`] when the initial OS seed draw fails.
+/// Returns [`RngError`] when the initial OS seed draw fails or returns all-zero
+/// material.
 pub fn hedged_chacha20_rng_from_os(personalization: &[u8]) -> Result<HedgedChaCha20Rng, RngError> {
     let mut os = OsRng;
     hedged_chacha20_rng_from_rng(personalization, &mut os)
@@ -146,7 +157,8 @@ pub fn hedged_chacha20_rng_from_os(personalization: &[u8]) -> Result<HedgedChaCh
 /// the required seed draw to the process OS RNG.
 ///
 /// # Errors
-/// Returns [`RngError`] when the required seed draw fails.
+/// Returns [`RngError`] when the required seed draw fails or returns all-zero
+/// material.
 pub fn hedged_chacha20_rng_from_rng<R: TryCryptoRng + ?Sized>(
     personalization: &[u8],
     rng: &mut R,
@@ -365,6 +377,15 @@ mod tests {
     }
 
     #[test]
+    fn seed_reports_all_zero_material() {
+        let zero = HedgedRngSeed::from_entropy([0_u8; 32]);
+        let non_zero = HedgedRngSeed::from_entropy([0xA9; 32]);
+
+        assert!(zero.is_all_zero());
+        assert!(!non_zero.is_all_zero());
+    }
+
+    #[test]
     fn seed_from_rng_exposes_injected_seed_bytes() {
         let raw = [0xB9; 32];
         let mut rng = FixedSeedRng { seed: raw };
@@ -372,6 +393,13 @@ mod tests {
         let seed = HedgedRngSeed::from_rng(&mut rng).expect("fixed RNG seed");
 
         assert_eq!(seed.as_bytes(), &raw);
+    }
+
+    #[test]
+    fn seed_from_rng_rejects_all_zero_material() {
+        let mut rng = FixedSeedRng { seed: [0_u8; 32] };
+
+        assert!(matches!(HedgedRngSeed::from_rng(&mut rng), Err(RngError)));
     }
 
     #[test]
@@ -391,6 +419,16 @@ mod tests {
     }
 
     #[test]
+    fn hedged_rng_from_rng_rejects_all_zero_seed_material() {
+        let mut rng = FixedSeedRng { seed: [0_u8; 32] };
+
+        assert_eq!(
+            hedged_chacha20_rng_from_rng(b"zero-seed", &mut rng).map(|_| ()),
+            Err(RngError)
+        );
+    }
+
+    #[test]
     fn injected_seed_rng_failure_is_reported() {
         let mut rng = FailingSeedRng;
 
@@ -405,7 +443,7 @@ mod tests {
     fn rng_error_display_is_stable() {
         assert_eq!(
             RngError.to_string(),
-            "operating-system RNG failed while drawing hedged RNG seed material"
+            "hedged RNG seed draw failed or returned all-zero material"
         );
     }
 }

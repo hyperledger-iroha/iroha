@@ -1,9 +1,9 @@
-//! In-memory DA commitment index used while WSV wiring lands.
+//! Ledger-derived in-memory DA commitment index.
 //!
 //! This store keeps a deterministic view of commitments keyed by manifest hash
-//! and `(lane_id, epoch, sequence)` so Torii/query paths can be wired without
-//! depending on persistent storage. Once WSV plumbing is in place this module
-//! should be replaced by a durable column-family backed index.
+//! and `(lane_id, epoch, sequence)` for Torii/query paths. Committed block bodies
+//! in Kura are the recovery source of truth; [`crate::state::State`] hydrates this
+//! projection from those DA commitment bundles during access or rewind.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -115,7 +115,10 @@ impl DaCommitmentStore {
         self.by_block.iter()
     }
 
-    /// Drop commitments belonging to retired lanes.
+    /// Drop query indexes belonging to retired lanes.
+    ///
+    /// Stored block bundles remain byte-for-byte committed bundle snapshots so
+    /// proof construction continues to match the block header commitment hash.
     pub fn prune_lanes(&mut self, retired: &BTreeSet<LaneId>) {
         if retired.is_empty() {
             return;
@@ -124,21 +127,6 @@ impl DaCommitmentStore {
             .retain(|_, entry| !retired.contains(&entry.commitment.lane_id));
         self.by_lane_epoch
             .retain(|(lane, _, _), _| !retired.contains(&LaneId::new(*lane)));
-        self.by_block.retain(|_, bundle| {
-            let filtered: Vec<_> = bundle
-                .commitments
-                .iter()
-                .filter(|record| !retired.contains(&record.lane_id))
-                .cloned()
-                .collect();
-            if filtered.is_empty() {
-                return false;
-            }
-            if filtered.len() != bundle.commitments.len() {
-                *bundle = DaCommitmentBundle::new(filtered);
-            }
-            true
-        });
         self.seen_keys.retain(|key| !retired.contains(&key.lane_id));
     }
 }
@@ -271,22 +259,61 @@ mod tests {
         let record_b = sample_record(1, 1, 2);
         store.insert_bundle(
             1,
-            DaCommitmentBundle::new(vec![record_a.clone(), record_b.clone()]),
+            DaCommitmentBundle::new(vec![record_b.clone(), record_a.clone()]),
         );
 
         let retired = BTreeSet::from([LaneId::new(1)]);
         store.prune_lanes(&retired);
 
-        assert!(
-            store.get_by_lane_epoch_sequence(0, 1, 1).is_some(),
-            "lane 0 entry kept"
-        );
+        let kept = store
+            .get_by_lane_epoch_sequence(0, 1, 1)
+            .expect("lane 0 entry kept");
+        assert_eq!(kept.location.block_height, 1);
+        assert_eq!(kept.location.index_in_bundle, 1);
         assert!(
             store.get_by_lane_epoch_sequence(1, 1, 2).is_none(),
             "retired lane removed"
         );
-        let bundle = store.bundle_at(1).expect("bundle retained");
-        assert_eq!(bundle.commitments.len(), 1);
+        let bundle = store.bundle_at(1).expect("committed bundle retained");
+        assert_eq!(bundle.commitments.as_slice(), &[record_b, record_a]);
+    }
+
+    #[test]
+    fn insert_bundle_filters_stale_duplicates_from_indexes_but_preserves_bundle() {
+        let mut store = DaCommitmentStore::default();
+        let first = sample_record(1, 1, 1);
+        let mut stale_duplicate = first.clone();
+        stale_duplicate.manifest_hash = ManifestDigest::new([0x55; 32]);
+        stale_duplicate.storage_ticket = StorageTicketId::new([0x66; 32]);
+        let later = sample_record(2, 1, 0);
+
+        store.insert_bundle(7, DaCommitmentBundle::new(vec![first.clone()]));
+        store.insert_bundle(
+            8,
+            DaCommitmentBundle::new(vec![stale_duplicate.clone(), later.clone()]),
+        );
+
+        assert!(
+            store
+                .get_by_manifest(&stale_duplicate.manifest_hash)
+                .is_none(),
+            "stale duplicate manifest must not become queryable"
+        );
+        let fetched = store
+            .get_by_lane_epoch_sequence(2, 1, 0)
+            .expect("later record indexed");
+        assert_eq!(fetched.location.block_height, 8);
+        assert_eq!(fetched.location.index_in_bundle, 1);
+
+        let bundle = store.bundle_at(8).expect("committed block bundle retained");
+        assert_eq!(
+            bundle.commitments.as_slice(),
+            &[stale_duplicate, later.clone()]
+        );
+        assert_eq!(
+            bundle.commitments[usize::try_from(fetched.location.index_in_bundle).unwrap()],
+            fetched.commitment
+        );
     }
 
     #[test]
