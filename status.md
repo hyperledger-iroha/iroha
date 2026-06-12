@@ -3,6 +3,14 @@
 Last updated: 2026-06-13
 
 
+## 2026-06-13 Confidential note X25519 key-material hardening
+
+- Hardened Kotlin/JVM and Android Java confidential note encryption/decryption to reject all-zero X25519 private material before public-key derivation or ECDH, and to map low-order peer public keys to explicit `IllegalArgumentException` failures.
+- Added adversarial tests for zero private keys, non-zero low-order recipient public keys, zero ephemeral private keys, and zero recipient private keys on decrypt.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
 ## 2026-06-13 Android native bridge production feature build documentation
 
 - Updated `kotlin/README.md` to document the default fail-closed `buildNativeLibs` command and the explicit `-PprivacyProductionEnabled=true` production-gated command that passes `--features privacy-production-enabled` to `connect_norito_bridge`.

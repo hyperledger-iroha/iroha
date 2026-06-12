@@ -37,7 +37,7 @@ final class ConfidentialNoteCrypto {
 
   static byte[] publicKeyFromPrivateKey(final byte[] privateKey) {
     final byte[] privateBytes =
-        ConfidentialNoteScalars.fixedBytes(privateKey, KEY_LENGTH, "privateKey");
+        fixedNonZeroBytes(privateKey, KEY_LENGTH, "privateKey");
     try {
       final X25519PrivateKeyParameters params = new X25519PrivateKeyParameters(privateBytes, 0);
       final byte[] publicKey = new byte[KEY_LENGTH];
@@ -76,7 +76,7 @@ final class ConfidentialNoteCrypto {
     final byte[] recipientPublic =
         ConfidentialNoteScalars.fixedBytes(recipientPublicKey, KEY_LENGTH, "recipientPublicKey");
     final byte[] ephemeralPrivate =
-        ConfidentialNoteScalars.fixedBytes(ephemeralPrivateKey, KEY_LENGTH, "ephemeralPrivateKey");
+        fixedNonZeroBytes(ephemeralPrivateKey, KEY_LENGTH, "ephemeralPrivateKey");
     final byte[] nonceBytes =
         ConfidentialNoteScalars.fixedBytes(nonce, XCHACHA_NONCE_LENGTH, "nonce");
     final byte[] ephemeralPublic = publicKeyFromPrivateKey(ephemeralPrivate);
@@ -113,7 +113,7 @@ final class ConfidentialNoteCrypto {
           "encryptedPayload version must be " + ConfidentialEncryptedPayload.VERSION_V1);
     }
     final byte[] recipientPrivate =
-        ConfidentialNoteScalars.fixedBytes(recipientPrivateKey, KEY_LENGTH, "recipientPrivateKey");
+        fixedNonZeroBytes(recipientPrivateKey, KEY_LENGTH, "recipientPrivateKey");
     final byte[] recipientPublic = publicKeyFromPrivateKey(recipientPrivate);
     final byte[] key =
         derivePayloadKey(
@@ -229,7 +229,7 @@ final class ConfidentialNoteCrypto {
       final byte[] ephemeralPublicKey,
       final byte[] recipientPublicKey) {
     final byte[] localPrivate =
-        ConfidentialNoteScalars.fixedBytes(localPrivateKey, KEY_LENGTH, "localPrivateKey");
+        fixedNonZeroBytes(localPrivateKey, KEY_LENGTH, "localPrivateKey");
     final X25519PrivateKeyParameters local = new X25519PrivateKeyParameters(localPrivate, 0);
     final X25519PublicKeyParameters peer =
         new X25519PublicKeyParameters(
@@ -238,7 +238,11 @@ final class ConfidentialNoteCrypto {
     agreement.init(local);
     final byte[] shared = new byte[KEY_LENGTH];
     try {
-      agreement.calculateAgreement(peer, shared, 0);
+      try {
+        agreement.calculateAgreement(peer, shared, 0);
+      } catch (final IllegalStateException ex) {
+        throw new IllegalArgumentException("peerPublicKey must not be low-order", ex);
+      }
       if (isAllZero(shared)) {
         throw new IllegalArgumentException("X25519 shared secret is all zero");
       }
@@ -457,6 +461,15 @@ final class ConfidentialNoteCrypto {
       }
     }
     return true;
+  }
+
+  private static byte[] fixedNonZeroBytes(
+      final byte[] value, final int expected, final String name) {
+    final byte[] bytes = ConfidentialNoteScalars.fixedBytes(value, expected, name);
+    if (isAllZero(bytes)) {
+      throw new IllegalArgumentException(name + " must not be all zero");
+    }
+    return bytes;
   }
 
   private static final class Varint {

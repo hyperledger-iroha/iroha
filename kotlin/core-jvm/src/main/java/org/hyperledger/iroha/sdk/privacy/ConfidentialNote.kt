@@ -153,7 +153,7 @@ object ConfidentialNoteTags {
 object ConfidentialNoteEncryption {
     @JvmStatic
     fun publicKeyFromPrivateKey(privateKey: ByteArray): ByteArray {
-        val privateBytes = fixedBytes(privateKey, 32, "privateKey")
+        val privateBytes = fixedNonZeroBytes(privateKey, 32, "privateKey")
         return try {
             val publicKey = X25519PrivateKeyParameters(privateBytes, 0).generatePublicKey()
             ByteArray(32).also { publicKey.encode(it, 0) }
@@ -187,7 +187,7 @@ object ConfidentialNoteEncryption {
         nonce: ByteArray,
     ): ConfidentialEncryptedPayload {
         val recipientPublic = fixedBytes(recipientPublicKey, 32, "recipientPublicKey")
-        val ephemeralPrivate = fixedBytes(ephemeralPrivateKey, 32, "ephemeralPrivateKey")
+        val ephemeralPrivate = fixedNonZeroBytes(ephemeralPrivateKey, 32, "ephemeralPrivateKey")
         val nonceBytes = fixedBytes(nonce, 24, "nonce")
         val ephemeralPublic = publicKeyFromPrivateKey(ephemeralPrivate)
         var key: ByteArray? = null
@@ -239,7 +239,7 @@ object ConfidentialNoteDecryption {
         spendKey: ByteArray,
         expectedChainId: String?,
     ): ConfidentialNoteOpening {
-        val recipientPrivate = fixedBytes(recipientPrivateKey, 32, "recipientPrivateKey")
+        val recipientPrivate = fixedNonZeroBytes(recipientPrivateKey, 32, "recipientPrivateKey")
         val recipientPublic = ConfidentialNoteEncryption.publicKeyFromPrivateKey(recipientPrivate)
         require(encryptedPayload.version == ConfidentialEncryptedPayload.VERSION_V1) {
             "encryptedPayload version must be ${ConfidentialEncryptedPayload.VERSION_V1}"
@@ -357,14 +357,18 @@ private fun derivePayloadKey(
     ephemeralPublicKey: ByteArray,
     recipientPublicKey: ByteArray,
 ): ByteArray {
-    val localPrivate = fixedBytes(localPrivateKey, 32, "localPrivateKey")
+    val localPrivate = fixedNonZeroBytes(localPrivateKey, 32, "localPrivateKey")
     val local = X25519PrivateKeyParameters(localPrivate, 0)
     val peer = X25519PublicKeyParameters(fixedBytes(peerPublicKey, 32, "peerPublicKey"), 0)
     val agreement = X25519Agreement()
     agreement.init(local)
     val shared = ByteArray(32)
     try {
-        agreement.calculateAgreement(peer, shared, 0)
+        try {
+            agreement.calculateAgreement(peer, shared, 0)
+        } catch (ex: IllegalStateException) {
+            throw IllegalArgumentException("peerPublicKey must not be low-order", ex)
+        }
         require(!shared.all { it.toInt() == 0 }) { "X25519 shared secret is all zero" }
         val hkdf = HKDFBytesGenerator(SHA256Digest())
         hkdf.init(
@@ -618,6 +622,12 @@ private fun canonicalText(value: String, name: String): String {
 private fun fixedBytes(value: ByteArray, expected: Int, name: String): ByteArray {
     require(value.size == expected) { "$name must be $expected bytes" }
     return value.copyOf()
+}
+
+private fun fixedNonZeroBytes(value: ByteArray, expected: Int, name: String): ByteArray {
+    val bytes = fixedBytes(value, expected, name)
+    require(bytes.any { it.toInt() != 0 }) { "$name must not be all zero" }
+    return bytes
 }
 
 private fun copyNonEmpty(value: ByteArray, name: String): ByteArray {

@@ -79,6 +79,8 @@ public final class ConfidentialNoteTests {
     final byte[] spendKey = repeated(0x11, 32);
     final byte[] rho = repeated(0x22, 32);
     final byte[] ownerTag = ConfidentialOwnerTag.deriveFromSpendKey(spendKey);
+    final ConfidentialNoteOpening opening =
+        new ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", "chain", "1");
 
     expectThrows(() -> new ConfidentialNoteOpening(new byte[31], spendKey, ownerTag, "rose#wonderland", "chain", "1"));
     expectThrows(() -> new ConfidentialNoteOpening(rho, new byte[0], ownerTag, "rose#wonderland", "chain", "1"));
@@ -86,6 +88,18 @@ public final class ConfidentialNoteTests {
     expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, ownerTag, " rose#wonderland", "chain", "1"));
     expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", "chain", "01"));
     expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", "chain", U128_OVERFLOW));
+    expectThrows(() -> ConfidentialNoteEncryption.publicKeyFromPrivateKey(new byte[32]));
+    final byte[] nonZeroLowOrder = new byte[32];
+    nonZeroLowOrder[0] = 1;
+    expectThrows(
+        () -> ConfidentialNoteEncryption.encryptNote(
+            opening, nonZeroLowOrder, repeated(0x66, 32), repeated(0x77, 24)));
+    expectThrows(
+        () -> ConfidentialNoteEncryption.encryptNote(
+            opening,
+            ConfidentialNoteEncryption.publicKeyFromPrivateKey(repeated(0x55, 32)),
+            new byte[32],
+            repeated(0x77, 24)));
   }
 
   private static void derivationsAreDomainSeparated() {
@@ -165,6 +179,8 @@ public final class ConfidentialNoteTests {
     expectThrows(
         () -> ConfidentialNoteDecryption.decryptNote(
             payload, recipientPrivateKey, spendKey, "other-chain"));
+    expectThrows(
+        () -> ConfidentialNoteDecryption.decryptNote(payload, new byte[32], spendKey));
   }
 
   private static void assertOpeningEquals(

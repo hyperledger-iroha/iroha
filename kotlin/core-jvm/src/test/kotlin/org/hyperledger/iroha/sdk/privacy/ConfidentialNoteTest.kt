@@ -76,6 +76,7 @@ class ConfidentialNoteTest {
         val spendKey = repeated(0x11, 32)
         val rho = repeated(0x22, 32)
         val ownerTag = ConfidentialOwnerTag.deriveFromSpendKey(spendKey)
+        val opening = ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", "chain", "1")
 
         assertFailsWith<IllegalArgumentException> {
             ConfidentialNoteOpening(ByteArray(31), spendKey, ownerTag, "rose#wonderland", "chain", "1")
@@ -94,6 +95,25 @@ class ConfidentialNoteTest {
         }
         assertFailsWith<IllegalArgumentException> {
             ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", "chain", U128_OVERFLOW)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialNoteEncryption.publicKeyFromPrivateKey(ByteArray(32))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialNoteEncryption.encryptNote(
+                opening,
+                ByteArray(32).also { it[0] = 1 },
+                repeated(0x66, 32),
+                repeated(0x77, 24),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialNoteEncryption.encryptNote(
+                opening,
+                ConfidentialNoteEncryption.publicKeyFromPrivateKey(repeated(0x55, 32)),
+                ByteArray(32),
+                repeated(0x77, 24),
+            )
         }
     }
 
@@ -202,6 +222,9 @@ class ConfidentialNoteTest {
         }
         assertFailsWith<IllegalArgumentException> {
             ConfidentialNoteDecryption.decryptNote(payload, recipientPrivateKey, spendKey, "other-chain")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialNoteDecryption.decryptNote(payload, ByteArray(32), spendKey)
         }
     }
 
