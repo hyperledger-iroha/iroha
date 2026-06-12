@@ -72,7 +72,7 @@ public final class OfflineCashLifecycle {
     private final String assetDefinitionId;
     private final boolean offlinePaymentsEnabled;
     private final String issuerPublicKeyBase64;
-    private final Integer bridgeAbiVersion;
+    private final Integer nativeBridgeAbiVersion;
     private final String artifactSetId;
     private final String circuitId;
     private final long createdAtMs;
@@ -81,14 +81,14 @@ public final class OfflineCashLifecycle {
     public ConfigurationSnapshot(
         final boolean offlinePaymentsEnabled,
         final String issuerPublicKeyBase64,
-        final Integer bridgeAbiVersion,
+        final Integer nativeBridgeAbiVersion,
         final Long expiresAtMs) {
       this(
           null,
           null,
           offlinePaymentsEnabled,
           issuerPublicKeyBase64,
-          bridgeAbiVersion,
+          nativeBridgeAbiVersion,
           null,
           null,
           0L,
@@ -100,7 +100,7 @@ public final class OfflineCashLifecycle {
         final String assetDefinitionId,
         final boolean offlinePaymentsEnabled,
         final String issuerPublicKeyBase64,
-        final Integer bridgeAbiVersion,
+        final Integer nativeBridgeAbiVersion,
         final String artifactSetId,
         final String circuitId,
         final long createdAtMs,
@@ -109,7 +109,7 @@ public final class OfflineCashLifecycle {
       this.assetDefinitionId = assetDefinitionId;
       this.offlinePaymentsEnabled = offlinePaymentsEnabled;
       this.issuerPublicKeyBase64 = issuerPublicKeyBase64;
-      this.bridgeAbiVersion = bridgeAbiVersion;
+      this.nativeBridgeAbiVersion = nativeBridgeAbiVersion;
       this.artifactSetId = artifactSetId;
       this.circuitId = circuitId;
       this.createdAtMs = createdAtMs;
@@ -132,8 +132,8 @@ public final class OfflineCashLifecycle {
       return issuerPublicKeyBase64;
     }
 
-    public Integer bridgeAbiVersion() {
-      return bridgeAbiVersion;
+    public Integer nativeBridgeAbiVersion() {
+      return nativeBridgeAbiVersion;
     }
 
     public String artifactSetId() {
@@ -153,13 +153,13 @@ public final class OfflineCashLifecycle {
     }
 
     public void requireUsableForOfflineExchange(
-        final long nowMs, final Integer requiredBridgeAbiVersion) {
+        final long nowMs, final Integer requiredNativeBridgeAbiVersion) {
       if (!offlinePaymentsEnabled) {
         throw new ConfigurationSnapshotException(
             "offline_payments_disabled",
             "Offline cash is disabled in the cached configuration snapshot.");
       }
-      if (issuerPublicKeyBase64 == null || issuerPublicKeyBase64.trim().isEmpty()) {
+      if (!isCanonicalSnapshotText(issuerPublicKeyBase64)) {
         throw new ConfigurationSnapshotException(
             "missing_issuer_public_key",
             "Offline cash requires a cached issuer public key before offline exchange.");
@@ -169,13 +169,26 @@ public final class OfflineCashLifecycle {
             "expired",
             "Offline cash configuration snapshot expired at " + expiresAtMs + ".");
       }
-      if (requiredBridgeAbiVersion != null
-          && (bridgeAbiVersion == null || bridgeAbiVersion < requiredBridgeAbiVersion)) {
+      if (requiredNativeBridgeAbiVersion != null
+          && (nativeBridgeAbiVersion == null || nativeBridgeAbiVersion < requiredNativeBridgeAbiVersion)) {
         throw new ConfigurationSnapshotException(
-            "unsupported_bridge_abi",
-            "Offline cash requires bridge ABI " + requiredBridgeAbiVersion + ".");
+            "unsupported_native_bridge_abi",
+            "Offline cash requires native bridge ABI " + requiredNativeBridgeAbiVersion + ".");
       }
     }
+  }
+
+  private static boolean isCanonicalSnapshotText(final String value) {
+    if (value == null || value.isEmpty()) {
+      return false;
+    }
+    for (int i = 0; i < value.length(); i++) {
+      final char c = value.charAt(i);
+      if (c <= 0x20 || c > 0x7E) {
+        return false;
+      }
+    }
+    return true;
   }
 
   public static final class ConfigurationSnapshotException extends IllegalStateException {

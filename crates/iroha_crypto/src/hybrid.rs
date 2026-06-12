@@ -20,12 +20,13 @@ use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
+use crate::kex::is_x25519_low_order_public_key;
+
 const SUITE_KDF_SALT_V1: &[u8] = b"sorafs.hybrid.kem.hkdf:transcript-v1";
 const SUITE_KDF_INFO_V1: &[u8] = b"sorafs.hybrid.kem.material:transcript-v1";
 const SUITE_REKEY_INFO_V1: &[u8] = b"sorafs.hybrid.kem.rekey:transcript-v1";
 const SUITE_TRANSCRIPT_DOMAIN_V1: &[u8] = b"sorafs.hybrid.kem.transcript:transcript-v1";
 const HYBRID_KEM_SUITE: MlKemSuite = MlKemSuite::MlKem768;
-const X25519_LOW_ORDER_CHECK_SECRET: [u8; 32] = [1_u8; 32];
 
 /// Supported hybrid suites for payload envelopes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -188,6 +189,7 @@ impl HybridPublicKey {
         HYBRID_KEM_SUITE
             .validate_public_key(kyber_bytes)
             .map_err(|_| HybridError::InvalidKyberPublicKey)?;
+        validate_kyber_public_not_all_zero(kyber_bytes)?;
 
         Ok(Self {
             x25519,
@@ -268,6 +270,7 @@ impl HybridSecretKey {
         HYBRID_KEM_SUITE
             .validate_secret_key(kyber_bytes)
             .map_err(|_| HybridError::InvalidKyberSecretKey)?;
+        validate_kyber_secret_not_all_zero(kyber_bytes)?;
         let kyber_secret = Zeroizing::new(kyber_bytes.to_vec());
 
         // Kyber secret keys embed the public key in their trailing bytes per PQClean.
@@ -595,7 +598,14 @@ fn fill_random<R: TryCryptoRng>(
         .map_err(|err| HybridError::RandomBytes {
             operation,
             message: err.to_string(),
-        })
+        })?;
+    if !dest.is_empty() && dest.iter().all(|&byte| byte == 0) {
+        return Err(HybridError::RandomBytes {
+            operation,
+            message: "rng returned all-zero material".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Recover symmetric material from an encapsulated bundle.
@@ -718,19 +728,24 @@ fn append_transcript_component(
 
 fn decode_x25519_public_key(bytes: [u8; 32]) -> Result<X25519PublicKey, HybridError> {
     let public_key = X25519PublicKey::from(bytes);
-    if x25519_public_key_is_low_order(&public_key) {
+    if is_x25519_low_order_public_key(&public_key) {
         return Err(HybridError::InvalidX25519PublicKey);
     }
     Ok(public_key)
 }
 
-fn x25519_public_key_is_low_order(public_key: &X25519PublicKey) -> bool {
-    let probe_secret = StaticSecret::from(X25519_LOW_ORDER_CHECK_SECRET);
-    probe_secret
-        .diffie_hellman(public_key)
-        .as_bytes()
-        .iter()
-        .all(|&byte| byte == 0)
+fn validate_kyber_public_not_all_zero(kyber_public: &[u8]) -> Result<(), HybridError> {
+    if kyber_public.iter().all(|&byte| byte == 0) {
+        return Err(HybridError::InvalidKyberPublicKey);
+    }
+    Ok(())
+}
+
+fn validate_kyber_secret_not_all_zero(kyber_secret: &[u8]) -> Result<(), HybridError> {
+    if kyber_secret.iter().all(|&byte| byte == 0) {
+        return Err(HybridError::InvalidKyberSecretKey);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -771,9 +786,116 @@ mod tests {
 
     impl TryCryptoRng for FailingTryRng {}
 
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            dst.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedTryRng {}
+
+    struct ScriptedTryRng {
+        fills: Vec<u8>,
+        next: usize,
+    }
+
+    impl ScriptedTryRng {
+        fn new(fills: Vec<u8>) -> Self {
+            Self { fills, next: 0 }
+        }
+
+        fn next_fill(&mut self) -> u8 {
+            let byte = self.fills.get(self.next).copied().unwrap_or(0xA5);
+            self.next += 1;
+            byte
+        }
+    }
+
+    impl TryRngCore for ScriptedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.next_fill(); 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.next_fill(); 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            dst.fill(self.next_fill());
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for ScriptedTryRng {}
+
+    #[test]
+    fn fill_random_rejects_all_zero_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+        let mut dest = [0xFF; 32];
+
+        let err = fill_random(&mut rng, "generating hybrid x25519 secret", &mut dest)
+            .expect_err("all-zero fill must fail");
+
+        match err {
+            HybridError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "generating hybrid x25519 secret");
+                assert_eq!(message, "rng returned all-zero material");
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
+
     fn set_first_mlkem_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
         bytes[0] = 0xFF;
         bytes[1] = (bytes[1] & 0xF0) | 0x0F;
+    }
+
+    fn mlkem_secret_embedded_public_range() -> core::ops::Range<usize> {
+        const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
+
+        let start = HYBRID_KEM_SUITE.secret_key_len()
+            - HYBRID_KEM_SUITE.public_key_len()
+            - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
+        start..start + HYBRID_KEM_SUITE.public_key_len()
+    }
+
+    fn mlkem_secret_embedded_public_hash_range() -> core::ops::Range<usize> {
+        const PUBLIC_KEY_HASH_BYTES: usize = 32;
+        const PUBLIC_HASH_AND_REJECTION_SEED_BYTES: usize = 64;
+
+        let start = HYBRID_KEM_SUITE.secret_key_len() - PUBLIC_HASH_AND_REJECTION_SEED_BYTES;
+        start..start + PUBLIC_KEY_HASH_BYTES
+    }
+
+    fn mlkem_public_key_hash(public_key: &[u8]) -> [u8; 32] {
+        let digest = Sha3_256::digest(public_key);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest);
+        out
+    }
+
+    fn mlkem_secret_with_zero_embedded_public_key(secret_key: &mut [u8]) {
+        let public_range = mlkem_secret_embedded_public_range();
+        secret_key[public_range.clone()].fill(0);
+        let public_hash = mlkem_public_key_hash(&secret_key[public_range]);
+        secret_key[mlkem_secret_embedded_public_hash_range()].copy_from_slice(&public_hash);
     }
 
     #[test]
@@ -963,6 +1085,38 @@ mod tests {
     }
 
     #[test]
+    fn try_generate_rejects_all_zero_x25519_random_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+
+        let err = HybridKeyPair::try_generate(&mut rng)
+            .expect_err("all-zero generated X25519 material must fail");
+
+        match err {
+            HybridError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "generating hybrid x25519 secret");
+                assert_eq!(message, "rng returned all-zero material");
+            }
+            other => panic!("expected all-zero X25519 RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_generate_rejects_all_zero_mlkem_seed_material() {
+        let mut rng = ScriptedTryRng::new(vec![0xA5, 0]);
+
+        let err = HybridKeyPair::try_generate(&mut rng)
+            .expect_err("all-zero ML-KEM seed material must fail");
+
+        match err {
+            HybridError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "seeding hybrid ml-kem keypair");
+                assert_eq!(message, "rng returned all-zero material");
+            }
+            other => panic!("expected all-zero seed RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn encapsulate_reports_rng_failure() {
         let mut key_rng = ChaCha20Rng::from_seed([0x44; 32]);
         let pair = HybridKeyPair::generate(&mut key_rng).expect("generated hybrid keypair");
@@ -980,6 +1134,50 @@ mod tests {
                 assert!(message.contains("failing hybrid RNG"));
             }
             other => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encapsulate_rejects_all_zero_ephemeral_x25519_random_material() {
+        let mut key_rng = ChaCha20Rng::from_seed([0x44; 32]);
+        let pair = HybridKeyPair::generate(&mut key_rng).expect("generated hybrid keypair");
+        let mut rng = FixedTryRng { byte: 0 };
+
+        let err = encapsulate(
+            HybridSuite::X25519MlKem768ChaCha20Poly1305,
+            pair.public(),
+            &mut rng,
+        )
+        .expect_err("all-zero generated ephemeral X25519 material must fail");
+
+        match err {
+            HybridError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "generating hybrid ephemeral x25519 secret");
+                assert_eq!(message, "rng returned all-zero material");
+            }
+            other => panic!("expected all-zero ephemeral X25519 RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encapsulate_rejects_all_zero_mlkem_seed_material() {
+        let mut key_rng = ChaCha20Rng::from_seed([0x45; 32]);
+        let pair = HybridKeyPair::generate(&mut key_rng).expect("generated hybrid keypair");
+        let mut rng = ScriptedTryRng::new(vec![0xA5, 0]);
+
+        let err = encapsulate(
+            HybridSuite::X25519MlKem768ChaCha20Poly1305,
+            pair.public(),
+            &mut rng,
+        )
+        .expect_err("all-zero ML-KEM seed material must fail");
+
+        match err {
+            HybridError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "seeding hybrid ml-kem encapsulation");
+                assert_eq!(message, "rng returned all-zero material");
+            }
+            other => panic!("expected all-zero seed RNG failure, got {other:?}"),
         }
     }
 
@@ -1051,6 +1249,18 @@ mod tests {
     }
 
     #[test]
+    fn public_key_decode_rejects_all_zero_kyber_public_key() {
+        let mut rng = ChaCha20Rng::from_seed([0x7C; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let all_zero_kyber = vec![0_u8; HYBRID_KEM_SUITE.public_key_len()];
+
+        let err = HybridPublicKey::from_bytes(pair.public().x25519_bytes(), all_zero_kyber)
+            .expect_err("all-zero Kyber public key must be rejected while decoding");
+
+        assert_eq!(err, HybridError::InvalidKyberPublicKey);
+    }
+
+    #[test]
     fn secret_key_decode_rejects_noncanonical_kyber_secret_key() {
         let mut rng = ChaCha20Rng::from_seed([0x7B; 32]);
         let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
@@ -1059,6 +1269,31 @@ mod tests {
 
         let err = HybridSecretKey::from_bytes(x25519, kyber_secret)
             .expect_err("noncanonical Kyber secret key must be rejected while decoding");
+        assert_eq!(err, HybridError::InvalidKyberSecretKey);
+    }
+
+    #[test]
+    fn secret_key_decode_rejects_all_zero_kyber_secret_key() {
+        let mut rng = ChaCha20Rng::from_seed([0x7D; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let all_zero_kyber = vec![0_u8; HYBRID_KEM_SUITE.secret_key_len()];
+
+        let err = HybridSecretKey::from_bytes(pair.secret().x25519().to_bytes(), all_zero_kyber)
+            .expect_err("all-zero Kyber secret key must be rejected while decoding");
+
+        assert_eq!(err, HybridError::InvalidKyberSecretKey);
+    }
+
+    #[test]
+    fn secret_key_decode_rejects_all_zero_embedded_kyber_public_key() {
+        let mut rng = ChaCha20Rng::from_seed([0x7E; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let (x25519, mut kyber_secret) = pair.secret().to_bytes();
+        mlkem_secret_with_zero_embedded_public_key(&mut kyber_secret);
+
+        let err = HybridSecretKey::from_bytes(x25519, kyber_secret)
+            .expect_err("all-zero embedded Kyber public key must be rejected while decoding");
+
         assert_eq!(err, HybridError::InvalidKyberSecretKey);
     }
 

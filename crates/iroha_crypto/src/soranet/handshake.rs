@@ -39,7 +39,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-use crate::{KeyPair, SessionKey};
+use crate::{KeyPair, SessionKey, kex::is_x25519_low_order_public_key};
 
 /// Domain separation tag for transcript hashing.
 const TRANSCRIPT_DOMAIN: &[u8] = b"soranet.transcript.v1";
@@ -60,7 +60,6 @@ const ED25519_SIGNATURE_LEN: usize = 64;
 const NOISE_SECRET_LEN: usize = 32;
 const NOISE_PADDING_BLOCK: usize = 1024;
 const TRANSCRIPT_BINDING_LEN: usize = 32;
-const X25519_LOW_ORDER_CHECK_SECRET: [u8; NOISE_SECRET_LEN] = [1_u8; NOISE_SECRET_LEN];
 
 const STEP_NOTE_HYBRID_INIT: &str = "Client sends NK2 hybrid init";
 const STEP_NOTE_HYBRID_RESPONSE: &str = "Relay completes NK2 hybrid handshake";
@@ -251,7 +250,14 @@ fn fill_random<R: TryCryptoRng>(
         .map_err(|err| HarnessError::RandomBytes {
             operation,
             message: err.to_string(),
-        })
+        })?;
+    if !dest.is_empty() && dest.iter().all(|&byte| byte == 0) {
+        return Err(HarnessError::RandomBytes {
+            operation,
+            message: "rng returned all-zero material".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Parse a capability vector into structured TLVs.
@@ -1977,19 +1983,24 @@ fn derive_ed25519_signature(
     Ok(signature.to_bytes())
 }
 
-fn validate_handshake_signature_len(
+fn validate_handshake_signature_material(
     context: &str,
     name: &str,
-    actual: usize,
+    signature: &[u8],
     expected: usize,
 ) -> Result<(), HarnessError> {
+    let actual = signature.len();
     if actual == expected {
-        Ok(())
-    } else {
-        Err(HarnessError::Validation(format!(
-            "{context} {name} signature must be {expected} bytes, got {actual}"
-        )))
+        if signature.iter().all(|&byte| byte == 0) {
+            return Err(HarnessError::Validation(format!(
+                "{context} {name} signature must not be all zero"
+            )));
+        }
+        return Ok(());
     }
+    Err(HarnessError::Validation(format!(
+        "{context} {name} signature must be {expected} bytes, got {actual}"
+    )))
 }
 
 fn read_handshake_signature_pair(
@@ -1997,15 +2008,15 @@ fn read_handshake_signature_pair(
     context: &str,
 ) -> Result<(), HarnessError> {
     let dilithium = cursor.read_len_prefixed()?;
-    validate_handshake_signature_len(
+    validate_handshake_signature_material(
         context,
         "Dilithium3",
-        dilithium.len(),
+        dilithium,
         DILITHIUM3_SIGNATURE_LEN,
     )?;
 
     let ed25519 = cursor.read_len_prefixed()?;
-    validate_handshake_signature_len(context, "Ed25519", ed25519.len(), ED25519_SIGNATURE_LEN)
+    validate_handshake_signature_material(context, "Ed25519", ed25519, ED25519_SIGNATURE_LEN)
 }
 
 fn validate_noise_padding(
@@ -4917,12 +4928,7 @@ fn decode_noise_public_key(
 
 fn noise_public_key_is_low_order(public: &[u8; NOISE_SECRET_LEN]) -> bool {
     let public_key = X25519PublicKey::from(*public);
-    let probe_secret = StaticSecret::from(X25519_LOW_ORDER_CHECK_SECRET);
-    probe_secret
-        .diffie_hellman(&public_key)
-        .as_bytes()
-        .iter()
-        .all(|&byte| byte == 0)
+    is_x25519_low_order_public_key(&public_key)
 }
 
 struct MessageCursor<'a> {
@@ -5027,6 +5033,46 @@ mod tests {
     }
 
     impl TryCryptoRng for FailingTryRng {}
+
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            dst.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedTryRng {}
+
+    #[test]
+    fn fill_random_rejects_all_zero_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+        let mut dest = [0xFF; 32];
+
+        let err = fill_random(&mut rng, "building client hello nonce", &mut dest)
+            .expect_err("all-zero fill must fail");
+
+        match err {
+            HarnessError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "building client hello nonce");
+                assert_eq!(message, "rng returned all-zero material");
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
 
     #[test]
     fn encode_signature_returns_prefixed_base64() {
@@ -6008,6 +6054,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_client_hello_rejects_all_zero_dilithium_signature() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut rng = StdRng::seed_from_u64(7314);
+        let (mut client_hello, _state) =
+            build_client_hello(&params, &mut rng).expect("client hello");
+
+        let header = client_first_signature_len_range(&client_hello);
+        let mut offset = header.start;
+        let payload = len_prefixed_payload_range(&client_hello, &mut offset);
+        client_hello[payload].fill(0);
+
+        let err = match parse_client_hello(&client_hello, params.resume_hash) {
+            Ok(_) => panic!("all-zero Dilithium signature material must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("Dilithium3 signature")
+                && err.to_string().contains("all zero"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn parse_client_hello_rejects_malformed_padding() {
         let params = RuntimeParams::soranet_defaults();
         let mut rng = StdRng::seed_from_u64(7314);
@@ -6083,6 +6152,47 @@ mod tests {
         .expect_err("malformed Ed25519 signature length must be rejected");
         assert!(
             err.to_string().contains("Ed25519 signature"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_relay_response_rejects_all_zero_ed25519_signature() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut rng_client = StdRng::seed_from_u64(7315);
+        let mut rng_relay = StdRng::seed_from_u64(7316);
+        let relay_keys = KeyPair::random();
+
+        let (client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("client hello");
+        let (mut relay_response, _relay_state) =
+            process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
+                .expect("relay response");
+
+        let (_dilithium_header, ed25519_header) = relay_signature_len_ranges(&relay_response);
+        let mut offset = ed25519_header.start;
+        let payload = len_prefixed_payload_range(&relay_response, &mut offset);
+        relay_response[payload].fill(0);
+
+        let profile = kem_profile(params.kem_id).expect("kem profile");
+        let err = match relay_response.first().copied() {
+            Some(HYBRID_RELAY_RESPONSE_TYPE) => parse_hybrid_relay_response(
+                &relay_response,
+                params.descriptor_commit,
+                profile.suite(),
+            )
+            .map(|_| ()),
+            Some(PQFS_RELAY_RESPONSE_TYPE) => parse_pqfs_relay_response(
+                &relay_response,
+                params.descriptor_commit,
+                profile.suite(),
+            )
+            .map(|_| ()),
+            other => panic!("unexpected relay response type {other:?}"),
+        }
+        .expect_err("all-zero Ed25519 signature material must be rejected");
+        assert!(
+            err.to_string().contains("Ed25519 signature") && err.to_string().contains("all zero"),
             "unexpected error: {err}"
         );
     }
@@ -6906,6 +7016,47 @@ mod tests {
     }
 
     #[test]
+    fn process_client_hello_rejects_all_zero_nk2_kem_before_relay_rng() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(6104);
+        let relay_keys = KeyPair::random();
+        let (mut client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("nk2 client");
+        let primary_range = client_hello_primary_kem_range(&client_hello);
+        client_hello[primary_range].fill(0);
+
+        let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut PanicRng) {
+            Ok(_) => panic!("all-zero primary KEM key must fail before relay RNG"),
+            Err(err) => err,
+        };
+        match err {
+            HarnessError::Kem(message) => {
+                assert!(message.contains("client ML-KEM public key"));
+                assert!(message.contains("all zero"));
+            }
+            other => panic!("expected KEM preflight error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn build_client_hello_supports_nk3_preference() {
         let defaults = RuntimeParams::soranet_defaults();
         let client_caps = capabilities_with_suites(
@@ -7125,6 +7276,53 @@ mod tests {
     }
 
     #[test]
+    fn process_client_hello_rejects_all_zero_nk3_forward_kem_before_relay_rng() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(6105);
+        let relay_keys = KeyPair::random();
+        let (mut client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("nk3 client");
+        let forward_range = client_hello_forward_kem_range(&client_hello);
+        client_hello[forward_range].fill(0);
+
+        let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut PanicRng) {
+            Ok(_) => panic!("all-zero forward KEM key must fail before relay RNG"),
+            Err(err) => err,
+        };
+        match err {
+            HarnessError::Kem(message) => {
+                assert!(message.contains("forward ML-KEM public key"));
+                assert!(message.contains("all zero"));
+            }
+            other => panic!("expected KEM preflight error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn runtime_handshake_roundtrip_supports_mlkem1024() {
         let defaults = RuntimeParams::soranet_defaults();
         let client_capabilities =
@@ -7218,6 +7416,25 @@ mod tests {
     }
 
     #[test]
+    fn build_client_hello_rejects_all_zero_nonce_material() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut rng = FixedTryRng { byte: 0 };
+
+        let err = match build_client_hello(&params, &mut rng) {
+            Ok(_) => panic!("expected all-zero client nonce failure"),
+            Err(err) => err,
+        };
+
+        match err {
+            HarnessError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "building client hello nonce");
+                assert_eq!(message, "rng returned all-zero material");
+            }
+            other => panic!("expected all-zero client nonce RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn process_client_hello_reports_relay_rng_failure() {
         let params = RuntimeParams::soranet_defaults();
         let mut client_rng = StdRng::seed_from_u64(22);
@@ -7240,6 +7457,29 @@ mod tests {
                 );
             }
             other => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn process_client_hello_rejects_all_zero_relay_nonce_material() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut client_rng = StdRng::seed_from_u64(23);
+        let (client_hello, _client_state) =
+            build_client_hello(&params, &mut client_rng).expect("client hello");
+        let relay_keys = KeyPair::random();
+        let mut relay_rng = FixedTryRng { byte: 0 };
+
+        let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut relay_rng) {
+            Ok(_) => panic!("expected all-zero relay nonce failure"),
+            Err(err) => err,
+        };
+
+        match err {
+            HarnessError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "building relay nonce");
+                assert_eq!(message, "rng returned all-zero material");
+            }
+            other => panic!("expected all-zero relay nonce RNG failure, got {other:?}"),
         }
     }
 

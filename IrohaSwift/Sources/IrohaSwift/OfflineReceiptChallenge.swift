@@ -25,9 +25,7 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
         nonceHex: String,
         expectedScale: Int? = nil
     ) throws -> Result {
-        if chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            throw Error.invalidInput("chainId must not be empty")
-        }
+        try validateExactNonEmpty(chainId, field: "chainId")
         try validateAmount(amount, expectedScale: expectedScale)
         _ = try parseHashHex(senderCertificateIdHex, field: "senderCertificateIdHex")
         _ = try parseHashHex(nonceHex, field: "nonceHex")
@@ -84,13 +82,17 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
 
     private static func parseHashHex(_ value: String, field: String) throws -> Data {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let bytes = Data(hexString: trimmed), bytes.count == 32 else {
+        guard !trimmed.isEmpty, trimmed == value else {
+            throw Error.invalidInput("\(field) must be exact")
+        }
+        guard let bytes = Data(hexString: value), bytes.count == 32 else {
             throw Error.invalidInput("\(field) must be 64 hex characters")
         }
         return bytes
     }
 
     private static func validateAmount(_ value: String, expectedScale: Int?) throws {
+        try validateExactNonEmpty(value, field: "amount")
         do {
             _ = try OfflineNorito.encodeNumeric(value)
         } catch let error as OfflineNoritoError {
@@ -133,6 +135,16 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
         }
         if let expectedScale, scale != expectedScale {
             throw Error.invalidInput("amount must use scale \(expectedScale): \(value)")
+        }
+    }
+
+    private static func validateExactNonEmpty(_ value: String, field: String) throws {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw Error.invalidInput("\(field) must not be empty")
+        }
+        guard trimmed == value else {
+            throw Error.invalidInput("\(field) must be exact")
         }
     }
 }

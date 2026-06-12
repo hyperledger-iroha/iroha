@@ -9,11 +9,15 @@ from iroha_python import (
     buildZkX509IdentityCommitments,
     buildZkX509IdentityDevProofFixture,
     buildZkX509IdentityEnvelope,
+    buildZkX509IdentityProofV0,
     build_zk_x509_identity_commitments,
     build_zk_x509_identity_dev_proof_fixture,
     build_zk_x509_identity_envelope,
+    build_zk_x509_identity_proof_v0,
     decode_privacy_proof_envelope,
+    verifyZkX509IdentityProofV0,
     verifyZkX509IdentityProofLocally,
+    verify_zk_x509_identity_proof_v0,
     verify_zk_x509_identity_proof_locally,
 )
 from iroha_python.verange import build_privacy_proof_envelope
@@ -114,6 +118,23 @@ def test_zk_x509_builders_normalize_commitments_and_envelopes() -> None:
     assert verified["address_binding"] == commitments["address_binding"].hex()
     assert verified["public_inputs"] == fixture["public_inputs"]
 
+    production_proof = build_zk_x509_identity_proof_v0(
+        {
+            **base,
+            "vkHash": bytes([0x99]) * 32,
+            "proofBytes": b"production-zk-x509-identity-proof",
+        }
+    )
+    production_verified = verify_zk_x509_identity_proof_v0(
+        {"envelope": production_proof, **base}
+    )
+    assert production_verified["ok"] is True
+    assert production_verified["production"] is True
+    assert production_verified["kind"] == "zk-x509-onchain-identity-v0"
+    assert production_verified["backend"] == "Stark"
+    assert production_verified["address_binding"] == commitments["address_binding"].hex()
+    assert production_verified["public_inputs"] == fixture["public_inputs"]
+
 
 def test_zk_x509_package_root_exports_catalog_entrypoint_aliases() -> None:
     base = _base()
@@ -137,6 +158,72 @@ def test_zk_x509_package_root_exports_catalog_entrypoint_aliases() -> None:
     )
     assert verified["ok"] is True
     assert verified["address_binding"] == commitments["address_binding"].hex()
+
+    production_proof = buildZkX509IdentityProofV0(
+        {
+            **base,
+            "vkHash": bytes([0x99]) * 32,
+            "proofBytes": b"production-zk-x509-identity-proof",
+        }
+    )
+    production_verified = verifyZkX509IdentityProofV0(
+        {"envelope": production_proof, **base}
+    )
+    assert production_verified["ok"] is True
+    assert production_verified["production"] is True
+    assert production_verified["address_binding"] == commitments["address_binding"].hex()
+
+
+def test_zk_x509_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class ZkX509Dict(dict):
+        pass
+
+    base = _base()
+    proof_options = {
+        **base,
+        "vkHash": bytes([0x99]) * 32,
+        "proofBytes": b"production-zk-x509-identity-proof",
+    }
+
+    for helper in (build_zk_x509_identity_commitments, buildZkX509IdentityCommitments):
+        with pytest.raises(TypeError, match="zkX509IdentityCommitments"):
+            helper(ZkX509Dict(base))
+
+    for helper in (build_zk_x509_identity_envelope, buildZkX509IdentityEnvelope):
+        with pytest.raises(TypeError, match="zkX509IdentityEnvelope"):
+            helper(ZkX509Dict(proof_options))
+
+    for helper in (build_zk_x509_identity_proof_v0, buildZkX509IdentityProofV0):
+        with pytest.raises(TypeError, match="zkX509IdentityProofV0"):
+            helper(ZkX509Dict(proof_options))
+
+    for helper in (
+        build_zk_x509_identity_dev_proof_fixture,
+        buildZkX509IdentityDevProofFixture,
+    ):
+        with pytest.raises(TypeError, match="zkX509IdentityDevProofFixture"):
+            helper(ZkX509Dict({**base, "vkHash": bytes([0x99]) * 32}))
+
+    production_proof = build_zk_x509_identity_proof_v0(proof_options)
+    raw_verified = verify_zk_x509_identity_proof_v0(production_proof)
+    assert raw_verified["ok"] is True
+    verify_options = {"envelope": production_proof, **base}
+    for helper in (verify_zk_x509_identity_proof_v0, verifyZkX509IdentityProofV0):
+        with pytest.raises(TypeError, match="zkX509IdentityProofV0"):
+            helper(ZkX509Dict(verify_options))
+
+    fixture = build_zk_x509_identity_dev_proof_fixture(
+        {**base, "vkHash": bytes([0x99]) * 32}
+    )
+    local_verified = verify_zk_x509_identity_proof_locally(fixture["envelope"])
+    assert local_verified["ok"] is True
+    local_options = {
+        **verify_options,
+        "envelope": fixture["envelope"],
+    }
+    for helper in (verify_zk_x509_identity_proof_locally, verifyZkX509IdentityProofLocally):
+        with pytest.raises(TypeError, match="zkX509IdentityLocalVerification"):
+            helper(ZkX509Dict(local_options))
 
 
 def test_zk_x509_wallet_address_alias_derives_address_binding() -> None:
@@ -323,3 +410,20 @@ def test_zk_x509_local_verifier_rejects_tampered_dev_fixtures() -> None:
             match="zkX509IdentityLocalVerification|privacyProofEnvelope",
         ):
             verify_zk_x509_identity_proof_locally(case)
+
+
+def test_zk_x509_production_builder_and_verifier_reject_dev_fixtures() -> None:
+    fixture_input = {**_base(), "vkHash": bytes([0x99]) * 32}
+    fixture = build_zk_x509_identity_dev_proof_fixture(fixture_input)
+
+    with pytest.raises(ValueError, match="dev fixture"):
+        build_zk_x509_identity_proof_v0(
+            {
+                **_base(),
+                "vkHash": bytes([0x99]) * 32,
+                "proofBytes": fixture["proof_bytes"],
+            }
+        )
+
+    with pytest.raises(ValueError, match="dev fixture"):
+        verify_zk_x509_identity_proof_v0({"envelope": fixture["envelope"], **_base()})

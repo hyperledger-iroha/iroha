@@ -15,7 +15,29 @@ final class VerifyingKeyInstructionUtils {
     if (value == null || trimWhitespace(value).isEmpty()) {
       throw new IllegalArgumentException("Instruction argument '" + key + "' is required");
     }
-    return trimWhitespace(value);
+    return value;
+  }
+
+  static String requireExact(final Map<String, String> arguments, final String key) {
+    final String value = arguments.get(key);
+    if (value == null || trimWhitespace(value).isEmpty()) {
+      throw new IllegalArgumentException("Instruction argument '" + key + "' is required");
+    }
+    if (!trimWhitespace(value).equals(value)) {
+      throw new IllegalArgumentException(
+          "Instruction argument '" + key + "' must not contain surrounding whitespace");
+    }
+    return value;
+  }
+
+  static String requireExactNonBlank(final String value, final String context) {
+    if (value == null || value.trim().isEmpty()) {
+      throw new IllegalArgumentException(context + " must not be blank");
+    }
+    if (!value.trim().equals(value)) {
+      throw new IllegalArgumentException(context + " must not contain surrounding whitespace");
+    }
+    return value;
   }
 
   static String requireProductionBackend(final Map<String, String> arguments, final String key) {
@@ -36,7 +58,14 @@ final class VerifyingKeyInstructionUtils {
       return null;
     }
     final String trimmed = trimWhitespace(value);
-    return trimmed.isEmpty() ? null : trimmed;
+    if (trimmed.isEmpty()) {
+      return null;
+    }
+    if (!trimmed.equals(value)) {
+      throw new IllegalArgumentException(
+          "Instruction argument '" + key + "' must not contain surrounding whitespace");
+    }
+    return value;
   }
 
   static Integer parseOptionalInt(final Map<String, String> arguments, final String key) {
@@ -59,7 +88,7 @@ final class VerifyingKeyInstructionUtils {
       final Map<String, String> arguments, final String backend) {
     final VerifyingKeyRecordDescription.Builder builder = VerifyingKeyRecordDescription.builder();
     builder.setVersion(Integer.parseUnsignedInt(require(arguments, "record.version")));
-    builder.setCircuitId(require(arguments, "record.circuit_id"));
+    builder.setCircuitId(requireExact(arguments, "record.circuit_id"));
     builder.setBackendTag(
         VerifyingKeyBackendTag.parse(require(arguments, "record.backend_tag")));
     builder.setCurve(optional(arguments, "record.curve"));
@@ -75,7 +104,7 @@ final class VerifyingKeyInstructionUtils {
     }
     builder.setVkLength(parseOptionalInt(arguments, "record.vk_len"));
     builder.setMaxProofBytes(parseOptionalInt(arguments, "record.max_proof_bytes"));
-    builder.setGasScheduleId(require(arguments, "record.gas_schedule_id"));
+    builder.setGasScheduleId(requireExact(arguments, "record.gas_schedule_id"));
     builder.setMetadataUriCid(optional(arguments, "record.metadata_uri_cid"));
     builder.setVkBytesCid(optional(arguments, "record.vk_bytes_cid"));
     builder.setActivationHeight(parseOptionalLong(arguments, "record.activation_height"));

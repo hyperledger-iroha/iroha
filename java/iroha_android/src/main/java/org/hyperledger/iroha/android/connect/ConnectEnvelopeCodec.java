@@ -595,14 +595,10 @@ public final class ConnectEnvelopeCodec {
     if (algorithm == null) {
       return 0;
     }
-    final String normalized = algorithm.trim();
-    if (normalized.isEmpty()) {
-      return 0;
-    }
-    if (!isPrintableAscii(normalized)) {
+    if (!isPrintableAscii(algorithm)) {
       throw new IllegalArgumentException("Unsupported wallet signature algorithm: " + algorithm);
     }
-    if ("ed25519".equalsIgnoreCase(normalized)) {
+    if ("ed25519".equals(algorithm)) {
       return 0;
     }
     throw new IllegalArgumentException("Unsupported wallet signature algorithm: " + algorithm);

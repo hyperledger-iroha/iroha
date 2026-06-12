@@ -60,6 +60,11 @@ final class ConnectEnvelopeCodecTests: XCTestCase {
     func testEncodeSignResultOkRejectsConfusableAlgorithmsBeforeBridge() {
         let signature = Data(repeating: 0x44, count: 64)
         for algorithm in [
+            "",
+            " ",
+            "ED25519",
+            " Ed25519 ",
+            "ed25519 ",
             "secp256k1",
             "ed\t25519",
             "ed\u{200B}25519",

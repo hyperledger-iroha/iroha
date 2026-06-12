@@ -196,6 +196,10 @@ final class NativeEscrowInstructionBuildersTests: XCTestCase {
             (["backend": "halo2/ipa"], "proof.vk_ref.name"),
             (["backend": "   ", "name": "vk_escrow"], "proof.vk_ref.backend"),
             (["backend": "halo2/ipa", "name": "   "], "proof.vk_ref.name"),
+            (["backend": " halo2/ipa", "name": "vk_escrow"], "proof.vk_ref.backend"),
+            (["backend": "halo2/ipa ", "name": "vk_escrow"], "proof.vk_ref.backend"),
+            (["backend": "halo2/ipa", "name": " vk_escrow"], "proof.vk_ref.name"),
+            (["backend": "halo2/ipa", "name": "vk_escrow "], "proof.vk_ref.name"),
         ] {
             let proof: [String: Any] = [
                 "backend": "halo2/ipa",
@@ -211,6 +215,26 @@ final class NativeEscrowInstructionBuildersTests: XCTestCase {
             )) { error in
                 XCTAssertEqual(error as? NativeEscrowInstructionBuilderError,
                                .invalidValue(field: field))
+            }
+        }
+    }
+
+    func testAnonymousEscrowRejectsPaddedProofBackend() {
+        for backend in [" halo2/ipa", "halo2/ipa ", "   "] {
+            let proof: [String: Any] = [
+                "backend": backend,
+                "proof": "proof-bytes",
+                "vk_ref": ["backend": "halo2/ipa", "name": "vk_escrow"],
+            ]
+            XCTAssertThrowsError(try NativeEscrowInstructionBuilders.openAnonymousAssetEscrow(
+                escrowId: "anonymous-escrow",
+                assetDefinition: "xor#wonderland",
+                fundingNullifiers: ["n1"],
+                escrowCommitment: "escrow-note",
+                proof: proof
+            )) { error in
+                XCTAssertEqual(error as? NativeEscrowInstructionBuilderError,
+                               .invalidValue(field: "proof.backend"))
             }
         }
     }

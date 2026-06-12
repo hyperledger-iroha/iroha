@@ -156,6 +156,8 @@ __all__ = [
     "buildConfidentialTransferProofV2",
     "build_confidential_unshield_proof_v3",
     "buildConfidentialUnshieldProofV3",
+    "build_confidential_asset_hidden_transfer_proof_v1",
+    "buildConfidentialAssetHiddenTransferProofV1",
     "build_zk_ace_authorization_proof_v1",
     "zk_ace_build_transfer_authorization_v1",
     "privacy_bridge_abi_version",
@@ -286,16 +288,19 @@ def _normalize_lane_privacy_attachment(entry: Mapping[str, Any]) -> Dict[str, An
     try:
         commitment_id = int(entry["commitment_id"])
         leaf_index = int(entry.get("leaf_index", 0))
-        proof_backend = str(entry.get("proof_backend", "halo2/ipa"))
+        proof_backend = _require_exact_non_empty_string(
+            entry.get("proof_backend", "halo2/ipa"),
+            "proof_backend",
+        )
         proof_bytes = _normalize_bytes(entry["proof_bytes"], "proof_bytes")
-        verifying_key_name = str(entry["verifying_key_name"]).strip()
+        verifying_key_name = _require_exact_non_empty_string(
+            entry["verifying_key_name"],
+            "verifying_key_name",
+        )
         leaf = _normalize_bytes(entry["leaf"], "leaf", expected_len=32)
         raw_audit = entry.get("audit_path", [])
     except KeyError as exc:  # pragma: no cover - defensive path
         raise KeyError(f"lane privacy attachment missing required key: {exc}") from exc
-
-    if not verifying_key_name:
-        raise ValueError("verifying_key_name must not be empty")
 
     if not isinstance(raw_audit, Iterable):
         raise TypeError("audit_path must be an iterable of optional bytes")
@@ -550,6 +555,7 @@ def normalize_crypto_algorithm(algorithm: str) -> str:
 
     if not isinstance(algorithm, str):
         raise TypeError("algorithm must be a string")
+    algorithm = _require_exact_non_empty_string(algorithm, "algorithm")
     return str(_crypto.normalize_crypto_algorithm(algorithm))
 
 
@@ -990,6 +996,14 @@ def _normalize_u128_literal(value: int | str, name: str) -> str:
     return str(amount)
 
 
+def _require_exact_non_empty_string(value: Any, context: str) -> str:
+    if not isinstance(value, str) or value == "":
+        raise ValueError(f"{context} must be a non-empty string")
+    if value.strip() != value:
+        raise ValueError(f"{context} must not contain surrounding whitespace")
+    return value
+
+
 def _confidential_verifying_key_parts(
     verifying_key: Mapping[str, Any],
     context: str,
@@ -1012,13 +1026,11 @@ def _confidential_verifying_key_parts(
         or verifying_key.get("vk_bytes")
         or verifying_key.get("vkBytes")
     )
-    if not isinstance(backend, str) or not backend.strip():
-        raise ValueError(f"{context}.backend must be a non-empty string")
-    if not isinstance(circuit_id, str) or not circuit_id.strip():
-        raise ValueError(f"{context}.circuit_id must be a non-empty string")
+    backend = _require_exact_non_empty_string(backend, f"{context}.backend")
+    circuit_id = _require_exact_non_empty_string(circuit_id, f"{context}.circuit_id")
     if vk_bytes is None:
         raise ValueError(f"{context}.bytes is required")
-    return backend.strip(), circuit_id.strip(), vk_bytes
+    return backend, circuit_id, vk_bytes
 
 
 def _confidential_native_result(result: Any, context: str) -> Dict[str, Any]:
@@ -1101,8 +1113,47 @@ def build_confidential_unshield_proof_v3(
     return _confidential_native_result(result, "confidential unshield v3 prover")
 
 
+def build_confidential_asset_hidden_transfer_proof_v1(
+    *,
+    chain_id: str,
+    pool_id: str,
+    asset_set_root: bytes | bytearray | memoryview | str,
+    input_commitments: Iterable[bytes | bytearray | memoryview | str],
+    nullifiers: Iterable[bytes | bytearray | memoryview | str],
+    output_commitments: Iterable[bytes | bytearray | memoryview | str],
+    root_hint: bytes | bytearray | memoryview | str,
+    verifying_key: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Build an asset-hidden transfer v1 proof envelope with the native Halo2 prover."""
+
+    if not hasattr(_crypto, "build_confidential_asset_hidden_transfer_proof_v1"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing asset-hidden transfer v1 prover support; rebuild the extension"
+        )
+    vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
+        verifying_key,
+        "verifying_key",
+    )
+    result = _crypto.build_confidential_asset_hidden_transfer_proof_v1(
+        str(chain_id),
+        str(pool_id),
+        asset_set_root,
+        list(input_commitments),
+        list(nullifiers),
+        list(output_commitments),
+        root_hint,
+        vk_backend,
+        vk_circuit_id,
+        vk_bytes,
+    )
+    return _confidential_native_result(result, "asset-hidden transfer v1 prover")
+
+
 buildConfidentialTransferProofV2 = build_confidential_transfer_proof_v2
 buildConfidentialUnshieldProofV3 = build_confidential_unshield_proof_v3
+buildConfidentialAssetHiddenTransferProofV1 = (
+    build_confidential_asset_hidden_transfer_proof_v1
+)
 
 
 def zk_ace_build_transfer_authorization_v1(
@@ -1498,9 +1549,9 @@ def _privacy_proof_request_native_probe_returns_bytes(module: object) -> bool:
     try:
         result = _call_privacy_native_method(
             method,
-            "verange-transparent-range-v1",
-            "buildVeRangeProofV1",
-            "bulletproofs:verange_transparent_range_v1",
+            _ZK_ACE_ALGORITHM_ID,
+            _ZK_ACE_PRODUCTION_ENTRYPOINT,
+            _ZK_ACE_PRODUCTION_VK_REF,
             public_inputs,
             b"",
             b"",

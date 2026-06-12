@@ -694,7 +694,9 @@ final class ToriiClientTests: XCTestCase {
                                                     receiptHash: String,
                                                     uaid: String,
                                                     backend: String,
+                                                    verificationMode: String = "signed",
                                                     programId: String = "identifier_lookup_retail",
+                                                    openingProgramId: String? = nil,
                                                     programDigestHex: String = String(repeating: "11", count: 32),
                                                     inputCiphertextHashHex: String = String(repeating: "ab", count: 32),
                                                     outputCiphertextHashHex: String = String(repeating: "bb", count: 32),
@@ -716,7 +718,7 @@ final class ToriiClientTests: XCTestCase {
                 programId: programId,
                 programDigest: programDigestHex,
                 backend: backend,
-                verificationMode: "signed",
+                verificationMode: verificationMode,
                 inputCiphertextHash: inputCiphertextHashHex,
                 outputCiphertextHash: outputCiphertextHashHex,
                 parameterDigest: parameterDigestHex,
@@ -727,7 +729,7 @@ final class ToriiClientTests: XCTestCase {
                 expiresAtMs: expiresAtMs
             ),
             opening: sampleOpening(
-                programId: programId,
+                programId: openingProgramId ?? programId,
                 inputCiphertextHash: inputCiphertextHashHex,
                 outputCiphertextHash: outputCiphertextHashHex,
                 parameterDigest: parameterDigestHex,
@@ -1661,6 +1663,45 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(try receipt?.verifyAttestation(using: policy), true)
     }
 
+    func testIdentifierReceiptDecodeNormalizesPaddedAccountIdBeforeSignatureVerification() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        var receiptObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(try identifierReceiptJSON(payload: payload, signatureHex: signed.signatureHex).utf8)
+            ) as? [String: Any]
+        )
+        var payloadObject = try XCTUnwrap(receiptObject["payload"] as? [String: Any])
+        payloadObject["account_id"] = " \(accountId) "
+        receiptObject["payload"] = payloadObject
+
+        let receiptData = try JSONSerialization.data(withJSONObject: receiptObject, options: [])
+        let decoded = try JSONDecoder().decode(ToriiIdentifierResolutionReceipt.self, from: receiptData)
+        XCTAssertEqual(decoded.payload.accountId, accountId)
+        let policy = ToriiIdentifierPolicySummary(
+            policyId: "phone#retail",
+            owner: accountId,
+            active: true,
+            normalization: .phoneE164,
+            resolverPublicKey: signed.resolverPublicKey,
+            backend: "bfv-affine-sha3-256-v1",
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: nil,
+            ramFheProfile: nil,
+            proofVerifier: nil,
+            note: nil
+        )
+        XCTAssertEqual(try decoded.verifyAttestation(using: policy), true)
+    }
+
     func testIdentifierReceiptOpeningSignatureUsesConstVecEncoding() throws {
         let accountId = try canonicalOwnerLiteral()
         let payload = makeSignedIdentifierReceiptPayload(
@@ -2016,19 +2057,430 @@ final class ToriiClientTests: XCTestCase {
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
             backend: "bfv-affine-sha3-256-v1"
         )
-        let signed = try signedIdentifierReceiptFixture(payload: payload)
-        let receipt = try identifierReceipt(payload: payload, signatureHex: "GG")
-        let policy = identifierPolicy(
-            owner: accountId,
-            resolverPublicKey: signed.resolverPublicKey
-        )
 
-        XCTAssertThrowsError(try receipt.verifyAttestation(using: policy)) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                XCTFail("expected invalid payload error, got \(error)")
+        XCTAssertThrowsError(try identifierReceipt(payload: payload, signatureHex: "GG")) { error in
+            guard case let DecodingError.dataCorrupted(context) = error else {
+                XCTFail("expected dataCorrupted decode error, got \(error)")
                 return
             }
-            XCTAssertTrue(reason.contains("attestation.signature"))
+            XCTAssertTrue(context.debugDescription.contains("signature"))
+            XCTAssertTrue(context.debugDescription.contains("valid hex"))
+        }
+    }
+
+    func testIdentifierReceiptCanonicalPayloadRejectsNonExactExecutionTags() throws {
+        let accountId = try canonicalOwnerLiteral()
+        for (payload, expectedReason) in [
+            (
+                makeSignedIdentifierReceiptPayload(
+                    policyId: " phone#retail",
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1"
+                ),
+                "policyId"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    policyId: "phone#retail ",
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1"
+                ),
+                "policyId"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    policyId: "phone #retail",
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1"
+                ),
+                "policyId"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    policyId: "phone# retail",
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1"
+                ),
+                "policyId"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1",
+                    programId: " identifier_lookup_retail"
+                ),
+                "programId"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: " \(accountId)",
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1"
+                ),
+                "accountId"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: "\(accountId) ",
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1"
+                ),
+                "accountId"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: " opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1"
+                ),
+                "opaque_id"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: "\(String(repeating: "22", count: 31))23 ",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1"
+                ),
+                "receipt_hash"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: " uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1"
+                ),
+                "uaid"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1",
+                    programDigestHex: " \(String(repeating: "11", count: 32))"
+                ),
+                "program_digest"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1",
+                    inputCiphertextHashHex: "\(String(repeating: "ab", count: 32)) "
+                ),
+                "input_ciphertext_hash"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1",
+                    programId: "identifier_lookup_retail "
+                ),
+                "programId"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1",
+                    openingProgramId: " identifier_lookup_retail"
+                ),
+                "programId"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1",
+                    openingProgramId: "identifier_lookup_retail "
+                ),
+                "programId"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: " bfv-affine-sha3-256-v1"
+                ),
+                "backend"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "BFV-AFFINE-SHA3-256-V1"
+                ),
+                "backend"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1",
+                    verificationMode: "signed "
+                ),
+                "verificationMode"
+            ),
+            (
+                makeSignedIdentifierReceiptPayload(
+                    accountId: accountId,
+                    opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+                    receiptHash: String(repeating: "22", count: 31) + "23",
+                    uaid: "uaid:\(String(repeating: "33", count: 31))35",
+                    backend: "bfv-affine-sha3-256-v1",
+                    verificationMode: "Signed"
+                ),
+                "verificationMode"
+            ),
+        ] {
+            XCTAssertThrowsError(try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    XCTFail("expected invalid payload error, got \(error)")
+                    return
+                }
+                let normalizedReason = reason.replacingOccurrences(of: "_", with: "").lowercased()
+                let normalizedExpectedReason = expectedReason.replacingOccurrences(of: "_", with: "").lowercased()
+                XCTAssertTrue(normalizedReason.contains(normalizedExpectedReason), reason)
+            }
+        }
+    }
+
+    func testIdentifierReceiptDecodeRejectsNonExactExecutionTags() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let payloadData = try JSONEncoder().encode(payload)
+        let payloadObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
+        )
+
+        for policyId in [" phone#retail", "phone#retail ", "phone #retail", "phone# retail"] {
+            var mutatedPayload = payloadObject
+            mutatedPayload["policy_id"] = policyId
+            let mutatedData = try JSONSerialization.data(
+                withJSONObject: mutatedPayload,
+                options: []
+            )
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiIdentifierResolutionPayload.self,
+                    from: mutatedData
+                )
+            ) { error in
+                guard case let DecodingError.dataCorrupted(context) = error else {
+                    XCTFail("expected dataCorrupted decode error, got \(error)")
+                    return
+                }
+                XCTAssertTrue(context.debugDescription.contains("policy_id"))
+            }
+        }
+
+        for programId in [" identifier_lookup_retail", "identifier_lookup_retail "] {
+            var mutatedPayload = payloadObject
+            var execution = try XCTUnwrap(mutatedPayload["execution"] as? [String: Any])
+            execution["program_id"] = programId
+            mutatedPayload["execution"] = execution
+            let mutatedData = try JSONSerialization.data(
+                withJSONObject: mutatedPayload,
+                options: []
+            )
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiIdentifierResolutionPayload.self,
+                    from: mutatedData
+                )
+            ) { error in
+                guard case let DecodingError.dataCorrupted(context) = error else {
+                    XCTFail("expected dataCorrupted decode error, got \(error)")
+                    return
+                }
+                XCTAssertTrue(context.debugDescription.contains("program_id"))
+            }
+
+            mutatedPayload = payloadObject
+            var opening = try XCTUnwrap(mutatedPayload["opening"] as? [String: Any])
+            var openingPayload = try XCTUnwrap(opening["payload"] as? [String: Any])
+            openingPayload["program_id"] = programId
+            opening["payload"] = openingPayload
+            mutatedPayload["opening"] = opening
+            let mutatedOpeningData = try JSONSerialization.data(
+                withJSONObject: mutatedPayload,
+                options: []
+            )
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiIdentifierResolutionPayload.self,
+                    from: mutatedOpeningData
+                )
+            ) { error in
+                guard case let DecodingError.dataCorrupted(context) = error else {
+                    XCTFail("expected dataCorrupted decode error, got \(error)")
+                    return
+                }
+                XCTAssertTrue(context.debugDescription.contains("program_id"))
+            }
+        }
+
+        for paddedAccountId in [" \(accountId)", "\(accountId) "] {
+            var mutatedPayload = payloadObject
+            mutatedPayload["account_id"] = paddedAccountId
+            let mutatedData = try JSONSerialization.data(
+                withJSONObject: mutatedPayload,
+                options: []
+            )
+
+            let decoded = try JSONDecoder().decode(
+                ToriiIdentifierResolutionPayload.self,
+                from: mutatedData
+            )
+            XCTAssertEqual(decoded.accountId, accountId)
+        }
+
+        let hashExactnessCases: [(path: [String], value: String, reason: String)] = [
+            (["opaque_id"], " \(try XCTUnwrap(payloadObject["opaque_id"] as? String))", "opaque_id"),
+            (["receipt_hash"], "\(try XCTUnwrap(payloadObject["receipt_hash"] as? String)) ", "receipt_hash"),
+            (["uaid"], " \(try XCTUnwrap(payloadObject["uaid"] as? String))", "uaid"),
+            (
+                ["execution", "program_digest"],
+                " \(try XCTUnwrap(try XCTUnwrap(payloadObject["execution"] as? [String: Any])["program_digest"] as? String))",
+                "program_digest"
+            ),
+            (
+                ["opening", "payload", "input_ciphertext_hash"],
+                "\(try XCTUnwrap(try XCTUnwrap(try XCTUnwrap(payloadObject["opening"] as? [String: Any])["payload"] as? [String: Any])["input_ciphertext_hash"] as? String)) ",
+                "input_ciphertext_hash"
+            ),
+        ]
+        for testCase in hashExactnessCases {
+            var mutatedPayload = payloadObject
+            if testCase.path.count == 1 {
+                mutatedPayload[testCase.path[0]] = testCase.value
+            } else if testCase.path == ["execution", "program_digest"] {
+                var execution = try XCTUnwrap(mutatedPayload["execution"] as? [String: Any])
+                execution["program_digest"] = testCase.value
+                mutatedPayload["execution"] = execution
+            } else {
+                var opening = try XCTUnwrap(mutatedPayload["opening"] as? [String: Any])
+                var openingPayload = try XCTUnwrap(opening["payload"] as? [String: Any])
+                openingPayload["input_ciphertext_hash"] = testCase.value
+                opening["payload"] = openingPayload
+                mutatedPayload["opening"] = opening
+            }
+            let mutatedData = try JSONSerialization.data(
+                withJSONObject: mutatedPayload,
+                options: []
+            )
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiIdentifierResolutionPayload.self,
+                    from: mutatedData
+                )
+            ) { error in
+                if case let DecodingError.dataCorrupted(context) = error {
+                    XCTAssertTrue(context.debugDescription.contains(testCase.reason))
+                } else if case let ToriiClientError.invalidPayload(reason) = error {
+                    XCTAssertTrue(reason.contains(testCase.reason))
+                } else {
+                    XCTFail("expected exactness decode error, got \(error)")
+                }
+            }
+        }
+
+        var emptyAccountPayload = payloadObject
+        emptyAccountPayload["account_id"] = " \n\t "
+        let emptyAccountData = try JSONSerialization.data(
+            withJSONObject: emptyAccountPayload,
+            options: []
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiIdentifierResolutionPayload.self,
+                from: emptyAccountData
+            )
+        ) { error in
+            guard case let DecodingError.dataCorrupted(context) = error else {
+                XCTFail("expected dataCorrupted decode error, got \(error)")
+                return
+            }
+            XCTAssertTrue(context.debugDescription.contains("account_id"))
+        }
+
+        for (field, value) in [
+            ("backend", " bfv-affine-sha3-256-v1"),
+            ("backend", "BFV-AFFINE-SHA3-256-V1"),
+            ("verification_mode", "signed "),
+            ("verification_mode", "Signed"),
+        ] {
+            var mutatedPayload = payloadObject
+            var execution = try XCTUnwrap(mutatedPayload["execution"] as? [String: Any])
+            execution[field] = value
+            mutatedPayload["execution"] = execution
+            let mutatedData = try JSONSerialization.data(
+                withJSONObject: mutatedPayload,
+                options: []
+            )
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiIdentifierResolutionPayload.self,
+                    from: mutatedData
+                )
+            ) { error in
+                guard case let DecodingError.dataCorrupted(context) = error else {
+                    XCTFail("expected dataCorrupted decode error, got \(error)")
+                    return
+                }
+                XCTAssertTrue(context.debugDescription.contains(field))
+            }
         }
     }
 
@@ -2070,6 +2522,207 @@ final class ToriiClientTests: XCTestCase {
                 return
             }
             XCTAssertTrue(reason.contains("Only signed identifier receipt attestations"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsPaddedProofAttestationBackendDuringDecode() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        )
+
+        for proofBackend in [" ram-lfe-v1", "ram-lfe-v1 "] {
+            let receiptJSON = """
+            {
+              "payload":\(payloadJSON),
+              "attestation":{
+                "kind":"proof",
+                "proof_backend":"\(proofBackend)",
+                "proof_b64":"AAAA"
+              }
+            }
+            """
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiIdentifierResolutionReceipt.self,
+                    from: Data(receiptJSON.utf8)
+                )
+            ) { error in
+                guard case let DecodingError.dataCorrupted(context) = error else {
+                    XCTFail("expected dataCorrupted decode error, got \(error)")
+                    return
+                }
+                XCTAssertTrue(context.debugDescription.contains("proof_backend"))
+            }
+        }
+    }
+
+    func testIdentifierReceiptRejectsNonExactAttestationKindDuringDecode() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        )
+
+        for kind in [" signed", "signed ", "Signed"] {
+            let receiptJSON = """
+            {
+              "payload":\(payloadJSON),
+              "attestation":{
+                "kind":"\(kind)",
+                "signature":"A1B2C3D4"
+              }
+            }
+            """
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiIdentifierResolutionReceipt.self,
+                    from: Data(receiptJSON.utf8)
+                )
+            ) { error in
+                guard case let DecodingError.dataCorrupted(context) = error else {
+                    XCTFail("expected dataCorrupted decode error, got \(error)")
+                    return
+                }
+                XCTAssertTrue(context.debugDescription.contains("kind"))
+            }
+        }
+    }
+
+    func testIdentifierReceiptRejectsPaddedPayloadAccountIdDuringDecode() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        )
+
+        for paddedAccountId in [" \(accountId)", "\(accountId) "] {
+            let paddedPayloadJSON = payloadJSON.replacingOccurrences(
+                of: "\"account_id\":\"\(accountId)\"",
+                with: "\"account_id\":\"\(paddedAccountId)\""
+            )
+            let receiptJSON = """
+            {
+              "payload":\(paddedPayloadJSON),
+              "attestation":{
+                "kind":"signed",
+                "signature":"\(signed.signatureHex)"
+              }
+            }
+            """
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiIdentifierResolutionReceipt.self,
+                    from: Data(receiptJSON.utf8)
+                )
+            ) { error in
+                guard case let DecodingError.dataCorrupted(context) = error else {
+                    XCTFail("expected dataCorrupted decode error, got \(error)")
+                    return
+                }
+                XCTAssertTrue(context.debugDescription.contains("payload.account_id"))
+                XCTAssertTrue(context.debugDescription.contains("surrounding whitespace"))
+            }
+        }
+    }
+
+    func testIdentifierReceiptRejectsMalformedProofAttestationBase64DuringDecode() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        )
+        let receiptJSON = """
+        {
+          "payload":\(payloadJSON),
+          "attestation":{
+            "kind":"proof",
+            "proof_backend":"ram-lfe-v1",
+            "proof_b64":"@@@"
+          }
+        }
+        """
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiIdentifierResolutionReceipt.self,
+                from: Data(receiptJSON.utf8)
+            )
+        ) { error in
+            guard case let DecodingError.dataCorrupted(context) = error else {
+                XCTFail("expected dataCorrupted decode error, got \(error)")
+                return
+            }
+            XCTAssertTrue(context.debugDescription.contains("proof_b64"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsPaddedProofAttestationBase64DuringDecode() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        )
+
+        for proofB64 in [" AAAA", "AAAA "] {
+            let receiptJSON = """
+            {
+              "payload":\(payloadJSON),
+              "attestation":{
+                "kind":"proof",
+                "proof_backend":"ram-lfe-v1",
+                "proof_b64":"\(proofB64)"
+              }
+            }
+            """
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiIdentifierResolutionReceipt.self,
+                    from: Data(receiptJSON.utf8)
+                )
+            ) { error in
+                guard case let DecodingError.dataCorrupted(context) = error else {
+                    XCTFail("expected dataCorrupted decode error, got \(error)")
+                    return
+                }
+                XCTAssertTrue(context.debugDescription.contains("proof_b64"))
+            }
         }
     }
 
@@ -2149,14 +2802,23 @@ final class ToriiClientTests: XCTestCase {
                 continue
             }
 
-            let mutatedReceipt = try identifierReceipt(fromFixture: mutatedReceiptObject)
-            let mutatedPolicy = try identifierReceiptPolicy(fromFixture: mutatedPolicyObject)
-            if negative["expected_error_contains"] is String {
-                XCTAssertThrowsError(
-                    try mutatedReceipt.verifyAttestation(using: mutatedPolicy),
-                    negativeName
-                )
+            if let expectedError = negative["expected_error_contains"] as? String {
+                do {
+                    let mutatedReceipt = try identifierReceipt(fromFixture: mutatedReceiptObject)
+                    let mutatedPolicy = try identifierReceiptPolicy(fromFixture: mutatedPolicyObject)
+                    XCTAssertThrowsError(
+                        try mutatedReceipt.verifyAttestation(using: mutatedPolicy),
+                        negativeName
+                    )
+                } catch let DecodingError.dataCorrupted(context) {
+                    XCTAssertTrue(
+                        context.debugDescription.localizedCaseInsensitiveContains(expectedError),
+                        negativeName
+                    )
+                }
             } else {
+                let mutatedReceipt = try identifierReceipt(fromFixture: mutatedReceiptObject)
+                let mutatedPolicy = try identifierReceiptPolicy(fromFixture: mutatedPolicyObject)
                 XCTAssertEqual(
                     try mutatedReceipt.verifyAttestation(using: mutatedPolicy),
                     try bool(negative, "expected_result"),
@@ -2198,6 +2860,83 @@ final class ToriiClientTests: XCTestCase {
                 return
             }
             XCTAssertTrue(context.debugDescription.contains("require only signature"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsPaddedSignedAttestationSignatureDuringDecode() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        )
+        let receiptJSON = """
+        {
+          "payload":\(payloadJSON),
+          "attestation":{
+            "kind":"signed",
+            "signature":" \(signed.signatureHex)"
+          }
+        }
+        """
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiIdentifierResolutionReceipt.self,
+                from: Data(receiptJSON.utf8)
+            )
+        ) { error in
+            guard case let DecodingError.dataCorrupted(context) = error else {
+                XCTFail("expected dataCorrupted decode error, got \(error)")
+                return
+            }
+            XCTAssertTrue(context.debugDescription.contains("signature must be exact"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsPaddedOpeningSignatureDuringDecode() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        ).replacingOccurrences(
+            of: "\"signature\":\"\(payload.opening.signature)\"",
+            with: "\"signature\":\"\(payload.opening.signature) \""
+        )
+        let receiptJSON = """
+        {
+          "payload":\(payloadJSON),
+          "attestation":{
+            "kind":"signed",
+            "signature":"\(signed.signatureHex)"
+          }
+        }
+        """
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiIdentifierResolutionReceipt.self,
+                from: Data(receiptJSON.utf8)
+            )
+        ) { error in
+            guard case let DecodingError.dataCorrupted(context) = error else {
+                XCTFail("expected dataCorrupted decode error, got \(error)")
+                return
+            }
+            XCTAssertTrue(context.debugDescription.contains("opening.signature must be exact"))
         }
     }
 
@@ -2389,7 +3128,12 @@ final class ToriiClientTests: XCTestCase {
             )
             XCTFail("Expected invalidPayload error")
         } catch let ToriiClientError.invalidPayload(reason) {
-            XCTAssertTrue(reason.contains("payload") || reason.contains("attestation"))
+            XCTAssertTrue(reason.contains("claim-receipt decode failed"))
+            XCTAssertTrue(reason.contains("body_len="))
+            XCTAssertTrue(reason.contains("body_sha256="))
+            XCTAssertFalse(reason.contains(accountId))
+            XCTAssertFalse(reason.contains(opaqueId))
+            XCTAssertFalse(reason.contains("signature_payload_hex"))
         }
     }
 
@@ -3102,6 +3846,12 @@ final class ToriiClientTests: XCTestCase {
         preimage.append(u64BigEndianData(UInt64(bytes.count)))
         preimage.append(bytes)
         return Data(SHA256.hash(data: preimage)).hexEncodedString()
+    }
+
+    private func expectedProductionBackendRejection(_ backend: String) -> String {
+        backend.trimmingCharacters(in: .whitespacesAndNewlines) == backend
+            ? "unsupported production verifier backend"
+            : "surrounding whitespace"
     }
 
     private func u64BigEndianData(_ value: UInt64) -> Data {
@@ -4862,6 +5612,50 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(quote.quoteId, quoteId)
         XCTAssertEqual(quote.openLeaseInstruction?.wireId, "OpenVpnLeaseEscrow")
         XCTAssertEqual(quote.txInstructions.count, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testCreateVpnQuoteRejectsPaddedCanonicalAuthBeforeRequest() async throws {
+        let meteringKey = String(repeating: "ab", count: 32)
+        let request = ToriiVpnQuoteCreateRequest(
+            exitClass: "standard",
+            meteringPublicKeyHex: meteringKey
+        )
+        var called = false
+        StubURLProtocol.handler = { request in
+            called = true
+            let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: [:])!
+            return (response, Data())
+        }
+        let client = makeClient()
+
+        let paddedAccount = ToriiCanonicalRequestAuth(
+            accountId: " alice",
+            privateKey: Data(repeating: 7, count: 32),
+            timestampMs: 1_700_000_000_000,
+            nonce: "nonce-1"
+        )
+        do {
+            _ = try await client.createVpnQuote(request, canonicalAuth: paddedAccount)
+            XCTFail("padded canonical auth account should reject")
+        } catch {
+            XCTAssertEqual(error as? ToriiCanonicalRequestError, .invalidAccountId)
+        }
+        XCTAssertFalse(called)
+
+        let paddedNonce = ToriiCanonicalRequestAuth(
+            accountId: "alice",
+            privateKey: Data(repeating: 7, count: 32),
+            timestampMs: 1_700_000_000_000,
+            nonce: "nonce-1 "
+        )
+        do {
+            _ = try await client.createVpnQuote(request, canonicalAuth: paddedNonce)
+            XCTFail("padded canonical auth nonce should reject")
+        } catch {
+            XCTAssertEqual(error as? ToriiCanonicalRequestError, .invalidNonce)
+        }
+        XCTAssertFalse(called)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -8987,7 +9781,7 @@ final class ToriiClientHeaderTests: XCTestCase {
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload, got \(error)")
                 }
-                XCTAssertTrue(reason.contains("unsupported production verifier backend"))
+                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
             }
             await XCTAssertThrowsErrorAsync(
                 try await makeClient().listVerifyingKeys(query: ToriiVerifyingKeyListQuery(backend: backend))
@@ -8995,13 +9789,13 @@ final class ToriiClientHeaderTests: XCTestCase {
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload, got \(error)")
                 }
-                XCTAssertTrue(reason.contains("unsupported production verifier backend"))
+                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
             }
             XCTAssertThrowsError(try ToriiVerifyingKeyListQuery(backend: backend).queryItems()) { error in
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload, got \(error)")
                 }
-                XCTAssertTrue(reason.contains("unsupported production verifier backend"))
+                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
             }
         }
         XCTAssertEqual(requests, 0)
@@ -9065,10 +9859,74 @@ final class ToriiClientHeaderTests: XCTestCase {
                 let description = String(describing: error)
                 XCTAssertTrue(
                     description.contains("unsupported production verifier backend")
+                        || description.contains("surrounding whitespace")
                         || description.contains("stored key backend must match record backend")
                         || description.contains("vk_len must match stored key byte length"),
                     description
                 )
+            }
+        }
+    }
+
+    func testVerifyingKeyListDecodingRejectsPaddedSelectorMetadata() {
+        let payloads = [
+            """
+            [{
+              "id": { "backend": "halo2/ipa", "name": " vk_main" },
+              "record": {
+                "version": 1,
+                "circuit_id": "halo2/ipa::transfer_v1",
+                "backend": "halo2/ipa",
+                "curve": "pallas",
+                "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "vk_len": 32,
+                "max_proof_bytes": 4096,
+                "gas_schedule_id": "halo2_default",
+                "status": "Active"
+              }
+            }]
+            """,
+            """
+            [{
+              "id": { "backend": "halo2/ipa", "name": "vk_main" },
+              "record": {
+                "version": 1,
+                "circuit_id": " halo2/ipa::transfer_v1",
+                "backend": "halo2/ipa",
+                "curve": "pallas",
+                "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "vk_len": 32,
+                "max_proof_bytes": 4096,
+                "gas_schedule_id": "halo2_default",
+                "status": "Active"
+              }
+            }]
+            """,
+            """
+            [{
+              "id": { "backend": "halo2/ipa", "name": "vk_main" },
+              "record": {
+                "version": 1,
+                "circuit_id": "halo2/ipa::transfer_v1",
+                "backend": "halo2/ipa",
+                "curve": "pallas",
+                "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "vk_len": 32,
+                "max_proof_bytes": 4096,
+                "gas_schedule_id": "halo2_default ",
+                "status": "Active"
+              }
+            }]
+            """
+        ]
+
+        for payload in payloads {
+            let data = payload.data(using: .utf8)!
+            XCTAssertThrowsError(try JSONDecoder().decode([ToriiVerifyingKeyListItem].self, from: data)) { error in
+                XCTAssertTrue(String(describing: error).contains("surrounding whitespace"))
             }
         }
     }
@@ -9149,6 +10007,58 @@ final class ToriiClientHeaderTests: XCTestCase {
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload error")
             }
+        }
+    }
+
+    func testRegisterVerifyingKeyRejectsPaddedSelectorMetadata() {
+        let base = ToriiVerifyingKeyRegisterRequest(
+            authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            privateKey: "ed25519:private-key",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "a", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: Data([0x01, 0x02])
+        )
+
+        var paddedName = base
+        paddedName.name = " vk_main"
+        XCTAssertThrowsError(try JSONEncoder().encode(paddedName)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+            XCTAssertTrue(reason.contains("name"))
+            XCTAssertTrue(reason.contains("surrounding whitespace"))
+        }
+
+        var paddedCircuit = base
+        paddedCircuit.circuitId = "halo2/ipa::transfer_v1 "
+        XCTAssertThrowsError(try JSONEncoder().encode(paddedCircuit)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+            XCTAssertTrue(reason.contains("circuit_id"))
+            XCTAssertTrue(reason.contains("surrounding whitespace"))
+        }
+
+        var paddedGasSchedule = base
+        paddedGasSchedule.gasScheduleId = " halo2_default"
+        XCTAssertThrowsError(try JSONEncoder().encode(paddedGasSchedule)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+            XCTAssertTrue(reason.contains("gas_schedule_id"))
+            XCTAssertTrue(reason.contains("surrounding whitespace"))
+        }
+
+        XCTAssertThrowsError(try ToriiVerifyingKeyId(backend: "halo2/ipa", name: "vk_main ")) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+            XCTAssertTrue(reason.contains("name"))
+            XCTAssertTrue(reason.contains("surrounding whitespace"))
         }
     }
 
@@ -9308,7 +10218,7 @@ final class ToriiClientHeaderTests: XCTestCase {
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload error")
                 }
-                XCTAssertTrue(reason.contains("unsupported production verifier backend"))
+                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
             }
 
             let updateRequest = ToriiVerifyingKeyUpdateRequest(
@@ -9324,7 +10234,7 @@ final class ToriiClientHeaderTests: XCTestCase {
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload error")
                 }
-                XCTAssertTrue(reason.contains("unsupported production verifier backend"))
+                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
             }
         }
     }
@@ -10834,6 +11744,7 @@ data: {"authority":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMN
                     return XCTFail("Expected invalidPayload error")
                 }
                 XCTAssertTrue(reason.contains("unsupported production verifier backend")
+                              || reason.contains("surrounding whitespace")
                               || reason.contains("must be a non-empty string"))
             }
         }
@@ -11306,7 +12217,7 @@ id: 88
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload error")
                 }
-                XCTAssertTrue(reason.contains("unsupported production verifier backend"))
+                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
             }
         }
 

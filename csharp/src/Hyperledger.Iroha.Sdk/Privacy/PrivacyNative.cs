@@ -470,12 +470,180 @@ public static class PrivacyNative
         return BuildProofV1(requestArchive);
     }
 
+    public static PrivacyProofResultArchive buildVeRangeProofV1(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildVeRangeProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive BuildVeRangeProofV1(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive buildJindoLatticeProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildJindoLatticeProofV0(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive BuildJindoLatticeProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive buildSisHintsAnonymousCredentialProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildSisHintsAnonymousCredentialProofV0(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive BuildSisHintsAnonymousCredentialProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive buildSilentThresholdCredentialShowingProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildSilentThresholdCredentialShowingProofV0(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive BuildSilentThresholdCredentialShowingProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive buildVegaCredentialPredicateProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildVegaCredentialPredicateProofV0(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive BuildVegaCredentialPredicateProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive buildZkAmsAdmissionBatchProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildZkAmsAdmissionBatchProofV0(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive BuildZkAmsAdmissionBatchProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive buildZkAtPolicyProofV1(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildZkAtPolicyProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive BuildZkAtPolicyProofV1(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return BuildProofV1(requestArchive);
+    }
+
     public static PrivacyProofResultArchive VerifyProofV1(ReadOnlySpan<byte> requestArchive)
     {
         return new PrivacyProofResultArchive(CallProof(
             requestArchive,
             "iroha_privacy_verify_proof_v1",
             NativeVerifyProof));
+    }
+
+    public static PrivacyProofResultArchive verifyJindoPolynomialCommitmentV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifyJindoPolynomialCommitmentV0(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive VerifyJindoPolynomialCommitmentV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifyProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive verifySisHintsAnonymousCredentialProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifySisHintsAnonymousCredentialProofV0(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive VerifySisHintsAnonymousCredentialProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifyProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive verifySilentThresholdCredentialShowingProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifySilentThresholdCredentialShowingProofV0(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive VerifySilentThresholdCredentialShowingProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifyProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive verifyVegaCredentialPredicateProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifyVegaCredentialPredicateProofV0(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive VerifyVegaCredentialPredicateProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifyProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive verifyZkAmsAdmissionBatchProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifyZkAmsAdmissionBatchProofV0(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive VerifyZkAmsAdmissionBatchProofV0(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifyProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive verifyZkAtPolicyProofV1(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifyZkAtPolicyProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive VerifyZkAtPolicyProofV1(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifyProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive verifyVeRangeProofV1(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifyVeRangeProofV1(requestArchive);
+    }
+
+    public static PrivacyProofResultArchive VerifyVeRangeProofV1(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return VerifyProofV1(requestArchive);
     }
 
     internal delegate int NativeCapabilitiesCall(out IntPtr outPtr, out UIntPtr outLen);

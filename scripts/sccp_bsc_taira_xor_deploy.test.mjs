@@ -69,6 +69,52 @@ const SMOKE_FIXTURE_IC = Array.from(
   { length: 10 },
   () => SMOKE_FIXTURE_G1,
 ).flat();
+const BN254_FIELD_MODULUS =
+  "21888242871839275222246405745257275088548364400416034343698204186575808495617";
+const VALID_G1_POINTS = Object.freeze([
+  ["1", "2"],
+  [
+    "9576106256429682909732802513550057851239909425182015025367964331626916216831",
+    "3762041743597375428823600987466094155844250131321505902823128844567717085184",
+  ],
+  [
+    "3353031288059533942658390886683067124018257005454921763367312015432060078554",
+    "9219267825703472604525134401207926938879294737679236299959534577481019155125",
+  ],
+  [
+    "630304514517065905805907603459758825509592621551236526167962233161984155096",
+    "3298788481628376164685881594646072674987908183674059693236881428704728023444",
+  ],
+  [
+    "13570409158413168902482548731272473099962820218194106864832849132278468589419",
+    "18252126150865472586447287550516904769515478526140362071553674090249271156456",
+  ],
+  [
+    "16871563132712611889207374617876253056600942990440275496096608761584790102682",
+    "3838344180602666607241702771172151008105832187458852540486498644210934342967",
+  ],
+  [
+    "16505412013779483600153006526520018416641925099395101274830277736786454794420",
+    "7682254973974174219605117756131480330501749384673294748404564408855034650314",
+  ],
+  [
+    "6140509816169546666445045371175256741689665787771362214341354520900173219671",
+    "2119358721806734900337760520567816609583030564837318202241638389787068393748",
+  ],
+  [
+    "17223428520732544896768972829232412550600189189749035035315773332431112582976",
+    "18015292390085659179210022586584526370894502947582215993343134976025027799555",
+  ],
+  [
+    "16010416262623650787166522410092685733271695651039545299664263705504024577652",
+    "4158029737862195193537505459971263746202654920841369766306064860524994925923",
+  ],
+  [
+    "10908234943904029183509203005277591045231307288576533611618815554535749028689",
+    "4940726467235499156506156244111951923083992917602717449880869831087842936342",
+  ],
+]);
+const VALID_IC = VALID_G1_POINTS.slice(1, 11).flat();
 const BURN_RECORD_BYTES = Buffer.from(
   "bsc taira xor burn-record artifact fixture for route-config tests",
   "utf8",
@@ -118,9 +164,9 @@ const nativeProverBundleForRollout = (destinationRollout, overrides = {}) => {
     domain: SCCP_DOMAIN_BSC,
     chain: "bsc-testnet",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
-    proof_artifact: "artifacts/bsc-testnet/proof-artifact.bin",
+    proof_artifact: "artifacts/bsc-testnet/proof-artifact.r1cs",
     proof_artifact_hash: proofArtifactHash,
-    proving_key: "artifacts/bsc-testnet/proving-key.bin",
+    proving_key: "artifacts/bsc-testnet/proving-key.zkey",
     proving_key_hash: provingKeyHash,
     verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
     verifier_key_hash: destinationRollout.verifierKeyHash,
@@ -188,11 +234,11 @@ const readyReadback = (overrides = {}) => ({
 });
 
 const verifierMaterial = (overrides = {}) => ({
-  alpha1: [1, 2],
+  alpha1: VALID_G1_POINTS[0],
   beta2: [3, 4, 5, 6],
   gamma2: [7, 8, 9, 10],
   delta2: [11, 12, 13, 14],
-  ic: Array.from({ length: 20 }, (_, index) => index + 15),
+  ic: VALID_IC,
   verifierKeyHash: HASH_22,
   proofFamily: "stark-fri-v1",
   networkId: BSC_TESTNET_NETWORK_ID_HEX,
@@ -281,6 +327,8 @@ const routeManifest = (overrides = {}) => {
     chain: "bsc-testnet",
     chainIdHex: "0x61",
     networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
+    explorerUrl: "https://testnet.bscscan.com",
+    explorerHost: "testnet.bscscan.com",
     counterpartyDomain: SCCP_DOMAIN_BSC,
     verifierTarget: "EvmContract",
     productionReady: false,
@@ -413,9 +461,28 @@ async function writeNativeProverFixtureFiles({
   };
   const snarkjsBytes = (magic, sectionCount, bytes) => {
     const out = Buffer.from(bytes);
+    const headerBytes = 12;
+    const sectionHeaderBytes = sectionCount * 12;
+    const payloadBytes = out.length - headerBytes - sectionHeaderBytes;
+    if (payloadBytes < sectionCount) {
+      throw new Error("snarkjs test fixture is too small");
+    }
     out.set(Buffer.from(magic, "ascii"), 0);
     out.writeUInt32LE(1, 4);
     out.writeUInt32LE(sectionCount, 8);
+    let offset = headerBytes;
+    for (let index = 0; index < sectionCount; index += 1) {
+      const sectionSize =
+        Math.floor(payloadBytes / sectionCount) +
+        (index < payloadBytes % sectionCount ? 1 : 0);
+      out.writeUInt32LE(index + 1, offset);
+      out.writeUInt32LE(sectionSize, offset + 4);
+      out.writeUInt32LE(0, offset + 8);
+      offset += 12 + sectionSize;
+    }
+    if (offset !== out.length) {
+      throw new Error("snarkjs test fixture sections do not fill the file");
+    }
     return out;
   };
   const proofBytes =
@@ -726,6 +793,57 @@ test("BSC verifier material normalization rejects foreign or malformed inputs", 
       }),
     /2 uint256/u,
   );
+  assert.throws(
+    () => normalizeVerifierMaterial(verifierMaterial({ alpha1: [1, 3] })),
+    /BN254 G1 curve/u,
+  );
+  assert.throws(
+    () =>
+      normalizeVerifierMaterial(
+        verifierMaterial({ alpha1: [BN254_FIELD_MODULUS, 2] }),
+      ),
+    /BN254 field element/u,
+  );
+  assert.throws(
+    () => normalizeVerifierMaterial(verifierMaterial({ ic: [0, 0, ...VALID_IC.slice(2)] })),
+    /point at infinity/u,
+  );
+});
+
+test("BSC verifier material normalization ignores inherited verifier fields", () => {
+  const inheritedMaterial = Object.create(verifierMaterial());
+
+  assert.throws(
+    () => normalizeVerifierMaterial(inheritedMaterial),
+    /expectedVerifierKeyHash/u,
+  );
+  assert.equal(
+    isSmokeFixtureGroth16VerifierMaterial(
+      Object.create(
+        verifierMaterial({
+          alpha1: SMOKE_FIXTURE_G1,
+          beta2: SMOKE_FIXTURE_G2,
+          gamma2: SMOKE_FIXTURE_G2,
+          delta2: SMOKE_FIXTURE_G2,
+          ic: SMOKE_FIXTURE_IC,
+        }),
+      ),
+    ),
+    false,
+  );
+});
+
+test("BSC verifier material diagnostic flags must be own fields", () => {
+  const material = {
+    ...verifierMaterial(),
+  };
+  Object.setPrototypeOf(material, {
+    diagnostic: true,
+    warning: "Generated diagnostic BSC testnet verifier material.",
+  });
+
+  const normalized = normalizeVerifierMaterial(material);
+  assert.deepEqual(normalized.diagnosticVerifierReasons, []);
 });
 
 test("BSC verifier material reports diagnostic key material before deployment", () => {
@@ -781,6 +899,8 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
   assert.match(toml, /tron_network = "bsc-testnet"/u);
   assert.match(toml, /chain = "bsc-testnet"/u);
   assert.match(toml, /chain_id_hex = "0x61"/u);
+  assert.match(toml, /explorer_url = "https:\/\/testnet\.bscscan\.com"/u);
+  assert.match(toml, /explorer_host = "testnet\.bscscan\.com"/u);
   assert.match(toml, /counterparty_domain = 2/u);
   assert.match(toml, /verifier_target = "EvmContract"/u);
   assert.match(toml, /sccp_allow_unready_transparent_proofs = true/u);
@@ -846,6 +966,34 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
     ),
   );
   assert.doesNotMatch(toml, /private[_-]?key|mnemonic|seed[_-]?phrase/iu);
+});
+
+test("BSC route-config rejects route material supplied only by prototypes", () => {
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(Object.create(routeManifest()), {
+        "allow-unready": "true",
+      }),
+    /route manifest schema/u,
+  );
+
+  const route = routeManifest();
+  const {
+    destinationRollout,
+    productionReady: _productionReady,
+    ...ownRouteWithoutRolloutOrReady
+  } = route;
+  Object.setPrototypeOf(ownRouteWithoutRolloutOrReady, {
+    destinationRollout,
+    productionReady: false,
+  });
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(ownRouteWithoutRolloutOrReady, {
+        "allow-unready": "true",
+      }),
+    /route manifest destinationRollout/u,
+  );
 });
 
 test("BSC route-config requires explicit post-deploy evidence for production-ready manifests", () => {
@@ -917,6 +1065,40 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
   assert.throws(
     () =>
       buildBscTairaXorRouteConfigToml(
+        productionReadyManifest(
+          { offlineFullTomlSha256: undefined },
+          {
+            productionReady: false,
+            disabledReason: "disabled while verifier material is diagnostic",
+          },
+        ),
+      ),
+    /fullTomlReady requires postDeployLiveEvidence\.offlineFullTomlSha256/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({}, { explorerUrl: undefined }),
+      ),
+    /requires explorerUrl/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({}, { explorerHost: undefined }),
+      ),
+    /requires explorerHost/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({}, { bscExplorerUrl: "https://bscscan.com" }),
+      ),
+    /explorerUrl must not use multiple aliases|BSC testnet explorer origin/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
         productionReadyManifest({
           sourceEventTransactionProductionBlockers: [
             "source event transaction has not been observed on mainnet",
@@ -924,6 +1106,71 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
         }),
       ),
     /empty postDeployLiveEvidence production blockers.*sourceEventTransactionProductionBlockers/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          source_event_transaction_production_blockers: [
+            "witness seal proof required",
+          ],
+        }),
+      ),
+    /productionReady requires empty postDeployLiveEvidence production blockers.*source_event_transaction_production_blockers: witness seal proof required/u,
+    "BSC source event transaction contradictory blockers",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          source_event_transaction_production_blockers:
+            "witness seal proof required",
+        }),
+      ),
+    /source_event_transaction_production_blockers must be a list/u,
+    "BSC source event transaction scalar blockers",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          source_event_transaction_production_blockers: [
+            " witness seal proof required",
+          ],
+        }),
+      ),
+    /source_event_transaction_production_blockers\[0\].*non-empty canonical string/u,
+    "BSC source event transaction malformed blocker entry",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          post_deploy_production_blockers: ["route overlay still pending"],
+        }),
+      ),
+    /productionReady requires empty postDeployLiveEvidence production blockers.*post_deploy_production_blockers: route overlay still pending/u,
+    "BSC post-deploy blocker contradictory blockers",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          full_toml_production_blockers: [123],
+        }),
+      ),
+    /full_toml_production_blockers\[0\].*non-empty canonical string/u,
+    "BSC full TOML blocker malformed entry",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          route_canary_production_blockers: [" route canary evidence is stale"],
+        }),
+      ),
+    /route_canary_production_blockers\[0\].*non-empty canonical string/u,
+    "BSC route canary blocker malformed entry",
   );
   assert.throws(
     () =>
@@ -1008,6 +1255,8 @@ test("BSC route-config validates explorer URLs against the selected network", ()
     bscNetwork: "mainnet",
     chain: "bsc-mainnet",
     chainIdHex: "0x38",
+    explorerUrl: "https://bscscan.com",
+    explorerHost: "bscscan.com",
     networkIdHex: BSC_MAINNET_NETWORK_ID_HEX,
     destinationRollout: {
       destinationNetworkId: BSC_MAINNET_NETWORK_ID_HEX,
@@ -1160,7 +1409,7 @@ test("BSC route-config requires SDK-valid native prover bundles for production r
       buildBscTairaXorRouteConfigToml(
         productionReadyRouteManifest({
           bundleOverrides: {
-            proving_key: "artifacts/bsc-testnet/proof-artifact.bin",
+            verifier_key: "artifacts/bsc-testnet/proof-artifact.r1cs",
           },
         }),
       ),
@@ -1464,6 +1713,38 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
     /proof artifact must start with \.r1cs magic bytes/u,
   );
 
+  const wasmProofPath = await writeNativeProverFixtureFiles();
+  await writeFile(
+    join(wasmProofPath.artifactRoot, "proof-artifact.wasm"),
+    await readFile(join(wasmProofPath.artifactRoot, "proof-artifact.r1cs")),
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...wasmProofPath.options,
+        "proof-artifact": "proof-artifact.wasm",
+      }),
+    /proof artifact must be a \.r1cs artifact/u,
+  );
+
+  const badR1csSections = await writeNativeProverFixtureFiles();
+  const badR1csSectionBytes = Buffer.from(
+    await readFile(join(badR1csSections.artifactRoot, "proof-artifact.r1cs")),
+  );
+  badR1csSectionBytes.writeUInt32LE(badR1csSectionBytes.length, 16);
+  await writeFile(
+    join(badR1csSections.artifactRoot, "bad-proof-sections.r1cs"),
+    badR1csSectionBytes,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...badR1csSections.options,
+        "proof-artifact": "bad-proof-sections.r1cs",
+      }),
+    /proof artifact \.r1cs section exceeds file size/u,
+  );
+
   const badZkeyHeader = await writeNativeProverFixtureFiles();
   const badZkeyBytes = Buffer.from(
     await readFile(join(badZkeyHeader.artifactRoot, "proving-key.zkey")),
@@ -1480,6 +1761,24 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
         "proving-key": "bad-proving-key.zkey",
       }),
     /proving key must start with \.zkey magic bytes/u,
+  );
+
+  const badZkeySections = await writeNativeProverFixtureFiles();
+  const badZkeySectionBytes = Buffer.from(
+    await readFile(join(badZkeySections.artifactRoot, "proving-key.zkey")),
+  );
+  badZkeySectionBytes.writeUInt32LE(badZkeySectionBytes.length, 16);
+  await writeFile(
+    join(badZkeySections.artifactRoot, "bad-proving-key-sections.zkey"),
+    badZkeySectionBytes,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...badZkeySections.options,
+        "proving-key": "bad-proving-key-sections.zkey",
+      }),
+    /proving key \.zkey section exceeds file size/u,
   );
 
   const tinyImplementation = await writeNativeProverFixtureFiles({
@@ -1736,8 +2035,22 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       /source bridge address.*canonical lowercase hex/u,
     ],
     [
+      {
+        sccpBscSourceBridgeAddress: undefined,
+        sccp_tron_source_bridge_address: BSC_SOURCE_BRIDGE_ADDRESS,
+      },
+      /source bridge address.*must not use TRON aliases.*sccp_tron_source_bridge_address/u,
+    ],
+    [
       { bscVerifierAddress: BSC_VERIFIER_ADDRESS.replace(/^0x/u, "0X") },
       /verifier address.*canonical lowercase hex/u,
+    ],
+    [
+      {
+        bscVerifierAddress: undefined,
+        tron_verifier_address: BSC_VERIFIER_ADDRESS,
+      },
+      /verifier address.*must not use TRON aliases.*tron_verifier_address/u,
     ],
     [
       {

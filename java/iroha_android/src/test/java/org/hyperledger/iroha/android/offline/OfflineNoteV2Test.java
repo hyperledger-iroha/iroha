@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,9 +43,11 @@ public final class OfflineNoteV2Test {
     publicInputHashesMatchRustVectors();
     proofBindingRejectsMismatch();
     proofVerifierAndHashValidationRejectsMalformedValues();
+    openVerifyEnvelopeDecoderRejectsMalformedV2EnvelopeFields();
     certificateValidationRejectsMalformedValues();
     auditBundleRejectsInvalidShapesAndUncommittedOutputs();
     issueRedeemPublicInputsAndInstancesRejectMalformedValues();
+    offlineNoteV2DomainsRejectSubstitutionAndPadding();
     instanceValuesMatchRustVectors();
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
     nativeHalo2ProverPerformanceWhenRequested();
@@ -407,11 +410,13 @@ public final class OfflineNoteV2Test {
 
   private static void proofVerifierAndHashValidationRejectsMalformedValues() throws Exception {
     final byte[] publicInputsHash = audit(loadFixture()).publicInputsHash();
-    final OfflineNoteV2.ProofBox trimmedProof =
-        new OfflineNoteV2.ProofBox(
-            "  " + OfflineNoteV2.RECURSIVE_BACKEND + "  ", new byte[] {1});
-    assertEquals(OfflineNoteV2.RECURSIVE_BACKEND, trimmedProof.backend(), "trimmed proof backend");
+    final OfflineNoteV2.ProofBox proof =
+        new OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, new byte[] {1});
+    assertEquals(OfflineNoteV2.RECURSIVE_BACKEND, proof.backend(), "exact proof backend");
 
+    assertThrows(
+        () -> new OfflineNoteV2.ProofBox("  " + OfflineNoteV2.RECURSIVE_BACKEND + "  ", new byte[] {1}),
+        "padded proof backend should throw");
     assertThrows(
         () -> new OfflineNoteV2.ProofBox(" \n ", new byte[] {1}),
         "blank proof backend should throw");
@@ -436,11 +441,45 @@ public final class OfflineNoteV2Test {
         () -> new OfflineNoteV2.VerifyingKeyIdReference("", "vk"),
         "blank verifier backend should throw");
     assertThrows(
+        () -> new OfflineNoteV2.VerifyingKeyIdReference(" halo2/ipa ", "vk"),
+        "padded verifier backend should throw");
+    assertThrows(
+        () -> new OfflineNoteV2.VerifyingKeyIdReference("halo2/ipa", " vk "),
+        "padded verifier name should throw");
+    assertThrows(
         () -> new OfflineNoteV2.VerifyingKeyIdReference("halo2:ipa", "vk"),
         "colon verifier backend should throw");
     assertThrows(
         () -> new OfflineNoteV2.VerifyingKeyIdReference("halo2/ipa", "bad:vk"),
         "colon verifier name should throw");
+  }
+
+  private static void openVerifyEnvelopeDecoderRejectsMalformedV2EnvelopeFields()
+      throws Exception {
+    final long[] values =
+        OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit(loadFixture())).publicValues();
+    final byte[] payload = fakeZk1ProofPayload(new byte[] {1, 2, 3}, values);
+    final byte[] envelope = OfflineNoteV2Halo2Prover.openVerifyEnvelope(payload);
+
+    assertTrue(
+        !OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(envelope, repeat("00", 32)),
+        "mismatched public input hash should decode the envelope and return false");
+
+    assertIllegalArgumentContains(
+        () ->
+            OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(
+                OfflineNoteV2Halo2Prover.openVerifyEnvelope(new byte[0]),
+                repeat("00", 32)),
+        "OpenVerifyEnvelope proof payload is empty");
+
+    assertIllegalArgumentContains(
+        () ->
+            OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(
+                rawOpenVerifyEnvelopeWithCircuitPayload(
+                    concat(openEnvelopeStringPayload(OfflineNoteV2Halo2Prover.CIRCUIT_ID),
+                        new byte[] {0})),
+                values),
+        "Trailing bytes after OpenVerifyEnvelope field decode");
   }
 
   private static void certificateValidationRejectsMalformedValues() throws Exception {
@@ -711,6 +750,65 @@ public final class OfflineNoteV2Test {
         "unconserved audit amounts should throw");
   }
 
+  private static void offlineNoteV2DomainsRejectSubstitutionAndPadding() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2.KeyCertificateV2 certificate =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
+    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+    final OfflineNoteV2.IssuedClaimV2 claim = audit.inputClaims().get(0);
+    final OfflineNoteV2.AuditPublicInputsV2 auditPublic = audit.publicInputs();
+    final OfflineNoteV2.RedeemPublicInputsV2 redeemPublic = redeem.publicInputs();
+
+    assertThrows(
+        () ->
+            new OfflineNoteV2.KeyCertificatePayloadV2(
+                OfflineNoteV2.KEY_CERTIFICATE_PAYLOAD_DOMAIN + " ",
+                certificate.version(),
+                certificate.platform(),
+                certificate.keyId(),
+                certificate.deviceId(),
+                certificate.accountId(),
+                certificate.publicKey(),
+                certificate.assertionScheme(),
+                certificate.assertionKeyAlgorithm(),
+                certificate.assertionPublicKey(),
+                certificate.assertionUsageCountLimit(),
+                certificate.oneUse()),
+        "padded key-certificate payload domain must be rejected");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.IssuedClaimV2(
+                OfflineNoteV2.ISSUED_CLAIM_DOMAIN + "\n",
+                claim.noteCommitment(),
+                claim.keyCertificatePayloadHash(),
+                claim.assetId(),
+                claim.amount()),
+        "padded issued-claim domain must be rejected");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.RedeemPublicInputsV2(
+                "forged:" + OfflineNoteV2.REDEEM_PUBLIC_INPUTS_DOMAIN,
+                redeemPublic.sourceNoteCommitment(),
+                redeemPublic.inputNullifiers(),
+                redeemPublic.keyCertificatePayloadHash(),
+                redeemPublic.recipient(),
+                redeemPublic.assetId(),
+                redeemPublic.amount()),
+        "forged redeem-public-inputs domain must be rejected");
+    assertThrows(
+        () ->
+            new OfflineNoteV2.AuditPublicInputsV2(
+                " " + OfflineNoteV2.AUDIT_PUBLIC_INPUTS_DOMAIN,
+                auditPublic.tokenId(),
+                auditPublic.keyCertificatePayloadHash(),
+                auditPublic.inputNullifiers(),
+                auditPublic.inputClaims(),
+                auditPublic.outputCommitments(),
+                auditPublic.outputClaims()),
+        "padded audit-public-inputs domain must be rejected");
+  }
+
   private static void instanceValuesMatchRustVectors() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
@@ -910,6 +1008,76 @@ public final class OfflineNoteV2Test {
       throw new AssertionError("Offline Note V2 instruction must use a wire payload");
     }
     return wire.payloadBytes();
+  }
+
+  private static byte[] fakeZk1ProofPayload(final byte[] proofTranscript, final long[] publicValues) {
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.writeBytes(new byte[] {0x5A, 0x4B, 0x31, 0x00});
+    appendTlv(out, "PROF", proofTranscript);
+    final ByteArrayOutputStream instances = new ByteArrayOutputStream();
+    writeUInt32Le(instances, 16);
+    writeUInt32Le(instances, 1);
+    for (final long value : publicValues) {
+      instances.writeBytes(OfflineNoteV2.instanceScalarBytes(value));
+    }
+    appendTlv(out, "I10P", instances.toByteArray());
+    return out.toByteArray();
+  }
+
+  private static void appendTlv(
+      final ByteArrayOutputStream out, final String tag, final byte[] value) {
+    out.writeBytes(tag.getBytes(StandardCharsets.UTF_8));
+    writeUInt32Le(out, value.length);
+    out.writeBytes(value);
+  }
+
+  private static void writeUInt32Le(final ByteArrayOutputStream out, final int value) {
+    int remaining = value;
+    for (int i = 0; i < 4; i++) {
+      out.write(remaining & 0xFF);
+      remaining >>>= 8;
+    }
+  }
+
+  private static byte[] rawOpenVerifyEnvelopeWithCircuitPayload(
+      final byte[] circuitFieldPayload) {
+    return NoritoCodec.encode(
+        "raw-open-envelope",
+        "iroha_data_model::zk::OpenVerifyEnvelope",
+        new TypeAdapter<>() {
+          @Override
+          public void encode(final NoritoEncoder encoder, final String value) {
+            writeOpenEnvelopeField(
+                encoder,
+                child -> child.writeUInt(OfflineNoteV2Halo2Prover.BACKEND_TAG, 32));
+            writeOpenEnvelopeRawField(encoder, circuitFieldPayload);
+          }
+
+          @Override
+          public String decode(final NoritoDecoder decoder) {
+            throw new AssertionError("raw OpenVerifyEnvelope test adapter is encode-only");
+          }
+        },
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] openEnvelopeStringPayload(final String value) {
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
+    writeInstructionString(encoder, value);
+    return encoder.toByteArray();
+  }
+
+  private static void writeOpenEnvelopeField(
+      final NoritoEncoder encoder, final InstructionFieldWriter writePayload) {
+    final NoritoEncoder child = encoder.childEncoder();
+    writePayload.write(child);
+    writeOpenEnvelopeRawField(encoder, child.toByteArray());
+  }
+
+  private static void writeOpenEnvelopeRawField(
+      final NoritoEncoder encoder, final byte[] payload) {
+    encoder.writeLength(payload.length, compact(encoder));
+    encoder.writeBytes(payload);
   }
 
   private static byte[] rawInstructionPair(final String wireName, final byte[] wirePayload) {
@@ -1117,6 +1285,20 @@ public final class OfflineNoteV2Test {
     return out;
   }
 
+  private static String repeat(final String value, final int count) {
+    final StringBuilder builder = new StringBuilder(value.length() * count);
+    for (int i = 0; i < count; i++) {
+      builder.append(value);
+    }
+    return builder.toString();
+  }
+
+  private static byte[] concat(final byte[] first, final byte[] second) {
+    final byte[] out = Arrays.copyOf(first, first.length + second.length);
+    System.arraycopy(second, 0, out, first.length, second.length);
+    return out;
+  }
+
   private static void assertEquals(
       final String expected, final String actual, final String message) {
     if (!expected.equals(actual)) {
@@ -1143,6 +1325,19 @@ public final class OfflineNoteV2Test {
       return;
     }
     throw new AssertionError(message);
+  }
+
+  private static void assertIllegalArgumentContains(
+      final Runnable action, final String expectedMessage) {
+    try {
+      action.run();
+    } catch (final IllegalArgumentException expected) {
+      assertTrue(
+          expected.getMessage().contains(expectedMessage),
+          "expected IllegalArgumentException to contain: " + expectedMessage);
+      return;
+    }
+    throw new AssertionError("expected IllegalArgumentException: " + expectedMessage);
   }
 
   @FunctionalInterface

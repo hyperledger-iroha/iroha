@@ -8,12 +8,16 @@ from iroha_python import (
     AccountAddress,
     buildVegaCredentialDevProofFixture,
     buildVegaCredentialPredicateCommitment,
+    buildVegaCredentialPredicateProofV0,
     buildVegaCredentialProofEnvelope,
     build_vega_credential_dev_proof_fixture,
     build_vega_credential_predicate_commitment,
+    build_vega_credential_predicate_proof_v0,
     build_vega_credential_proof_envelope,
     decode_privacy_proof_envelope,
+    verifyVegaCredentialPredicateProofV0,
     verifyVegaCredentialProofLocally,
+    verify_vega_credential_predicate_proof_v0,
     verify_vega_credential_proof_locally,
 )
 from iroha_python.verange import build_privacy_proof_envelope
@@ -96,6 +100,22 @@ def test_vega_builders_normalize_predicates_and_proof_envelopes() -> None:
     assert verified["expiration_epoch"] == 42
     assert verified["public_inputs"] == fixture["public_inputs"]
 
+    production_proof = build_vega_credential_predicate_proof_v0(
+        {
+            **_base(),
+            "vkHash": bytes([0x77]) * 32,
+            "proofBytes": b"production-vega-predicate-proof",
+        }
+    )
+    production_verified = verify_vega_credential_predicate_proof_v0(
+        {"envelope": production_proof, **_base()}
+    )
+    assert production_verified["ok"] is True
+    assert production_verified["production"] is True
+    assert production_verified["kind"] == "vega-existing-credential-zk-v0"
+    assert production_verified["credential_schema"] == "boi-age-credential-v1"
+    assert production_verified["expiration_epoch"] == 42
+
 
 def test_vega_package_root_exports_catalog_entrypoint_aliases() -> None:
     predicate_commitment = buildVegaCredentialPredicateCommitment(
@@ -119,6 +139,119 @@ def test_vega_package_root_exports_catalog_entrypoint_aliases() -> None:
     fixture = buildVegaCredentialDevProofFixture({**_base(), "vkHash": bytes([0x77]) * 32})
     verified = verifyVegaCredentialProofLocally({"envelope": fixture["envelope"], **_base()})
     assert verified["ok"] is True
+
+    production_proof = buildVegaCredentialPredicateProofV0(
+        {
+            **_base(),
+            "vkHash": bytes([0x77]) * 32,
+            "proofBytes": b"production-vega-predicate-proof",
+        }
+    )
+    production_verified = verifyVegaCredentialPredicateProofV0(
+        {"envelope": production_proof, **_base()}
+    )
+    assert production_verified["ok"] is True
+    assert production_verified["production"] is True
+    assert production_verified["kind"] == "vega-existing-credential-zk-v0"
+
+
+def test_vega_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class VegaDict(dict):
+        pass
+
+    predicate_options: dict[str, object] = {
+        "predicateJson": _predicate(),
+        "credentialSchema": "boi-age-credential-v1",
+        "domainSeparator": "boi:vega:pilot:v0",
+    }
+    proof_options = {
+        **_base(),
+        "vkHash": bytes([0x77]) * 32,
+        "proofBytes": b"production-vega-predicate-proof",
+    }
+
+    for helper in (
+        build_vega_credential_predicate_commitment,
+        buildVegaCredentialPredicateCommitment,
+    ):
+        with pytest.raises(TypeError, match="vegaCredentialPredicateCommitment"):
+            helper(VegaDict(predicate_options))
+
+    for helper in (build_vega_credential_proof_envelope, buildVegaCredentialProofEnvelope):
+        with pytest.raises(TypeError, match="vegaCredentialProofEnvelope"):
+            helper(VegaDict(proof_options))
+
+    for helper in (
+        build_vega_credential_predicate_proof_v0,
+        buildVegaCredentialPredicateProofV0,
+    ):
+        with pytest.raises(TypeError, match="vegaCredentialPredicateProofV0"):
+            helper(VegaDict(proof_options))
+
+    for helper in (
+        build_vega_credential_dev_proof_fixture,
+        buildVegaCredentialDevProofFixture,
+    ):
+        with pytest.raises(TypeError, match="vegaCredentialDevProofFixture"):
+            helper(VegaDict({**_base(), "vkHash": bytes([0x77]) * 32}))
+
+    production_proof = build_vega_credential_predicate_proof_v0(proof_options)
+    raw_verified = verify_vega_credential_predicate_proof_v0(production_proof)
+    assert raw_verified["ok"] is True
+    verify_options = {"envelope": production_proof, **_base()}
+    for helper in (
+        verify_vega_credential_predicate_proof_v0,
+        verifyVegaCredentialPredicateProofV0,
+    ):
+        with pytest.raises(TypeError, match="vegaCredentialPredicateProofV0"):
+            helper(VegaDict(verify_options))
+
+    fixture = build_vega_credential_dev_proof_fixture(
+        {**_base(), "vkHash": bytes([0x77]) * 32}
+    )
+    local_verified = verify_vega_credential_proof_locally(fixture["envelope"])
+    assert local_verified["ok"] is True
+    local_options = {
+        **verify_options,
+        "envelope": fixture["envelope"],
+    }
+    for helper in (verify_vega_credential_proof_locally, verifyVegaCredentialProofLocally):
+        with pytest.raises(TypeError, match="vegaCredentialLocalVerification"):
+            helper(VegaDict(local_options))
+
+
+def test_vega_production_builder_and_verifier_reject_dev_fixtures() -> None:
+    proof = build_vega_credential_predicate_proof_v0(
+        {
+            **_base(),
+            "vkHash": bytes([0x77]) * 32,
+            "proofBytes": b"production-vega-predicate-proof",
+        }
+    )
+    decoded = decode_privacy_proof_envelope(proof)
+    assert decoded["backend"] == "Stark"
+
+    verified = verify_vega_credential_predicate_proof_v0(
+        {"envelope": proof, **_base()}
+    )
+    assert verified["ok"] is True
+    assert verified["production"] is True
+
+    fixture = build_vega_credential_dev_proof_fixture(
+        {**_base(), "vkHash": bytes([0x77]) * 32}
+    )
+    with pytest.raises(ValueError, match="dev fixture"):
+        verify_vega_credential_predicate_proof_v0(
+            {"envelope": fixture["envelope"], **_base()}
+        )
+    with pytest.raises(ValueError, match="dev fixture"):
+        build_vega_credential_predicate_proof_v0(
+            {
+                **_base(),
+                "vkHash": bytes([0x77]) * 32,
+                "proofBytes": fixture["proof_bytes"],
+            }
+        )
 
 
 @pytest.mark.parametrize(

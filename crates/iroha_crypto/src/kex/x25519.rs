@@ -2,10 +2,10 @@ use hkdf::Hkdf;
 #[cfg(feature = "rand")]
 use rand::rngs::OsRng;
 #[cfg(feature = "rand")]
-use rand_core::TryRngCore;
+use rand_core::TryCryptoRng;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::KeyExchangeScheme;
 use crate::{Error, KeyGenOption, SessionKey, error::ParseError, rng::rng_from_seed};
@@ -46,15 +46,23 @@ impl KeyExchangeScheme for X25519Sha256 {
                 let pk = PublicKey::from(&sk);
                 Ok((pk, sk))
             }
-            KeyGenOption::UseSeed(s) => {
+            KeyGenOption::UseSeed(mut s) => {
+                if s.len() == Self::PRIVATE_KEY_SIZE && s.iter().all(|&byte| byte == 0) {
+                    s.zeroize();
+                    return Err(Error::KeyGen(
+                        "X25519 seed material must not be all zero".into(),
+                    ));
+                }
                 let mut rng = rng_from_seed(s);
                 let mut bytes = Zeroizing::new([0u8; 32]);
                 rand_core::RngCore::fill_bytes(&mut rng, bytes.as_mut());
+                validate_private_key_material_not_all_zero("X25519 derived private key", &bytes)?;
                 let sk = StaticSecret::from(*bytes);
                 let pk = PublicKey::from(&sk);
                 Ok((pk, sk))
             }
             KeyGenOption::FromPrivateKey(ref sk) => {
+                validate_private_key_material_not_all_zero("X25519 private key", sk.as_bytes())?;
                 let pk = PublicKey::from(sk);
                 Ok((pk, sk.clone()))
             }
@@ -98,7 +106,7 @@ impl KeyExchangeScheme for X25519Sha256 {
         let mut array = [0u8; Self::PUBLIC_KEY_SIZE];
         array.copy_from_slice(bytes);
         let public_key = PublicKey::from(array);
-        if is_low_order_public_key(&public_key) {
+        if is_x25519_low_order_public_key(&public_key) {
             return Err(ParseError("x25519 public key is low-order".into()));
         }
         Ok(public_key)
@@ -112,15 +120,32 @@ impl KeyExchangeScheme for X25519Sha256 {
 impl X25519Sha256 {
     #[cfg(feature = "rand")]
     fn random_private_key() -> Result<StaticSecret, Error> {
+        Self::random_private_key_from_rng(&mut OsRng)
+    }
+
+    #[cfg(feature = "rand")]
+    fn random_private_key_from_rng<R>(rng: &mut R) -> Result<StaticSecret, Error>
+    where
+        R: TryCryptoRng,
+    {
         let mut bytes = Zeroizing::new([0u8; 32]);
-        OsRng
-            .try_fill_bytes(bytes.as_mut())
+        rng.try_fill_bytes(bytes.as_mut())
             .map_err(|err| Error::KeyGen(format!("X25519 OS RNG failed: {err}")))?;
+        validate_private_key_material_not_all_zero("X25519 OS RNG private key", &bytes)?;
         Ok(StaticSecret::from(*bytes))
     }
 }
 
-fn is_low_order_public_key(public_key: &PublicKey) -> bool {
+fn validate_private_key_material_not_all_zero(label: &str, bytes: &[u8; 32]) -> Result<(), Error> {
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(Error::KeyGen(format!(
+            "{label} material must not be all zero"
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn is_x25519_low_order_public_key(public_key: &PublicKey) -> bool {
     let probe_secret = StaticSecret::from(LOW_ORDER_CHECK_PRIVATE_KEY);
     probe_secret
         .diffie_hellman(public_key)
@@ -131,7 +156,47 @@ fn is_low_order_public_key(public_key: &PublicKey) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use curve25519_dalek::constants::EIGHT_TORSION;
+    #[cfg(feature = "rand")]
+    use rand_core::TryRngCore;
+
     use super::*;
+
+    #[cfg(feature = "rand")]
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    #[cfg(feature = "rand")]
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "rand")]
+    impl TryCryptoRng for FixedTryRng {}
+
+    fn low_order_montgomery_encodings() -> Vec<[u8; 32]> {
+        let mut encodings = EIGHT_TORSION
+            .iter()
+            .map(|point| point.to_montgomery().0)
+            .collect::<Vec<_>>();
+        encodings.sort_unstable();
+        encodings.dedup();
+        encodings
+    }
 
     #[test]
     fn key_exchange() {
@@ -171,6 +236,27 @@ mod tests {
         assert_eq!(shared_secret1.payload(), shared_secret2.payload());
     }
 
+    #[cfg(feature = "rand")]
+    #[test]
+    fn random_private_key_from_rng_rejects_all_zero_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+
+        assert!(matches!(
+            X25519Sha256::random_private_key_from_rng(&mut rng),
+            Err(Error::KeyGen(message)) if message.contains("all zero")
+        ));
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn random_private_key_from_rng_accepts_nonzero_material() {
+        let mut rng = FixedTryRng { byte: 0x42 };
+
+        let secret = X25519Sha256::random_private_key_from_rng(&mut rng)
+            .expect("nonzero X25519 random material must produce a secret");
+        assert_ne!(secret.to_bytes(), [0u8; 32]);
+    }
+
     #[test]
     fn hkdf_derivation_is_domain_separated() {
         let scheme = X25519Sha256::new();
@@ -193,12 +279,20 @@ mod tests {
     }
 
     #[test]
-    fn shared_secret_rejects_low_order_public_key() {
+    fn shared_secret_rejects_all_low_order_public_keys() {
         let scheme = X25519Sha256::new();
         let (_pk, sk) = scheme.keypair(KeyGenOption::UseSeed(vec![0x11; 32]));
-        let low_order = PublicKey::from([0u8; 32]);
-        let err = scheme.compute_shared_secret(&sk, &low_order);
-        assert!(err.is_err());
+
+        let low_order_points = low_order_montgomery_encodings();
+        assert!(low_order_points.len() > 1);
+        for low_order in low_order_points {
+            let low_order = PublicKey::from(low_order);
+            match scheme.compute_shared_secret(&sk, &low_order) {
+                Err(Error::Other(message)) => assert!(message.contains("all-zero")),
+                Err(other) => panic!("unexpected low-order public-key error: {other:?}"),
+                Ok(_) => panic!("low-order public key must derive an all-zero secret"),
+            }
+        }
     }
 
     #[test]
@@ -216,9 +310,34 @@ mod tests {
     }
 
     #[test]
-    fn decode_public_key_rejects_low_order_public_key() {
-        let err = X25519Sha256::decode_public_key(&[0u8; 32])
-            .expect_err("low-order public key must be rejected while decoding");
-        assert!(err.to_string().contains("low-order"));
+    fn seeded_keypair_rejects_all_zero_seed_material() {
+        let scheme = X25519Sha256::new();
+
+        assert!(matches!(
+            scheme.try_keypair(KeyGenOption::UseSeed(vec![0u8; 32])),
+            Err(Error::KeyGen(message)) if message.contains("all zero")
+        ));
+    }
+
+    #[test]
+    fn imported_private_key_rejects_all_zero_material() {
+        let scheme = X25519Sha256::new();
+        let zero_secret = StaticSecret::from([0u8; 32]);
+
+        assert!(matches!(
+            scheme.try_keypair(KeyGenOption::FromPrivateKey(zero_secret)),
+            Err(Error::KeyGen(message)) if message.contains("all zero")
+        ));
+    }
+
+    #[test]
+    fn decode_public_key_rejects_all_low_order_public_keys() {
+        let low_order_points = low_order_montgomery_encodings();
+        assert!(low_order_points.len() > 1);
+        for low_order in low_order_points {
+            let err = X25519Sha256::decode_public_key(&low_order)
+                .expect_err("low-order public key must be rejected while decoding");
+            assert!(err.to_string().contains("low-order"));
+        }
     }
 }

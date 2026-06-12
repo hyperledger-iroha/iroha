@@ -6134,6 +6134,26 @@ async fn handler_offline_note_readiness(
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
         ),
         json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
+        json_entry(
+            "offline_kagemusha_recursive_compact_available",
+            offline_kagemusha_abi7,
+        ),
+        json_entry(
+            "offline_kagemusha_recursive_compact_mode",
+            "recursive_compact_v1",
+        ),
+        json_entry(
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            7_u64,
+        ),
+        json_entry(
+            "offline_kagemusha_recursive_compact_circuit_id",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+        ),
+        json_entry(
+            "offline_kagemusha_recursive_compact_artifacts_available",
+            offline_kagemusha_abi7,
+        ),
     ]))
 }
 
@@ -6154,6 +6174,26 @@ async fn handler_offline_v2_note_readiness(
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
         ),
         json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
+        json_entry(
+            "offline_kagemusha_recursive_compact_available",
+            offline_kagemusha_abi7,
+        ),
+        json_entry(
+            "offline_kagemusha_recursive_compact_mode",
+            "recursive_compact_v1",
+        ),
+        json_entry(
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            7_u64,
+        ),
+        json_entry(
+            "offline_kagemusha_recursive_compact_circuit_id",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+        ),
+        json_entry(
+            "offline_kagemusha_recursive_compact_artifacts_available",
+            offline_kagemusha_abi7,
+        ),
     ]))
 }
 

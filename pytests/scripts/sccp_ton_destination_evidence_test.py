@@ -42,6 +42,57 @@ def load_evidence_module():
     return module
 
 
+def test_ton_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
+    module = load_evidence_module()
+
+    def fail_apply(_args):
+        raise ValueError("secret-token /tmp/operator/private-path")
+
+    monkeypatch.setattr(module, "apply_verifier_code_boc_hash", fail_apply)
+
+    try:
+        module.main(
+            [
+                "--verifier-contract-address",
+                TON_VERIFIER_CONTRACT_ADDRESS,
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("TON destination CLI accepted top-level render failure")
+
+    captured = capsys.readouterr()
+    assert "SCCP TON destination evidence rendering failed" in captured.err
+    assert "secret-token" not in captured.err
+    assert "private-path" not in captured.err
+
+
+def test_ton_destination_redacts_verifier_address_parser_failures(monkeypatch):
+    """Destination verifier address parser failures must not echo parser payloads."""
+
+    module = load_evidence_module()
+    args = ton_args(module)
+
+    def fail_address(_value, *, label):
+        raise module.argparse.ArgumentTypeError(
+            f"secret-token {label} parser detail"
+        )
+
+    monkeypatch.setattr(module, "normalize_ton_raw_address", fail_address)
+    try:
+        module._require_destination_evidence(args)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "verifier_contract_address metadata is invalid"
+        assert "secret-token" not in rendered
+        assert "parser detail" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("TON destination leaked verifier parser detail")
+
+
 def noncanonical_base64_alias(raw: bytes) -> str:
     encoded = base64.b64encode(raw).decode("ascii")
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -498,6 +549,28 @@ def test_ton_cli_derives_verifier_code_hash_from_code_boc(capsys, tmp_path):
         assert exc.code == 2
     else:
         raise AssertionError("mismatched TON code BoC hash was accepted")
+
+
+def test_ton_toml_code_boc_base64_reparse_redacts_parser_detail():
+    module = load_evidence_module()
+    args = SimpleNamespace(
+        verifier_code_hash=bytes.fromhex(TON_CODE_BOC_ROOT_HASH),
+        verifier_code_boc_root_hash=bytes.fromhex(TON_CODE_BOC_ROOT_HASH),
+        verifier_code_boc_hash_matches=True,
+        verifier_code_boc_base64_text="secret-token-ton-code-boc",
+    )
+
+    try:
+        module._require_code_boc_root_metadata(args, output="toml")
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "--toml has invalid verifier code BoC base64 evidence"
+        assert "secret-token" not in rendered
+        assert "must be base64" not in rendered
+        assert "canonical base64" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("invalid copied TON code BoC base64 evidence was accepted")
 
 
 def test_ton_direct_renderers_derive_verifier_code_hash_from_code_boc():

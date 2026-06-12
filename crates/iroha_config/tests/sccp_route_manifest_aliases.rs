@@ -102,19 +102,11 @@ destination_verifier_address = "{VERIFIER}"
 }
 
 #[test]
-fn generated_bsc_route_manifest_toml_accepts_matching_alias_mirrors() {
+fn bsc_specific_route_manifest_toml_parses_without_legacy_tron_address_fields() {
     let toml = route_manifest_toml(&format!(
         r#"
-source_bridge_address = "{SOURCE_BRIDGE}"
 sccp_bsc_source_bridge_address = "{SOURCE_BRIDGE}"
-bsc_source_bridge_address = "{SOURCE_BRIDGE}"
-sccp_tron_source_bridge_address = "{SOURCE_BRIDGE}"
-destination_verifier_address = "{VERIFIER}"
-verifier_address = "{VERIFIER}"
 sccp_bsc_destination_verifier_address = "{VERIFIER}"
-bsc_verifier_address = "{VERIFIER}"
-evm_verifier_address = "{VERIFIER}"
-tron_verifier_address = "{VERIFIER}"
 "#
     ));
 
@@ -130,23 +122,45 @@ tron_verifier_address = "{VERIFIER}"
 }
 
 #[test]
-fn legacy_tron_route_manifest_toml_still_parses() {
+fn route_manifest_toml_rejects_legacy_tron_source_bridge_alias() {
     let toml = route_manifest_toml(&format!(
         r#"
 sccp_tron_source_bridge_address = "{SOURCE_BRIDGE}"
+sccp_bsc_destination_verifier_address = "{VERIFIER}"
+"#
+    ));
+
+    let message = parse_panic_message(&toml);
+    assert!(message.contains("must not use TRON aliases"));
+    assert!(message.contains("sccp_tron_source_bridge_address"));
+}
+
+#[test]
+fn route_manifest_toml_rejects_legacy_tron_verifier_alias() {
+    let toml = route_manifest_toml(&format!(
+        r#"
+sccp_bsc_source_bridge_address = "{SOURCE_BRIDGE}"
 tron_verifier_address = "{VERIFIER}"
 "#
     ));
 
-    let actual = load_actual_config(&toml);
-    let route = actual
-        .zk
-        .sccp_route_manifests
-        .first()
-        .expect("route manifest");
+    let message = parse_panic_message(&toml);
+    assert!(message.contains("must not use TRON aliases"));
+    assert!(message.contains("tron_verifier_address"));
+}
 
-    assert_eq!(route.sccp_tron_source_bridge_address, SOURCE_BRIDGE);
-    assert_eq!(route.tron_verifier_address, VERIFIER);
+#[test]
+fn route_manifest_toml_rejects_matching_bsc_address_alias_mirrors() {
+    let toml = route_manifest_toml(&format!(
+        r#"
+source_bridge_address = "{SOURCE_BRIDGE}"
+sccp_bsc_source_bridge_address = "{SOURCE_BRIDGE}"
+sccp_bsc_destination_verifier_address = "{VERIFIER}"
+"#
+    ));
+
+    let message = parse_panic_message(&toml);
+    assert!(message.contains("must not use multiple aliases"));
 }
 
 #[test]
@@ -184,7 +198,7 @@ destination_verifier_address = "{VERIFIER}"
     ));
 
     let message = parse_panic_message(&toml);
-    assert!(message.contains("source bridge address aliases disagree"));
+    assert!(message.contains("must not use multiple aliases"));
 }
 
 #[test]
@@ -198,5 +212,5 @@ bsc_verifier_address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     ));
 
     let message = parse_panic_message(&toml);
-    assert!(message.contains("destination verifier address aliases disagree"));
+    assert!(message.contains("must not use multiple aliases"));
 }

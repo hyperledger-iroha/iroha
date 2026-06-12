@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import math
@@ -111,8 +112,16 @@ def _sha256_file_with_size(
 
 
 def _secret_path_error(path: str | None, label: str) -> str | None:
-    if path is not None and device_lab.SECRET_RE.search(path):
+    if path is None:
+        return None
+    if device_lab.SECRET_RE.search(path):
         return f"{label} must not contain secret-looking material"
+    if device_lab._contains_control_character(path):
+        return f"{label} must not contain control characters"
+    if "\\" in path:
+        return f"{label} must not contain backslashes"
+    if ".." in Path(path).parts:
+        return f"{label} must be canonical"
     return None
 
 
@@ -134,10 +143,78 @@ def _validate_generated_at_utc(value: str) -> list[str]:
     return []
 
 
+def _validate_generated_at_future_skew(
+    generated_at: dt.datetime | None,
+    max_future_skew_seconds: int,
+) -> list[str]:
+    if max_future_skew_seconds < 0:
+        return ["--max-generated-at-future-skew-seconds must be non-negative"]
+    if generated_at is None:
+        return []
+    max_generated_at = (
+        dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        + dt.timedelta(seconds=max_future_skew_seconds)
+    )
+    if generated_at > max_generated_at:
+        return ["--generated-at-utc must not be ahead of the helper clock skew allowance"]
+    return []
+
+
 def _validate_proof_log(path: Path) -> tuple[str | None, list[str]]:
     return readiness.validate_lineage_proof_log(
         path, readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
     )
+
+
+def _cleanup_validation_temp_output(
+    path: Path,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return ["lineage proof evidence validation file could not be removed"]
+    try:
+        parent_fd = os.open(path.parent, device_lab._directory_open_flags())
+    except OSError:
+        return ["lineage proof evidence validation file could not be removed"]
+    try:
+        try:
+            validation_temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["lineage proof evidence validation file could not be removed"]
+        if (
+            not stat.S_ISREG(validation_temp_stat.st_mode)
+            or _file_identity(validation_temp_stat) != expected_identity
+        ):
+            return ["lineage proof evidence validation file changed before cleanup"]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["lineage proof evidence validation file could not be removed"]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
+def _validation_temp_identity(handle: Any, path: Path) -> tuple[int, int] | None:
+    try:
+        return _file_identity(os.fstat(handle.fileno()))
+    except (AttributeError, OSError):
+        pass
+    try:
+        path_stat = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(path_stat.st_mode):
+        return None
+    return _file_identity(path_stat)
 
 
 def build_evidence(
@@ -147,6 +224,9 @@ def build_evidence(
     command: str,
     elapsed_seconds: float,
     generated_at_utc: str,
+    max_generated_at_future_skew_seconds: int = (
+        readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS
+    ),
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Build a Reserved-lineage proof evidence document from local artifacts."""
 
@@ -161,6 +241,12 @@ def build_evidence(
     )
     if timestamp_error is not None:
         errors.append(timestamp_error["message"])
+    errors.extend(
+        _validate_generated_at_future_skew(
+            generated_at,
+            max_generated_at_future_skew_seconds,
+        )
+    )
     errors.extend(_validate_command(command))
     errors.extend(_validate_elapsed_seconds(elapsed_seconds))
 
@@ -254,6 +340,7 @@ def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> 
     if post_create_dir_errors:
         return post_create_dir_errors
     path: Path | None = None
+    tmp_identity: tuple[int, int] | None = None
     try:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -264,22 +351,21 @@ def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> 
             delete=False,
         ) as handle:
             path = Path(handle.name)
+            tmp_identity = _validation_temp_identity(handle, path)
             handle.write(evidence_text)
-    except OSError:
+            handle.flush()
+            os.fsync(handle.fileno())
+    except (AttributeError, OSError):
         errors = ["lineage proof evidence validation file could not be written"]
         if path is not None:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                errors.append("lineage proof evidence validation file could not be removed")
+            errors.extend(_cleanup_validation_temp_output(path, tmp_identity))
         return errors
     result = readiness.check_lineage_proof_evidence(
         path, require_canonical_filename=False
     )
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        return ["lineage proof evidence validation file could not be removed"]
+    cleanup_errors = _cleanup_validation_temp_output(path, tmp_identity)
+    if cleanup_errors:
+        return cleanup_errors
     return [item["message"] for item in result["blockers"]]
 
 
@@ -332,6 +418,12 @@ def _same_resolved_parent(child: Path, parent: Path) -> tuple[bool | None, list[
 def validate_output_corridor(out_path: Path, artifact_dir: Path) -> list[str]:
     """Validate that --out resolves directly under --artifact-dir."""
 
+    out_secret_error = _secret_path_error(str(out_path), "--out")
+    if out_secret_error is not None:
+        return [out_secret_error]
+    artifact_dir_secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")
+    if artifact_dir_secret_error is not None:
+        return [artifact_dir_secret_error]
     output_parent, output_parent_errors = _resolve_corridor_path(
         out_path.parent,
         "--out parent",
@@ -354,10 +446,10 @@ def validate_output_corridor(out_path: Path, artifact_dir: Path) -> list[str]:
 def validate_lineage_input_paths(artifact_dir: Path, proof_log: Path) -> list[str]:
     """Reject detached or aliased lineage proof inputs before reading bytes."""
 
-    errors = validate_artifact_dir_path(artifact_dir)
     proof_log_secret_error = _secret_path_error(str(proof_log), "--proof-log")
     if proof_log_secret_error is not None:
-        errors.append(proof_log_secret_error)
+        return [proof_log_secret_error]
+    errors = validate_artifact_dir_path(artifact_dir)
     if errors:
         return errors
     proof_log_ancestor_errors = device_lab.validate_no_symlink_ancestors(
@@ -459,6 +551,43 @@ def _validate_output_parent(
     return True, []
 
 
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _sync_output_parent(
+    parent: Path,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
+        parent_fd = os.open(parent, _directory_open_flags())
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    try:
+        parent_stat = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            return [f"{label} parent directory could not be synced"]
+        if expected_identity is not None and _file_identity(parent_stat) != expected_identity:
+            return [f"{label} parent directory changed before sync"]
+        os.fsync(parent_fd)
+    except OSError:
+        return [f"{label} parent directory could not be synced"]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
 def validate_output_path(path: Path, label: str) -> list[str]:
     """Reject output paths that could overwrite aliased local files."""
 
@@ -536,6 +665,13 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     if errors:
         return errors
     try:
+        parent_stat = path.parent.lstat()
+    except OSError:
+        return ["--out parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        return ["--out parent directory could not be synced"]
+    parent_identity = _file_identity(parent_stat)
+    try:
         evidence_text = json.dumps(
             evidence,
             indent=2,
@@ -547,6 +683,7 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     if len(evidence_text.encode("utf-8")) > readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES:
         return ["--out evidence exceeds maximum size"]
     tmp_path: Path | None = None
+    tmp_identity: tuple[int, int] | None = None
     write_errors: list[str] = []
     try:
         with tempfile.NamedTemporaryFile(
@@ -558,6 +695,7 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
+            tmp_identity = _file_identity(os.fstat(handle.fileno()))
             handle.write(evidence_text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -571,19 +709,16 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
         write_errors.append("--out could not be written")
     finally:
         if tmp_path is not None:
-            write_errors.extend(_cleanup_temp_output(tmp_path))
+            write_errors.extend(_cleanup_temp_output(tmp_path, tmp_identity))
     if write_errors:
         return write_errors
-    try:
-        parent_fd = os.open(path.parent, os.O_RDONLY)
-    except OSError:
-        return ["--out parent directory could not be synced"]
-    try:
-        os.fsync(parent_fd)
-    except OSError:
-        return ["--out parent directory could not be synced"]
-    finally:
-        os.close(parent_fd)
+    sync_errors = _sync_output_parent(
+        path.parent,
+        "--out",
+        expected_identity=parent_identity,
+    )
+    if sync_errors:
+        return sync_errors
     errors = validate_output_path(path, "--out")
     if errors:
         return errors
@@ -604,11 +739,40 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     return []
 
 
-def _cleanup_temp_output(path: Path) -> list[str]:
+def _cleanup_temp_output(
+    path: Path,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return ["--out temporary file metadata could not be read"]
     try:
-        path.unlink(missing_ok=True)
+        parent_fd = os.open(path.parent, _directory_open_flags())
     except OSError:
         return ["--out temporary file could not be removed"]
+    try:
+        try:
+            temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["--out temporary file could not be removed"]
+        if (
+            not stat.S_ISREG(temp_stat.st_mode)
+            or _file_identity(temp_stat) != expected_identity
+        ):
+            return ["--out temporary file changed before cleanup"]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["--out temporary file could not be removed"]
+    finally:
+        os.close(parent_fd)
     return []
 
 
@@ -641,6 +805,15 @@ def main(argv: list[str] | None = None) -> int:
         "--generated-at-utc",
         default=readiness.utc_now(),
         help="Canonical ISO-8601 UTC timestamp for the evidence document.",
+    )
+    parser.add_argument(
+        "--max-generated-at-future-skew-seconds",
+        type=int,
+        default=readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS,
+        help=(
+            "Maximum number of seconds generated_at_utc may be ahead of the "
+            "helper clock."
+        ),
     )
     parser.add_argument(
         "--out",
@@ -685,6 +858,7 @@ def main(argv: list[str] | None = None) -> int:
         command=args.command,
         elapsed_seconds=args.elapsed_seconds,
         generated_at_utc=args.generated_at_utc,
+        max_generated_at_future_skew_seconds=args.max_generated_at_future_skew_seconds,
     )
     if errors:
         for error in errors:

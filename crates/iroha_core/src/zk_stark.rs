@@ -62,29 +62,74 @@ const MAX_TRANSCRIPT_LABEL_LEN: usize = 128;
 const MAX_ENVELOPE_BYTES: usize = 1 << 20; // 1 MiB guard for decoded envelopes
 
 pub(crate) const STARK_FRI_QUERY_INDEX_REPEATED_ERROR: &str = "FRI query index repeated";
+const STARK_FRI_BOUNDED_QUERY_REJECTION_ATTEMPTS: usize = 8;
+const BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS: u32 = 1024;
+
+fn validate_stark_transcript_label(label: &str, max_len: usize) -> Result<(), &'static str> {
+    if label.is_empty() {
+        return Err("transcript label must not be empty");
+    }
+    if label.len() > max_len {
+        return Err("transcript label exceeds maximum length");
+    }
+    if !label.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err("transcript label must contain only printable ASCII bytes without whitespace");
+    }
+    Ok(())
+}
+
+fn validate_stark_circuit_id(circuit_id: &str) -> Result<(), &'static str> {
+    if circuit_id.is_empty() {
+        return Err("circuit id must not be empty");
+    }
+    if circuit_id.len() > MAX_TRANSCRIPT_LABEL_LEN {
+        return Err("circuit id exceeds maximum length");
+    }
+    if !circuit_id.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err("circuit id must contain only printable ASCII bytes without whitespace");
+    }
+    Ok(())
+}
+
+fn validate_stark_domain_tag(domain_tag: &str, max_len: usize) -> Result<(), &'static str> {
+    if domain_tag.is_empty() {
+        return Err("domain tag must not be empty");
+    }
+    if domain_tag.len() > max_len {
+        return Err("domain tag exceeds maximum length");
+    }
+    if !domain_tag.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err("domain tag must contain only printable ASCII bytes without whitespace");
+    }
+    Ok(())
+}
 
 /// Tunable limits applied during STARK envelope verification to prevent denial-of-service inputs.
+///
+/// These values can tighten the built-in protocol caps for a caller, but they
+/// cannot relax canonical verifier structure limits. Values above the native
+/// caps are clamped internally.
 #[derive(Clone, Copy, Debug)]
 pub struct StarkVerifierLimits {
-    /// Maximum supported domain log2.
+    /// Caller cap for domain log2, clamped to the native protocol maximum.
     pub max_domain_log2: u8,
-    /// Maximum supported blowup log2.
+    /// Caller cap for blowup log2, clamped to the native protocol maximum.
     pub max_blowup_log2: u8,
-    /// Maximum fold arity.
+    /// Caller cap for fold arity, clamped to the native verifier maximum.
     pub max_fold_arity: u8,
-    /// Maximum number of queries.
+    /// Caller cap for query count, clamped to the native protocol maximum.
     pub max_queries: usize,
-    /// Maximum Merkle depth.
+    /// Caller cap for Merkle depth, clamped to the native verifier maximum.
     pub max_merkle_depth: usize,
-    /// Maximum auxiliary terms in composition leaf.
+    /// Caller cap for auxiliary terms in a composition leaf, clamped natively.
     pub max_aux_terms: usize,
-    /// Maximum values in a sampled AIR trace row.
+    /// Caller cap for values in a sampled AIR trace row, clamped natively.
     pub max_air_width: usize,
-    /// Maximum domain tag length.
+    /// Caller cap for domain tag length, clamped to the canonical maximum.
     pub max_domain_tag_len: usize,
-    /// Maximum transcript label length.
+    /// Caller cap for transcript label length, clamped to the canonical maximum.
     pub max_transcript_label_len: usize,
-    /// Maximum encoded envelope size in bytes (decoded input slice length).
+    /// Caller cap for encoded envelope size, clamped to the native byte budget.
     pub max_envelope_bytes: usize,
 }
 
@@ -103,6 +148,48 @@ impl Default for StarkVerifierLimits {
             max_envelope_bytes: MAX_ENVELOPE_BYTES,
         }
     }
+}
+
+fn effective_max_domain_log2(limits: &StarkVerifierLimits) -> u8 {
+    limits.max_domain_log2.min(MAX_DOMAIN_LOG2)
+}
+
+fn effective_max_blowup_log2(limits: &StarkVerifierLimits) -> u8 {
+    limits.max_blowup_log2.min(MAX_DOMAIN_LOG2)
+}
+
+fn effective_max_fold_arity(limits: &StarkVerifierLimits) -> u8 {
+    limits.max_fold_arity.min(1 << 5)
+}
+
+fn effective_max_queries(limits: &StarkVerifierLimits) -> usize {
+    limits.max_queries.min(MAX_FRI_QUERIES)
+}
+
+fn effective_max_merkle_depth(limits: &StarkVerifierLimits) -> usize {
+    limits.max_merkle_depth.min(MAX_MERKLE_DEPTH)
+}
+
+fn effective_max_aux_terms(limits: &StarkVerifierLimits) -> usize {
+    limits.max_aux_terms.min(MAX_AUX_TERMS)
+}
+
+fn effective_max_air_width(limits: &StarkVerifierLimits) -> usize {
+    limits.max_air_width.min(MAX_AIR_WIDTH)
+}
+
+fn effective_max_domain_tag_len(limits: &StarkVerifierLimits) -> usize {
+    limits.max_domain_tag_len.min(MAX_DOMAIN_TAG_LEN)
+}
+
+fn effective_max_transcript_label_len(limits: &StarkVerifierLimits) -> usize {
+    limits
+        .max_transcript_label_len
+        .min(MAX_TRANSCRIPT_LABEL_LEN)
+}
+
+fn effective_max_envelope_bytes(limits: &StarkVerifierLimits) -> usize {
+    limits.max_envelope_bytes.min(MAX_ENVELOPE_BYTES)
 }
 
 /// Goldilocks field element with canonical modular reduction.
@@ -360,7 +447,8 @@ fn merkle_path_depth_ok(
     expected_depth: usize,
     limits: &StarkVerifierLimits,
 ) -> bool {
-    if expected_depth > limits.max_merkle_depth || path.siblings.len() != expected_depth {
+    if expected_depth > effective_max_merkle_depth(limits) || path.siblings.len() != expected_depth
+    {
         return false;
     }
     let required_dir_bytes = (expected_depth + 7) / 8;
@@ -422,15 +510,21 @@ fn validate_params(
     query_count: usize,
     limits: &StarkVerifierLimits,
 ) -> Option<usize> {
-    if params.version != 1 || params.n_log2 == 0 || params.n_log2 > limits.max_domain_log2 {
+    if params.version != 1
+        || params.n_log2 == 0
+        || params.n_log2 > effective_max_domain_log2(limits)
+    {
         return None;
     }
-    if params.blowup_log2 == 0 || params.blowup_log2 > limits.max_blowup_log2 {
+    if params.blowup_log2 == 0
+        || params.blowup_log2 > effective_max_blowup_log2(limits)
+        || params.blowup_log2 > params.n_log2
+    {
         return None;
     }
     // The current wire format (`FoldDecommitV1`) carries a binary fold (y0,y1),
     // so only `fold_arity = 2` is supported by the native verifier.
-    if params.fold_arity != 2 || params.fold_arity > limits.max_fold_arity {
+    if params.fold_arity != 2 || params.fold_arity > effective_max_fold_arity(limits) {
         return None;
     }
     if params.merkle_arity != 2 {
@@ -439,11 +533,12 @@ fn validate_params(
     if params.hash_fn != STARK_HASH_SHA256_V1 && params.hash_fn != STARK_HASH_POSEIDON2_V1 {
         return None;
     }
-    if params.domain_tag.is_empty() || params.domain_tag.len() > limits.max_domain_tag_len {
+    if validate_stark_domain_tag(&params.domain_tag, effective_max_domain_tag_len(limits)).is_err()
+    {
         return None;
     }
     if params.queries == 0
-        || params.queries as usize > limits.max_queries
+        || params.queries as usize > effective_max_queries(limits)
         || params.queries as usize != query_count
     {
         return None;
@@ -452,7 +547,7 @@ fn validate_params(
     if query_count > domain {
         return None;
     }
-    if roots_len == 0 || roots_len > limits.max_merkle_depth + 1 {
+    if roots_len == 0 || roots_len > effective_max_merkle_depth(limits) + 1 {
         return None;
     }
     let required_layers = layers_required(params)?;
@@ -462,9 +557,58 @@ fn validate_params(
     Some(required_layers)
 }
 
+fn validate_stark_opening_commitment_params_v1(
+    params: &StarkFriParamsV1,
+) -> Result<(), &'static str> {
+    let roots_len = layers_required(params)
+        .and_then(|layers| layers.checked_add(1))
+        .ok_or("STARK opening commitment parameters invalid")?;
+    if validate_params(
+        params,
+        roots_len,
+        usize::from(params.queries),
+        &StarkVerifierLimits::default(),
+    )
+    .is_none()
+    {
+        return Err("STARK opening commitment parameters invalid");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn attach_valid_auxiliary_composition_values(envelope: &mut StarkVerifyEnvelopeV1) {
+        let query_count = envelope.proof.queries.len();
+        let leaf = 30_u64;
+        let (comp_root, path) =
+            stark_merkle_root_and_path_from_field_values_v1(&envelope.params, &[leaf], 0)
+                .expect("derive auxiliary composition root");
+        let comp_values = (0..query_count)
+            .map(|_| StarkCompositionValueV1 {
+                leaf,
+                constant: 7,
+                z_coeff: 0,
+                aux_terms: vec![
+                    StarkCompositionTermV1 {
+                        wire_index: 1,
+                        value: 5,
+                        coeff: 3,
+                    },
+                    StarkCompositionTermV1 {
+                        wire_index: 3,
+                        value: 2,
+                        coeff: 4,
+                    },
+                ],
+                path: path.clone(),
+            })
+            .collect();
+        envelope.proof.commits.comp_root = Some(comp_root);
+        envelope.proof.comp_values = Some(comp_values);
+    }
 
     #[test]
     fn fq_addition_wraps_correctly() {
@@ -525,7 +669,7 @@ mod tests {
         validate_zk_ace_stark_fri_verifying_key_payload(&valid)
             .expect("canonical ZK-ACE STARK/FRI payload is accepted");
 
-        let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 10] = [
+        let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 11] = [
             ("version", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.version = 2
             }),
@@ -546,6 +690,9 @@ mod tests {
             }),
             ("blowup_floor", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.blowup_log2 = ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2 - 1;
+            }),
+            ("blowup_domain", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.blowup_log2 = payload.n_log2 + 1;
             }),
             ("queries_floor", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.queries = ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES - 1;
@@ -588,7 +735,7 @@ mod tests {
         validate_stark_fri_production_verifying_key_payload(&poseidon, CIRCUIT_ID, "test")
             .expect("Poseidon2 STARK/FRI payload is accepted");
 
-        let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 10] = [
+        let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 11] = [
             ("version", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.version = 2
             }),
@@ -610,6 +757,9 @@ mod tests {
             ("blowup_floor", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.blowup_log2 = ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2 - 1;
             }),
+            ("blowup_domain", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.blowup_log2 = payload.n_log2 + 1;
+            }),
             ("queries_floor", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.queries = ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES - 1;
             }),
@@ -629,6 +779,116 @@ mod tests {
                 "{label} mutation must fail closed"
             );
         }
+
+        let overlong_circuit_id = "soracloud:".to_owned() + &"x".repeat(MAX_TRANSCRIPT_LABEL_LEN);
+        for circuit_id in [
+            "",
+            " ",
+            "soracloud:test production-circuit",
+            "soracloud:test\tproduction-circuit",
+            overlong_circuit_id.as_str(),
+        ] {
+            let mut invalid = valid.clone();
+            invalid.circuit_id = circuit_id.to_owned();
+            assert!(
+                validate_stark_fri_production_verifying_key_payload(&invalid, circuit_id, "test")
+                    .is_err(),
+                "matching noncanonical circuit id {circuit_id:?} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn stark_verifier_limits_cannot_relax_canonical_structure_caps() {
+        let valid = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:canonical-limit-cap".to_owned(),
+        };
+        assert_eq!(
+            validate_params(&valid, 5, 2, &StarkVerifierLimits::default()),
+            Some(4)
+        );
+
+        let mut relaxed = StarkVerifierLimits::default();
+        relaxed.max_domain_log2 = MAX_DOMAIN_LOG2 + 1;
+        relaxed.max_blowup_log2 = MAX_DOMAIN_LOG2 + 1;
+        relaxed.max_queries = MAX_FRI_QUERIES + 1;
+        relaxed.max_merkle_depth = MAX_MERKLE_DEPTH + 1;
+        relaxed.max_aux_terms = MAX_AUX_TERMS + 1;
+        relaxed.max_air_width = MAX_AIR_WIDTH + 1;
+        relaxed.max_domain_tag_len = MAX_DOMAIN_TAG_LEN + 1;
+        relaxed.max_transcript_label_len = MAX_TRANSCRIPT_LABEL_LEN + 1;
+        relaxed.max_envelope_bytes = MAX_ENVELOPE_BYTES + 1;
+
+        let mut oversized_domain = valid.clone();
+        oversized_domain.n_log2 = MAX_DOMAIN_LOG2 + 1;
+        oversized_domain.queries = 1;
+        assert!(
+            validate_params(
+                &oversized_domain,
+                usize::from(MAX_DOMAIN_LOG2) + 2,
+                1,
+                &relaxed
+            )
+            .is_none(),
+            "caller limits must not relax canonical domain depth"
+        );
+
+        let mut oversized_blowup = valid.clone();
+        oversized_blowup.blowup_log2 = MAX_DOMAIN_LOG2 + 1;
+        assert!(
+            validate_params(&oversized_blowup, 5, 2, &relaxed).is_none(),
+            "caller limits must not relax canonical blowup depth"
+        );
+        let mut impossible_blowup = valid.clone();
+        impossible_blowup.blowup_log2 = valid.n_log2 + 1;
+        assert!(
+            validate_params(&impossible_blowup, 5, 2, &relaxed).is_none(),
+            "verifier must reject blowup depth greater than the evaluation domain"
+        );
+
+        let mut too_many_queries = valid.clone();
+        too_many_queries.n_log2 = 6;
+        too_many_queries.queries = (MAX_FRI_QUERIES + 1) as u16;
+        assert!(
+            validate_params(&too_many_queries, 7, MAX_FRI_QUERIES + 1, &relaxed).is_none(),
+            "caller limits must not relax canonical query count"
+        );
+
+        let mut overlong_domain_tag = valid.clone();
+        overlong_domain_tag.domain_tag = "d".repeat(MAX_DOMAIN_TAG_LEN + 1);
+        assert!(
+            validate_params(&overlong_domain_tag, 5, 2, &relaxed).is_none(),
+            "caller limits must not relax canonical domain-tag length"
+        );
+
+        let too_deep_path = MerklePath {
+            dirs: vec![0; (MAX_MERKLE_DEPTH + 8) / 8],
+            siblings: vec![[0; 32]; MAX_MERKLE_DEPTH + 1],
+        };
+        assert!(
+            !merkle_path_depth_ok(&too_deep_path, MAX_MERKLE_DEPTH + 1, &relaxed),
+            "caller limits must not relax canonical Merkle depth"
+        );
+
+        let overlong_transcript_label = "T".repeat(MAX_TRANSCRIPT_LABEL_LEN + 1);
+        assert!(
+            validate_stark_transcript_label(
+                &overlong_transcript_label,
+                effective_max_transcript_label_len(&relaxed),
+            )
+            .is_err(),
+            "caller limits must not relax canonical transcript-label length"
+        );
+        assert_eq!(effective_max_aux_terms(&relaxed), MAX_AUX_TERMS);
+        assert_eq!(effective_max_air_width(&relaxed), MAX_AIR_WIDTH);
+        assert_eq!(effective_max_envelope_bytes(&relaxed), MAX_ENVELOPE_BYTES);
     }
 
     #[test]
@@ -734,23 +994,106 @@ mod tests {
         );
 
         let nonzero_values = vec![1; 1_usize << usize::from(params.n_log2)];
-        let nonzero_final = stark_synthesize_fri_envelope_from_field_values_v1(
-            params.clone(),
-            "IROHA-TEST-STARK".to_owned(),
-            &nonzero_values,
-            &extra_query_roots,
-        )
-        .expect("synthesize non-zero field-value FRI envelope");
-        assert_eq!(
-            validate_stark_fri_query_shape_and_indices_v1(
-                &params,
-                &nonzero_final.transcript_label,
-                &nonzero_final.proof.commits.roots,
+        assert!(
+            stark_synthesize_fri_envelope_from_field_values_v1(
+                params.clone(),
+                "IROHA-TEST-STARK".to_owned(),
+                &nonzero_values,
                 &extra_query_roots,
-                &nonzero_final.proof.queries,
             )
-            .expect_err("non-zero final FRI values must be rejected"),
-            "FRI query final value mismatch"
+            .is_none(),
+            "prover must reject non-zero final FRI values before emitting proof bytes"
+        );
+        let public_err = prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+            params,
+            "IROHA-TEST-STARK".to_owned(),
+            "stark/fri/nonzero-final:test".to_owned(),
+            [0xA5; 32],
+            vec![vec![0]; 1_usize << 4],
+            nonzero_values,
+        )
+        .expect_err("public AIR prover must reject non-zero final FRI values");
+        assert_eq!(
+            public_err, "STARK final FRI value must be zero",
+            "non-zero final FRI values must fail during proof construction"
+        );
+    }
+
+    #[test]
+    fn without_replacement_query_schedule_uses_bound_specific_offsets() {
+        assert_without_replacement_query_schedule_uses_bound_specific_offsets(
+            STARK_HASH_SHA256_V1,
+            "sha256",
+        );
+        assert_without_replacement_query_schedule_uses_bound_specific_offsets(
+            STARK_HASH_POSEIDON2_V1,
+            "poseidon2",
+        );
+    }
+
+    fn assert_without_replacement_query_schedule_uses_bound_specific_offsets(
+        hash_fn: u8,
+        hash_label: &str,
+    ) {
+        let mut params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 3,
+            blowup_log2: 1,
+            fold_arity: 2,
+            queries: 4,
+            merkle_arity: 2,
+            hash_fn,
+            domain_tag: String::new(),
+        };
+        let label = "IROHA-TEST-BOUNDED-STARK-QUERY-OFFSET";
+        let roots = [[0x42; 32], [0x24; 32]];
+        let domain = 1_usize << usize::from(params.n_log2);
+        let query_number = 1;
+        let remaining = domain - query_number;
+
+        for nonce in 0_u32..4096 {
+            params.domain_tag = format!("iroha:test:{hash_label}:bounded-query-offset:{nonce}");
+            let domain_remodulo = derive_query_index(label, &params, &roots, query_number)
+                .expect("query index")
+                % remaining;
+            let bounded =
+                derive_bounded_query_offset(label, &params, &roots, query_number, remaining)
+                    .expect("bounded query offset");
+            if domain_remodulo == bounded {
+                continue;
+            }
+
+            let first_draw =
+                derive_bounded_query_offset(label, &params, &roots, 0, domain).expect("first draw");
+            let mut swaps = BTreeMap::new();
+            let first_selected = first_draw;
+            swaps.insert(first_draw, 0);
+            let bounded_selected = swaps
+                .get(&(query_number + bounded))
+                .copied()
+                .unwrap_or(query_number + bounded);
+            let remodulo_selected = swaps
+                .get(&(query_number + domain_remodulo))
+                .copied()
+                .unwrap_or(query_number + domain_remodulo);
+            if bounded_selected == remodulo_selected {
+                continue;
+            }
+
+            let indices =
+                derive_query_indices_without_replacement(label, &params, &roots, 2, domain)
+                    .expect("without-replacement schedule");
+            assert_eq!(indices[0], first_selected);
+            assert_eq!(indices[1], bounded_selected);
+            assert_ne!(
+                indices[1], remodulo_selected,
+                "query schedule must use a bound-specific draw, not domain sample modulo remaining"
+            );
+            return;
+        }
+
+        panic!(
+            "failed to find {hash_label} bounded-offset fixture that differs from domain remodulo"
         );
     }
 
@@ -781,11 +1124,19 @@ mod tests {
         validate_stark_air_opening_first_fri_value_v1(&opening, 0, &decommit)
             .expect("even sampled index binds y0");
         let mut odd_opening = opening.clone();
+        odd_opening.index = 1;
         odd_opening.composition_value = 17;
         validate_stark_air_opening_first_fri_value_v1(&odd_opening, 1, &decommit)
             .expect("odd sampled index binds y1");
         assert_eq!(
             validate_stark_air_opening_first_fri_value_v1(&opening, 1, &decommit)
+                .expect_err("mismatched sampled index must fail"),
+            "AIR/FRI opening index mismatch"
+        );
+        let mut wrong_side_opening = odd_opening;
+        wrong_side_opening.composition_value = 11;
+        assert_eq!(
+            validate_stark_air_opening_first_fri_value_v1(&wrong_side_opening, 1, &decommit)
                 .expect_err("wrong FRI side must fail"),
             "AIR/FRI composition value mismatch"
         );
@@ -811,6 +1162,252 @@ mod tests {
         )
         .expect("ok");
         assert!(verify_stark_fri_envelope(&bytes));
+    }
+
+    #[test]
+    fn stark_fri_rejects_noncanonical_transcript_labels() {
+        for (hash_fn, hash_label, domain_tag, circuit_id, digest_byte) in [
+            (
+                STARK_HASH_SHA256_V1,
+                "sha256",
+                "iroha:test:canonical-transcript-label:sha256",
+                "stark/fri/sha256-goldilocks:canonical-transcript-label",
+                0x51_u8,
+            ),
+            (
+                STARK_HASH_POSEIDON2_V1,
+                "poseidon2",
+                "iroha:test:canonical-transcript-label:poseidon2",
+                "stark/fri/poseidon2-goldilocks:canonical-transcript-label",
+                0x52_u8,
+            ),
+        ] {
+            let params = StarkFriParamsV1 {
+                version: 1,
+                n_log2: 4,
+                blowup_log2: 2,
+                fold_arity: 2,
+                queries: 2,
+                merkle_arity: 2,
+                hash_fn,
+                domain_tag: domain_tag.to_owned(),
+            };
+            let bytes = prove_stark_fri_air_envelope_bytes(
+                params.clone(),
+                format!("IROHA-TEST-STARK-CANONICAL-LABEL-{hash_label}"),
+                circuit_id.to_owned(),
+                [digest_byte; 32],
+            )
+            .expect("valid labeled STARK envelope");
+            assert!(verify_stark_fri_envelope(&bytes));
+
+            let mut envelope: StarkVerifyEnvelopeV1 =
+                norito::decode_from_bytes(&bytes).expect("decode labeled STARK envelope");
+            let air = envelope.proof.air.as_ref().expect("AIR section");
+            let extra_query_roots = [air.trace_root, air.composition_root, air.public_digest];
+            let invalid_labels = [
+                ("empty", String::new()),
+                ("leading whitespace", " IROHA-TEST-STARK".to_owned()),
+                ("embedded whitespace", "IROHA TEST STARK".to_owned()),
+                ("control byte", "IROHA-TEST\nSTARK".to_owned()),
+                ("non-ASCII", "IROHA-TEST-STARK-π".to_owned()),
+                ("overlong", "A".repeat(MAX_TRANSCRIPT_LABEL_LEN + 1)),
+            ];
+            for (label_case, invalid_label) in invalid_labels {
+                let err = prove_stark_fri_air_envelope_bytes(
+                    params.clone(),
+                    invalid_label.clone(),
+                    circuit_id.to_owned(),
+                    [digest_byte; 32],
+                )
+                .expect_err(
+                    "noncanonical STARK transcript labels must be rejected by proof construction",
+                );
+                assert!(
+                    err.contains("transcript label"),
+                    "{hash_label} {label_case} error should mention transcript labels, got: {err}"
+                );
+
+                assert_eq!(
+                    validate_stark_fri_query_shape_and_indices_v1(
+                        &params,
+                        &invalid_label,
+                        &envelope.proof.commits.roots,
+                        &extra_query_roots,
+                        &envelope.proof.queries,
+                    )
+                    .expect_err("query replay must reject noncanonical transcript labels"),
+                    "FRI transcript label invalid"
+                );
+
+                envelope.transcript_label = invalid_label;
+                let tampered =
+                    norito::to_bytes(&envelope).expect("encode noncanonical-label STARK envelope");
+                assert!(
+                    !verify_stark_fri_envelope(&tampered),
+                    "{hash_label} verifier must reject {label_case} transcript labels"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stark_fri_rejects_noncanonical_circuit_ids() {
+        for (hash_fn, hash_label, domain_tag, circuit_id, digest_byte) in [
+            (
+                STARK_HASH_SHA256_V1,
+                "sha256",
+                "iroha:test:canonical-circuit-id:sha256",
+                "stark/fri/sha256-goldilocks:canonical-circuit-id",
+                0x61_u8,
+            ),
+            (
+                STARK_HASH_POSEIDON2_V1,
+                "poseidon2",
+                "iroha:test:canonical-circuit-id:poseidon2",
+                "stark/fri/poseidon2-goldilocks:canonical-circuit-id",
+                0x62_u8,
+            ),
+        ] {
+            let params = StarkFriParamsV1 {
+                version: 1,
+                n_log2: 4,
+                blowup_log2: 2,
+                fold_arity: 2,
+                queries: 2,
+                merkle_arity: 2,
+                hash_fn,
+                domain_tag: domain_tag.to_owned(),
+            };
+            let transcript_label = format!("IROHA-TEST-STARK-CANONICAL-CIRCUIT-{hash_label}");
+            let bytes = prove_stark_fri_air_envelope_bytes(
+                params.clone(),
+                transcript_label.clone(),
+                circuit_id.to_owned(),
+                [digest_byte; 32],
+            )
+            .expect("valid circuit-id STARK envelope");
+            assert!(verify_stark_fri_envelope(&bytes));
+
+            let mut envelope: StarkVerifyEnvelopeV1 =
+                norito::decode_from_bytes(&bytes).expect("decode circuit-id STARK envelope");
+            let invalid_circuit_ids = [
+                ("empty", String::new()),
+                (
+                    "leading whitespace",
+                    " stark/fri/sha256-goldilocks:test".to_owned(),
+                ),
+                (
+                    "embedded whitespace",
+                    "stark/fri/sha256 goldilocks:test".to_owned(),
+                ),
+                (
+                    "control byte",
+                    "stark/fri/sha256-goldilocks:\ntest".to_owned(),
+                ),
+                ("non-ASCII", "stark/fri/sha256-goldilocks:π".to_owned()),
+                ("overlong", "c".repeat(MAX_TRANSCRIPT_LABEL_LEN + 1)),
+            ];
+            for (id_case, invalid_circuit_id) in invalid_circuit_ids {
+                let err = prove_stark_fri_air_envelope_bytes(
+                    params.clone(),
+                    transcript_label.clone(),
+                    invalid_circuit_id.clone(),
+                    [digest_byte; 32],
+                )
+                .expect_err(
+                    "noncanonical STARK circuit ids must be rejected by proof construction",
+                );
+                assert!(
+                    err.contains("circuit_id"),
+                    "{hash_label} {id_case} error should mention circuit_id, got: {err}"
+                );
+
+                envelope.proof.air.as_mut().expect("AIR section").circuit_id = invalid_circuit_id;
+                let tampered = norito::to_bytes(&envelope)
+                    .expect("encode noncanonical-circuit STARK envelope");
+                assert!(
+                    !verify_stark_fri_envelope(&tampered),
+                    "{hash_label} verifier must reject {id_case} circuit ids"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stark_fri_rejects_noncanonical_domain_tags() {
+        for (hash_fn, hash_label, domain_tag, circuit_id, digest_byte) in [
+            (
+                STARK_HASH_SHA256_V1,
+                "sha256",
+                "iroha:test:canonical-domain-tag:sha256",
+                "stark/fri/sha256-goldilocks:canonical-domain-tag",
+                0x71_u8,
+            ),
+            (
+                STARK_HASH_POSEIDON2_V1,
+                "poseidon2",
+                "iroha:test:canonical-domain-tag:poseidon2",
+                "stark/fri/poseidon2-goldilocks:canonical-domain-tag",
+                0x72_u8,
+            ),
+        ] {
+            let params = StarkFriParamsV1 {
+                version: 1,
+                n_log2: 4,
+                blowup_log2: 2,
+                fold_arity: 2,
+                queries: 2,
+                merkle_arity: 2,
+                hash_fn,
+                domain_tag: domain_tag.to_owned(),
+            };
+            let transcript_label = format!("IROHA-TEST-STARK-CANONICAL-DOMAIN-{hash_label}");
+            let bytes = prove_stark_fri_air_envelope_bytes(
+                params.clone(),
+                transcript_label.clone(),
+                circuit_id.to_owned(),
+                [digest_byte; 32],
+            )
+            .expect("valid domain-tag STARK envelope");
+            assert!(verify_stark_fri_envelope(&bytes));
+
+            let mut envelope: StarkVerifyEnvelopeV1 =
+                norito::decode_from_bytes(&bytes).expect("decode domain-tag STARK envelope");
+            let invalid_domain_tags = [
+                ("empty", String::new()),
+                ("leading whitespace", " iroha:test:domain".to_owned()),
+                ("embedded whitespace", "iroha:test domain".to_owned()),
+                ("control byte", "iroha:test:\ndomain".to_owned()),
+                ("non-ASCII", "iroha:test:π".to_owned()),
+                ("overlong", "d".repeat(MAX_DOMAIN_TAG_LEN + 1)),
+            ];
+            for (tag_case, invalid_domain_tag) in invalid_domain_tags {
+                let mut invalid_params = params.clone();
+                invalid_params.domain_tag = invalid_domain_tag.clone();
+                let err = prove_stark_fri_air_envelope_bytes(
+                    invalid_params,
+                    transcript_label.clone(),
+                    circuit_id.to_owned(),
+                    [digest_byte; 32],
+                )
+                .expect_err(
+                    "noncanonical STARK domain tags must be rejected by proof construction",
+                );
+                assert!(
+                    err.contains("domain tag"),
+                    "{hash_label} {tag_case} error should mention domain tag, got: {err}"
+                );
+
+                envelope.params.domain_tag = invalid_domain_tag;
+                let tampered =
+                    norito::to_bytes(&envelope).expect("encode noncanonical-domain STARK envelope");
+                assert!(
+                    !verify_stark_fri_envelope(&tampered),
+                    "{hash_label} verifier must reject {tag_case} domain tags"
+                );
+            }
+        }
     }
 
     #[test]
@@ -904,6 +1501,22 @@ mod tests {
         );
         assert!(!verify_stark_fri_envelope(&bytes));
 
+        let mut auxiliary_envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode zero-composition AIR envelope");
+        attach_valid_auxiliary_composition_values(&mut auxiliary_envelope);
+        let auxiliary_bytes =
+            norito::to_bytes(&auxiliary_envelope).expect("encode auxiliary AIR envelope");
+        assert!(
+            !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &auxiliary_bytes,
+                circuit_id,
+                &public_digest,
+                &rows,
+                &composition_values,
+            ),
+            "caller-owned explicit AIR must reject auxiliary generic composition commitments"
+        );
+
         let mut drifted_rows = rows.clone();
         drifted_rows[0][0] ^= 1;
         assert!(
@@ -956,6 +1569,28 @@ mod tests {
             envelope.proof.commits.roots.first(),
             Some(&air.composition_root)
         );
+        let mut malformed_opening_params = envelope.params.clone();
+        malformed_opening_params.domain_tag = "iroha:test:bad domain tag".to_owned();
+        assert_eq!(
+            validate_stark_air_opening_commitment_roots_v1(
+                &malformed_opening_params,
+                air,
+                air.openings.first().expect("AIR opening")
+            )
+            .expect_err("opening root replay must reject malformed STARK params"),
+            "STARK opening commitment parameters invalid"
+        );
+        let mut impossible_opening_params = envelope.params.clone();
+        impossible_opening_params.blowup_log2 = impossible_opening_params.n_log2 + 1;
+        assert_eq!(
+            validate_stark_air_opening_commitment_roots_v1(
+                &impossible_opening_params,
+                air,
+                air.openings.first().expect("AIR opening")
+            )
+            .expect_err("opening root replay must reject impossible FRI geometry"),
+            "STARK opening commitment parameters invalid"
+        );
         let extra_query_roots = [air.trace_root, air.composition_root, air.public_digest];
         let indices = validate_stark_fri_query_shape_and_indices_v1(
             &envelope.params,
@@ -1002,15 +1637,44 @@ mod tests {
         noncanonical_composition[0] = MOD_P_U64;
         assert_eq!(
             prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
-                params,
+                params.clone(),
                 "IROHA-TEST-ZERO-COMPOSITION-AIR".to_owned(),
                 "stark/fri/custom-zero-air:test".to_owned(),
                 public_digest,
-                rows,
+                rows.clone(),
                 noncanonical_composition,
             )
             .expect_err("non-canonical composition values must be rejected"),
             "STARK AIR composition contains non-canonical field element"
+        );
+
+        let mut noncanonical_rows = rows;
+        noncanonical_rows[domain - 1][1] = MOD_P_U64;
+        assert_eq!(
+            prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+                params.clone(),
+                "IROHA-TEST-ZERO-COMPOSITION-AIR".to_owned(),
+                "stark/fri/custom-zero-air:test".to_owned(),
+                public_digest,
+                noncanonical_rows.clone(),
+                composition_values.clone(),
+            )
+            .expect_err("non-canonical AIR rows must be rejected"),
+            "STARK AIR row contains non-canonical field element"
+        );
+        assert!(
+            stark_air_trace_root_from_rows_v1(&params, &noncanonical_rows).is_none(),
+            "explicit AIR trace roots must reject non-canonical row field elements"
+        );
+        assert!(
+            !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &bytes,
+                circuit_id,
+                &public_digest,
+                &noncanonical_rows,
+                &composition_values,
+            ),
+            "explicit AIR verification must reject non-canonical caller rows"
         );
     }
 
@@ -1037,6 +1701,1098 @@ mod tests {
             err.contains("STARK query count exceeds domain size"),
             "unexpected impossible-query rejection: {err}"
         );
+    }
+
+    #[test]
+    fn air_envelope_skips_repeated_transcript_query_indices() {
+        let mut params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 3,
+            blowup_log2: 1,
+            fold_arity: 2,
+            queries: 4,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: String::new(),
+        };
+        let domain = 1_usize << usize::from(params.n_log2);
+        let values = vec![Fq::zero(); domain];
+
+        for nonce in 0_u32..1024 {
+            params.domain_tag = format!("iroha:test:skip-repeated-query:{nonce}");
+            let envelope = synthesize_stark_fri_envelope_from_values(
+                params.clone(),
+                "IROHA-TEST-SKIP-REPEATED-AIR-QUERY".to_owned(),
+                values.clone(),
+                &[],
+            )
+            .expect("duplicate-free query schedule must synthesize");
+            let raw_indices = (0..usize::from(params.queries))
+                .map(|query_number| {
+                    derive_query_index(
+                        &envelope.transcript_label,
+                        &params,
+                        &envelope.proof.commits.roots,
+                        query_number,
+                    )
+                    .expect("query index")
+                        % domain
+                })
+                .collect::<Vec<_>>();
+            if !raw_indices
+                .iter()
+                .enumerate()
+                .any(|(index, sampled)| raw_indices[..index].contains(sampled))
+            {
+                continue;
+            }
+
+            let replayed_indices = validate_stark_fri_query_shape_and_indices_v1(
+                &params,
+                &envelope.transcript_label,
+                &envelope.proof.commits.roots,
+                &[],
+                &envelope.proof.queries,
+            )
+            .expect("colliding raw transcript samples are mapped without replacement");
+            assert_eq!(replayed_indices.len(), usize::from(params.queries));
+            assert!(
+                !replayed_indices
+                    .iter()
+                    .enumerate()
+                    .any(|(index, sampled)| replayed_indices[..index].contains(sampled)),
+                "replayed transcript query indices must be duplicate-free"
+            );
+            assert_ne!(
+                raw_indices, replayed_indices,
+                "fixture must exercise collision skipping"
+            );
+
+            let public_digest = [0x73; 32];
+            let circuit_id = "stark/fri/custom-skip-repeated-query-air:test";
+            let rows = (0..domain)
+                .map(|index| {
+                    stark_air_row(index, &public_digest).expect("build duplicate-skip AIR row")
+                })
+                .collect::<Vec<_>>();
+            let composition_values = (0..domain)
+                .map(|index| {
+                    stark_air_composition_value(
+                        index,
+                        domain,
+                        &public_digest,
+                        &rows[index],
+                        &rows[(index + 1) % domain],
+                    )
+                    .expect("build duplicate-skip AIR composition value")
+                })
+                .collect::<Vec<_>>();
+            let composition_values_u64 = composition_values
+                .iter()
+                .map(|value| value.0)
+                .collect::<Vec<_>>();
+            let bytes = prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
+                params.clone(),
+                "IROHA-TEST-SKIP-REPEATED-AIR-QUERY".to_owned(),
+                circuit_id.to_owned(),
+                public_digest,
+                rows.clone(),
+                composition_values.clone(),
+            )
+            .expect("colliding raw samples must still produce a duplicate-free AIR envelope");
+            assert!(
+                verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                    &bytes,
+                    circuit_id,
+                    &public_digest,
+                    &rows,
+                    &composition_values_u64,
+                )
+            );
+
+            let mut duplicate_opening: StarkVerifyEnvelopeV1 =
+                norito::decode_from_bytes(&bytes).expect("decode duplicate-free AIR envelope");
+            duplicate_opening.proof.queries[1] = duplicate_opening.proof.queries[0].clone();
+            let first_opening = duplicate_opening
+                .proof
+                .air
+                .as_ref()
+                .expect("duplicate-free AIR section")
+                .openings[0]
+                .clone();
+            duplicate_opening
+                .proof
+                .air
+                .as_mut()
+                .expect("duplicate-free AIR section")
+                .openings[1] = first_opening;
+            let duplicate_opening_bytes =
+                norito::to_bytes(&duplicate_opening).expect("encode duplicate AIR opening");
+            assert!(
+                !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                    &duplicate_opening_bytes,
+                    circuit_id,
+                    &public_digest,
+                    &rows,
+                    &composition_values_u64,
+                ),
+                "duplicate raw query/opening replay must not satisfy skipped transcript samples"
+            );
+            return;
+        }
+
+        panic!("failed to find small-domain transcript query collision fixture");
+    }
+
+    fn sample_bfv_full_bootstrap_linear_transform_artifact_payload(
+        params: &iroha_crypto::BfvParameters,
+        role: iroha_crypto::BfvFullBootstrapCircuitArtifactRoleV1,
+    ) -> Vec<u8> {
+        let transform = iroha_crypto::BfvFullBootstrapLinearTransformV1 {
+            input_slot_count: params.polynomial_degree,
+            output_slot_count: params.polynomial_degree,
+            diagonals: vec![iroha_crypto::BfvFullBootstrapLinearTransformDiagonalV1 {
+                rotation_steps: 0,
+                plaintext: iroha_crypto::encode_packed_plaintext_slots(
+                    params,
+                    &vec![1; usize::from(params.polynomial_degree)],
+                )
+                .expect("encode identity packed-slot mask"),
+            }],
+        };
+        iroha_crypto::encode_bfv_full_bootstrap_linear_transform_artifact_v1(
+            params, 1, role, &transform,
+        )
+        .expect("encode full-bootstrap linear transform artifact")
+    }
+
+    fn sample_bfv_full_bootstrap_artifacts_for_secret(
+        params: &iroha_crypto::BfvParameters,
+        secret_key: &iroha_crypto::BfvSecretKey,
+    ) -> iroha_crypto::BfvFullBootstrapCircuitArtifactBundleV1 {
+        let accumulator = iroha_crypto::BfvFullBootstrapAccumulatorV1 {
+            slot_count: params.polynomial_degree,
+            test_vector: iroha_crypto::encode_packed_plaintext_slots(
+                params,
+                &vec![1; usize::from(params.polynomial_degree)],
+            )
+            .expect("encode full-bootstrap accumulator"),
+        };
+        let accumulator = iroha_crypto::encode_bfv_full_bootstrap_accumulator_artifact_v1(
+            params,
+            1,
+            &accumulator,
+        )
+        .expect("encode accumulator artifact");
+        let accumulator_digest = iroha_crypto::Hash::new(&accumulator);
+        let proof_public_input_schema =
+            iroha_crypto::encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+                params,
+                1,
+                &iroha_crypto::bfv_full_bootstrap_proof_public_input_schema_v1(),
+            )
+            .expect("encode proof public-input schema artifact");
+        let proof_public_input_schema_digest = iroha_crypto::Hash::new(&proof_public_input_schema);
+        let arithmetic_air_constraint_system =
+            iroha_crypto::encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
+                params,
+                1,
+                &iroha_crypto::bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(),
+            )
+            .expect("encode arithmetic AIR artifact");
+        let coefficient_to_slot_key = sample_bfv_full_bootstrap_linear_transform_artifact_payload(
+            params,
+            iroha_crypto::BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+        );
+        let slot_to_coefficient_key = sample_bfv_full_bootstrap_linear_transform_artifact_payload(
+            params,
+            iroha_crypto::BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
+        );
+        let blind_rotation_key =
+            iroha_crypto::bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
+                params,
+                accumulator_digest,
+                1,
+            )
+            .expect("build blind-rotation key");
+        let blind_rotation_key =
+            iroha_crypto::encode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+                params,
+                1,
+                &blind_rotation_key,
+            )
+            .expect("encode blind-rotation artifact");
+        let sample_extraction = iroha_crypto::BfvFullBootstrapSampleExtractionV1 {
+            source_slot_count: params.polynomial_degree,
+            source_ciphertext_component_count: 2,
+            extracted_coefficient_index: 0,
+            output_ciphertext_component_count: 2,
+        };
+        let sample_extraction_key =
+            iroha_crypto::bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1(
+                params,
+                secret_key,
+                sample_extraction,
+                b"zk-stark-bfv-full-bootstrap-sample-switch",
+            )
+            .expect("build sample-extraction switch key");
+        let sample_extraction_key =
+            iroha_crypto::encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
+                params,
+                1,
+                &sample_extraction_key,
+            )
+            .expect("encode sample-extraction switch key artifact");
+        let evaluator_artifact_set_digest =
+            iroha_crypto::bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+                params,
+                1,
+                &coefficient_to_slot_key,
+                &slot_to_coefficient_key,
+                &blind_rotation_key,
+                &sample_extraction_key,
+                &accumulator,
+                &proof_public_input_schema,
+                &arithmetic_air_constraint_system,
+            )
+            .expect("derive evaluator artifact-set digest");
+        let prover_key_material =
+            iroha_crypto::encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
+                iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            )
+            .expect("encode native prover material");
+        let verifier_key_material =
+            iroha_crypto::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1(
+                iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            )
+            .expect("encode native verifier material");
+        let (prover_key, verifier_key) =
+            iroha_crypto::bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
+                params,
+                1,
+                proof_public_input_schema_digest,
+                evaluator_artifact_set_digest,
+                &prover_key_material,
+                &verifier_key_material,
+            )
+            .expect("build native proof-key pair");
+        let prover_key = iroha_crypto::encode_bfv_full_bootstrap_proof_key_artifact_v1(
+            params,
+            1,
+            iroha_crypto::BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            &prover_key,
+        )
+        .expect("encode prover-key artifact");
+        let verifier_key = iroha_crypto::encode_bfv_full_bootstrap_proof_key_artifact_v1(
+            params,
+            1,
+            iroha_crypto::BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+            &verifier_key,
+        )
+        .expect("encode verifier-key artifact");
+        iroha_crypto::BfvFullBootstrapCircuitArtifactBundleV1 {
+            coefficient_to_slot_key,
+            slot_to_coefficient_key,
+            blind_rotation_key,
+            sample_extraction_key,
+            accumulator,
+            proof_public_input_schema,
+            arithmetic_air_constraint_system,
+            prover_key,
+            verifier_key,
+        }
+    }
+
+    fn bfv_full_bootstrap_stark_test_prover_input_material()
+    -> iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1 {
+        let params = iroha_crypto::ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, _relinearization_key) =
+            iroha_crypto::keygen_from_seed(&params, b"zk-stark-bfv-full-bootstrap-keygen")
+                .expect("BFV keygen");
+        let artifacts = sample_bfv_full_bootstrap_artifacts_for_secret(&params, &secret_key);
+        let material = iroha_crypto::bfv_full_bootstrap_circuit_material_from_artifacts_v1(
+            &params, 1, &artifacts,
+        )
+        .expect("derive governed full-bootstrap material");
+        let blind_rotation = iroha_crypto::decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+            &params,
+            &material,
+            &artifacts.blind_rotation_key,
+        )
+        .expect("decode blind-rotation artifact");
+        let mut bootstrap_key = iroha_crypto::bootstrap_key_from_seed(
+            &params,
+            &public_key,
+            "zk-stark-bfv-full-bootstrap-refresh-key",
+            b"zk-stark-bfv-full-bootstrap-refresh-seed",
+        )
+        .expect("bootstrap refresh key");
+        bootstrap_key.mode = iroha_crypto::BfvBootstrapKeyMode::FullBootstrapV1;
+        bootstrap_key.full_bootstrap_material = Some(material.clone());
+        let plaintext = iroha_crypto::encode_packed_plaintext_slots(
+            &params,
+            &(0..usize::from(params.polynomial_degree))
+                .map(|slot| u64::try_from((slot * 13 + 11) % 257).expect("slot fits"))
+                .collect::<Vec<_>>(),
+        )
+        .expect("encode packed BFV plaintext");
+        let input = iroha_crypto::encrypt_from_seed(
+            &params,
+            &public_key,
+            &plaintext,
+            b"zk-stark-bfv-full-bootstrap-input",
+        )
+        .expect("encrypt BFV input");
+        let galois_keys = blind_rotation
+            .steps
+            .iter()
+            .map(|step| {
+                iroha_crypto::galois_key_from_seed(
+                    &params,
+                    &secret_key,
+                    step.automorphism_power,
+                    b"zk-stark-bfv-full-bootstrap-galois",
+                )
+                .expect("Galois key")
+            })
+            .collect::<Vec<_>>();
+        let output =
+            iroha_crypto::full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &input,
+            )
+            .expect("artifact-aware full-bootstrap output");
+        let input_bound = iroha_crypto::bfv_encrypted_zero_refresh_residual_multiple_bound(&params)
+            .expect("input residual bound");
+        let output_bound =
+            iroha_crypto::bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                input_bound,
+            )
+            .expect("artifact-aware full-bootstrap output bound");
+        let claim = iroha_crypto::bfv_full_bootstrap_execution_proof_claim_with_witness_digest_v1(
+            &params,
+            &bootstrap_key,
+            &artifacts,
+            &galois_keys,
+            0,
+            input,
+            output,
+            iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+            input_bound,
+            output_bound,
+        )
+        .expect("derive execution proof claim");
+        let witness_material =
+            iroha_crypto::bfv_full_bootstrap_execution_witness_digest_material_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &claim,
+            )
+            .expect("derive execution witness material");
+        let proof_input = iroha_crypto::bfv_full_bootstrap_execution_proof_input_material_v1(
+            &public_key,
+            &witness_material,
+        )
+        .expect("build execution proof input material");
+        let prover_key = iroha_crypto::decode_bfv_full_bootstrap_proof_key_artifact_v1(
+            &params,
+            &material,
+            iroha_crypto::BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            &artifacts.prover_key,
+        )
+        .expect("decode prover key artifact");
+        let verifier_key = iroha_crypto::decode_bfv_full_bootstrap_proof_key_artifact_v1(
+            &params,
+            &material,
+            iroha_crypto::BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+            &artifacts.verifier_key,
+        )
+        .expect("decode verifier key artifact");
+        iroha_crypto::bfv_full_bootstrap_execution_prover_input_material_v1(
+            &proof_input,
+            &prover_key,
+            &verifier_key,
+        )
+        .expect("build BFV execution prover input material")
+    }
+
+    #[test]
+    fn bfv_full_bootstrap_air_transcript_labels_are_canonical_retry_labels() {
+        let base = iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1;
+        assert!(bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(
+            base
+        ));
+        assert!(bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(
+            &format!("{base}:1")
+        ));
+        assert!(bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(
+            &format!(
+                "{}:{}",
+                base,
+                BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS - 1
+            )
+        ));
+
+        for label in [
+            format!("{base}:0"),
+            format!("{base}:00"),
+            format!("{base}:01"),
+            format!("{base}:0001"),
+            format!(
+                "{}:{}",
+                base, BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS
+            ),
+            format!("{base}:+1"),
+            format!("{base}:1 "),
+            format!("{base}:1:2"),
+            format!("{base}-1"),
+        ] {
+            assert!(
+                !bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(&label),
+                "noncanonical BFV STARK transcript label must be rejected: {label:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
+        let material = bfv_full_bootstrap_stark_test_prover_input_material();
+        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
+            .expect("BFV full-bootstrap STARK AIR envelope");
+        assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
+            &bytes, &material
+        ));
+        let env: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
+        assert!(bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(
+            &env.transcript_label
+        ));
+        let expected_params =
+            bfv_full_bootstrap_stark_air_params_v1(material.proof_input_material.statement_hash);
+        assert!(bfv_full_bootstrap_stark_air_params_match_v1(
+            &env.params,
+            &expected_params
+        ));
+        let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+        let air = env.proof.air.as_ref().expect("BFV AIR section");
+        let opening_indices = air
+            .openings
+            .iter()
+            .map(|opening| opening.index)
+            .collect::<Vec<_>>();
+        iroha_crypto::validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1(
+            &opening_indices,
+        )
+        .expect("BFV canonical public opening set");
+        for opening in &air.openings {
+            iroha_crypto::validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
+                opening.index,
+                &opening.row,
+                &opening.next_row,
+                material.proof_input_material.statement_hash,
+                material.proof_input_material.witness_material.slot_index,
+                material.proof_input_material.witness_material.bound_mode,
+            )
+            .expect("BFV sampled opening is a canonical public padding row");
+        }
+
+        let mut unsafe_generic_air = None;
+        for attempt in 0..BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS {
+            let transcript_label = bfv_full_bootstrap_stark_air_transcript_label_v1(attempt);
+            let candidate_bytes =
+                match prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+                    expected_params.clone(),
+                    transcript_label.clone(),
+                    iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+                    public_digest,
+                    material.arithmetic_trace_material.rows.clone(),
+                    material
+                        .arithmetic_air_evaluation_material
+                        .composition_values
+                        .clone(),
+                ) {
+                    Ok(bytes) => bytes,
+                    Err(_) => continue,
+                };
+            let candidate_env: StarkVerifyEnvelopeV1 =
+                norito::decode_from_bytes(&candidate_bytes).expect("decode candidate BFV AIR");
+            let candidate_air = candidate_env
+                .proof
+                .air
+                .as_ref()
+                .expect("candidate AIR section");
+            let candidate_indices = candidate_air
+                .openings
+                .iter()
+                .map(|opening| opening.index)
+                .collect::<Vec<_>>();
+            let Err(opening_err) =
+                iroha_crypto::validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1(
+                    &candidate_indices,
+                )
+            else {
+                continue;
+            };
+            unsafe_generic_air = Some((candidate_bytes, candidate_indices, opening_err));
+            break;
+        }
+        let (unsafe_bytes, unsafe_indices, opening_err) = unsafe_generic_air
+            .expect("find allowed BFV transcript label with private-row AIR openings");
+        assert!(
+            opening_err.to_string().contains("unmasked private row"),
+            "unsafe generic AIR rejection must be privacy-related: {opening_err}"
+        );
+        assert!(
+            verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &unsafe_bytes,
+                iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                &public_digest,
+                &material.arithmetic_trace_material.rows,
+                &material
+                    .arithmetic_air_evaluation_material
+                    .composition_values,
+            ),
+            "unsafe candidate must remain a structurally valid generic AIR proof"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&unsafe_bytes, &material),
+            "BFV native AIR verifier must reject generic proofs that open private rows: {unsafe_indices:?}"
+        );
+
+        let mut stale_domain = env.clone();
+        stale_domain.params.domain_tag = bfv_full_bootstrap_stark_air_params_v1(
+            iroha_crypto::Hash::new(b"alternate BFV full-bootstrap statement hash"),
+        )
+        .domain_tag;
+        let stale_domain_bytes = norito::to_bytes(&stale_domain).expect("encode stale domain");
+        assert!(!verify_stark_fri_bfv_full_bootstrap_air_envelope(
+            &stale_domain_bytes,
+            &material
+        ));
+
+        let mut stale_material = material.clone();
+        stale_material.proof_input_material.statement_hash =
+            iroha_crypto::Hash::new(b"stale BFV full-bootstrap statement hash");
+        assert!(!verify_stark_fri_bfv_full_bootstrap_air_envelope(
+            &bytes,
+            &stale_material
+        ));
+
+        let mut tampered_opening = env;
+        tampered_opening
+            .proof
+            .air
+            .as_mut()
+            .expect("BFV AIR section")
+            .openings[0]
+            .row[9] = 1;
+        let tampered_opening_bytes =
+            norito::to_bytes(&tampered_opening).expect("encode tampered opening");
+        assert!(!verify_stark_fri_bfv_full_bootstrap_air_envelope(
+            &tampered_opening_bytes,
+            &material
+        ));
+    }
+
+    #[test]
+    fn bfv_full_bootstrap_air_rejects_auxiliary_generic_composition_sidecars() {
+        let material = bfv_full_bootstrap_stark_test_prover_input_material();
+        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
+            .expect("BFV full-bootstrap STARK AIR envelope");
+        assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
+            &bytes, &material
+        ));
+
+        let mut sidecar_envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
+        assert!(sidecar_envelope.proof.commits.comp_root.is_none());
+        assert!(sidecar_envelope.proof.comp_values.is_none());
+        attach_valid_auxiliary_composition_values(&mut sidecar_envelope);
+        assert!(sidecar_envelope.proof.commits.comp_root.is_some());
+        assert_eq!(
+            sidecar_envelope.proof.comp_values.as_ref().map(Vec::len),
+            Some(sidecar_envelope.proof.queries.len())
+        );
+
+        let mut comp_root_only = sidecar_envelope.clone();
+        comp_root_only.proof.comp_values = None;
+        let mut comp_values_only = sidecar_envelope.clone();
+        comp_values_only.proof.commits.comp_root = None;
+        let mut truncated_values = sidecar_envelope.clone();
+        truncated_values
+            .proof
+            .comp_values
+            .as_mut()
+            .expect("composition values")
+            .pop();
+
+        let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+        for (case, envelope) in [
+            ("paired auxiliary sidecars", sidecar_envelope),
+            ("comp_root without comp_values", comp_root_only),
+            ("comp_values without comp_root", comp_values_only),
+            ("truncated comp_values", truncated_values),
+        ] {
+            let auxiliary_bytes =
+                norito::to_bytes(&envelope).expect("encode auxiliary BFV STARK envelope");
+            assert!(
+                !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                    &auxiliary_bytes,
+                    iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                    &public_digest,
+                    &material.arithmetic_trace_material.rows,
+                    &material
+                        .arithmetic_air_evaluation_material
+                        .composition_values,
+                ),
+                "caller-owned BFV explicit AIR must reject {case}"
+            );
+            assert!(
+                !verify_stark_fri_bfv_full_bootstrap_air_envelope(&auxiliary_bytes, &material),
+                "BFV native AIR verifier must reject {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn bfv_full_bootstrap_air_rejects_malformed_proof_and_air_bindings() {
+        let material = bfv_full_bootstrap_stark_test_prover_input_material();
+        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
+            .expect("BFV full-bootstrap STARK AIR envelope");
+        assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
+            &bytes, &material
+        ));
+        let envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
+        let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+
+        let assert_rejected = |case: &str, envelope: &StarkVerifyEnvelopeV1| {
+            let malformed_bytes =
+                norito::to_bytes(envelope).expect("encode malformed BFV STARK envelope");
+            assert!(
+                !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                    &malformed_bytes,
+                    iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                    &public_digest,
+                    &material.arithmetic_trace_material.rows,
+                    &material
+                        .arithmetic_air_evaluation_material
+                        .composition_values,
+                ),
+                "caller-owned BFV explicit AIR must reject {case}"
+            );
+            assert!(
+                !verify_stark_fri_bfv_full_bootstrap_air_envelope(&malformed_bytes, &material),
+                "BFV native AIR verifier must reject {case}"
+            );
+        };
+
+        let mut bad_proof_version = envelope.clone();
+        bad_proof_version.proof.version = 2;
+        assert_rejected("non-v1 proof version", &bad_proof_version);
+
+        let mut bad_commit_version = envelope.clone();
+        bad_commit_version.proof.commits.version = 2;
+        assert_rejected("non-v1 commitment version", &bad_commit_version);
+
+        let mut missing_air = envelope.clone();
+        missing_air.proof.air = None;
+        assert_rejected("missing AIR section", &missing_air);
+
+        let mut foreign_air = envelope.clone();
+        foreign_air
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .circuit_id = "stark/fri/sha256-goldilocks:foreign-bfv-air".to_owned();
+        assert_rejected("foreign AIR circuit id", &foreign_air);
+
+        let mut drifted_composition_root = envelope.clone();
+        drifted_composition_root
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .composition_root[0] ^= 0x01;
+        assert_rejected("AIR composition-root drift", &drifted_composition_root);
+
+        let mut drifted_trace_root = envelope.clone();
+        drifted_trace_root
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .trace_root[0] ^= 0x01;
+        assert_rejected("AIR trace-root drift", &drifted_trace_root);
+
+        let mut drifted_fri_root = envelope.clone();
+        drifted_fri_root.proof.commits.roots[0][0] ^= 0x01;
+        assert_rejected("FRI composition-root drift", &drifted_fri_root);
+
+        let mut missing_query = envelope.clone();
+        missing_query.proof.queries.pop();
+        assert_rejected("missing FRI query chain", &missing_query);
+
+        let mut missing_opening = envelope;
+        missing_opening
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .openings
+            .pop();
+        assert_rejected("missing AIR opening", &missing_opening);
+    }
+
+    #[test]
+    fn bfv_full_bootstrap_air_rejects_opening_path_and_sample_drift() {
+        let material = bfv_full_bootstrap_stark_test_prover_input_material();
+        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
+            .expect("BFV full-bootstrap STARK AIR envelope");
+        assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
+            &bytes, &material
+        ));
+        let envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
+        let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+
+        let assert_rejected = |case: &str, envelope: &StarkVerifyEnvelopeV1| {
+            let malformed_bytes =
+                norito::to_bytes(envelope).expect("encode malformed BFV STARK envelope");
+            assert!(
+                !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                    &malformed_bytes,
+                    iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                    &public_digest,
+                    &material.arithmetic_trace_material.rows,
+                    &material
+                        .arithmetic_air_evaluation_material
+                        .composition_values,
+                ),
+                "caller-owned BFV explicit AIR must reject {case}"
+            );
+            assert!(
+                !verify_stark_fri_bfv_full_bootstrap_air_envelope(&malformed_bytes, &material),
+                "BFV native AIR verifier must reject {case}"
+            );
+        };
+
+        let mut wrong_opening_index = envelope.clone();
+        let opening_index = wrong_opening_index
+            .proof
+            .air
+            .as_ref()
+            .expect("AIR section")
+            .openings[0]
+            .index;
+        wrong_opening_index
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .openings[0]
+            .index = opening_index.wrapping_add(1);
+        assert_rejected("opening index drift", &wrong_opening_index);
+
+        let mut swapped_row_paths = envelope.clone();
+        let opening = &mut swapped_row_paths
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .openings[0];
+        core::mem::swap(&mut opening.row_path, &mut opening.next_row_path);
+        assert_rejected("swapped row and next-row paths", &swapped_row_paths);
+
+        let mut tampered_row_path = envelope.clone();
+        tampered_row_path
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .openings[0]
+            .row_path
+            .siblings
+            .first_mut()
+            .expect("row path sibling")[0] ^= 0x01;
+        assert_rejected("row Merkle path drift", &tampered_row_path);
+
+        let mut tampered_next_row_path = envelope.clone();
+        tampered_next_row_path
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .openings[0]
+            .next_row_path
+            .siblings
+            .first_mut()
+            .expect("next-row path sibling")[0] ^= 0x01;
+        assert_rejected("next-row Merkle path drift", &tampered_next_row_path);
+
+        let mut tampered_composition_path = envelope.clone();
+        tampered_composition_path
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .openings[0]
+            .composition_path
+            .siblings
+            .first_mut()
+            .expect("composition path sibling")[0] ^= 0x01;
+        assert_rejected(
+            "composition-value Merkle path drift",
+            &tampered_composition_path,
+        );
+
+        let mut tampered_composition_value = envelope.clone();
+        tampered_composition_value
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .openings[0]
+            .composition_value ^= 0x01;
+        assert_rejected(
+            "opened composition-value drift",
+            &tampered_composition_value,
+        );
+
+        let mut tampered_fri_base_value = envelope.clone();
+        tampered_fri_base_value.proof.queries[0][0].y0 ^= 0x01;
+        assert_rejected("FRI base value drift", &tampered_fri_base_value);
+
+        let mut duplicated_opening = envelope;
+        let air = duplicated_opening.proof.air.as_mut().expect("AIR section");
+        assert!(air.openings.len() > 1, "BFV AIR test envelope has queries");
+        air.openings[1] = air.openings[0].clone();
+        assert_rejected("duplicated AIR opening", &duplicated_opening);
+    }
+
+    #[test]
+    fn bfv_full_bootstrap_air_verifier_limits_are_enforced() {
+        let material = bfv_full_bootstrap_stark_test_prover_input_material();
+        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
+            .expect("BFV full-bootstrap STARK AIR envelope");
+        assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
+            &bytes, &material
+        ));
+        assert!(
+            verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
+                &bytes,
+                &StarkVerifierLimits::default(),
+                &material,
+            )
+        );
+
+        let envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
+        let air = envelope.proof.air.as_ref().expect("BFV AIR section");
+
+        let mut tight_envelope_bytes = StarkVerifierLimits::default();
+        tight_envelope_bytes.max_envelope_bytes = bytes.len().saturating_sub(1);
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
+                &bytes,
+                &tight_envelope_bytes,
+                &material,
+            ),
+            "BFV native AIR verifier must honor envelope byte limits"
+        );
+
+        let mut tight_transcript_label = StarkVerifierLimits::default();
+        tight_transcript_label.max_transcript_label_len =
+            envelope.transcript_label.len().saturating_sub(1);
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
+                &bytes,
+                &tight_transcript_label,
+                &material,
+            ),
+            "BFV native AIR verifier must honor transcript-label limits"
+        );
+
+        let mut tight_queries = StarkVerifierLimits::default();
+        tight_queries.max_queries = envelope.proof.queries.len().saturating_sub(1);
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
+                &bytes,
+                &tight_queries,
+                &material,
+            ),
+            "BFV native AIR verifier must honor query-count limits"
+        );
+
+        let mut tight_air_width = StarkVerifierLimits::default();
+        tight_air_width.max_air_width = usize::from(air.trace_width).saturating_sub(1);
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
+                &bytes,
+                &tight_air_width,
+                &material,
+            ),
+            "BFV native AIR verifier must honor AIR width limits"
+        );
+    }
+
+    #[test]
+    fn bfv_full_bootstrap_air_rejects_parameter_profile_drift() {
+        let material = bfv_full_bootstrap_stark_test_prover_input_material();
+        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
+            .expect("BFV full-bootstrap STARK AIR envelope");
+        assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
+            &bytes, &material
+        ));
+        let envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
+        let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
+
+        let assert_rejected = |case: &str, envelope: &StarkVerifyEnvelopeV1| {
+            let malformed_bytes =
+                norito::to_bytes(envelope).expect("encode parameter-drift BFV STARK envelope");
+            assert!(
+                !verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                    &malformed_bytes,
+                    iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+                    &public_digest,
+                    &material.arithmetic_trace_material.rows,
+                    &material
+                        .arithmetic_air_evaluation_material
+                        .composition_values,
+                ),
+                "caller-owned BFV explicit AIR must reject {case}"
+            );
+            assert!(
+                !verify_stark_fri_bfv_full_bootstrap_air_envelope(&malformed_bytes, &material),
+                "BFV native AIR verifier must reject {case}"
+            );
+        };
+
+        let mut bad_version = envelope.clone();
+        bad_version.params.version = 2;
+        assert_rejected("STARK parameter version drift", &bad_version);
+
+        let mut bad_domain_depth = envelope.clone();
+        bad_domain_depth.params.n_log2 = bad_domain_depth.params.n_log2.saturating_add(1);
+        assert_rejected("STARK domain-depth drift", &bad_domain_depth);
+
+        let mut bad_blowup = envelope.clone();
+        bad_blowup.params.blowup_log2 = bad_blowup.params.blowup_log2.saturating_add(1);
+        assert_rejected("STARK blowup drift", &bad_blowup);
+
+        let mut bad_fold_arity = envelope.clone();
+        bad_fold_arity.params.fold_arity = 4;
+        assert_rejected("STARK fold-arity drift", &bad_fold_arity);
+
+        let mut bad_merkle_arity = envelope.clone();
+        bad_merkle_arity.params.merkle_arity = 4;
+        assert_rejected("STARK Merkle-arity drift", &bad_merkle_arity);
+
+        let mut bad_hash_selector = envelope.clone();
+        bad_hash_selector.params.hash_fn = STARK_HASH_POSEIDON2_V1;
+        assert_rejected("STARK hash-selector drift", &bad_hash_selector);
+
+        let mut bad_query_count = envelope.clone();
+        bad_query_count.params.queries = bad_query_count.params.queries.saturating_sub(1);
+        assert_rejected("STARK query-count header drift", &bad_query_count);
+
+        let mut stale_domain = envelope;
+        stale_domain.params.domain_tag = bfv_full_bootstrap_stark_air_params_v1(
+            iroha_crypto::Hash::new(b"alternate BFV full-bootstrap parameter profile"),
+        )
+        .domain_tag;
+        assert_rejected("statement-bound domain-tag drift", &stale_domain);
+    }
+
+    #[test]
+    fn bfv_full_bootstrap_air_rejects_stale_prover_input_material() {
+        let material = bfv_full_bootstrap_stark_test_prover_input_material();
+        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
+            .expect("BFV full-bootstrap STARK AIR envelope");
+        assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
+            &bytes, &material
+        ));
+
+        let assert_rejected_material =
+            |case: &str, material: iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1| {
+                assert!(
+                    iroha_crypto::validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                        &material
+                    )
+                    .is_err(),
+                    "mutated BFV prover input material must fail validation: {case}"
+                );
+                assert!(
+                    !verify_stark_fri_bfv_full_bootstrap_air_envelope(&bytes, &material),
+                    "BFV native AIR verifier must reject {case}"
+                );
+                assert!(
+                    prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material).is_err(),
+                    "BFV native AIR prover must reject {case}"
+                );
+            };
+
+        let mut stale_version = material.clone();
+        stale_version.version = stale_version.version.saturating_add(1);
+        assert_rejected_material("stale prover input material version", stale_version);
+
+        let mut stale_field_count = material.clone();
+        stale_field_count.field_count = stale_field_count.field_count.saturating_add(1);
+        assert_rejected_material("stale prover input material field count", stale_field_count);
+
+        let mut stale_proof_input_version = material.clone();
+        stale_proof_input_version.proof_input_material.version = stale_proof_input_version
+            .proof_input_material
+            .version
+            .saturating_add(1);
+        assert_rejected_material(
+            "stale proof-input material version",
+            stale_proof_input_version,
+        );
+
+        let mut stale_trace_digest = material.clone();
+        stale_trace_digest.arithmetic_trace_material_digest =
+            iroha_crypto::Hash::new(b"stale BFV arithmetic trace material digest");
+        assert_rejected_material("stale arithmetic trace material digest", stale_trace_digest);
+
+        let mut stale_air_evaluation_digest = material.clone();
+        stale_air_evaluation_digest.arithmetic_air_evaluation_material_digest =
+            iroha_crypto::Hash::new(b"stale BFV arithmetic AIR evaluation material digest");
+        assert_rejected_material(
+            "stale arithmetic AIR evaluation material digest",
+            stale_air_evaluation_digest,
+        );
+
+        let mut drifted_trace_rows = material.clone();
+        drifted_trace_rows.arithmetic_trace_material.rows[0][0] ^= 0x01;
+        assert_rejected_material("drifted arithmetic trace rows", drifted_trace_rows);
+
+        let mut drifted_composition_values = material.clone();
+        drifted_composition_values
+            .arithmetic_air_evaluation_material
+            .composition_values[0] ^= 0x01;
+        assert_rejected_material(
+            "drifted arithmetic AIR composition values",
+            drifted_composition_values,
+        );
+
+        let mut swapped_proof_keys = material;
+        core::mem::swap(
+            &mut swapped_proof_keys.prover_key,
+            &mut swapped_proof_keys.verifier_key,
+        );
+        assert_rejected_material("swapped BFV native proof keys", swapped_proof_keys);
     }
 
     fn zk_ace_test_account(seed: u8) -> iroha_data_model::account::AccountId {
@@ -1136,7 +2892,7 @@ mod tests {
             &StarkVerifierLimits::default(),
             &public_inputs,
         ));
-        let envelope: StarkVerifyEnvelopeV1 =
+        let mut envelope: StarkVerifyEnvelopeV1 =
             norito::decode_from_bytes(&bytes).expect("decode ZK-ACE AIR envelope");
         let air = envelope.proof.air.as_ref().expect("AIR section");
         let extra_query_roots = [air.trace_root, air.composition_root, air.public_digest];
@@ -1154,6 +2910,45 @@ mod tests {
                 .iter()
                 .all(|&index| zk_ace_air_opening_is_safe(index, domain)),
             "ZK-ACE prover must not open private witness rows"
+        );
+        let mut auxiliary_envelope = envelope.clone();
+        attach_valid_auxiliary_composition_values(&mut auxiliary_envelope);
+        let auxiliary_bytes =
+            norito::to_bytes(&auxiliary_envelope).expect("encode auxiliary ZK-ACE AIR envelope");
+        assert!(
+            !verify_stark_fri_zk_ace_envelope_with_limits(
+                &auxiliary_bytes,
+                &StarkVerifierLimits::default(),
+                &public_inputs,
+            ),
+            "ZK-ACE AIR must reject auxiliary generic composition commitments"
+        );
+
+        envelope.proof.air.as_mut().expect("AIR section").circuit_id =
+            "stark/fri/zk-ace-pq-authorization-v0:wrong".to_owned();
+        let wrong_circuit =
+            norito::to_bytes(&envelope).expect("encode wrong-circuit ZK-ACE AIR envelope");
+        assert!(
+            !verify_stark_fri_zk_ace_envelope_with_limits(
+                &wrong_circuit,
+                &StarkVerifierLimits::default(),
+                &public_inputs,
+            ),
+            "ZK-ACE AIR verification must bind the canonical circuit id"
+        );
+
+        let err = prove_stark_fri_zk_ace_air_envelope_bytes(
+            params,
+            "IROHA-TEST-ZK-ACE-AIR-WRONG-CIRCUIT".to_owned(),
+            "stark/fri/zk-ace-pq-authorization-v0:wrong".to_owned(),
+            public_digest,
+            &public_inputs,
+            &witness,
+        )
+        .expect_err("ZK-ACE AIR prover must reject wrong circuit ids");
+        assert!(
+            err.contains("circuit_id"),
+            "wrong-circuit ZK-ACE AIR error should mention circuit_id, got: {err}"
         );
     }
 
@@ -1208,6 +3003,26 @@ mod tests {
     }
 
     #[test]
+    fn synthesized_envelope_rejects_blowup_larger_than_domain() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 5,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:invalid-blowup-domain".to_owned(),
+        };
+        let err = synthesize_stark_fri_envelope_bytes(params, "IROHA-TEST-STARK".to_owned())
+            .expect_err("blowup_log2 larger than n_log2 must fail");
+        assert!(
+            err.contains("blowup factor"),
+            "error should mention blowup factor, got: {err}"
+        );
+    }
+
+    #[test]
     fn synthesized_envelope_rejects_tampered_domain_tag() {
         let params = StarkFriParamsV1 {
             version: 1,
@@ -1252,6 +3067,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 fn derive_query_index(
     label: &str,
     params: &StarkFriParamsV1,
@@ -1265,60 +3081,113 @@ fn derive_query_index(
     if domain == 0 {
         return None;
     }
+    let (word, _) = derive_query_challenge_word(label, params, roots, query_idx, 0)?;
+    Some((u128::from(word) % (domain as u128)) as usize)
+}
+
+fn extend_query_challenge_preimage(
+    preimage: &mut Vec<u8>,
+    label: &str,
+    params: &StarkFriParamsV1,
+    roots: &[[u8; 32]],
+    query_idx: usize,
+    rejection_attempt: usize,
+) -> Option<()> {
+    preimage.extend_from_slice(b"STARK:query-index");
+    preimage.extend_from_slice(label.as_bytes());
+    preimage.extend_from_slice(&params.version.to_le_bytes());
+    preimage.extend_from_slice(&[
+        params.n_log2,
+        params.blowup_log2,
+        params.fold_arity,
+        params.merkle_arity,
+        params.hash_fn,
+    ]);
+    preimage.extend_from_slice(&params.queries.to_le_bytes());
+    preimage.extend_from_slice(&(params.domain_tag.len() as u32).to_le_bytes());
+    preimage.extend_from_slice(params.domain_tag.as_bytes());
+    preimage.extend_from_slice(&u64::try_from(query_idx).ok()?.to_le_bytes());
+    if rejection_attempt != 0 {
+        preimage.extend_from_slice(b"STARK:query-index:bounded-retry");
+        preimage.extend_from_slice(&u64::try_from(rejection_attempt).ok()?.to_le_bytes());
+    }
+    for root in roots {
+        preimage.extend_from_slice(root);
+    }
+    Some(())
+}
+
+fn derive_query_challenge_word(
+    label: &str,
+    params: &StarkFriParamsV1,
+    roots: &[[u8; 32]],
+    query_idx: usize,
+    rejection_attempt: usize,
+) -> Option<(u64, u128)> {
     match params.hash_fn {
         STARK_HASH_SHA256_V1 => {
+            let mut preimage = Vec::new();
+            extend_query_challenge_preimage(
+                &mut preimage,
+                label,
+                params,
+                roots,
+                query_idx,
+                rejection_attempt,
+            )?;
             let mut h = Sha256::new();
-            h.update(b"STARK:query-index");
-            h.update(label.as_bytes());
-            h.update(&params.version.to_le_bytes());
-            h.update(&[
-                params.n_log2,
-                params.blowup_log2,
-                params.fold_arity,
-                params.merkle_arity,
-                params.hash_fn,
-            ]);
-            h.update(&params.queries.to_le_bytes());
-            h.update(&(params.domain_tag.len() as u32).to_le_bytes());
-            h.update(params.domain_tag.as_bytes());
-            h.update(&(query_idx as u64).to_le_bytes());
-            for root in roots {
-                h.update(root);
-            }
+            h.update(&preimage);
             let digest = h.finalize();
             let mut w = [0u8; 8];
             w.copy_from_slice(&digest[..8]);
-            Some((u64::from_le_bytes(w) % (domain as u64)) as usize)
+            Some((u64::from_le_bytes(w), 1_u128 << 64))
         }
         STARK_HASH_POSEIDON2_V1 => {
             let mut preimage = Vec::new();
-            preimage.extend_from_slice(b"STARK:query-index");
-            preimage.extend_from_slice(label.as_bytes());
-            preimage.extend_from_slice(&params.version.to_le_bytes());
-            preimage.extend_from_slice(&[
-                params.n_log2,
-                params.blowup_log2,
-                params.fold_arity,
-                params.merkle_arity,
-                params.hash_fn,
-            ]);
-            preimage.extend_from_slice(&params.queries.to_le_bytes());
-            preimage.extend_from_slice(&(params.domain_tag.len() as u32).to_le_bytes());
-            preimage.extend_from_slice(params.domain_tag.as_bytes());
-            preimage.extend_from_slice(&(query_idx as u64).to_le_bytes());
-            for root in roots {
-                preimage.extend_from_slice(root);
-            }
+            extend_query_challenge_preimage(
+                &mut preimage,
+                label,
+                params,
+                roots,
+                query_idx,
+                rejection_attempt,
+            )?;
             let packed = pack_bytes(&preimage);
             let len_field = u64::try_from(packed.length).ok()?;
             let mut limbs = Vec::with_capacity(packed.limbs.len() + 1);
             limbs.push(len_field);
             limbs.extend_from_slice(&packed.limbs);
             let v = hash_field_elements(&limbs);
-            Some((v % (domain as u64)) as usize)
+            Some((v, MOD_P))
         }
         _ => None,
     }
+}
+
+fn derive_bounded_query_offset(
+    label: &str,
+    params: &StarkFriParamsV1,
+    roots: &[[u8; 32]],
+    query_idx: usize,
+    bound: usize,
+) -> Result<usize, &'static str> {
+    if bound == 0 {
+        return Err("FRI query index derivation failed");
+    }
+    let bound = bound as u128;
+    for rejection_attempt in 0..STARK_FRI_BOUNDED_QUERY_REJECTION_ATTEMPTS {
+        let (word, source_space) =
+            derive_query_challenge_word(label, params, roots, query_idx, rejection_attempt)
+                .ok_or("FRI query index derivation failed")?;
+        let limit = source_space
+            .checked_sub(source_space % bound)
+            .ok_or("FRI query index derivation failed")?;
+        let word = u128::from(word);
+        if word < limit {
+            return usize::try_from(word % bound).map_err(|_| "FRI query index derivation failed");
+        }
+    }
+    Err("FRI query index derivation failed")
 }
 
 fn derive_query_indices_without_replacement(
@@ -1341,9 +3210,7 @@ fn derive_query_indices_without_replacement(
         let remaining = domain
             .checked_sub(query_number)
             .ok_or("FRI query index derivation failed")?;
-        let offset = derive_query_index(label, params, roots, query_number)
-            .ok_or("FRI query index derivation failed")?
-            % remaining;
+        let offset = derive_bounded_query_offset(label, params, roots, query_number, remaining)?;
         let draw = query_number
             .checked_add(offset)
             .ok_or("FRI query index derivation failed")?;
@@ -1431,14 +3298,14 @@ pub fn validate_stark_fri_production_verifying_key_payload(
     circuit_id: &str,
     label: &str,
 ) -> Result<(), String> {
-    if circuit_id.trim().is_empty() {
-        return Err(format!(
-            "{label} STARK/FRI verifier key expected circuit id must not be empty"
-        ));
-    }
+    validate_stark_circuit_id(circuit_id).map_err(|err| {
+        format!("{label} STARK/FRI verifier key expected circuit id invalid: {err}")
+    })?;
     if payload.version != 1 {
         return Err(format!("{label} STARK/FRI verifier key must use version 1"));
     }
+    validate_stark_circuit_id(&payload.circuit_id)
+        .map_err(|err| format!("{label} STARK/FRI verifier key circuit id invalid: {err}"))?;
     if payload.circuit_id != circuit_id {
         return Err(format!(
             "{label} STARK/FRI verifier key circuit id mismatch"
@@ -1469,6 +3336,12 @@ pub fn validate_stark_fri_production_verifying_key_payload(
         return Err(format!(
             "{label} STARK/FRI blowup_log2 {} is below production floor {}",
             payload.blowup_log2, ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2
+        ));
+    }
+    if payload.blowup_log2 > payload.n_log2 {
+        return Err(format!(
+            "{label} STARK/FRI blowup_log2 {} exceeds n_log2 {}",
+            payload.blowup_log2, payload.n_log2
         ));
     }
     if payload.queries < ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES {
@@ -1872,6 +3745,7 @@ pub(crate) fn validate_stark_air_opening_commitment_roots_v1(
     air: &StarkAirProofV1,
     opening: &StarkAirOpeningV1,
 ) -> Result<(), &'static str> {
+    validate_stark_opening_commitment_params_v1(params)?;
     let row_leaf = stark_air_trace_leaf_hash(params, &opening.row).ok_or("row leaf hash failed")?;
     if !merkle_verify_hash(params, &air.trace_root, &row_leaf, &opening.row_path) {
         return Err("row Merkle root mismatch");
@@ -1907,6 +3781,8 @@ pub(crate) fn validate_stark_fri_query_shape_and_indices_v1(
     extra_query_roots: &[[u8; 32]],
     queries: &[Vec<FoldDecommitV1>],
 ) -> Result<Vec<usize>, &'static str> {
+    validate_stark_transcript_label(transcript_label, MAX_TRANSCRIPT_LABEL_LEN)
+        .map_err(|_| "FRI transcript label invalid")?;
     let limits = StarkVerifierLimits::default();
     let expected_chain_len = validate_params(params, roots.len(), queries.len(), &limits)
         .ok_or("FRI parameter/root/query shape mismatch")?;
@@ -2003,6 +3879,9 @@ pub(crate) fn validate_stark_air_opening_first_fri_value_v1(
     base_index: usize,
     first_decommit: &FoldDecommitV1,
 ) -> Result<(), &'static str> {
+    if usize::try_from(opening.index).ok() != Some(base_index) {
+        return Err("AIR/FRI opening index mismatch");
+    }
     let opened_fri_value = if base_index.is_multiple_of(2) {
         first_decommit.y0
     } else {
@@ -2010,57 +3889,6 @@ pub(crate) fn validate_stark_air_opening_first_fri_value_v1(
     };
     if opened_fri_value != opening.composition_value {
         return Err("AIR/FRI composition value mismatch");
-    }
-    Ok(())
-}
-
-/// Verify that one optional composition value is bound to its commitment root.
-pub(crate) fn validate_stark_composition_value_commitment_v1(
-    params: &StarkFriParamsV1,
-    comp_root: &[u8; 32],
-    comp_entry: &StarkCompositionValueV1,
-    expected_depth: usize,
-    expected_index: usize,
-) -> Result<(), &'static str> {
-    if !merkle_path_depth_ok(
-        &comp_entry.path,
-        expected_depth,
-        &StarkVerifierLimits::default(),
-    ) {
-        return Err("composition value Merkle path depth mismatch");
-    }
-    if merkle_path_index(&comp_entry.path) != Some(expected_index) {
-        return Err("composition value Merkle path index mismatch");
-    }
-    let cv_f =
-        Fq::from_canonical_u64(comp_entry.leaf).ok_or("composition value leaf field element")?;
-    let constant = Fq::from_canonical_u64(comp_entry.constant)
-        .ok_or("composition value constant field element")?;
-    Fq::from_canonical_u64(comp_entry.z_coeff).ok_or("composition value z coefficient")?;
-    if comp_entry.z_coeff != 0 {
-        return Err("composition value z coefficient requires final fold");
-    }
-    if comp_entry.aux_terms.len() > StarkVerifierLimits::default().max_aux_terms {
-        return Err("composition value auxiliary term count");
-    }
-    let mut expected = constant;
-    let mut last_wire: Option<u32> = None;
-    for term in &comp_entry.aux_terms {
-        if last_wire.is_some_and(|prev| term.wire_index <= prev) {
-            return Err("composition value auxiliary wire ordering");
-        }
-        last_wire = Some(term.wire_index);
-        let coeff = Fq::from_canonical_u64(term.coeff)
-            .ok_or("composition value auxiliary coefficient field element")?;
-        let value = Fq::from_canonical_u64(term.value)
-            .ok_or("composition value auxiliary field element")?;
-        expected = expected.add(coeff.mul(value));
-    }
-    if cv_f != expected {
-        return Err("composition value leaf mismatch");
-    }
-    if !merkle_verify(params, comp_root, cv_f, &comp_entry.path) {
-        return Err("composition value Merkle root mismatch");
     }
     Ok(())
 }
@@ -2100,6 +3928,10 @@ enum StarkAirVerificationContext<'a> {
 }
 
 impl StarkAirVerificationContext<'_> {
+    fn allows_auxiliary_composition(self) -> bool {
+        matches!(self, Self::Binding)
+    }
+
     fn trace_width(self) -> usize {
         match self {
             Self::Binding => stark_air_trace_width(),
@@ -2128,6 +3960,13 @@ fn stark_air_row(index: usize, public_digest: &[u8; 32]) -> Option<Vec<u64>> {
 }
 
 fn stark_air_trace_leaf_hash(params: &StarkFriParamsV1, row: &[u64]) -> Option<[u8; 32]> {
+    if row
+        .iter()
+        .copied()
+        .any(|value| Fq::from_canonical_u64(value).is_none())
+    {
+        return None;
+    }
     match params.hash_fn {
         STARK_HASH_SHA256_V1 => {
             let mut h = Sha256::new();
@@ -2450,7 +4289,10 @@ fn stark_air_context_matches_statement(
     context: StarkAirVerificationContext<'_>,
 ) -> bool {
     match context {
-        StarkAirVerificationContext::Binding | StarkAirVerificationContext::ZkAce { .. } => true,
+        StarkAirVerificationContext::Binding => true,
+        StarkAirVerificationContext::ZkAce { .. } => {
+            air.circuit_id == iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
+        }
         StarkAirVerificationContext::Explicit(explicit) => {
             if air.circuit_id != explicit.circuit_id
                 || air.public_digest != *explicit.public_digest
@@ -2506,6 +4348,64 @@ fn zk_ace_air_opening_is_safe(index: usize, domain_size: usize) -> bool {
         && !zk_ace_air_opening_is_private((index + 1) % domain_size, domain_size)
 }
 
+fn bfv_full_bootstrap_stark_air_params_v1(statement_hash: iroha_crypto::Hash) -> StarkFriParamsV1 {
+    StarkFriParamsV1 {
+        version: 1,
+        n_log2: iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1,
+        blowup_log2: iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1,
+        fold_arity: iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1,
+        queries: iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1,
+        merkle_arity: iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1,
+        hash_fn: iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1,
+        domain_tag: iroha_crypto::bfv_full_bootstrap_native_stark_air_domain_tag_v1(statement_hash),
+    }
+}
+
+fn bfv_full_bootstrap_stark_air_params_match_v1(
+    actual: &StarkFriParamsV1,
+    expected: &StarkFriParamsV1,
+) -> bool {
+    actual.version == expected.version
+        && actual.n_log2 == expected.n_log2
+        && actual.blowup_log2 == expected.blowup_log2
+        && actual.fold_arity == expected.fold_arity
+        && actual.queries == expected.queries
+        && actual.merkle_arity == expected.merkle_arity
+        && actual.hash_fn == expected.hash_fn
+        && actual.domain_tag == expected.domain_tag
+}
+
+fn bfv_full_bootstrap_stark_air_transcript_label_v1(attempt: u32) -> String {
+    if attempt == 0 {
+        return iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1.to_owned();
+    }
+    format!(
+        "{}:{attempt}",
+        iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
+    )
+}
+
+fn bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(label: &str) -> bool {
+    let base = iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1;
+    if label == base {
+        return true;
+    }
+    let Some(suffix) = label
+        .strip_prefix(base)
+        .and_then(|value| value.strip_prefix(':'))
+    else {
+        return false;
+    };
+    if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+    suffix.parse::<u32>().is_ok_and(|attempt| {
+        attempt > 0
+            && attempt < BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS
+            && suffix == attempt.to_string()
+    })
+}
+
 fn validate_stark_prover_params(
     params: &StarkFriParamsV1,
     transcript_label: &str,
@@ -2516,7 +4416,10 @@ fn validate_stark_prover_params(
     if params.n_log2 == 0 || params.n_log2 > MAX_DOMAIN_LOG2 {
         return Err("unsupported STARK domain size".to_owned());
     }
-    if params.blowup_log2 == 0 || params.blowup_log2 > MAX_DOMAIN_LOG2 {
+    if params.blowup_log2 == 0
+        || params.blowup_log2 > MAX_DOMAIN_LOG2
+        || params.blowup_log2 > params.n_log2
+    {
         return Err("unsupported STARK blowup factor".to_owned());
     }
     if params.fold_arity != 2 {
@@ -2528,16 +4431,14 @@ fn validate_stark_prover_params(
     if params.hash_fn != STARK_HASH_SHA256_V1 && params.hash_fn != STARK_HASH_POSEIDON2_V1 {
         return Err("unsupported STARK hash_fn".to_owned());
     }
-    if params.domain_tag.is_empty() || params.domain_tag.len() > MAX_DOMAIN_TAG_LEN {
-        return Err("invalid STARK domain tag".to_owned());
-    }
+    validate_stark_domain_tag(&params.domain_tag, MAX_DOMAIN_TAG_LEN)
+        .map_err(|err| format!("invalid STARK domain tag: {err}"))?;
     let query_count = params.queries as usize;
     if query_count == 0 || query_count > MAX_FRI_QUERIES {
         return Err("invalid STARK query count".to_owned());
     }
-    if transcript_label.len() > MAX_TRANSCRIPT_LABEL_LEN {
-        return Err("transcript label exceeds maximum length".to_owned());
-    }
+    validate_stark_transcript_label(transcript_label, MAX_TRANSCRIPT_LABEL_LEN)
+        .map_err(str::to_owned)?;
     let n_log2 = params.n_log2 as usize;
     if n_log2 > MAX_MERKLE_DEPTH {
         return Err("STARK domain depth exceeds verifier limits".to_owned());
@@ -2618,6 +4519,9 @@ fn synthesize_stark_fri_envelope_from_values(
     let final_values = layer_values
         .last()
         .ok_or_else(|| "missing STARK final FRI layer".to_owned())?;
+    if final_values.len() != 1 || final_values.first().copied() != Some(Fq::zero()) {
+        return Err("STARK final FRI value must be zero".to_owned());
+    }
     let final_levels = merkle_levels_from_values(&params, final_values)
         .ok_or_else(|| "failed to build STARK final FRI Merkle layer".to_owned())?;
     let final_root = merkle_root_from_levels(&final_levels)
@@ -2790,6 +4694,8 @@ pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_byte
     rows: Vec<Vec<u64>>,
     composition_values: Vec<u64>,
 ) -> Result<Vec<u8>, String> {
+    validate_stark_circuit_id(&circuit_id)
+        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
     let composition_values = composition_values
         .into_iter()
         .map(|value| {
@@ -2816,9 +4722,8 @@ fn prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
     rows: Vec<Vec<u64>>,
     composition_values: Vec<Fq>,
 ) -> Result<Vec<u8>, String> {
-    if circuit_id.is_empty() || circuit_id.len() > MAX_TRANSCRIPT_LABEL_LEN {
-        return Err("invalid STARK AIR circuit_id".to_owned());
-    }
+    validate_stark_circuit_id(&circuit_id)
+        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
     validate_stark_prover_params(&params, &transcript_label)?;
     let domain = 1usize
         .checked_shl(u32::from(params.n_log2))
@@ -2948,6 +4853,8 @@ pub fn prove_stark_fri_air_envelope_bytes(
     circuit_id: String,
     public_digest: [u8; 32],
 ) -> Result<Vec<u8>, String> {
+    validate_stark_circuit_id(&circuit_id)
+        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
     validate_stark_prover_params(&params, &transcript_label)?;
     let domain = 1usize
         .checked_shl(u32::from(params.n_log2))
@@ -2996,6 +4903,8 @@ pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
     public_digest: [u8; 32],
     rows: Vec<Vec<u64>>,
 ) -> Result<Vec<u8>, String> {
+    validate_stark_circuit_id(&circuit_id)
+        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
     let domain = 1usize
         .checked_shl(u32::from(params.n_log2))
         .ok_or_else(|| "STARK domain size overflow".to_owned())?;
@@ -3010,6 +4919,164 @@ pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
     )
 }
 
+/// Build a canonical BFV full-bootstrap native STARK/FRI AIR proof envelope.
+///
+/// The proof is synthesized from validated
+/// [`iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1`]. The
+/// wrapper binds the native STARK domain tag to the BFV execution statement
+/// hash and retries deterministic transcript labels until all sampled openings
+/// are public padding rows.
+///
+/// # Errors
+///
+/// Returns an error when the BFV prover input material is invalid, the STARK
+/// envelope cannot be built, or no deterministic transcript label yields the
+/// canonical duplicate-free public opening set.
+pub fn prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(
+    material: &iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1,
+) -> Result<Vec<u8>, String> {
+    iroha_crypto::validate_bfv_full_bootstrap_execution_prover_input_material_v1(material)
+        .map_err(|err| format!("BFV full-bootstrap prover input material invalid: {err}"))?;
+    let statement_hash = material.proof_input_material.statement_hash;
+    let public_digest: [u8; 32] = statement_hash.into();
+    let params = bfv_full_bootstrap_stark_air_params_v1(statement_hash);
+    let rows = material.arithmetic_trace_material.rows.clone();
+    let composition_values = material
+        .arithmetic_air_evaluation_material
+        .composition_values
+        .clone();
+    let mut last_rejection = None;
+    for attempt in 0..BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS {
+        let transcript_label = bfv_full_bootstrap_stark_air_transcript_label_v1(attempt);
+        let bytes = match prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+            params.clone(),
+            transcript_label,
+            iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+            public_digest,
+            rows.clone(),
+            composition_values.clone(),
+        ) {
+            Ok(bytes) => bytes,
+            Err(err) if err == STARK_FRI_QUERY_INDEX_REPEATED_ERROR => {
+                last_rejection = Some(err);
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+        let mut limits = StarkVerifierLimits::default();
+        limits.max_envelope_bytes = usize::MAX;
+        if verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(&bytes, &limits, material) {
+            return Ok(bytes);
+        }
+        last_rejection =
+            Some("BFV full-bootstrap STARK query schedule opened a private row".to_owned());
+    }
+    Err(format!(
+        "failed to derive BFV full-bootstrap STARK/FRI envelope with canonical public openings after {} transcript labels{}",
+        BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS,
+        last_rejection
+            .map(|err| format!(": {err}"))
+            .unwrap_or_default()
+    ))
+}
+
+/// Verify a canonical BFV full-bootstrap native STARK/FRI AIR proof envelope.
+///
+/// This is the default-limit companion to
+/// [`verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits`].
+#[must_use]
+pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope(
+    bytes: &[u8],
+    material: &iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1,
+) -> bool {
+    verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
+        bytes,
+        &StarkVerifierLimits::default(),
+        material,
+    )
+}
+
+/// Verify a BFV full-bootstrap native STARK/FRI AIR proof envelope with limits.
+///
+/// Generic STARK verification is only the first stage. This BFV wrapper also
+/// requires the exact first-release BFV STARK parameters, the statement-bound
+/// domain tag, the canonical BFV circuit id, the statement hash as the public
+/// digest, the canonical opening count, and sampled public-padding rows that
+/// match the BFV statement header.
+#[must_use]
+pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
+    bytes: &[u8],
+    limits: &StarkVerifierLimits,
+    material: &iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1,
+) -> bool {
+    if iroha_crypto::validate_bfv_full_bootstrap_execution_prover_input_material_v1(material)
+        .is_err()
+    {
+        return false;
+    }
+    let statement_hash = material.proof_input_material.statement_hash;
+    let public_digest: [u8; 32] = statement_hash.into();
+    if !verify_stark_fri_air_envelope_from_rows_and_composition_values_with_limits(
+        bytes,
+        limits,
+        iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        &public_digest,
+        &material.arithmetic_trace_material.rows,
+        &material
+            .arithmetic_air_evaluation_material
+            .composition_values,
+    ) {
+        return false;
+    }
+    let env: StarkVerifyEnvelopeV1 = match norito::decode_from_bytes(bytes) {
+        Ok(env) => env,
+        Err(_) => return false,
+    };
+    if !bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(&env.transcript_label) {
+        return false;
+    }
+    let expected_params = bfv_full_bootstrap_stark_air_params_v1(statement_hash);
+    if !bfv_full_bootstrap_stark_air_params_match_v1(&env.params, &expected_params) {
+        return false;
+    }
+    let Some(air) = env.proof.air.as_ref() else {
+        return false;
+    };
+    if air.circuit_id != iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1
+        || air.public_digest != public_digest
+        || usize::from(air.trace_width)
+            != usize::from(iroha_crypto::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1)
+        || air.openings.len()
+            != usize::from(iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1)
+    {
+        return false;
+    }
+    let opening_indices = air
+        .openings
+        .iter()
+        .map(|opening| opening.index)
+        .collect::<Vec<_>>();
+    if iroha_crypto::validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1(
+        &opening_indices,
+    )
+    .is_err()
+    {
+        return false;
+    }
+    let witness = &material.proof_input_material.witness_material;
+    air.openings.iter().all(|opening| {
+        iroha_crypto::validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
+            opening.index,
+            &opening.row,
+            &opening.next_row,
+            statement_hash,
+            witness.slot_index,
+            witness.bound_mode,
+        )
+        .is_ok()
+    })
+}
+
 /// Build a deterministic V1 STARK/FRI envelope for the ZK-ACE authorization AIR.
 pub fn prove_stark_fri_zk_ace_air_envelope_bytes(
     params: StarkFriParamsV1,
@@ -3019,8 +5086,10 @@ pub fn prove_stark_fri_zk_ace_air_envelope_bytes(
     public_inputs: &iroha_data_model::zk::ZkAcePublicInputsV1,
     witness: &iroha_data_model::zk::ZkAceWitnessV1,
 ) -> Result<Vec<u8>, String> {
-    if circuit_id.is_empty() || circuit_id.len() > MAX_TRANSCRIPT_LABEL_LEN {
-        return Err("invalid STARK AIR circuit_id".to_owned());
+    validate_stark_circuit_id(&circuit_id)
+        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
+    if circuit_id != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID {
+        return Err("ZK-ACE AIR circuit_id mismatch".to_owned());
     }
     validate_stark_prover_params(&params, &transcript_label)?;
     let expected_public_digest =
@@ -3083,12 +5152,16 @@ pub fn prove_stark_fri_zk_ace_air_envelope_bytes(
             .ok_or_else(|| "failed to derive ZK-ACE AIR composition root".to_owned())?;
         let extra_query_roots = [trace_root, composition_root, public_digest];
 
-        let mut envelope = synthesize_stark_fri_envelope_from_values(
+        let mut envelope = match synthesize_stark_fri_envelope_from_values(
             params.clone(),
             transcript_label.clone(),
             composition_values,
             &extra_query_roots,
-        )?;
+        ) {
+            Ok(envelope) => envelope,
+            Err(err) if err == STARK_FRI_QUERY_INDEX_REPEATED_ERROR => continue,
+            Err(err) => return Err(err),
+        };
         if envelope.proof.commits.roots.first().copied() != Some(composition_root) {
             return Err("ZK-ACE AIR composition root does not match FRI base root".to_owned());
         }
@@ -3239,8 +5312,8 @@ fn verify_stark_air_opening(
     if usize::try_from(opening.index).ok() != Some(base_index)
         || opening.row.len() != air.trace_width as usize
         || opening.next_row.len() != air.trace_width as usize
-        || opening.row.len() > limits.max_air_width
-        || opening.next_row.len() > limits.max_air_width
+        || opening.row.len() > effective_max_air_width(limits)
+        || opening.next_row.len() > effective_max_air_width(limits)
     {
         return false;
     }
@@ -3381,7 +5454,7 @@ fn verify_stark_fri_envelope_with_context(
     limits: &StarkVerifierLimits,
     context: StarkAirVerificationContext<'_>,
 ) -> bool {
-    if bytes.len() > limits.max_envelope_bytes {
+    if bytes.len() > effective_max_envelope_bytes(limits) {
         return false;
     }
     // Decode envelope
@@ -3389,7 +5462,12 @@ fn verify_stark_fri_envelope_with_context(
         Ok(e) => e,
         Err(_) => return false,
     };
-    if env.transcript_label.len() > limits.max_transcript_label_len {
+    if validate_stark_transcript_label(
+        &env.transcript_label,
+        effective_max_transcript_label_len(limits),
+    )
+    .is_err()
+    {
         return false;
     }
     if env.proof.version != 1 || env.proof.commits.version != 1 {
@@ -3404,6 +5482,11 @@ fn verify_stark_fri_envelope_with_context(
     if env.proof.commits.comp_root.is_some() != env.proof.comp_values.is_some() {
         return false;
     }
+    if !context.allows_auxiliary_composition()
+        && (env.proof.commits.comp_root.is_some() || env.proof.comp_values.is_some())
+    {
+        return false;
+    }
     if let Some(values) = env.proof.comp_values.as_ref() {
         if values.len() != query_count {
             return false;
@@ -3413,9 +5496,9 @@ fn verify_stark_fri_envelope_with_context(
         return false;
     };
     if air.version != 1
-        || air.circuit_id.is_empty()
+        || validate_stark_circuit_id(&air.circuit_id).is_err()
         || air.trace_width as usize != context.trace_width()
-        || air.trace_width as usize > limits.max_air_width
+        || air.trace_width as usize > effective_max_air_width(limits)
         || air.openings.len() != query_count
         || roots.first().copied() != Some(air.composition_root)
     {
@@ -3591,7 +5674,7 @@ fn verify_stark_fri_envelope_with_context(
                 return false;
             }
             let comp_entry = &cv_all[qi];
-            if comp_entry.aux_terms.len() > limits.max_aux_terms {
+            if comp_entry.aux_terms.len() > effective_max_aux_terms(limits) {
                 return false;
             }
             let depth_comp = match log2_usize(layer_domain) {
@@ -3616,6 +5699,17 @@ fn verify_stark_fri_envelope_with_context(
                 Some(v) => v,
                 None => return false,
             };
+            let expected_public_digest = match stark_air_public_digest_from_composition(
+                comp_entry.constant,
+                comp_entry.z_coeff,
+                &comp_entry.aux_terms,
+            ) {
+                Ok(digest) => digest,
+                Err(_) => return false,
+            };
+            if air.public_digest != expected_public_digest {
+                return false;
+            }
             let mut expected = constant;
             if let Some(zf) = last_z {
                 if comp_entry.z_coeff != 0 {

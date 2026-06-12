@@ -38,7 +38,7 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "daedce952f4e3929ec3b22bad67d3f9c9b334be95e282ecdc9fa878f1cfae26b",
+        "macos-arm64": "d1dc2069532ff760e03ebf66fdd17811d8d7fa520dcd9f9048b61bbcbcffc3e2",
         "ios-arm64": "26bb800e9dce021ef38306caef70dbba7928dd99c6612801fb1bbc520b52b7a9",
         "ios-arm64_x86_64-simulator": "d0f651e6dc837bff7e92b05c9bf1e3a2988fc6995cabee6e3aaa269a01ecd1b5"
     ]
@@ -3766,9 +3766,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         var outPtr: UnsafeMutablePointer<UInt8>? = nil
         var outLen: CUnsignedLong = 0
-        var algorithmId = Array("verange-transparent-range-v1".utf8)
-        var entrypoint = Array("buildVeRangeProofV1".utf8)
-        var vkRef = Array("bulletproofs:verange_transparent_range_v1".utf8)
+        var algorithmId = Array("zk-ace-pq-authorization-v0".utf8)
+        var entrypoint = Array("buildZkAceAuthorizationProofV1".utf8)
+        var vkRef = Array("stark-fri:zk_ace_pq_authorization_v0".utf8)
         var publicInputs = Array("public-inputs".utf8)
         defer {
             Self.clearTemporaryPrivacyRequestArchive(&algorithmId)

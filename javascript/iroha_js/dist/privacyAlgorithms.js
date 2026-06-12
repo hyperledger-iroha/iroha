@@ -634,7 +634,25 @@ const BACKEND_FAMILY_BY_ALGORITHM_ID = Object.freeze({
   "aztec-private-rollup-v1": "aztec-plonkish-private-kernel",
   "pq-masp-stark-v0": "pq-masp-stark-fri",
 });
+const PENDING_PRODUCTION_BACKEND_FAMILIES = new Set([
+  "anonymous-pgc",
+  "aztec-plonkish-private-kernel",
+  "fcmp-plus-plus-curve-tree",
+  "groth16-bls12-377",
+  "halo2-ipa-orchard",
+  "lattice-pcs-sis",
+  "miden-stark",
+  "pq-masp-stark-fri",
+  "recursive-anonymous-admission",
+  "silent-threshold-anoncred",
+  "sis-with-hints",
+  "vega-existing-credential-zk",
+  "verange",
+  "zk-x509",
+  "zkat",
+]);
 const REQUIRED_PRIVACY_PLAN_ROWS = Object.freeze([
+  Object.freeze(["zk-ace-pq-authorization-v0", "chain-executable", "stark-fri"]),
   Object.freeze(["anonymous-pgc-k-out-of-n-v1", "sdk-builder", "anonymous-pgc"]),
   Object.freeze(["verange-transparent-range-v1", "component", "verange"]),
   Object.freeze(["zkat-policy-private-auth-v1", "sdk-builder", "zkat"]),
@@ -658,30 +676,30 @@ const REQUIRED_PRIVACY_PLAN_ROWS = Object.freeze([
   Object.freeze(["sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"]),
   Object.freeze([
     "orchard-halo2-actions-v1",
-    "research-target-as-of-2026-05",
+    "sdk-builder",
     "halo2-ipa-orchard",
   ]),
   Object.freeze([
     "penumbra-masp-v1",
-    "research-target-as-of-2026-05",
+    "sdk-builder",
     "groth16-bls12-377",
   ]),
   Object.freeze([
     "monero-fcmp-plus-plus-v1",
-    "research-target-as-of-2026-05",
+    "sdk-builder",
     "fcmp-plus-plus-curve-tree",
   ]),
   Object.freeze([
     "miden-stark-note-v1",
-    "research-target-as-of-2026-05",
+    "sdk-builder",
     "miden-stark",
   ]),
   Object.freeze([
     "aztec-private-rollup-v1",
-    "research-target-as-of-2026-05",
+    "sdk-builder",
     "aztec-plonkish-private-kernel",
   ]),
-  Object.freeze(["pq-masp-stark-v0", "research-target-as-of-2026-05", "pq-masp-stark-fri"]),
+  Object.freeze(["pq-masp-stark-v0", "sdk-builder", "pq-masp-stark-fri"]),
 ]);
 const REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID = Object.freeze({
   "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Anonymous PGC k-out-of-n payments v1", "Anonymous PGC", "Account-based anonymous confidential payment target with hidden sender, hidden amount, receiver privacy, and k-out-of-n receiver-set proofs."]),
@@ -1068,15 +1086,15 @@ const REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID = Object.freeze({
   "pq-masp-stark-v0": Object.freeze(["stale asset-set root", "duplicate PQ nullifier", "ML-DSA or ML-KEM domain mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
 });
 const REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID = Object.freeze({
-  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
-  "verange-transparent-range-v1": Object.freeze(["This is a component, not a complete payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
-  "zkat-policy-private-auth-v1": Object.freeze(["Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
-  "zk-ams-recursive-admission-v0": Object.freeze(["Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
-  "vega-existing-credential-zk-v0": Object.freeze(["Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust and revocation semantics remain external policy inputs.", "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
-  "silent-threshold-anoncred-v0": Object.freeze(["Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments need rotation and downgrade protections.", "This is a credential layer, not a private payment protocol.", "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
-  "zk-x509-onchain-identity-v0": Object.freeze(["Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
-  "jindo-lattice-pcs-zk-v0": Object.freeze(["This is a proof backend candidate, not a transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
-  "sis-hints-anoncred-pq-v0": Object.freeze(["This is a credential foundation, not an immediately deployable wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "verange-transparent-range-v1": Object.freeze(["This range-proof backend component is not a standalone payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "The SDK dev fixture is non-production and verifies deterministic binding only; production VeRange proving remains unavailable until the hardening gates pass.", "Wallet witnesses and private range inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "zkat-policy-private-auth-v1": Object.freeze(["Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "Production zkAt proof admission requires canonical policy commitments, transaction digest binding, account/action/domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "This production admission component is proof-verifiable but not a standalone payment protocol.", "Production ZK-AMS admission requires canonical issuer roots, admission-nullifier sets, anonymous account commitments, recursive admission digests, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet admission witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "vega-existing-credential-zk-v0": Object.freeze(["Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust, expiration, and revocation semantics require registered policy inputs.", "This production credential component is proof-verifiable but not a standalone payment protocol.", "Production Vega credential admission requires canonical issuer commitments, credential schema, predicate commitment, subject binding, expiration epoch, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet credential predicate witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "silent-threshold-anoncred-v0": Object.freeze(["Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments require explicit threshold, rotation, and downgrade protections.", "This production credential component is proof-verifiable but not a standalone payment protocol.", "Production silent-threshold credential admission requires canonical issuer-set, threshold-policy, showing-nullifier, verifier-policy, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet credential showing witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "Production ZK-X.509 identity proofs verify canonical CA-root, certificate-policy, revocation-root, subject-commitment, wallet binding, and domain-separated public inputs while remaining a reusable identity component rather than a standalone payment protocol.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["This is a production proof backend component, not a standalone transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "Production Jindo lattice proving and verifier adapters require registered LatticePcsSis parameters, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["This is a production credential proof component, not a standalone wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "Production SIS-with-hints credential proving and verifier adapters require registered SisWithHints parameters, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Wallet lattice credential witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
   "zk-ace-pq-authorization-v0": Object.freeze(["Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.", "Replay nullifiers must be chain-domain separated and irreversible after acceptance.", "A dev verifier must never be accepted under a production verifier key id.", "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
   "orchard-halo2-actions-v1": Object.freeze(["Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.", "Viewing-key and outgoing-viewing metadata must remain wallet-local.", "Production readiness requires audited Halo2 parameters and note-encryption review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
   "penumbra-masp-v1": Object.freeze(["Typed asset values must bind asset identifiers to balance commitments.", "Groth16 parameter registration must distinguish spend and output circuits.", "Wallet note plaintexts and position metadata must not be exposed through public APIs.", "Production MASP use requires audited parameter governance and chain-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
@@ -1214,60 +1232,28 @@ const REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID = Object.freeze({
   ]),
 });
 const REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
-  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["buildAnonymousPgcReceiverSet", "buildAnonymousPgcDevProofFixture", "verifyAnonymousPgcDevProofLocally"]),
-  "verange-transparent-range-v1": Object.freeze(["buildRangeCommitment", "buildVeRangeDevProofFixture", "buildVeRangeProofEnvelope", "verifyVeRangeProofLocally"]),
-  "zkat-policy-private-auth-v1": Object.freeze(["buildZkAtPolicyCommitment", "buildZkAtAuthenticatorEnvelope", "buildZkAtDevProofFixture", "verifyZkAtAuthenticatorLocally"]),
-  "zk-ams-recursive-admission-v0": Object.freeze(["buildZkAmsAdmissionBatch", "buildZkAmsAdmissionProofEnvelope", "buildZkAmsAdmissionDevProofFixture", "verifyZkAmsAdmissionProofLocally"]),
-  "vega-existing-credential-zk-v0": Object.freeze(["buildVegaCredentialPredicateCommitment", "buildVegaCredentialProofEnvelope", "buildVegaCredentialDevProofFixture", "verifyVegaCredentialProofLocally"]),
-  "silent-threshold-anoncred-v0": Object.freeze(["buildSilentThresholdCredentialCommitments", "buildSilentThresholdCredentialEnvelope", "buildSilentThresholdCredentialDevProofFixture", "verifySilentThresholdCredentialProofLocally"]),
-  "zk-x509-onchain-identity-v0": Object.freeze(["buildZkX509IdentityCommitments", "buildZkX509IdentityEnvelope", "buildZkX509IdentityDevProofFixture", "verifyZkX509IdentityProofLocally"]),
-  "jindo-lattice-pcs-zk-v0": Object.freeze(["buildJindoLatticePublicInputs", "buildJindoLatticeProofEnvelope", "buildJindoLatticeDevProofFixture", "verifyJindoLatticeProofLocally"]),
-  "sis-hints-anoncred-pq-v0": Object.freeze(["buildSisHintsCredentialCommitments", "buildSisHintsCredentialEnvelope", "buildSisHintsCredentialDevProofFixture", "verifySisHintsCredentialProofLocally"]),
-  "zk-ace-pq-authorization-v0": Object.freeze(["buildRegisterZkAceIdentityCommitmentInstruction", "buildRotateZkAceIdentityCommitmentInstruction", "buildRevokeZkAceIdentityCommitmentInstruction", "buildZkAceAuthorizedTransferInstruction", "buildZkAceAuthorizationProofV1"]),
-  "orchard-halo2-actions-v1": Object.freeze([]),
-  "penumbra-masp-v1": Object.freeze([]),
-  "monero-fcmp-plus-plus-v1": Object.freeze([]),
-  "miden-stark-note-v1": Object.freeze([]),
-  "aztec-private-rollup-v1": Object.freeze([]),
-  "pq-masp-stark-v0": Object.freeze([]),
-});
-const REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
   "anonymous-pgc-k-out-of-n-v1": Object.freeze([
+    "buildAnonymousPgcReceiverSet",
     "buildAnonymousPgcAccountCommitmentInstruction",
     "buildAnonymousPgcKOutOfNProofV1",
     "buildAnonymousPgcTransferInstruction",
   ]),
-  "verange-transparent-range-v1": Object.freeze(["buildVeRangeProofV1"]),
-  "zkat-policy-private-auth-v1": Object.freeze([
-    "buildZkAtPolicyCommitmentInstruction",
-    "buildZkAtPolicyProofV1",
-    "buildZkAtAuthorizedTransaction",
+  "verange-transparent-range-v1": Object.freeze([
+    "buildRangeCommitment",
+    "buildVeRangeDevProofFixture",
+    "buildVeRangeProofEnvelope",
+    "buildVeRangeProofV1",
+    "verifyVeRangeProofLocally",
+    "verifyVeRangeProofV1",
   ]),
-  "zk-ams-recursive-admission-v0": Object.freeze([
-    "buildZkAmsAdmissionBatchProofV0",
-    "buildSubmitZkAmsAdmissionBatchInstruction",
-  ]),
-  "vega-existing-credential-zk-v0": Object.freeze([
-    "buildVegaCredentialPredicateProofV0",
-    "buildSubmitVegaCredentialProofInstruction",
-  ]),
-  "silent-threshold-anoncred-v0": Object.freeze([
-    "buildSilentThresholdCredentialShowingProofV0",
-    "buildSubmitSilentThresholdCredentialProofInstruction",
-  ]),
-  "zk-x509-onchain-identity-v0": Object.freeze([
-    "buildZkX509IdentityProofV0",
-    "buildSubmitZkX509IdentityProofInstruction",
-  ]),
-  "jindo-lattice-pcs-zk-v0": Object.freeze([
-    "buildJindoLatticeProofV0",
-    "verifyJindoPolynomialCommitmentV0",
-  ]),
-  "sis-hints-anoncred-pq-v0": Object.freeze([
-    "buildSisHintsAnonymousCredentialProofV0",
-    "buildSubmitSisHintsCredentialProofInstruction",
-  ]),
-  "zk-ace-pq-authorization-v0": Object.freeze([]),
+  "zkat-policy-private-auth-v1": Object.freeze(["buildZkAtPolicyCommitment", "buildZkAtAuthenticatorEnvelope", "buildZkAtPolicyProofV1", "verifyZkAtPolicyProofV1"]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["buildZkAmsAdmissionBatch", "buildZkAmsAdmissionProofEnvelope", "buildZkAmsAdmissionBatchProofV0", "verifyZkAmsAdmissionBatchProofV0"]),
+  "vega-existing-credential-zk-v0": Object.freeze(["buildVegaCredentialPredicateCommitment", "buildVegaCredentialProofEnvelope", "buildVegaCredentialPredicateProofV0", "verifyVegaCredentialPredicateProofV0"]),
+  "silent-threshold-anoncred-v0": Object.freeze(["buildSilentThresholdCredentialCommitments", "buildSilentThresholdCredentialEnvelope", "buildSilentThresholdCredentialShowingProofV0", "verifySilentThresholdCredentialShowingProofV0"]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["buildZkX509IdentityCommitments", "buildZkX509IdentityEnvelope", "buildZkX509IdentityProofV0", "verifyZkX509IdentityProofV0"]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["buildJindoLatticePublicInputs", "buildJindoLatticeProofEnvelope", "buildJindoLatticeProofV0", "verifyJindoPolynomialCommitmentV0"]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["buildSisHintsCredentialCommitments", "buildSisHintsCredentialEnvelope", "buildSisHintsAnonymousCredentialProofV0", "verifySisHintsAnonymousCredentialProofV0"]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["buildRegisterZkAceIdentityCommitmentInstruction", "buildRotateZkAceIdentityCommitmentInstruction", "buildRevokeZkAceIdentityCommitmentInstruction", "buildZkAceAuthorizedTransferInstruction", "buildZkAceAuthorizationProofV1"]),
   "orchard-halo2-actions-v1": Object.freeze([
     "buildOrchardActionBundleProofV1",
     "buildOrchardActionBundleInstruction",
@@ -1297,9 +1283,27 @@ const REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.fre
     "encapsulateMlKem",
   ]),
 });
+const REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze([]),
+  "verange-transparent-range-v1": Object.freeze([]),
+  "zkat-policy-private-auth-v1": Object.freeze([]),
+  "zk-ams-recursive-admission-v0": Object.freeze([]),
+  "vega-existing-credential-zk-v0": Object.freeze([]),
+  "silent-threshold-anoncred-v0": Object.freeze([]),
+  "zk-x509-onchain-identity-v0": Object.freeze([]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze([]),
+  "sis-hints-anoncred-pq-v0": Object.freeze([]),
+  "zk-ace-pq-authorization-v0": Object.freeze([]),
+  "orchard-halo2-actions-v1": Object.freeze([]),
+  "penumbra-masp-v1": Object.freeze([]),
+  "monero-fcmp-plus-plus-v1": Object.freeze([]),
+  "miden-stark-note-v1": Object.freeze([]),
+  "aztec-private-rollup-v1": Object.freeze([]),
+  "pq-masp-stark-v0": Object.freeze([]),
+});
 const REQUIRED_PRIVACY_PLAN_PQ_LAYERS_BY_ALGORITHM_ID = Object.freeze({
   "anonymous-pgc-k-out-of-n-v1": Object.freeze({ proof: false, authorization: false, noteEncryption: false }),
-  "verange-transparent-range-v1": Object.freeze({ proof: false, authorization: false, noteEncryption: false }),
+  "verange-transparent-range-v1": Object.freeze({ proof: true, authorization: false, noteEncryption: false }),
   "zkat-policy-private-auth-v1": Object.freeze({ proof: false, authorization: false, noteEncryption: false }),
   "zk-ams-recursive-admission-v0": Object.freeze({ proof: false, authorization: false, noteEncryption: false }),
   "vega-existing-credential-zk-v0": Object.freeze({ proof: false, authorization: false, noteEncryption: false }),
@@ -1341,7 +1345,7 @@ const REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID = Object.freeze({
   "vega-existing-credential-zk-v0": Object.freeze(["credential issuer registry", "supported credential schema registry", "predicate registry", "revocation or expiration policy", "wallet credential predicate witness store", "credential predicate commitment registry", "credential predicate verifier key registry"]),
   "silent-threshold-anoncred-v0": Object.freeze(["threshold issuer registry", "credential parameter registry", "verifier policy registry", "credential showing nullifier policy", "wallet credential showing witness store", "credential showing commitment registry", "anonymous credential verifier key registry"]),
   "zk-x509-onchain-identity-v0": Object.freeze(["trusted CA root registry", "certificate policy registry", "revocation root registry", "identity proof verifier", "wallet certificate witness store", "certificate subject commitment registry", "ZK-X.509 verifier key registry"]),
-  "jindo-lattice-pcs-zk-v0": Object.freeze(["lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "benchmark fixtures"]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "production benchmark vectors"]),
   "sis-hints-anoncred-pq-v0": Object.freeze(["lattice credential parameter registry", "issuer parameter registry", "credential showing verifier", "wallet lattice credential witness store", "lattice credential commitment registry", "lattice credential verifier key registry"]),
   "zk-ace-pq-authorization-v0": Object.freeze(["registered ZK-ACE identity commitment", "source-account allowlist", "authorization policy hash registry", "active ZK-ACE verifier key", "chain/domain binding state", "transfer digest binding", "replay nullifier uniqueness set", "identity rotation/revocation registry", "STARK/FRI verifier parameter floors", "wallet identity witness and replay-secret store"]),
   "orchard-halo2-actions-v1": Object.freeze(["Orchard note commitment tree", "Orchard nullifier set", "Orchard action-bundle verifier key registry", "wallet Orchard witness store"]),
@@ -2698,6 +2702,10 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
   if (!evidenceNullableEquals(source.public_inputs_schema, descriptor.publicInputsSchema)) {
     return null;
   }
+  const backendFamily = BACKEND_FAMILY_BY_ALGORITHM_ID[descriptor.id];
+  if (PENDING_PRODUCTION_BACKEND_FAMILIES.has(backendFamily)) {
+    return null;
+  }
   const sdkEntrypoints = evidenceSdkEntrypoints(source.sdk_entrypoints, descriptor);
   if (sdkEntrypoints === null) {
     return null;
@@ -3070,13 +3078,13 @@ function validateRequiredPrivacyPlanRows(descriptors) {
         `privacy algorithm catalog required production privacy plan row ${algorithmId} must keep planned SDK entrypoints ${plannedSdkEntrypoints.join(",")} until the production inventory is deliberately updated`,
       );
     }
-    if (
-      !(descriptor.plannedSdkEntrypoints ?? []).some(
-        entrypointIsProductionProofBuilder,
-      )
-    ) {
+    const proofBuilderEntrypoints = [
+      ...(descriptor.sdkEntrypoints ?? []),
+      ...descriptorPlannedSdkEntrypoints,
+    ];
+    if (!proofBuilderEntrypoints.some(entrypointIsProductionProofBuilder)) {
       throw new Error(
-        `privacy algorithm catalog required production privacy plan row ${algorithmId} must retain a planned production proof builder until production gates pass`,
+        `privacy algorithm catalog required production privacy plan row ${algorithmId} must retain or export a production proof builder`,
       );
     }
   }
@@ -3154,6 +3162,15 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
   ) {
     throw new Error(
       `privacy algorithm descriptor ${index}.implementationStage must be a known implementation stage`,
+    );
+  }
+  const backendFamily = BACKEND_FAMILY_BY_ALGORITHM_ID[descriptor.id];
+  if (
+    descriptor.implementationStage === "production-hardened" &&
+    PENDING_PRODUCTION_BACKEND_FAMILIES.has(backendFamily)
+  ) {
+    throw new Error(
+      `privacy algorithm descriptor ${index} backend family ${backendFamily} is still pending production chain admission`,
     );
   }
 
@@ -3464,16 +3481,21 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
       `privacy algorithm descriptor ${index} executable DevFixture SDK entrypoints must include a security note that marks dev fixtures as non-production and unavailable for production use`,
     );
   }
+  const hasExportedProductionProofBuilder = sdkEntrypoints.some(
+    entrypointIsProductionProofBuilder,
+  );
   if (
     sdkEntrypoints.some(entrypointIsExplicitDevFixture) &&
-    plannedSdkEntrypoints.length === 0
+    plannedSdkEntrypoints.length === 0 &&
+    !hasExportedProductionProofBuilder
   ) {
     throw new Error(
-      `privacy algorithm descriptor ${index} executable DevFixture SDK entrypoints must retain planned production SDK entrypoints until production gates pass`,
+      `privacy algorithm descriptor ${index} executable DevFixture SDK entrypoints must retain planned production SDK entrypoints or export a production proof builder until production gates pass`,
     );
   }
   if (
     sdkEntrypoints.some(entrypointIsExplicitDevFixture) &&
+    !hasExportedProductionProofBuilder &&
     !plannedSdkEntrypoints.some(entrypointIsProductionProofBuilder)
   ) {
     throw new Error(
@@ -3645,7 +3667,11 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
         `privacy algorithm descriptor ${index}.sourceReferences must include NIST FIPS 203, FIPS 204, and FIPS 205 URLs for post_quantum coverage; missing ${missingSourceUrls.join(", ")}`,
       );
     }
-    const plannedEntrypointNames = plannedSdkEntrypoints.map((entrypoint) => {
+    const postQuantumEntrypoints = [
+      ...(descriptor.sdkEntrypoints ?? []),
+      ...plannedSdkEntrypoints,
+    ];
+    const plannedEntrypointNames = postQuantumEntrypoints.map((entrypoint) => {
       const segments = entrypoint.split(".");
       return segments[segments.length - 1];
     });
@@ -3658,7 +3684,7 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
       );
     if (missingPlannedEntrypointFragments.length > 0) {
       throw new Error(
-        `privacy algorithm descriptor ${index}.plannedSdkEntrypoints must include planned ML-DSA authorization and ML-KEM note-encryption SDK entrypoints for post_quantum coverage; missing ${missingPlannedEntrypointFragments.join(", ")}`,
+        `privacy algorithm descriptor ${index}.sdkEntrypoints or plannedSdkEntrypoints must include ML-DSA authorization and ML-KEM note-encryption SDK entrypoints for post_quantum coverage; missing ${missingPlannedEntrypointFragments.join(", ")}`,
       );
     }
     for (const [fieldName, values, requiredTokens, label] of [
@@ -3739,22 +3765,30 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
         );
       }
     }
+    const isTransparentBaseline = descriptor.id === "transparent-transfer";
     for (const field of SOURCE_REFERENCED_REQUIRED_VERIFIER_FIELDS) {
-      if (descriptor[field] == null || descriptor[field] === "") {
+      if (
+        !isTransparentBaseline &&
+        (descriptor[field] == null || descriptor[field] === "")
+      ) {
         throw new Error(
           `privacy algorithm descriptor ${index}.${field} must be non-empty for source-referenced implementation stages`,
         );
       }
     }
-    if (SOURCE_REFERENCED_FORBIDDEN_PROOF_FAMILIES.has(descriptor.proofFamily)) {
+    if (
+      !isTransparentBaseline &&
+      SOURCE_REFERENCED_FORBIDDEN_PROOF_FAMILIES.has(descriptor.proofFamily)
+    ) {
       throw new Error(
         `privacy algorithm descriptor ${index}.proofFamily must be a concrete proof family for source-referenced implementation stages`,
       );
     }
     const backendFamily = BACKEND_FAMILY_BY_ALGORITHM_ID[descriptor.id];
     if (
-      backendFamily == null ||
-      SOURCE_REFERENCED_FORBIDDEN_BACKEND_FAMILIES.has(backendFamily)
+      !isTransparentBaseline &&
+      (backendFamily == null ||
+        SOURCE_REFERENCED_FORBIDDEN_BACKEND_FAMILIES.has(backendFamily))
     ) {
       throw new Error(
         `privacy algorithm descriptor ${index} must have a registered non-none backend family for source-referenced implementation stages`,
@@ -3762,10 +3796,11 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
     }
     if (
       PRE_PRODUCTION_SOURCE_REFERENCED_IMPLEMENTATION_STAGES.has(descriptor.implementationStage) &&
-      (descriptor.plannedSdkEntrypoints ?? []).length === 0
+      (descriptor.plannedSdkEntrypoints ?? []).length === 0 &&
+      !(descriptor.sdkEntrypoints ?? []).some(entrypointIsProductionProofBuilder)
     ) {
       throw new Error(
-        `privacy algorithm descriptor ${index}.plannedSdkEntrypoints must be non-empty for pre-production source-referenced implementation stages`,
+        `privacy algorithm descriptor ${index}.plannedSdkEntrypoints must be non-empty or a production proof builder must be exported for pre-production source-referenced implementation stages`,
       );
     }
     if (
@@ -3951,6 +3986,46 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     publicInputsSchema: null,
     verifierKeyId: null,
     pqLayers: PQ_LAYER_NONE,
+    implementationStage: "production-hardened",
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "Iroha repository asset transfer implementation",
+        url: "https://github.com/hyperledger-iroha/iroha",
+      }),
+    ]),
+    recommendedFor: Object.freeze([
+      "baseline public payment flow",
+      "SDK parity and chain-admission checks",
+    ]),
+    securityNotes: Object.freeze([
+      "Transparent transfers intentionally have no privacy proof requirement.",
+      "Production readiness still requires SDK parity, chain admission, localnet acceptance, replay/restart checks, and internal review evidence.",
+      "Wallet signer material and private keys must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+    ]),
+    requiredState: Object.freeze([
+      "asset definition registry",
+      "source account balance",
+      "destination account",
+      "wallet signer state",
+    ]),
+    failureModes: Object.freeze([
+      "insufficient balance",
+      "wrong asset id",
+      "chain-id mismatch",
+      "malformed transfer instruction",
+    ]),
+    setupSteps: Object.freeze([
+      "Register asset definition and participating accounts.",
+      "Fund the source account.",
+      "Configure signer, chain id, and target domain.",
+    ]),
+    executionSteps: Object.freeze([
+      "Build the transfer asset instruction.",
+      "Sign the transaction.",
+      "Submit and wait for chain admission.",
+    ]),
     sdkEntrypoints: Object.freeze([
       "buildTransferAssetInstruction",
       "buildTransaction",
@@ -3968,9 +4043,52 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     maturity: "specification",
     coveredCriteria: Object.freeze(["hide_receiver"]),
     proofFamily: "commitment-only",
-    publicInputsSchema: "asset,from,amount,note_commitment",
+    publicInputsSchema: "asset,from,amount,note_commitment,chain_id,domain_separator",
     verifierKeyId: "zk::Shield",
     pqLayers: PQ_LAYER_NONE,
+    implementationStage: "production-hardened",
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "Iroha repository shielded asset implementation",
+        url: "https://github.com/hyperledger-iroha/iroha",
+      }),
+    ]),
+    recommendedFor: Object.freeze([
+      "entering confidential payment pools",
+      "public-to-private wallet funding",
+    ]),
+    securityNotes: Object.freeze([
+      "Shielding publishes the source debit while hiding the receiver note commitment opening.",
+      "Wallet witness material and note openings must remain local.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+    ]),
+    requiredState: Object.freeze([
+      "asset definition registry",
+      "shielded note commitment set",
+      "active shield verifier key",
+      "wallet note witness store",
+    ]),
+    failureModes: Object.freeze([
+      "insufficient public balance",
+      "malformed note commitment",
+      "malformed proof bytes",
+      "wrong verifier key",
+      "public input mismatch",
+      "wrong asset id",
+      "chain-id mismatch",
+    ]),
+    setupSteps: Object.freeze([
+      "Register the shield verifier key.",
+      "Register the shielded asset.",
+      "Prepare the receiver note commitment.",
+      "Persist wallet note opening material locally.",
+    ]),
+    executionSteps: Object.freeze([
+      "Build the shield instruction.",
+      "Submit the public debit and note commitment.",
+      "Record the resulting note witness in the wallet.",
+    ]),
     sdkEntrypoints: Object.freeze([
       "buildShieldInstruction",
       "buildTransaction",
@@ -3992,6 +4110,46 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,asset_tag,chain_tag",
     verifierKeyId: "confidential_transfer_v2",
     pqLayers: PQ_LAYER_NONE,
+    implementationStage: "production-hardened",
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "Iroha repository confidential transfer implementation",
+        url: "https://github.com/hyperledger-iroha/iroha",
+      }),
+    ]),
+    recommendedFor: Object.freeze([
+      "amount-private note transfers",
+      "sender and receiver note privacy",
+    ]),
+    securityNotes: Object.freeze([
+      "Proof public inputs must bind note roots, nullifiers, commitments, asset tag, and chain tag.",
+      "Witness note openings must remain wallet-local.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+    ]),
+    requiredState: Object.freeze([
+      "note commitment tree root",
+      "spent nullifier set",
+      "active confidential transfer verifier key",
+      "wallet note witness store",
+    ]),
+    failureModes: Object.freeze([
+      "stale root",
+      "duplicate nullifier",
+      "wrong verifier key",
+      "public input mismatch",
+      "malformed proof bytes",
+    ]),
+    setupSteps: Object.freeze([
+      "Register the confidential transfer verifier key.",
+      "Load spendable note witnesses.",
+      "Synchronize note roots and nullifier state.",
+    ]),
+    executionSteps: Object.freeze([
+      "Build the confidential transfer proof.",
+      "Build the zk transfer instruction.",
+      "Submit and wait for verifier admission.",
+    ]),
     sdkEntrypoints: Object.freeze([
       "buildConfidentialTransferProofV2",
       "buildZkTransferInstruction",
@@ -4016,6 +4174,47 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,change_commitment_0,root,public_amount,asset_tag,chain_tag",
     verifierKeyId: "confidential_unshield_v3",
     pqLayers: PQ_LAYER_NONE,
+    implementationStage: "production-hardened",
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "Iroha repository confidential unshield implementation",
+        url: "https://github.com/hyperledger-iroha/iroha",
+      }),
+    ]),
+    recommendedFor: Object.freeze([
+      "private-to-public redemption",
+      "confidential note exits",
+    ]),
+    securityNotes: Object.freeze([
+      "Unshield proofs must bind the public amount, destination, root, nullifier, asset tag, and chain tag.",
+      "Spent note witnesses must be redacted after submission.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+    ]),
+    requiredState: Object.freeze([
+      "note commitment tree root",
+      "spent nullifier set",
+      "active confidential unshield verifier key",
+      "wallet note witness store",
+    ]),
+    failureModes: Object.freeze([
+      "stale root",
+      "duplicate nullifier",
+      "wrong verifier key",
+      "public amount mismatch",
+      "malformed proof bytes",
+      "public input mismatch",
+    ]),
+    setupSteps: Object.freeze([
+      "Register the confidential unshield verifier key.",
+      "Load the note witness and destination account.",
+      "Synchronize note roots and nullifier state.",
+    ]),
+    executionSteps: Object.freeze([
+      "Build the confidential unshield proof.",
+      "Build the unshield instruction.",
+      "Submit and wait for public balance admission.",
+    ]),
     sdkEntrypoints: Object.freeze([
       "buildConfidentialUnshieldProofV3",
       "buildUnshieldInstruction",
@@ -4045,14 +4244,54 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "pool_id,asset_set_root,input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,chain_tag",
     verifierKeyId: "asset_hidden_transfer_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: "validator-scaffold-as-of-2026-05",
+    implementationStage: "production-hardened",
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "Iroha repository asset-hidden transfer implementation",
+        url: "https://github.com/hyperledger-iroha/iroha",
+      }),
+    ]),
+    recommendedFor: Object.freeze([
+      "multi-asset confidential pool transfers",
+      "asset-id privacy with note privacy",
+    ]),
+    securityNotes: Object.freeze([
+      "Asset-hidden proofs must bind pool id, asset-set root, nullifiers, output commitments, root, and chain tag.",
+      "Pool membership witnesses and asset openings must remain wallet-local.",
+      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+    ]),
+    requiredState: Object.freeze([
+      "asset-set commitment root",
+      "pool note commitment tree",
+      "spent nullifier set",
+      "active asset-hidden verifier key",
+      "wallet pool witness store",
+    ]),
+    failureModes: Object.freeze([
+      "stale asset-set root",
+      "duplicate nullifier",
+      "wrong verifier key",
+      "asset tag mismatch",
+      "malformed proof bytes",
+      "public input mismatch",
+    ]),
+    setupSteps: Object.freeze([
+      "Register the asset-hidden pool.",
+      "Register the asset-hidden transfer verifier key.",
+      "Synchronize pool note and asset-set roots.",
+    ]),
+    executionSteps: Object.freeze([
+      "Build the asset-hidden transfer proof.",
+      "Build the pool transfer instruction.",
+      "Submit and wait for verifier admission.",
+    ]),
     sdkEntrypoints: Object.freeze([
+      "buildConfidentialAssetHiddenTransferProofV1",
       "buildRegisterAssetHiddenZkPoolInstruction",
       "buildAssetHiddenZkTransferInstruction",
     ]),
-    plannedSdkEntrypoints: Object.freeze([
-      "buildConfidentialAssetHiddenTransferProofV1",
-    ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "zk::RegisterAssetHiddenZkPool",
       "zk::AssetHiddenZkTransfer",
@@ -4178,7 +4417,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Requires fresh anonymity-set roots and replay/link-tag state.",
       "Amount privacy depends on the range-proof component and commitment binding.",
       "Receiver ciphertext commitments must bind to the same transaction digest as the proof.",
-      "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.",
+      "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, chain id, and domain separator.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
       "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
@@ -4211,14 +4450,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     ]),
     sdkEntrypoints: Object.freeze([
       "buildAnonymousPgcReceiverSet",
-      "buildAnonymousPgcDevProofFixture",
-      "verifyAnonymousPgcDevProofLocally",
-    ]),
-    plannedSdkEntrypoints: Object.freeze([
       "buildAnonymousPgcAccountCommitmentInstruction",
       "buildAnonymousPgcKOutOfNProofV1",
       "buildAnonymousPgcTransferInstruction",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "anonymous account commitment accumulator",
       "spent link-tag set",
@@ -4241,7 +4477,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     publicInputsSchema:
       "commitments,range_parameters,aggregation_count,domain_separator,payload_digest",
     verifierKeyId: "verange_transparent_range_v1",
-    pqLayers: PQ_LAYER_NONE,
+    pqLayers: Object.freeze({
+      proof: true,
+      authorization: false,
+      noteEncryption: false,
+    }),
     implementationStage: "component",
     recommendedFor: Object.freeze([
       "confidential amount range proofs",
@@ -4255,10 +4495,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       }),
     ]),
     securityNotes: Object.freeze([
-      "This is a component, not a complete payment protocol.",
+      "This range-proof backend component is not a standalone payment protocol.",
       "Range parameters must be bound to the transaction payload and verifier key.",
       "Aggregated proof limits must be enforced by validators.",
-      "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.",
+      "The SDK dev fixture is non-production and verifies deterministic binding only; production VeRange proving remains unavailable until the hardening gates pass.",
+      "Wallet witnesses and private range inputs must stay local and must not be exposed through SDK or chain APIs.",
       "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
@@ -4289,11 +4530,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "buildRangeCommitment",
       "buildVeRangeDevProofFixture",
       "buildVeRangeProofEnvelope",
-      "verifyVeRangeProofLocally",
-    ]),
-    plannedSdkEntrypoints: Object.freeze([
       "buildVeRangeProofV1",
+      "verifyVeRangeProofLocally",
+      "verifyVeRangeProofV1",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "VeRange verifier registry entry",
       "range commitment binding rules",
@@ -4330,7 +4571,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Hides authorization policy, not payment fields.",
       "Policy commitments require explicit epoch, replay, and rotation semantics.",
       "Combining with ZK-ACE requires both proofs to bind the same transaction digest.",
-      "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.",
+      "Production zkAt proof admission requires canonical policy commitments, transaction digest binding, account/action/domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
       "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
@@ -4363,14 +4604,10 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     sdkEntrypoints: Object.freeze([
       "buildZkAtPolicyCommitment",
       "buildZkAtAuthenticatorEnvelope",
-      "buildZkAtDevProofFixture",
-      "verifyZkAtAuthenticatorLocally",
-    ]),
-    plannedSdkEntrypoints: Object.freeze([
-      "buildZkAtPolicyCommitmentInstruction",
       "buildZkAtPolicyProofV1",
-      "buildZkAtAuthorizedTransaction",
+      "verifyZkAtPolicyProofV1",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "zkAt policy commitment registry",
       "zkAt verifier",
@@ -4410,9 +4647,10 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Admission privacy is separate from later payment privacy.",
       "Duplicate admission prevention depends on issuer-scoped nullifiers.",
       "Recursive batching must bind every admitted account commitment.",
-      "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.",
+      "This production admission component is proof-verifiable but not a standalone payment protocol.",
+      "Production ZK-AMS admission requires canonical issuer roots, admission-nullifier sets, anonymous account commitments, recursive admission digests, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
-      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Wallet admission witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.",
       "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
@@ -4444,13 +4682,10 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     sdkEntrypoints: Object.freeze([
       "buildZkAmsAdmissionBatch",
       "buildZkAmsAdmissionProofEnvelope",
-      "buildZkAmsAdmissionDevProofFixture",
-      "verifyZkAmsAdmissionProofLocally",
-    ]),
-    plannedSdkEntrypoints: Object.freeze([
       "buildZkAmsAdmissionBatchProofV0",
-      "buildSubmitZkAmsAdmissionBatchInstruction",
+      "verifyZkAmsAdmissionBatchProofV0",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "issuer root registry",
       "admission nullifier set",
@@ -4487,10 +4722,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     securityNotes: Object.freeze([
       "Credential schema parsing must be deterministic and versioned.",
       "Proofs must bind to wallet or identity commitments to prevent credential replay.",
-      "Issuer trust and revocation semantics remain external policy inputs.",
-      "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.",
+      "Issuer trust, expiration, and revocation semantics require registered policy inputs.",
+      "This production credential component is proof-verifiable but not a standalone payment protocol.",
+      "Production Vega credential admission requires canonical issuer commitments, credential schema, predicate commitment, subject binding, expiration epoch, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
-      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Wallet credential predicate witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.",
       "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
@@ -4523,13 +4759,10 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     sdkEntrypoints: Object.freeze([
       "buildVegaCredentialPredicateCommitment",
       "buildVegaCredentialProofEnvelope",
-      "buildVegaCredentialDevProofFixture",
-      "verifyVegaCredentialProofLocally",
-    ]),
-    plannedSdkEntrypoints: Object.freeze([
       "buildVegaCredentialPredicateProofV0",
-      "buildSubmitVegaCredentialProofInstruction",
+      "verifyVegaCredentialPredicateProofV0",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "credential schema registry",
       "issuer registry",
@@ -4565,11 +4798,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     ]),
     securityNotes: Object.freeze([
       "Credential issuance and revocation governance are as important as proof verification.",
-      "Issuer-set commitments need rotation and downgrade protections.",
-      "This is a credential layer, not a private payment protocol.",
-      "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.",
+      "Issuer-set commitments require explicit threshold, rotation, and downgrade protections.",
+      "This production credential component is proof-verifiable but not a standalone payment protocol.",
+      "Production silent-threshold credential admission requires canonical issuer-set, threshold-policy, showing-nullifier, verifier-policy, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
-      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Wallet credential showing witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.",
       "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
@@ -4601,13 +4834,10 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     sdkEntrypoints: Object.freeze([
       "buildSilentThresholdCredentialCommitments",
       "buildSilentThresholdCredentialEnvelope",
-      "buildSilentThresholdCredentialDevProofFixture",
-      "verifySilentThresholdCredentialProofLocally",
-    ]),
-    plannedSdkEntrypoints: Object.freeze([
       "buildSilentThresholdCredentialShowingProofV0",
-      "buildSubmitSilentThresholdCredentialProofInstruction",
+      "verifySilentThresholdCredentialShowingProofV0",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "threshold issuer registry",
       "anonymous credential verifier",
@@ -4645,7 +4875,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Legacy X.509 trust roots are usually not post-quantum.",
       "Revocation root freshness must be explicit in the public inputs.",
       "Address binding must prevent proof replay across wallets and chains.",
-      "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.",
+      "Production ZK-X.509 identity proofs verify canonical CA-root, certificate-policy, revocation-root, subject-commitment, wallet binding, and domain-separated public inputs while remaining a reusable identity component rather than a standalone payment protocol.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
       "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
@@ -4681,13 +4911,10 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     sdkEntrypoints: Object.freeze([
       "buildZkX509IdentityCommitments",
       "buildZkX509IdentityEnvelope",
-      "buildZkX509IdentityDevProofFixture",
-      "verifyZkX509IdentityProofLocally",
-    ]),
-    plannedSdkEntrypoints: Object.freeze([
       "buildZkX509IdentityProofV0",
-      "buildSubmitZkX509IdentityProofInstruction",
+      "verifyZkX509IdentityProofV0",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "trusted CA root registry",
       "revocation root registry",
@@ -4726,17 +4953,17 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       }),
     ]),
     securityNotes: Object.freeze([
-      "This is a proof backend candidate, not a transaction algorithm.",
+      "This is a production proof backend component, not a standalone transaction algorithm.",
       "PQ proof coverage alone does not imply PQ authorization or note encryption.",
       "Parameter selection and implementation security require independent review.",
-      "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.",
+      "Production Jindo lattice proving and verifier adapters require registered LatticePcsSis parameters, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
       "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "lattice PCS parameter registry",
       "backend verifier implementation",
       "lattice PCS verifier key registry",
-      "benchmark fixtures",
+      "production benchmark vectors",
     ]),
     failureModes: Object.freeze([
       "parameter mismatch",
@@ -4757,13 +4984,10 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     sdkEntrypoints: Object.freeze([
       "buildJindoLatticePublicInputs",
       "buildJindoLatticeProofEnvelope",
-      "buildJindoLatticeDevProofFixture",
-      "verifyJindoLatticeProofLocally",
-    ]),
-    plannedSdkEntrypoints: Object.freeze([
       "buildJindoLatticeProofV0",
       "verifyJindoPolynomialCommitmentV0",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "Jindo verifier backend",
       "lattice PCS parameter registry",
@@ -4801,12 +5025,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       }),
     ]),
     securityNotes: Object.freeze([
-      "This is a credential foundation, not an immediately deployable wallet protocol.",
+      "This is a production credential proof component, not a standalone wallet protocol.",
       "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.",
       "Parameter choices and reduction assumptions need explicit governance.",
-      "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.",
-      "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
-      "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+      "Production SIS-with-hints credential proving and verifier adapters require registered SisWithHints parameters, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
+      "Wallet lattice credential witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.",
       "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
@@ -4836,13 +5059,10 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     sdkEntrypoints: Object.freeze([
       "buildSisHintsCredentialCommitments",
       "buildSisHintsCredentialEnvelope",
-      "buildSisHintsCredentialDevProofFixture",
-      "verifySisHintsCredentialProofLocally",
-    ]),
-    plannedSdkEntrypoints: Object.freeze([
       "buildSisHintsAnonymousCredentialProofV0",
-      "buildSubmitSisHintsCredentialProofInstruction",
+      "verifySisHintsAnonymousCredentialProofV0",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "lattice anonymous credential verifier",
       "credential parameter registry",
@@ -4864,7 +5084,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "anchor,nullifiers,cmx,value_commitments,binding_signature",
     verifierKeyId: "orchard_halo2_action_bundle_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: RESEARCH_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "single-asset private transfers",
       "mature note/nullifier wallet design",
@@ -4910,11 +5130,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Create output notes and value commitments.",
       "Generate one Halo2 proof over the action bundle and submit nullifiers plus commitments.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
-    plannedSdkEntrypoints: Object.freeze([
+    sdkEntrypoints: Object.freeze([
       "buildOrchardActionBundleProofV1",
       "buildOrchardActionBundleInstruction",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "Orchard note commitment tree",
       "Orchard nullifier set",
@@ -4942,7 +5162,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "state_commitment_anchor,nullifiers,note_commitments,balance_commitment,asset_id_commitment",
     verifierKeyId: "penumbra_masp_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: RESEARCH_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "multi-asset shielded pools",
       "IBC-style asset privacy",
@@ -4989,12 +5209,12 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Create typed output notes and balance commitments.",
       "Submit spend/output actions with proofs against the shielded pool state commitment tree.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
-    plannedSdkEntrypoints: Object.freeze([
+    sdkEntrypoints: Object.freeze([
       "buildPenumbraSpendProofV1",
       "buildPenumbraOutputProofV1",
       "buildPenumbraShieldedPoolTransaction",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "multi-asset state commitment tree",
       "typed note commitment and nullifier state",
@@ -5017,7 +5237,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "membership_root,key_image_or_link_tag,amount_commitments,range_commitments,spend_authorization,chain_tag",
     verifierKeyId: "monero_fcmp_plus_plus_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: RESEARCH_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "maximal sender anonymity sets",
       "decoy-ring replacement research",
@@ -5060,11 +5280,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Generate full-chain membership and amount-conservation proofs.",
       "Submit link tag, output commitments, range proof, and spend authorization.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
-    plannedSdkEntrypoints: Object.freeze([
+    sdkEntrypoints: Object.freeze([
       "buildFcmpPlusPlusMembershipProofV1",
       "buildFcmpPlusPlusTransferInstruction",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "full-output-set commitment accumulator",
       "spent link-tag set",
@@ -5095,7 +5315,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       authorization: false,
       noteEncryption: false,
     }),
-    implementationStage: RESEARCH_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "client-side proving",
       "private programmable note workflows",
@@ -5143,11 +5363,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Produce a STARK proof for the transaction script and account state delta.",
       "Submit note nullifiers, output note hashes, account commitments, and proof.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
-    plannedSdkEntrypoints: Object.freeze([
+    sdkEntrypoints: Object.freeze([
       "buildMidenStarkTransactionProofV1",
       "buildMidenNoteTransactionInstruction",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "STARK VM verifier",
       "private note hash and nullifier database",
@@ -5170,7 +5390,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "note_hashes,nullifiers,encrypted_logs,public_call_requests,private_kernel_commitment,rollup_state_roots",
     verifierKeyId: "aztec_private_kernel_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: RESEARCH_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "programmable private payments",
       "hybrid public/private contract workflows",
@@ -5218,11 +5438,11 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Accumulate note hashes, nullifiers, encrypted logs, and public-call requests in the private kernel.",
       "Submit the recursive private-kernel proof and side-effect commitments for validator verification.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
-    plannedSdkEntrypoints: Object.freeze([
+    sdkEntrypoints: Object.freeze([
       "buildAztecPrivateKernelProofV1",
       "buildAztecPrivateRollupTransactionInstruction",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "private note-hash tree",
       "nullifier tree",
@@ -5256,7 +5476,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       authorization: true,
       noteEncryption: true,
     }),
-    implementationStage: RESEARCH_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "end-to-end post-quantum privacy target",
       "long-horizon central-bank pilot research",
@@ -5312,14 +5532,14 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Generate STARK/FRI transfer proofs with ML-DSA authorization and ML-KEM output-note encryption.",
       "Submit nullifiers, output commitments, PQ policy hash, and proof for verifier admission.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
-    plannedSdkEntrypoints: Object.freeze([
+    sdkEntrypoints: Object.freeze([
       "buildPqMaspStarkTransferProofV0",
       "buildPqMaspStarkRegisterPoolInstruction",
       "buildPqMaspStarkTransferInstruction",
       "generateMlDsaKeyPair",
       "encapsulateMlKem",
     ]),
+    plannedSdkEntrypoints: Object.freeze([]),
     chainRequirements: Object.freeze([
       "STARK/FRI verifier enabled",
       "ML-DSA transaction authorization",

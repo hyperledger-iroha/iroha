@@ -67,7 +67,7 @@ REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_JS_METHODS = (
 )
 
 REQUIRED_RECURSIVE_COMPACT_JS_PUBLIC_EXPORTS = (
-    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
@@ -133,7 +133,7 @@ REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS = (
 )
 
 REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS = (
-    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
@@ -252,74 +252,205 @@ SOURCE_PATHS = (
     "crates/iroha_js_host/src/lib.rs",
     "docs/source/offline_kagemusha.md",
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
+    "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
     "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
     "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
-    "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift",
+    "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteV2Prover.swift",
+    "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiCanonicalRequest.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineBearerCashWallet.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineCashLifecycle.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineIssuerPublicKey.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineKagemushaAbi7CapabilityContract.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteCompatibility.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteInstances.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteRedeemPlanner.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteSecureStore.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteTextTransferContract.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransactionEncoder.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransferHandoff.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransferProtocols.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2Instances.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2TransactionEncoder.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineProofVerifiers.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineQrStream.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineQrStreamScan.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineTransferDiagnostics.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ToriiCanonicalRequestTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineKagemushaAbi7CapabilityContractTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoritoEncodingTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteNfcApduPayloadBudgetTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteRedeemPlannerTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTextTransferContractTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineProofVerifierTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineQrStreamTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineRevocationBundleTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountIdLiteral.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/CanonicalRequestSigner.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierJsonParser.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoder.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptVerifier.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/SigningAlgorithm.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoder.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtils.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyRecordDescription.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyStatus.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycle.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/VerifyingKeyBoxCodec.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountIdLiteralTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/CanonicalRequestSignerTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoderTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClientTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/crypto/SigningAlgorithmTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoderTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycleTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountIdLiteral.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/CanonicalRequestSigner.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierJsonParser.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptCanonicalEncoder.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptVerifier.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamClient.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoder.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/VerifyingKeyInstructionUtils.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyRecordDescription.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyStatus.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/SigningAlgorithm.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycle.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/VerifyingKeyBoxCodec.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountIdLiteralTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/CanonicalRequestSignerTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamClientTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoderParityTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/VerifyingKeyInstructionBuildersTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTagTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyRecordDescriptionTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyStatusTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/crypto/SigningAlgorithmTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
+    "javascript/iroha_js/src/address.js",
+    "javascript/iroha_js/dist/address.js",
+    "javascript/iroha_js/src/canonicalRequest.js",
+    "javascript/iroha_js/dist/canonicalRequest.js",
+    "javascript/iroha_js/src/curveRegistry.js",
+    "javascript/iroha_js/dist/curveRegistry.js",
     "javascript/iroha_js/src/crypto.js",
     "javascript/iroha_js/dist/crypto.js",
     "javascript/iroha_js/src/crypto.browser.js",
     "javascript/iroha_js/dist/crypto.browser.js",
     "javascript/iroha_js/src/index.js",
     "javascript/iroha_js/dist/index.js",
+    "javascript/iroha_js/src/instructionBuilders.js",
+    "javascript/iroha_js/dist/instructionBuilders.js",
+    "javascript/iroha_js/src/offlineCashLifecycle.js",
+    "javascript/iroha_js/dist/offlineCashLifecycle.js",
+    "javascript/iroha_js/src/privacyAlgorithms.js",
+    "javascript/iroha_js/dist/privacyAlgorithms.js",
+    "javascript/iroha_js/src/toriiClient.js",
+    "javascript/iroha_js/dist/toriiClient.js",
     "javascript/iroha_js/src/transaction.js",
     "javascript/iroha_js/dist/transaction.js",
     "javascript/iroha_js/index.d.ts",
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",
+    "fixtures/soracloud/identifier_receipt_vectors_v1.json",
+    "javascript/iroha_js/test/address.test.js",
+    "javascript/iroha_js/test/canonicalRequest.test.js",
     "javascript/iroha_js/test/crypto.browser.test.js",
+    "javascript/iroha_js/test/instructionBuilders.test.js",
     "javascript/iroha_js/test/transactionBuilder.test.js",
     "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+    "javascript/iroha_js/test/offlineCashLifecycle.test.js",
     "javascript/iroha_js/test/package_dist.test.js",
     "javascript/iroha_js/test/privacyNative.test.js",
+    "javascript/iroha_js/test/toriiClient.identifier.test.js",
+    "javascript/iroha_js/test/toriiClient.test.js",
     "python/iroha_python/src/iroha_python/__init__.py",
+    "python/iroha_python/src/iroha_python/_privacy_backends.py",
+    "python/iroha_python/src/iroha_python/address.py",
+    "python/iroha_python/src/iroha_python/client.py",
     "python/iroha_python/src/iroha_python/crypto.py",
+    "python/iroha_python/src/iroha_python/event_filter.py",
     "python/iroha_python/src/iroha_python/kagemusha.py",
+    "python/iroha_python/src/iroha_python/offline_cash.py",
     "python/iroha_python/src/iroha_python/privacy_catalog.py",
     "python/iroha_python/src/iroha_python/tx.py",
     "python/iroha_python/iroha_python_rs/src/lib.rs",
+    "python/iroha_python/tests/client_ledger_helpers_test.py",
     "python/iroha_python/tests/kagemusha_test.py",
     "python/iroha_python/tests/privacy_catalog_test.py",
     "python/iroha_python/tests/crypto_algorithms_test.py",
+    "python/iroha_python/tests/offline_cash_test.py",
+    "python/iroha_python/tests/test_address_format.py",
+    "python/iroha_torii_client/__init__.py",
+    "python/iroha_torii_client/client.py",
+    "python/iroha_torii_client/tests/test_client.py",
     "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj",
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
@@ -776,6 +907,66 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-test-filter-script",
     ),
     (
+        "Python SDK canonical request test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-canonical-request-test-filter-script",
+    ),
+    (
+        "Python SDK identifier receipt test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-identifier-receipt-test-filter-script",
+    ),
+    (
+        "identifier receipt proof-base64 guard negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-proof-base64-guard",
+    ),
+    (
+        "identifier receipt attestation kind exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-kind-exactness-guard",
+    ),
+    (
+        "identifier receipt proof-base64 exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-proof-base64-exactness-guard",
+    ),
+    (
+        "identifier receipt signature exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-signature-exactness-guard",
+    ),
+    (
+        "identifier receipt policy-id exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-policy-id-exactness-guard",
+    ),
+    (
+        "identifier receipt policy-summary id exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-policy-summary-id-exactness-guard",
+    ),
+    (
+        "identifier receipt program-id exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-program-id-exactness-guard",
+    ),
+    (
+        "identifier receipt account-id exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-account-id-exactness-guard",
+    ),
+    (
+        "identifier receipt hash-field exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-hash-exactness-guard",
+    ),
+    (
+        "identifier receipt timestamp exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-timestamp-exactness-guard",
+    ),
+    (
+        "identifier receipt timestamp u64 negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-timestamp-u64-guard",
+    ),
+    (
+        "identifier receipt resolver-key exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-resolver-key-exactness-guard",
+    ),
+    (
+        "Python SDK event-filter test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-event-filter-test-filter-script",
+    ),
+    (
         "Python SDK workflow inventory negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-workflow-inventory",
     ),
@@ -822,6 +1013,22 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "JVM SDK test filter script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-test-filter-script",
+    ),
+    (
+        "JVM SDK canonical request test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-canonical-request-test-filter-script",
+    ),
+    (
+        "JVM SDK signing/verifier exactness test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-signing-verifier-test-filter-script",
+    ),
+    (
+        "JVM SDK Torii event-stream verifier filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-torii-event-stream-verifier-filter-script",
+    ),
+    (
+        "JVM SDK identifier receipt filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-identifier-receipt-filter-script",
     ),
     (
         "JVM SDK workflow inventory negative control",
@@ -910,6 +1117,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Swift SDK privacy parse script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-privacy-parse-script",
+    ),
+    (
+        "Swift SDK Torii verifier parse script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-torii-verifier-parse-script",
     ),
     (
         "Swift SDK workflow inventory negative control",
@@ -1082,6 +1293,26 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "JavaScript SDK privacy native test filter negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-privacy-native-filter-script",
+    ),
+    (
+        "JavaScript SDK offline cash test filter negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-offline-cash-filter-script",
+    ),
+    (
+        "JavaScript SDK canonical request test filter negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-canonical-request-filter-script",
+    ),
+    (
+        "JavaScript SDK event-filter test filter negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-event-filter-filter-script",
+    ),
+    (
+        "JavaScript SDK verifier-key test filter negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-verifier-key-filter-script",
+    ),
+    (
+        "JavaScript SDK identifier receipt test filter negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-identifier-receipt-filter-script",
     ),
     (
         "JavaScript SDK workflow inventory negative control",
@@ -1726,13 +1957,31 @@ def check_javascript_sdk_script(errors):
         "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs|buildKagemusha" in script
         and "privacy native availability probes build and verify with Norito request archives" in script
         and "privacy native wrappers require binary Norito request archives" in script
+        and "fromAccount rejects control and Unicode-confusable curve algorithm aliases" in script
+        and "offline cash configuration snapshot requires cached issuer key and ABI" in script
+        and "canonical request signing: rejects padded auth fields" in script
+        and "streamEvents rejects unsupported production backend event filters before fetch" in script
+        and "streamEvents rejects malformed verifying key event names before fetch" in script
+        and "streamEvents rejects malformed proof event hashes before fetch" in script
+        and "ZK-ACE verifier-key references reject padded selector metadata" in script
+        and "privacy proof envelopes preserve pending production backend tags" in script
+        and "verifyIdentifierResolutionReceipt rejects adversarial receipt mutations" in script
+        and "encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags" in script
+        and "encodeIdentifierResolutionReceiptAttestation rejects padded proof backend" in script
+        and "verifyIdentifierResolutionReceipt matches shared receipt vectors" in script
+        and "test/address.test.js" in script
+        and "test/canonicalRequest.test.js" in script
         and "test/crypto.browser.test.js" in script
+        and "test/instructionBuilders.test.js" in script
         and "test/kagemushaFfiContractParity.test.js" in script
         and "test/kagemushaRecursiveSpend.test.js" in script
+        and "test/offlineCashLifecycle.test.js" in script
         and "test/package_dist.test.js" in script
         and "test/privacyNative.test.js" in script
+        and "test/toriiClient.identifier.test.js" in script
+        and "test/toriiClient.test.js" in script
         and "test/transactionBuilder.test.js" in script,
-        "Kagemusha JavaScript SDK script must run recursive spend, browser-stub, privacy native, package-dist, transaction-builder, and runtime-gate meta tests",
+        "Kagemusha JavaScript SDK script must run recursive spend, address exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, verifier-key exactness, identifier receipt exactness, browser-stub, privacy native, package-dist, transaction-builder, and runtime-gate meta tests",
         errors,
     )
 
@@ -1814,7 +2063,7 @@ def check_c_bridge(texts, errors):
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
         r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*7\s*;",
-        "C bridge ABI version",
+        "C native bridge ABI version",
         errors,
     )
     require_contains(
@@ -2173,7 +2422,7 @@ def check_recursive_compact_surface(texts, errors):
             relative,
             REQUIRED_RECURSIVE_COMPACT_JS_PUBLIC_EXPORTS
             + (
-                "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7",
+                "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7",
                 '"kagemusha-recursive-compact-v1"',
                 "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
                 "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
@@ -2221,7 +2470,7 @@ def check_recursive_compact_surface(texts, errors):
         texts,
         "javascript/iroha_js/index.d.ts",
         (
-            "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION: 7",
+            "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7",
             "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1:",
             "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT:",
             "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT:",
@@ -2284,13 +2533,13 @@ def check_recursive_compact_surface(texts, errors):
             '"kagemusha_verify_recursive_compact_payment_token"',
             "globals()[_RECURSIVE_COMPACT_TOKEN_METHOD]",
             "globals()[_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD]",
-            "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7",
+            "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7",
             '"kagemusha-recursive-compact-v1"',
             "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
             "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
             "def is_kagemusha_recursive_compact_unavailable",
-            "bridge ABI 7 with compact prover and verifier symbols",
-            "bridge ABI 7 with the compact verifier symbol",
+            "native bridge ABI 7 with compact prover and verifier symbols",
+            "native bridge ABI 7 with the compact verifier symbol",
             '("archive", "norito", "probe")',
             '_assert_kagemusha_norito_archive(compact_token, "compact_token_archive")',
             "returned non-boolean result",
@@ -2484,7 +2733,7 @@ def check_recursive_compact_surface(texts, errors):
         swift_wrapper,
         (
             "KagemushaRecursiveCompactPaymentTokenProver",
-            "requiredBridgeAbiVersion: UInt32 = 7",
+            "requiredNativeBridgeAbiVersion: UInt32 = 7",
             'recursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1"',
             "public static var isVerifierNativeAvailable",
             "isKagemushaRecursiveCompactPaymentTokenVerifierAvailable",
@@ -2650,7 +2899,7 @@ def check_recursive_compact_surface(texts, errors):
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
             "Kotlin recursive compact wrapper",
-            "REQUIRED_BRIDGE_ABI_VERSION: Int = 7",
+            "REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 7",
             "fun isVerifierNativeAvailable(): Boolean",
             "fun isProjectionVerifierNativeAvailable(): Boolean",
             "recursiveCompactVerifierKeysArchive: ByteArray?",
@@ -2681,6 +2930,7 @@ def check_recursive_compact_surface(texts, errors):
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
             "Android Java recursive compact wrapper",
             "REQUIRED_BRIDGE_ABI_VERSION = 7",
+            "REQUIRED_NATIVE_BRIDGE_ABI_VERSION = REQUIRED_BRIDGE_ABI_VERSION",
             "public static boolean isVerifierNativeAvailable()",
             "public static boolean isProjectionVerifierNativeAvailable()",
             "final byte[] recursiveCompactVerifierKeysArchive",
@@ -2784,7 +3034,7 @@ def check_recursive_compact_surface(texts, errors):
         texts,
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
         (
-            "KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_BRIDGE_ABI_VERSION",
+            "KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
             "KagemushaRecursiveCompactPaymentTokenProver.isVerifierNativeAvailable()",
             "KagemushaRecursiveCompactPaymentTokenProver.isProjectionVerifierNativeAvailable()",
             ".recursiveSpendCompactPaymentTokenFromBundle(ByteArray(0))",
@@ -2821,7 +3071,7 @@ def check_recursive_compact_surface(texts, errors):
         texts,
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
         (
-            "KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_BRIDGE_ABI_VERSION",
+            "KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
             "KagemushaRecursiveCompactPaymentTokenProver.isVerifierNativeAvailable()",
             "KagemushaRecursiveCompactPaymentTokenProver.isProjectionVerifierNativeAvailable()",
             ".recursiveSpendCompactPaymentTokenFromBundle(new byte[0])",
@@ -2861,7 +3111,7 @@ def check_recursive_compact_surface(texts, errors):
         csharp,
         REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS
         + (
-            "RecursiveCompactRequiredBridgeAbiVersion = 7",
+            "RecursiveCompactRequiredNativeBridgeAbiVersion = 7",
             "IsRecursiveCompactPaymentTokenProverAvailable",
             "IsRecursiveCompactPaymentTokenVerifierAvailable",
             "IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable",
@@ -3317,7 +3567,7 @@ def check_node_host(texts, errors):
         texts,
         relative,
         r"pub\s+fn\s+connect_norito_bridge_abi_version\s*\(\)\s*->\s*u32\s*\{\s*7\s*\}",
-        "Node NAPI bridge ABI version",
+        "Node NAPI native bridge ABI version",
         errors,
     )
 
@@ -3355,8 +3605,18 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         errors,
     )
     for test_class in (
+        "org.hyperledger.iroha.sdk.address.AccountIdLiteralTest",
+        "org.hyperledger.iroha.sdk.client.CanonicalRequestSignerTest",
+        "org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClientTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest",
+        "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest",
+        "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest",
+        "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyStatusTest",
+        "org.hyperledger.iroha.sdk.crypto.SigningAlgorithmTest",
         "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest",
         "org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest",
+        "org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest",
         "org.hyperledger.iroha.sdk.offline.OfflineNoteTest",
         "org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test",
         "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest",
@@ -3374,10 +3634,17 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
     require(
         (
             "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,"
+            "org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest,"
             "org.hyperledger.iroha.android.offline.OfflineNoteV2Test,"
             "org.hyperledger.iroha.android.offline.OfflineNoteTest,"
             "org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,"
-            "org.hyperledger.iroha.android.tx.TransactionBuilderTests"
+            "org.hyperledger.iroha.android.tx.TransactionBuilderTests,"
+            "org.hyperledger.iroha.android.address.AccountIdLiteralTests,"
+            "org.hyperledger.iroha.android.client.CanonicalRequestSignerTests,"
+            "org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests,"
+            "org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests,"
+            "org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests,"
+            "org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests"
         )
         in script,
         "Kagemusha JVM SDK script must run the focused Android Kagemusha harness mains",
@@ -3389,11 +3656,17 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "Kagemusha JVM SDK script must run the Android Gradle harness test",
         errors,
     )
+    require(
+        "--tests org.hyperledger.iroha.android.crypto.SigningAlgorithmTests" in script,
+        "Kagemusha JVM SDK script must run Android signing algorithm exactness tests",
+        errors,
+    )
 
 
 def check_javascript(texts, errors):
+    torii_identifier_test = "javascript/iroha_js/test/toriiClient.identifier.test.js"
     constants = (
-        "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6",
+        "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6",
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64",
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true",
         "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1",
@@ -3419,15 +3692,98 @@ def check_javascript(texts, errors):
         require_contains(texts, relative, constants, f"{relative} constants", errors)
         require_contains(texts, relative, REQUIRED_JS_PUBLIC_EXPORTS, f"{relative} public API", errors)
 
+    require_contains(
+        texts,
+        torii_identifier_test,
+        (
+            "attestation kind",
+            "attestation\\.signature must not contain surrounding whitespace",
+            "payload\\.opening\\.signature must not contain surrounding whitespace",
+            "proof_b64 must not contain surrounding whitespace",
+            "valid base64 string",
+            "policy_id exactness",
+            "program_id exactness",
+            "account_id exactness",
+            "hash exactness",
+            "timestamp exactness",
+            "payload.opaque_id",
+            "payload.receipt_hash",
+            "payload.uaid",
+            "payload.execution.program_digest",
+            "payload.execution.executed_at_ms",
+            "payload.execution.expires_at_ms",
+            "payload\\.execution\\.program_id",
+            "payload\\.opening\\.payload\\.program_id",
+            "payload\\.account_id",
+            "payload.opening.payload.input_ciphertext_hash",
+            "payload.opening.payload.opened_at_ms",
+            "payload.opening.payload.expires_at_ms",
+            "phone #retail",
+            'proof_b64: proofB64',
+            'proof_b64: "@@@"',
+        ),
+        "JavaScript identifier receipt attestation kind and proof base64 exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "fixtures/soracloud/identifier_receipt_vectors_v1.json",
+        (
+            "padded-leading-resolver-key",
+            "padded-trailing-resolver-key",
+            "padded-leading-policy-id",
+            "padded-trailing-policy-id",
+            "padded-leading-attestation-signature",
+            "padded-trailing-attestation-signature",
+            "policy.resolver_public_key",
+            "policy.policy_id",
+            "receipt.attestation.signature",
+            "surrounding whitespace",
+        ),
+        "identifier receipt policy and attestation exactness fixture",
+        errors,
+    )
+    for relative in ("javascript/iroha_js/src/toriiClient.js", "javascript/iroha_js/dist/toriiClient.js"):
+        require_contains(
+            texts,
+            relative,
+            (
+                "proof_b64: requireExactNonEmptyString(record.proof_b64",
+                "policy_id: requireIdentifierPolicyId(record.policy_id",
+                "resolver_public_key: requireExactNonEmptyString(",
+                "program_id: requireExactNonEmptyString(record.program_id",
+                "program_id: requireExactNonEmptyString(payload.program_id",
+                "account_id: requireExactAccountId(record.account_id",
+                "opaque_id: requireExactReceiptPrefixedHash(record.opaque_id",
+                "program_digest: requireExactReceiptHash(record.program_digest",
+                "input_ciphertext_hash: requireExactReceiptHash(",
+                "function identifierCanonicalExactString",
+                "function requireIdentifierPolicyId",
+                "function requireExactReceiptHash",
+                "function requireExactReceiptPrefixedHash",
+                "function requireExactReceiptUaid",
+                "function requireExactAccountId",
+                "function requireExactReceiptUnsignedInteger",
+                'typeof value === "string" && /^[0-9]+$/.test(value)',
+                "const literal = requireExactAccountId(accountId, context)",
+                "function requireExactHexString",
+                "const literal = requireExactNonEmptyString(value, context)",
+                "signature: requireExactHexString(record.signature",
+                "identifierReceiptAttestationPayload",
+            ),
+            f"{relative} identifier receipt proof base64 exactness",
+            errors,
+        )
+
     for relative in ("javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"):
         require_contains(
             texts,
             relative,
             (
-                "const KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff",
+                "const KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION = 0xffff_ffff",
                 "Number.isSafeInteger(version)",
                 "version >= 0",
-                "version <= KAGEMUSHA_MAX_BRIDGE_ABI_VERSION",
+                "version <= KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION",
             ),
             f"{relative} Kagemusha ABI probe bounds",
             errors,
@@ -3527,7 +3883,7 @@ def check_javascript(texts, errors):
             texts,
             relative,
             (
-                "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
+                "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
                 "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
                 "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
                 "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1",
@@ -3550,7 +3906,7 @@ def check_javascript(texts, errors):
         "javascript/iroha_js/index.d.ts",
         REQUIRED_JS_PUBLIC_EXPORTS
         + (
-            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION: 6",
+            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 6",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: 64",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: true",
             "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: 1",
@@ -3613,6 +3969,11 @@ def check_javascript(texts, errors):
                 "KagemushaInstructionArchive",
                 "KagemushaTransfer",
                 "RedeemKagemushaRecursive",
+                'typeof type !== "string"',
+                "normalizeExactMetadataString",
+                "verifyingKey.id.backend",
+                "verifyingKey.record.circuit_id",
+                "must not contain surrounding whitespace",
                 "kagemushaRecursiveSpendRedeem",
                 "kagemushaRecursiveRedeem.redeemRequestArchive",
             ),
@@ -3647,6 +4008,7 @@ def check_javascript(texts, errors):
         "javascript/iroha_js/test/transactionBuilder.test.js",
         (
             "buildKagemushaInstructionArchiveInstruction normalizes archive bytes",
+            "whitespaceInstructionType",
             "schema must match RedeemKagemushaRecursive",
             "checksum is invalid",
             "must not be compressed",
@@ -3658,6 +4020,10 @@ def check_javascript(texts, errors):
             "bytesBase64 must be canonical standard base64",
             "buildKagemushaInstructionTransaction wraps one archive instruction",
             "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+            "proof builders reject padded inline verifier-key metadata",
+            "buildPrivateKaigiFeeSpend",
+            r"privateKaigiFeeSpend\.verifyingKey\.id\.backend must not contain surrounding whitespace",
+            r"privateKaigiFeeSpend\.verifyingKey\.record\.circuit_id must not contain surrounding whitespace",
             "redeemRequestArchive must be a Buffer or ArrayBuffer view",
             "redeem native rejected",
         ),
@@ -3871,6 +4237,9 @@ def check_javascript(texts, errors):
             "overlongCircuitStringArchive",
             "invalidUtf8CircuitArchive",
             "appendVerifierKey",
+            "whitespaceCidVerifierKey",
+            "whitespaceCidProvingKeyArchive",
+            "whitespaceLineageOutputCircuitId",
             "lineage_verifier_key",
             "lineage_proving_key_archive",
             "exposedVerifierKey[0] = 0",
@@ -3981,16 +4350,113 @@ def check_python(texts, errors):
         "tests/kagemusha_test.py",
         "tests/privacy_catalog_test.py",
         "tests/crypto_algorithms_test.py",
+        "tests/offline_cash_test.py",
+        "tests/test_address_format.py",
     ):
         require(
             test_path in script,
             f"Kagemusha Python SDK script must run {test_path}",
             errors,
         )
+    require(
+        "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_canonical_request_auth_rejects_padded_fields_before_send" in script,
+        "Kagemusha Python SDK script must run the Torii canonical request auth exactness regression",
+        errors,
+    )
+    require(
+        "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_identifier_resolution_receipt_matches_shared_vectors" in script,
+        "Kagemusha Python SDK script must run the identifier receipt exactness and adversarial vector regression",
+        errors,
+    )
+    require(
+        "tests/client_ledger_helpers_test.py" in script
+        and "zk_event_filters_reject_unsupported_backends_before_request" in script
+        and "zk_verifying_key_event_filters_reject_malformed_names_before_request" in script
+        and "zk_proof_event_filters_reject_malformed_hashes_before_request" in script
+        and "zk_raw_event_filters_reject_malformed_privacy_matchers_before_request" in script
+        and "zk_raw_event_filters_canonicalize_privacy_matchers_before_request" in script,
+        "Kagemusha Python SDK script must run Torii event-filter verifier/proof exactness regressions",
+        errors,
+    )
     init = "python/iroha_python/src/iroha_python/__init__.py"
     wrapper = "python/iroha_python/src/iroha_python/kagemusha.py"
     tx_wrapper = "python/iroha_python/src/iroha_python/tx.py"
     host = "python/iroha_python/iroha_python_rs/src/lib.rs"
+    torii_client = texts["python/iroha_torii_client/client.py"]
+    torii_init = texts["python/iroha_torii_client/__init__.py"]
+    torii_tests = texts["python/iroha_torii_client/tests/test_client.py"]
+    require(
+        "def encode_identifier_resolution_receipt_payload(" in torii_client
+        and "def encode_identifier_resolution_receipt_attestation(" in torii_client
+        and "def verify_identifier_resolution_receipt(" in torii_client
+        and "_identifier_account_id_payload" in torii_client
+        and "_identifier_iroha_prehash" in torii_client
+        and 'value = _require_exact_non_empty_string(raw, "payload.policy_id")' in torii_client
+        and 'payload.policy_id.kind must not contain surrounding whitespace' in torii_client
+        and 'policy_id = _require_exact_non_empty_string(policy.get("policy_id"), "policy.policy_id")' in torii_client
+        and "_identifier_policy_id_payload(policy_id)" in torii_client
+        and 'literal = _require_exact_non_empty_string(value, context)' in torii_client
+        and '_identifier_policy_id_payload(payload.get("policy_id"))' in torii_client
+        and 'def _identifier_hash_bytes(raw: Any, context: str) -> bytes:\n    value = _require_exact_non_empty_string(raw, context)' in torii_client
+        and 'def _identifier_prefixed_hash_payload(raw: Any, prefix: str, context: str) -> bytes:\n    value = _require_exact_non_empty_string(raw, context)' in torii_client
+        and 'elif isinstance(value, str) and value.isdigit():' in torii_client
+        and '_require_exact_non_empty_string(account_id, "payload.account_id")' in torii_client
+        and '_identifier_account_id_payload(record.get("account_id"))' in torii_client
+        and 'def _identifier_exact_string(' in torii_client
+        and '_identifier_sized_field(_identifier_exact_string(raw, context))' in torii_client
+        and '_identifier_program_id_payload(record.get("program_id"), "payload.execution.program_id")' in torii_client
+        and '_identifier_program_id_payload(record.get("program_id"), "payload.opening.payload.program_id")' in torii_client
+        and "_identifier_verify_ed25519" in torii_client
+        and '_require_exact_non_empty_string(record.get("kind"), "identifier receipt attestation.kind")' in torii_client
+        and '_identifier_exact_hex_bytes(record.get("signature"), "payload.opening.signature")' in torii_client
+        and '_identifier_exact_hex_bytes(record.get("signature"), "identifier receipt attestation.signature")' in torii_client
+        and '_require_exact_non_empty_string(record.get("proof_b64"), "identifier receipt attestation.proof_b64")' in torii_client
+        and '_require_exact_non_empty_string(attestation.get("proof_b64"), "attestation.proof_b64")' in torii_client
+        and "proof attestations require an external verifier" in torii_client,
+        "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+        errors,
+    )
+    require(
+        "encode_identifier_resolution_receipt_payload" in torii_init
+        and "encode_identifier_resolution_receipt_attestation" in torii_init
+        and "verify_identifier_resolution_receipt" in torii_init,
+        "Python Torii client package must re-export identifier receipt helpers",
+        errors,
+    )
+    require(
+        "test_identifier_resolution_receipt_matches_shared_vectors" in torii_tests
+        and "identifier_receipt_vectors_v1.json" in torii_tests
+        and "canonical_payload_sha256" in torii_tests
+        and "attestation_vectors" in torii_tests
+        and "negative_cases" in torii_tests
+        and "payload.execution.backend must not contain surrounding whitespace" in torii_tests
+        and "payload.execution.verification_mode must not contain surrounding whitespace" in torii_tests
+        and "non_exact_kind" in torii_tests
+        and "identifier receipt attestation.kind" in torii_tests
+        and "identifier receipt attestation.signature must not contain surrounding whitespace" in torii_tests
+        and "payload.opening.signature must not contain surrounding whitespace" in torii_tests
+        and "payload.policy_id" in torii_tests
+        and "payload.execution.program_id" in torii_tests
+        and "payload.opening.payload.program_id" in torii_tests
+        and "payload.account_id" in torii_tests
+        and "payload.opaque_id" in torii_tests
+        and "payload.receipt_hash" in torii_tests
+        and "payload.uaid" in torii_tests
+        and "payload.execution.program_digest" in torii_tests
+        and "payload.opening.payload.input_ciphertext_hash" in torii_tests
+        and "timestamp_exactness_cases" in torii_tests
+        and "payload.execution.executed_at_ms" in torii_tests
+        and "payload.execution.expires_at_ms" in torii_tests
+        and "payload.opening.payload.opened_at_ms" in torii_tests
+        and "payload.opening.payload.expires_at_ms" in torii_tests
+        and "phone #retail" in torii_tests
+        and "identifier receipt attestation.proof_backend must not contain surrounding whitespace" in torii_tests
+        and "identifier receipt attestation.proof_b64 must not contain surrounding whitespace" in torii_tests
+        and "attestation.proof_b64 must be valid base64" in torii_tests
+        and "proof attestations require an external verifier" in torii_tests,
+        "Python Torii client tests must cover identifier receipt shared vectors and adversarial cases",
+        errors,
+    )
     require_contains(texts, wrapper, REQUIRED_PYTHON_PUBLIC_METHODS, "Python SDK", errors)
     require_contains(texts, init, REQUIRED_PYTHON_PUBLIC_METHODS, "Python package re-exports", errors)
     require_contains(
@@ -3999,6 +4465,7 @@ def check_python(texts, errors):
         REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS
         + (
             "def _normalize_kagemusha_instruction_archive_type(",
+            "if instruction_type not in KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES:",
             "def _assert_kagemusha_instruction_archive_schema(",
             "_norito_schema_hash(wire_name)",
             "_norito_archive_bytes_named(instruction_archive, \"instruction_archive\")",
@@ -4057,6 +4524,7 @@ def check_python(texts, errors):
             "instruction_archive must be a valid Norito archive",
             "schema must match RedeemKagemushaRecursive",
             "KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
+            "whitespace_instruction_type",
             "compressed[22] = 1",
             "unsupported_flags[39] = 0x08",
             "invalid_field_bitset[39] = 0x20",
@@ -4073,11 +4541,11 @@ def check_python(texts, errors):
         texts,
         wrapper,
         (
-            "KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xFFFF_FFFF",
+            "KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION = 0xFFFF_FFFF",
             "isinstance(version, bool)",
             "not isinstance(version, int)",
             "version < 0",
-            "version > KAGEMUSHA_MAX_BRIDGE_ABI_VERSION",
+            "version > KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION",
         ),
         "Python Kagemusha ABI probe bounds",
         errors,
@@ -4100,7 +4568,7 @@ def check_python(texts, errors):
         texts,
         wrapper,
         (
-            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6",
+            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = True",
             "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1",
@@ -4124,7 +4592,7 @@ def check_python(texts, errors):
         texts,
         init,
         (
-            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
+            "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
             "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1",
@@ -4220,6 +4688,9 @@ def check_python(texts, errors):
             "_kagemusha_verifier_key_commitment",
             "append_verifier_key",
             "duplicate_cid_verifier_key",
+            "whitespace_cid_verifier_key",
+            "whitespace_cid_proving_key_archive",
+            "whitespace_lineage_output_circuit_id",
             "missing_circuit_archive",
             "wrong_commitment_archive",
             "smuggled_circuit_archive",
@@ -4277,7 +4748,7 @@ def check_python(texts, errors):
     require_regex(
         texts,
         host,
-        r"fn\s+kagemusha_recursive_spend_bridge_abi_version_py\s*\(\)\s*->\s*u32\s*\{\s*7\s*\}",
+        r"fn\s+kagemusha_recursive_spend_native_bridge_abi_version_py\s*\(\)\s*->\s*u32\s*\{\s*7\s*\}",
         "Python recursive spend ABI version",
         errors,
     )
@@ -4341,9 +4812,137 @@ def check_swift(texts, errors):
     recursive_aggregation_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift"
     instruction_encoder_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"
     uc4_decode_test = "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift"
+    tx_builder = "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift"
+    torii_client = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    torii_client_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    offline_note = "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift"
     offline_v2 = "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift"
     offline_decoding = "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift"
+    tx_builder_test = "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift"
+    offline_note_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
     offline_v2_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift"
+    require_contains(
+        texts,
+        torii_client,
+        (
+            "identifier receipt attestation kind must be exact",
+            "exactReceiptPolicyId",
+            "exactProgramId",
+            "payload.policy_id.kind must not contain surrounding whitespace.",
+            "payload.accountId must be an exact canonical account identifier.",
+            "payload.accountId must be a canonical account identifier.",
+            "payload.account_id must not contain surrounding whitespace.",
+            "normalizedHash(_ raw: String, field: String) throws",
+            "\\(field) must not contain surrounding whitespace.",
+            "self.inputCiphertextHash = inputCiphertextHash",
+            "payload.execution.programId",
+            "payload.opening.payload.programId",
+            "payload.policyId.kind",
+            "opening.signature must be exact and contain no surrounding whitespace.",
+            "signature must be exact and contain no surrounding whitespace.",
+            "proof_b64 must be exact and contain no surrounding whitespace.",
+            "Data(base64Encoded: proofB64) == nil",
+            "proof_b64 must be valid base64.",
+        ),
+        "Swift identifier receipt attestation kind and proof base64 validation",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client_test,
+        (
+            "testIdentifierReceiptRejectsNonExactAttestationKindDuringDecode",
+            "testIdentifierReceiptRejectsPaddedSignedAttestationSignatureDuringDecode",
+            "testIdentifierReceiptRejectsPaddedOpeningSignatureDuringDecode",
+            "testIdentifierReceiptRejectsPaddedProofAttestationBase64DuringDecode",
+            "testIdentifierReceiptRejectsMalformedProofAttestationBase64DuringDecode",
+            "phone #retail",
+            "identifier_lookup_retail ",
+            "policy_id",
+            "program_id",
+            "account_id",
+            "accountId",
+            "opaque_id",
+            "receipt_hash",
+            "uaid",
+            "program_digest",
+            "input_ciphertext_hash",
+            "\"Signed\"",
+            "\"AAAA \"",
+            "\"proof_b64\":\"@@@\"",
+            "proof_b64",
+        ),
+        "Swift identifier receipt attestation kind and malformed proof base64 tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        tx_builder,
+        (
+            "case surroundingWhitespace",
+            "trimmingCharacters(in: .whitespacesAndNewlines) == backend",
+            "trimmingCharacters(in: .whitespacesAndNewlines) == name",
+            "Verifying key backend and name must not contain surrounding whitespace.",
+        ),
+        "Swift verifier-key id exactness",
+        errors,
+    )
+    for relative, label in (
+        (offline_note, "Swift Offline Note proof metadata exactness"),
+        (offline_v2, "Swift Offline Note V2 proof metadata exactness"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "let trimmedBackend = backend.trimmingCharacters(in: .whitespacesAndNewlines)",
+                "guard trimmedBackend == backend else",
+                "unsupportedRecursiveProofBackend",
+                "self.backend = backend",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        tx_builder_test,
+        (
+            "testVerifyingKeyIdReferenceValidation",
+            "VerifyingKeyIdReference(backend: \" halo2/ipa \", name: \"vk\")",
+            "VerifyingKeyIdReference(backend: \"halo2/ipa\", name: \" vk \")",
+            ".surroundingWhitespace",
+        ),
+        "Swift verifier-key id exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        offline_note_test,
+        (
+            "testOfflineNoteProofAndHashValidationRejectsMalformedValues",
+            "testOfflineNoteRecursiveProofCoversCustomVerifierAndVerifierValidation",
+            "proofBackend: \" custom_proof_backend \"",
+            "verifierBackend: \" custom_backend \"",
+            "verifierName: \" custom_vk \"",
+            ".surroundingWhitespace",
+        ),
+        "Swift Offline Note proof metadata exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        offline_v2_test,
+        (
+            "testOfflineNoteV2ProofAndHashValidationRejectsMalformedValues",
+            "testOfflineNoteV2RecursiveProofCoversCustomVerifierAndVerifierValidation",
+            "proofBackend: \" custom_proof_backend \"",
+            "verifierBackend: \" custom_backend \"",
+            "verifierName: \" custom_vk \"",
+            ".surroundingWhitespace",
+        ),
+        "Swift Offline Note V2 proof metadata exactness tests",
+        errors,
+    )
     require_contains(
         texts,
         offline_decoding,
@@ -4500,7 +5099,7 @@ def check_swift(texts, errors):
         texts,
         prover,
         (
-            "requiredBridgeAbiVersion: UInt32 = 6",
+            "requiredNativeBridgeAbiVersion: UInt32 = 6",
             "recursiveSpendLineageWitnesslessMaxHopsV1: UInt32 = 64",
             "recursiveSpendLineageTransitionCircuitWiredV1 = true",
             "recursivePreviousProofOpenEnvelopesRequiredCountV1 = 1",
@@ -4601,6 +5200,9 @@ def check_swift(texts, errors):
             "noritoOverlongCompactLength",
             "noritoOversizedTerminalCompactLength",
             "noritoHugeCanonicalCompactLength",
+            "whitespaceCidVerifierKey",
+            "whitespaceCidProvingKeyArchive",
+            "whitespaceLineageOutputCircuitId",
             "Data(\"not-zk1\".utf8)",
             "Data(\"not-norito\".utf8)",
             "lineageVerifierKey: appendVerifierKey",
@@ -4939,15 +5541,47 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
     )
     for relative in (
         "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+        "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
+        "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
         "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+        "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
         "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
+        "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteV2Prover.swift",
         "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
         "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
-        "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift",
+        "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift",
+        "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+        "IrohaSwift/Sources/IrohaSwift/ToriiCanonicalRequest.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineBearerCashWallet.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineCashLifecycle.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineIssuerPublicKey.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineKagemushaAbi7CapabilityContract.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteCompatibility.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteInstances.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteRedeemPlanner.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteSecureStore.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteTextTransferContract.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransactionEncoder.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransferHandoff.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransferProtocols.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2Instances.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteV2TransactionEncoder.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineProofVerifiers.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineQrStream.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineQrStreamScan.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineTransferDiagnostics.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
@@ -4955,6 +5589,23 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ToriiCanonicalRequestTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineKagemushaAbi7CapabilityContractTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoritoEncodingTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteNfcApduPayloadBudgetTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteRedeemPlannerTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTextTransferContractTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineProofVerifierTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineQrStreamTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineRevocationBundleTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift",
     ):
         require(
@@ -5013,17 +5664,352 @@ def check_java_kotlin(texts, errors):
     java_compact = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java"
     java_recursive_aggregation = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java"
     java = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
+    java_offline = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java"
+    java_vk_box = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/VerifyingKeyBoxCodec.java"
     kotlin_compact = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt"
     kotlin_recursive_aggregation = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt"
     kotlin = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
+    kotlin_offline = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt"
+    kotlin_vk_box = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/VerifyingKeyBoxCodec.kt"
     java_recursive_compact = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java"
     kotlin_recursive_compact = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"
     java_offline_v2 = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java"
     kotlin_offline_v2 = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt"
+    java_identifier_json = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierJsonParser.java"
+    kotlin_identifier_json = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierJsonParser.kt"
+    java_identifier_encoder = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoder.java"
+    java_identifier_verifier = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptVerifier.java"
+    kotlin_identifier_encoder = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptCanonicalEncoder.kt"
+    kotlin_identifier_verifier = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptVerifier.kt"
     java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
     kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt"
+    java_identifier_encoder_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoderTests.java"
+    kotlin_identifier_encoder_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoderParityTest.kt"
+    java_identifier_parser_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
+    kotlin_identifier_parser_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+    java_offline_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    kotlin_offline_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
     java_offline_v2_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java"
     kotlin_offline_v2_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"
+    for relative, label in (
+        (java_identifier_json, "Android Java identifier receipt kind/proof base64 parser validation"),
+        (kotlin_identifier_json, "Kotlin identifier receipt kind/proof base64 parser validation"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "requiredExactString(root",
+                ".kind",
+                ".signature",
+                ".policy_id",
+                ".program_id",
+                ".account_id",
+                ".program_digest",
+                ".input_ciphertext_hash",
+                ".proof_b64",
+                "Base64.getDecoder().decode(proofB64)",
+                "proof_b64 must be valid base64",
+            ),
+            label,
+            errors,
+        )
+    for relative, marker, label in (
+        (
+            java_identifier_encoder,
+            'AccountIdLiteral.requireCanonicalI105Address(payload.accountId(), "payload.account_id")',
+            "Android Java identifier receipt canonical account-id exactness",
+        ),
+        (
+            kotlin_identifier_encoder,
+            'requireCanonicalI105Address(payload.accountId, "payload.account_id")',
+            "Kotlin identifier receipt canonical account-id exactness",
+        ),
+        (
+            java_identifier_json,
+            'requiredExactString(root.get("account_id"), context + ".account_id")',
+            "Android Java identifier receipt parser account-id exactness",
+        ),
+        (
+            kotlin_identifier_json,
+            'requiredExactString(root["account_id"], "$context.account_id")',
+            "Kotlin identifier receipt parser account-id exactness",
+        ),
+        (
+            java_identifier_encoder,
+            "String body = requireExactNonBlank(raw, field);",
+            "Android Java identifier receipt canonical hash-field exactness",
+        ),
+        (
+            kotlin_identifier_encoder,
+            "var body = requireExactNonBlankString(raw, field)",
+            "Kotlin identifier receipt canonical hash-field exactness",
+        ),
+        (
+            java_identifier_json,
+            'requiredExactString(root.get("program_digest"), context + ".program_digest")',
+            "Android Java identifier receipt parser hash-field exactness",
+        ),
+        (
+            kotlin_identifier_json,
+            'requiredExactString(root["program_digest"], "$context.program_digest")',
+            "Kotlin identifier receipt parser hash-field exactness",
+        ),
+        (
+            java_identifier_json,
+            'asUnsignedLong(root.get("executed_at_ms"), context + ".executed_at_ms")',
+            "Android Java identifier receipt parser timestamp u64 validation",
+        ),
+        (
+            java_identifier_json,
+            "longValueExact()",
+            "Android Java identifier receipt parser timestamp overflow rejection",
+        ),
+        (
+            kotlin_identifier_json,
+            'asUnsignedLong(root["executed_at_ms"], "$context.executed_at_ms")',
+            "Kotlin identifier receipt parser timestamp u64 validation",
+        ),
+        (
+            java_identifier_json,
+            'item.get("resolver_public_key"),',
+            "Android Java identifier policy resolver-key parser exactness",
+        ),
+        (
+            java_identifier_json,
+            'requiredExactString(item.get("policy_id"),',
+            "Android Java identifier policy-summary id parser exactness",
+        ),
+        (
+            kotlin_identifier_json,
+            'requiredExactString(item["resolver_public_key"],',
+            "Kotlin identifier policy resolver-key parser exactness",
+        ),
+        (
+            kotlin_identifier_json,
+            'requiredExactString(item["policy_id"],',
+            "Kotlin identifier policy-summary id parser exactness",
+        ),
+        (
+            java_identifier_verifier,
+            '"resolverPublicKey must not contain surrounding whitespace"',
+            "Android Java identifier receipt resolver-key verifier exactness",
+        ),
+        (
+            java_identifier_verifier,
+            '"policy.policy_id must not contain surrounding whitespace"',
+            "Android Java identifier receipt policy-summary id verifier exactness",
+        ),
+        (
+            java_identifier_verifier,
+            'field + " must not contain surrounding whitespace"',
+            "Android Java identifier receipt verifier signature exactness",
+        ),
+        (
+            kotlin_identifier_verifier,
+            '"resolverPublicKey must not contain surrounding whitespace"',
+            "Kotlin identifier receipt resolver-key verifier exactness",
+        ),
+        (
+            kotlin_identifier_verifier,
+            '"policy.policy_id must not contain surrounding whitespace"',
+            "Kotlin identifier receipt policy-summary id verifier exactness",
+        ),
+        (
+            kotlin_identifier_verifier,
+            '"$field must not contain surrounding whitespace"',
+            "Kotlin identifier receipt verifier signature exactness",
+        ),
+        (
+            java_identifier_encoder,
+            'requireExactNonBlank(attestation.kind(), "attestation.kind")',
+            "Android Java identifier receipt canonical attestation kind validation",
+        ),
+        (
+            kotlin_identifier_encoder,
+            'requireExactNonBlankString(attestation.kind, "attestation.kind")',
+            "Kotlin identifier receipt canonical attestation kind validation",
+        ),
+        (
+            java_identifier_encoder,
+            'field + " must not contain surrounding whitespace"',
+            "Android Java identifier receipt canonical signature exactness",
+        ),
+        (
+            kotlin_identifier_encoder,
+            '"$field must not contain surrounding whitespace"',
+            "Kotlin identifier receipt canonical signature exactness",
+        ),
+        (
+            java_identifier_encoder,
+            'requireExactNonBlank(\n                        Objects.requireNonNull(attestation.proofB64()',
+            "Android Java identifier receipt canonical proof base64 exactness",
+        ),
+        (
+            kotlin_identifier_encoder,
+            'requireExactNonBlankString(\n                                requireNotNull(attestation.proofB64)',
+            "Kotlin identifier receipt canonical proof base64 exactness",
+        ),
+        (
+            java_identifier_encoder,
+            'requireExactNonBlank(raw, "payload.policy_id")',
+            "Android Java identifier receipt canonical policy-id exactness",
+        ),
+        (
+            kotlin_identifier_encoder,
+            'requireExactNonBlankString(raw, "payload.policy_id")',
+            "Kotlin identifier receipt canonical policy-id exactness",
+        ),
+        (
+            java_identifier_encoder,
+            'encodeProgramId(execution.programId(), "payload.execution.program_id")',
+            "Android Java identifier receipt canonical execution program-id exactness",
+        ),
+        (
+            kotlin_identifier_encoder,
+            'encodeProgramId(execution.programId, "payload.execution.program_id")',
+            "Kotlin identifier receipt canonical execution program-id exactness",
+        ),
+        (
+            java_identifier_encoder,
+            'encodeProgramId(payload.programId(), "payload.opening.payload.program_id")',
+            "Android Java identifier receipt canonical opening program-id exactness",
+        ),
+        (
+            kotlin_identifier_encoder,
+            'encodeProgramId(payload.programId, "payload.opening.payload.program_id")',
+            "Kotlin identifier receipt canonical opening program-id exactness",
+        ),
+        (
+            java_identifier_encoder,
+            'requireU64(execution.executedAtMs(), "payload.execution.executed_at_ms")',
+            "Android Java identifier receipt canonical timestamp u64 validation",
+        ),
+        (
+            kotlin_identifier_encoder,
+            'requireU64(execution.executedAtMs, "payload.execution.executed_at_ms")',
+            "Kotlin identifier receipt canonical timestamp u64 validation",
+        ),
+    ):
+        require_contains(texts, relative, (marker,), label, errors)
+    for relative, label in (
+        (java_identifier_encoder_test, "Android Java identifier receipt malformed proof base64 encoder tests"),
+        (kotlin_identifier_encoder_test, "Kotlin identifier receipt malformed proof base64 encoder tests"),
+        (java_identifier_parser_test, "Android Java identifier receipt malformed proof base64 parser tests"),
+        (kotlin_identifier_parser_test, "Kotlin identifier receipt malformed proof base64 parser tests"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "attestation kind",
+                "attestation signature",
+                "opening signature",
+                "policy_id exactness",
+                "program_id exactness",
+                "account_id exactness",
+                "hash exactness",
+                "timestamp u64",
+                "phone #retail",
+                "identifier_lookup_retail ",
+                "Signed",
+                "AQID ",
+                "@@@",
+                "proof_b64",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        java_identifier_parser_test,
+        ("overflow",),
+        "Android Java identifier receipt parser timestamp overflow test",
+        errors,
+    )
+    for relative, label in (
+        (java_offline, "Android Java Offline Note proof metadata exactness"),
+        (java_offline_v2, "Android Java Offline Note V2 proof metadata exactness"),
+        (kotlin_offline, "Kotlin Offline Note proof metadata exactness"),
+        (kotlin_offline_v2, "Kotlin Offline Note V2 proof metadata exactness"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "requireNonBlankUnpadded",
+                "verifying key backend",
+                "verifying key name",
+                "proof backend",
+                "must not contain surrounding whitespace",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (java_vk_box, "Android Java VerifyingKeyBox metadata exactness"),
+        (kotlin_vk_box, "Kotlin VerifyingKeyBox metadata exactness"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "requireNonBlankUnpadded(backend, \"backend\")",
+                "must not contain surrounding whitespace",
+                "bytes must not be empty",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        java_offline_test,
+        (
+            "recursiveProofMetadataRejectsPaddedAndMalformedVerifierKeys",
+            "padded verifier backend must be rejected",
+            "padded verifier name must be rejected",
+            "padded proof backend must be rejected",
+            "VerifyingKeyBoxCodec.encodeNorito(\" halo2/ipa \"",
+            "padded verifying key backend should fail",
+        ),
+        "Android Java proof metadata exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_offline_v2_test,
+        (
+            "padded proof backend should throw",
+            "new OfflineNoteV2.VerifyingKeyIdReference(\" halo2/ipa \", \"vk\")",
+            "new OfflineNoteV2.VerifyingKeyIdReference(\"halo2/ipa\", \" vk \")",
+            "padded verifier name should throw",
+        ),
+        "Android Java Offline Note V2 proof metadata exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_offline_test,
+        (
+            "recursiveProofMetadataRejectsPaddedAndMalformedVerifierKeys",
+            "OfflineNote.VerifyingKeyBox(\" halo2/ipa \", byteArrayOf(1))",
+            "\"  ${OfflineNote.RECURSIVE_BACKEND}  \"",
+            "\"  ${OfflineNote.RECURSIVE_VERIFIER_NAME}  \"",
+        ),
+        "Kotlin proof metadata exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_offline_v2_test,
+        (
+            "OfflineNoteV2.ProofBox(\"  ${OfflineNoteV2.RECURSIVE_BACKEND}  \", byteArrayOf(1))",
+            "OfflineNoteV2.VerifyingKeyIdReference(backend = \" halo2/ipa \", name = \"vk\")",
+            "OfflineNoteV2.VerifyingKeyIdReference(backend = \"halo2/ipa\", name = \" vk \")",
+        ),
+        "Kotlin Offline Note V2 proof metadata exactness tests",
+        errors,
+    )
     for relative, label in (
         (java_offline_v2, "Android Java Offline Note V2 decoder"),
         (kotlin_offline_v2, "Kotlin Offline Note V2 decoder"),
@@ -5264,7 +6250,7 @@ def check_java_kotlin(texts, errors):
             texts,
             relative,
             (
-                "REQUIRED_BRIDGE_ABI_VERSION",
+                "REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
                 "RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
                 "RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
                 "RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1",
@@ -5657,13 +6643,13 @@ def check_java_kotlin(texts, errors):
         errors,
     )
 
-    require_regex(texts, java, r"REQUIRED_BRIDGE_ABI_VERSION\s*=\s*6\s*;", "Android ABI version", errors)
+    require_regex(texts, java, r"REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*=\s*6\s*;", "Android ABI version", errors)
     require_regex(texts, java, r"RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1\s*=\s*64\s*;", "Android max hops", errors)
     require_regex(texts, java, r"RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1\s*=\s*true\s*;", "Android transition-circuit wired flag", errors)
     require_regex(texts, java, r"RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1\s*=\s*1\s*;", "Android open envelope count", errors)
     require_regex(texts, java, r"RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES\s*=\s*8\s*\*\s*1024\s*\*\s*1024\s*;", "Android open envelope max bytes", errors)
     require_regex(texts, java, r"RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES\s*=\s*128\s*;", "Android Pallas open-envelope transcript label max bytes", errors)
-    require_regex(texts, kotlin, r"REQUIRED_BRIDGE_ABI_VERSION:\s*Int\s*=\s*6", "Kotlin ABI version", errors)
+    require_regex(texts, kotlin, r"REQUIRED_NATIVE_BRIDGE_ABI_VERSION:\s*Int\s*=\s*6", "Kotlin ABI version", errors)
     require_regex(texts, kotlin, r"RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1:\s*Int\s*=\s*64", "Kotlin max hops", errors)
     require_regex(texts, kotlin, r"RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1:\s*Boolean\s*=\s*true", "Kotlin transition-circuit wired flag", errors)
     require_regex(texts, kotlin, r"RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1:\s*Int\s*=\s*1", "Kotlin open envelope count", errors)
@@ -5749,6 +6735,9 @@ def check_java_kotlin(texts, errors):
                 "verifierKeyCommitment",
                 "appendVerifierKey",
                 "duplicateCidVerifierKey",
+                "whitespaceCidVerifierKey",
+                "whitespaceCidProvingKeyArchive",
+                "whitespaceLineageOutputCircuitId",
                 "missingCircuitArchive",
                 "smuggledCircuitArchive",
                 "wrongCommitmentArchive",
@@ -6166,7 +7155,7 @@ def check_csharp(texts, errors):
         texts,
         relative,
         (
-            "RequiredBridgeAbiVersion = 6",
+            "RequiredNativeBridgeAbiVersion = 6",
             "RecursiveSpendLineageWitnesslessMaxHopsV1 = 64",
             "RecursiveSpendLineageTransitionCircuitWiredV1 = true",
             "RecursivePreviousProofOpenEnvelopesRequiredCountV1 = 1",
@@ -7648,7 +8637,7 @@ if mode == "--negative-control-python-sdk-bytecode-script":
 if mode == "--negative-control-python-sdk-test-filter-script":
     target = PYTHON_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace("  tests/kagemusha_test.py \\\n", "", 1)
+    mutated = original.replace("  tests/offline_cash_test.py \\\n", "", 1)
     if mutated == original:
         raise SystemExit("negative control failed: unable to mutate Python SDK test filter")
     text_overrides[target] = mutated
@@ -7660,11 +8649,339 @@ if mode == "--negative-control-python-sdk-test-filter-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK test filter drift was not detected")
 
+if mode == "--negative-control-python-sdk-canonical-request-test-filter-script":
+    target = PYTHON_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_canonical_request_auth_rejects_padded_fields_before_send"',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Python SDK canonical request test filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Python SDK canonical request test filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python SDK canonical request test filter drift was not detected")
+
+if mode == "--negative-control-python-sdk-identifier-receipt-test-filter-script":
+    target = PYTHON_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_identifier_resolution_receipt_matches_shared_vectors"',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Python SDK identifier receipt test filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Python SDK identifier receipt test filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python SDK identifier receipt test filter drift was not detected")
+
+if mode == "--negative-control-identifier-receipt-proof-base64-guard":
+    target = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    original = read(target)
+    mutated = original.replace(
+        "            if let proofB64, Data(base64Encoded: proofB64) == nil {\n"
+        "                throw DecodingError.dataCorruptedError(\n"
+        "                    forKey: .proofB64,\n"
+        "                    in: container,\n"
+        "                    debugDescription: \"proof_b64 must be valid base64.\"\n"
+        "                )\n"
+        "            }\n",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate identifier receipt proof-base64 guard")
+    text_overrides[target] = mutated
+    texts[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected identifier receipt proof-base64 guard drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier receipt proof-base64 guard drift was not detected")
+
+if mode == "--negative-control-identifier-receipt-kind-exactness-guard":
+    target = "python/iroha_torii_client/client.py"
+    original = read(target)
+    mutated = original.replace(
+        '    kind = _require_exact_non_empty_string(record.get("kind"), "identifier receipt attestation.kind")\n',
+        '    kind = _require_non_empty_string(record.get("kind"), "identifier receipt attestation.kind").lower()\n',
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate identifier receipt attestation kind exactness guard")
+    text_overrides[target] = mutated
+    texts[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected identifier receipt attestation kind exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier receipt attestation kind exactness drift was not detected")
+
+if mode == "--negative-control-identifier-receipt-proof-base64-exactness-guard":
+    target = "python/iroha_torii_client/client.py"
+    original = read(target)
+    mutated = original.replace(
+        '        proof_b64 = _require_exact_non_empty_string(record.get("proof_b64"), "identifier receipt attestation.proof_b64")\n',
+        '        proof_b64 = _require_non_empty_string(record.get("proof_b64"), "identifier receipt attestation.proof_b64")\n',
+        1,
+    ).replace(
+        '            _require_exact_non_empty_string(attestation.get("proof_b64"), "attestation.proof_b64"),\n',
+        '            _require_non_empty_string(attestation.get("proof_b64"), "attestation.proof_b64"),\n',
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate identifier receipt proof-base64 exactness guard")
+    text_overrides[target] = mutated
+    texts[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected identifier receipt proof-base64 exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier receipt proof-base64 exactness drift was not detected")
+
+if mode == "--negative-control-identifier-receipt-signature-exactness-guard":
+    target = "python/iroha_torii_client/client.py"
+    original = read(target)
+    mutated = original.replace(
+        '_identifier_exact_hex_bytes(record.get("signature"), "payload.opening.signature")',
+        '_identifier_hex_bytes(record.get("signature"), "payload.opening.signature")',
+        1,
+    ).replace(
+        '_identifier_exact_hex_bytes(record.get("signature"), "identifier receipt attestation.signature")',
+        '_identifier_hex_bytes(record.get("signature"), "identifier receipt attestation.signature")',
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate identifier receipt signature exactness guard")
+    text_overrides[target] = mutated
+    texts[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected identifier receipt signature exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier receipt signature exactness drift was not detected")
+
+if mode == "--negative-control-identifier-receipt-policy-id-exactness-guard":
+    target = "python/iroha_torii_client/client.py"
+    original = read(target)
+    mutated = original.replace(
+        '    value = _require_exact_non_empty_string(raw, "payload.policy_id")\n',
+        '    value = _require_non_empty_string(raw, "payload.policy_id")\n',
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate identifier receipt policy-id exactness guard")
+    text_overrides[target] = mutated
+    texts[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected identifier receipt policy-id exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier receipt policy-id exactness drift was not detected")
+
+if mode == "--negative-control-identifier-receipt-policy-summary-id-exactness-guard":
+    target = "python/iroha_torii_client/client.py"
+    original = read(target)
+    mutated = original.replace(
+        '    policy_id = _require_exact_non_empty_string(policy.get("policy_id"), "policy.policy_id")\n'
+        "    _identifier_policy_id_payload(policy_id)\n",
+        '    policy_id = _require_non_empty_string(policy.get("policy_id"), "policy.policy_id")\n',
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate identifier receipt policy-summary id exactness guard")
+    text_overrides[target] = mutated
+    texts[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected identifier receipt policy-summary id exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier receipt policy-summary id exactness drift was not detected")
+
+if mode == "--negative-control-identifier-receipt-program-id-exactness-guard":
+    target = "python/iroha_torii_client/client.py"
+    original = read(target)
+    mutated = original.replace(
+        '    return _identifier_sized_field(_identifier_exact_string(raw, context))\n',
+        '    return _identifier_sized_field(_identifier_string(raw, context))\n',
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate identifier receipt program-id exactness guard")
+    text_overrides[target] = mutated
+    texts[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected identifier receipt program-id exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier receipt program-id exactness drift was not detected")
+
+if mode == "--negative-control-identifier-receipt-account-id-exactness-guard":
+    target = "python/iroha_torii_client/client.py"
+    original = read(target)
+    mutated = original.replace(
+        '    literal = _require_exact_non_empty_string(account_id, "payload.account_id")\n',
+        '    literal = _require_non_empty_string(account_id, "payload.account_id")\n',
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate identifier receipt account-id exactness guard")
+    text_overrides[target] = mutated
+    texts[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected identifier receipt account-id exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier receipt account-id exactness drift was not detected")
+
+if mode == "--negative-control-identifier-receipt-hash-exactness-guard":
+    target = "python/iroha_torii_client/client.py"
+    original = read(target)
+    mutated = original.replace(
+        "def _identifier_hash_bytes(raw: Any, context: str) -> bytes:\n"
+        "    value = _require_exact_non_empty_string(raw, context)\n",
+        "def _identifier_hash_bytes(raw: Any, context: str) -> bytes:\n"
+        "    value = _require_non_empty_string(raw, context)\n",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate identifier receipt hash-field exactness guard")
+    text_overrides[target] = mutated
+    texts[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected identifier receipt hash-field exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier receipt hash-field exactness drift was not detected")
+
+if mode == "--negative-control-identifier-receipt-timestamp-exactness-guard":
+    target = "python/iroha_torii_client/client.py"
+    original = read(target)
+    mutated = original.replace(
+        "    elif isinstance(value, str) and value.isdigit():\n"
+        "        integer = int(value, 10)\n",
+        "    elif isinstance(value, str) and value.strip().isdigit():\n"
+        "        integer = int(value.strip(), 10)\n",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate identifier receipt timestamp exactness guard")
+    text_overrides[target] = mutated
+    texts[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected identifier receipt timestamp exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier receipt timestamp exactness drift was not detected")
+
+if mode == "--negative-control-identifier-receipt-timestamp-u64-guard":
+    target = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierJsonParser.java"
+    original = read(target)
+    mutated = original.replace(
+        'asUnsignedLong(root.get("executed_at_ms"), context + ".executed_at_ms")',
+        'asLong(root.get("executed_at_ms"), context + ".executed_at_ms")',
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate identifier receipt timestamp u64 guard")
+    text_overrides[target] = mutated
+    texts[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected identifier receipt timestamp u64 drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier receipt timestamp u64 drift was not detected")
+
+if mode == "--negative-control-identifier-receipt-resolver-key-exactness-guard":
+    target = "python/iroha_torii_client/client.py"
+    original = read(target)
+    mutated = original.replace(
+        "    literal = _require_exact_non_empty_string(value, context)\n"
+        "    prefixed_algorithm: Optional[str] = None\n",
+        "    literal = _require_non_empty_string(value, context).strip()\n"
+        "    prefixed_algorithm: Optional[str] = None\n",
+        1,
+    )
+    mutated = mutated.replace(
+        "        prefixed_algorithm = prefix.lower()\n",
+        "        prefixed_algorithm = prefix.strip().lower()\n",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate identifier receipt resolver-key exactness guard")
+    text_overrides[target] = mutated
+    texts[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected identifier receipt resolver-key exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier receipt resolver-key exactness drift was not detected")
+
+if mode == "--negative-control-python-sdk-event-filter-test-filter-script":
+    target = PYTHON_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        '"${VENV_DIR}/bin/python" -m pytest -q tests/client_ledger_helpers_test.py \\\n'
+        '  -k "zk_event_filters_reject_unsupported_backends_before_request or '
+        'zk_verifying_key_event_filters_reject_malformed_names_before_request or '
+        'zk_proof_event_filters_reject_malformed_hashes_before_request or '
+        'zk_raw_event_filters_reject_malformed_privacy_matchers_before_request or '
+        'zk_raw_event_filters_canonicalize_privacy_matchers_before_request"\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Python SDK event-filter test filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Python SDK event-filter test filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python SDK event-filter test filter drift was not detected")
+
 if mode == "--negative-control-python-sdk-workflow-inventory":
     target = WORKFLOW_PATH
     original = read(target)
     mutated = original.replace(
-        '      - "python/iroha_python/src/iroha_python/privacy_catalog.py"\n',
+        '      - "python/iroha_python/tests/offline_cash_test.py"\n',
         "",
         1,
     )
@@ -7869,18 +9186,12 @@ if mode == "--negative-control-jvm-sdk-test-filter-script":
     target = JVM_SDK_TEST_COMMAND
     original = read(target)
     mutated = original.replace(
-        "  --tests org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest \\\n"
-        "  --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest \\\n"
-        "  --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test \\\n"
-        "  --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest\n",
+        "  --tests org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest \\\n",
         "",
         1,
     )
     mutated = mutated.replace(
-        ",org.hyperledger.iroha.android.offline.OfflineNoteV2Test,"
-        "org.hyperledger.iroha.android.offline.OfflineNoteTest,"
-        "org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,"
-        "org.hyperledger.iroha.android.tx.TransactionBuilderTests",
+        ",org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest",
         "",
         1,
     )
@@ -7895,11 +9206,143 @@ if mode == "--negative-control-jvm-sdk-test-filter-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: JVM SDK test filter drift was not detected")
 
+if mode == "--negative-control-jvm-sdk-canonical-request-test-filter-script":
+    target = JVM_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "  --tests org.hyperledger.iroha.sdk.client.CanonicalRequestSignerTest \\\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        ",org.hyperledger.iroha.android.client.CanonicalRequestSignerTests",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JVM SDK canonical request test filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JVM SDK canonical request test filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM SDK canonical request test filter drift was not detected")
+
+if mode == "--negative-control-jvm-sdk-signing-verifier-test-filter-script":
+    target = JVM_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "  --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest \\\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        "  --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \\\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        "  --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \\\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        "  --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyStatusTest \\\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        "  --tests org.hyperledger.iroha.sdk.crypto.SigningAlgorithmTest \\\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        ",org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        " \\\n  --tests org.hyperledger.iroha.android.crypto.SigningAlgorithmTests",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JVM SDK signing/verifier test filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JVM SDK signing/verifier test filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM SDK signing/verifier test filter drift was not detected")
+
+if mode == "--negative-control-jvm-sdk-torii-event-stream-verifier-filter-script":
+    target = JVM_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "  --tests org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClientTest \\\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        ",org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JVM SDK Torii event-stream verifier filter"
+        )
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JVM SDK Torii event-stream verifier filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JVM SDK Torii event-stream verifier filter drift was not detected"
+    )
+
+if mode == "--negative-control-jvm-sdk-identifier-receipt-filter-script":
+    target = JVM_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "  --tests org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest \\\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        ",org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        ",org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JVM SDK identifier receipt filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JVM SDK identifier receipt filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JVM SDK identifier receipt filter drift was not detected"
+    )
+
 if mode == "--negative-control-jvm-sdk-workflow-inventory":
     target = WORKFLOW_PATH
     original = read(target)
     mutated = original.replace(
-        '      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"\n',
+        '      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt"\n',
         "",
         1,
     )
@@ -7918,7 +9361,7 @@ if mode == "--negative-control-jvm-sdk-android-workflow-inventory":
     target = WORKFLOW_PATH
     original = read(target)
     mutated = original.replace(
-        '      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java"\n',
+        '      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycleTest.java"\n',
         "",
         1,
     )
@@ -8245,6 +9688,30 @@ if mode == "--negative-control-swift-sdk-privacy-parse-script":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift SDK privacy parse drift was not detected")
+
+if mode == "--negative-control-swift-sdk-torii-verifier-parse-script":
+    target = SWIFT_SDK_PARSE_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "  IrohaSwift/Sources/IrohaSwift/ToriiClient.swift \\\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        "  IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift \\\n",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift SDK Torii verifier parse surface")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Swift SDK Torii verifier parse drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift SDK Torii verifier parse drift was not detected")
 
 if mode == "--negative-control-swift-sdk-workflow-inventory":
     target = WORKFLOW_PATH
@@ -9190,11 +10657,116 @@ if mode == "--negative-control-js-sdk-privacy-native-filter-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK privacy native filter drift was not detected")
 
+if mode == "--negative-control-js-sdk-offline-cash-filter-script":
+    target = JS_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "|offline cash configuration snapshot requires cached issuer key and ABI",
+        "",
+        1,
+    )
+    mutated = mutated.replace(" \\\n  test/offlineCashLifecycle.test.js", "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JavaScript SDK offline cash filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JavaScript SDK offline cash filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript SDK offline cash filter drift was not detected")
+
+if mode == "--negative-control-js-sdk-canonical-request-filter-script":
+    target = JS_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "|canonical request signing: rejects padded auth fields",
+        "",
+        1,
+    )
+    mutated = mutated.replace(" \\\n  test/canonicalRequest.test.js", "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JavaScript SDK canonical request filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JavaScript SDK canonical request filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript SDK canonical request filter drift was not detected")
+
+if mode == "--negative-control-js-sdk-event-filter-filter-script":
+    target = JS_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "|streamEvents rejects unsupported production backend event filters before fetch"
+        "|streamEvents rejects malformed verifying key event names before fetch"
+        "|streamEvents rejects malformed proof event hashes before fetch",
+        "",
+        1,
+    )
+    mutated = mutated.replace(" \\\n  test/toriiClient.test.js", "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JavaScript SDK event-filter filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JavaScript SDK event-filter filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript SDK event-filter filter drift was not detected")
+
+if mode == "--negative-control-js-sdk-verifier-key-filter-script":
+    target = JS_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "|ZK-ACE verifier-key references reject padded selector metadata|privacy proof envelopes preserve pending production backend tags",
+        "",
+        1,
+    )
+    mutated = mutated.replace(" \\\n  test/instructionBuilders.test.js", "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JavaScript SDK verifier-key filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JavaScript SDK verifier-key filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript SDK verifier-key filter drift was not detected")
+
+if mode == "--negative-control-js-sdk-identifier-receipt-filter-script":
+    target = JS_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations|"
+        "encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags|"
+        "encodeIdentifierResolutionReceiptAttestation rejects padded proof backend|"
+        "verifyIdentifierResolutionReceipt matches shared receipt vectors",
+        "",
+        1,
+    )
+    mutated = mutated.replace(" \\\n  test/toriiClient.identifier.test.js", "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JavaScript SDK identifier receipt filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JavaScript SDK identifier receipt filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript SDK identifier receipt filter drift was not detected")
+
 if mode == "--negative-control-js-sdk-workflow-inventory":
     target = WORKFLOW_PATH
     original = read(target)
     mutated = original.replace(
-        '      - "javascript/iroha_js/test/privacyNative.test.js"\n',
+        '      - "javascript/iroha_js/test/offlineCashLifecycle.test.js"\n',
         "",
         1,
     )
@@ -11688,7 +13260,7 @@ if mode == "--negative-control-kagemusha-abi-probe-bounds":
     mutated = dict(texts)
     target = "javascript/iroha_js/src/crypto.js"
     mutated[target] = mutated[target].replace(
-        "version <= KAGEMUSHA_MAX_BRIDGE_ABI_VERSION",
+        "version <= KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION",
         "version <= Number.MAX_SAFE_INTEGER",
         1,
     )

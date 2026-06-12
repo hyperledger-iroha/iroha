@@ -3734,6 +3734,103 @@ pub fn kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(
     Ok(public_inputs)
 }
 
+fn validate_kagemusha_recursive_aggregation_proof_public_input_nonzero_digest(
+    field: &'static str,
+    digest: &[u8; Hash::LENGTH],
+) -> Result<(), KagemushaFoldError> {
+    if *digest == [0u8; Hash::LENGTH] {
+        return Err(KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch { field });
+    }
+    Ok(())
+}
+
+fn validate_kagemusha_recursive_aggregation_proof_public_input_digests(
+    public_inputs: &KagemushaRecursiveAggregationProofPublicInputs,
+) -> Result<(), KagemushaFoldError> {
+    for (field, digest) in [
+        ("evidence_digest", &public_inputs.evidence_digest),
+        (
+            "folded_public_inputs_hash",
+            &public_inputs.folded_public_inputs_hash,
+        ),
+        (
+            "aggregation_transcript_digest",
+            &public_inputs.aggregation_transcript_digest,
+        ),
+        (
+            "verifier_params_fingerprint",
+            &public_inputs.verifier_params_fingerprint,
+        ),
+        (
+            "fixed_window_table_schedule_digest",
+            &public_inputs.fixed_window_table_schedule_digest,
+        ),
+        (
+            "fixed_window_shared_table_manifest_digest",
+            &public_inputs.fixed_window_shared_table_manifest_digest,
+        ),
+        (
+            "fixed_window_table_base_digest",
+            &public_inputs.fixed_window_table_base_digest,
+        ),
+        (
+            "verifier_witness_batch_digest",
+            &public_inputs.verifier_witness_batch_digest,
+        ),
+    ] {
+        validate_kagemusha_recursive_aggregation_proof_public_input_nonzero_digest(field, digest)?;
+    }
+    Ok(())
+}
+
+fn validate_kagemusha_recursive_aggregation_proof_public_input_counts(
+    public_inputs: &KagemushaRecursiveAggregationProofPublicInputs,
+) -> Result<(), KagemushaFoldError> {
+    validate_kagemusha_recursive_verifier_opening_len(public_inputs.verifier_opening_len)?;
+    if public_inputs.hop_count == 0 {
+        return Err(KagemushaFoldError::Empty);
+    }
+    let hop_count =
+        usize::try_from(public_inputs.hop_count).map_err(|_| KagemushaFoldError::TooManyHops {
+            max: KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+            actual: usize::MAX,
+        })?;
+    if hop_count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS {
+        return Err(KagemushaFoldError::TooManyHops {
+            max: KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+            actual: hop_count,
+        });
+    }
+    if public_inputs.verifier_witness_count != public_inputs.hop_count {
+        return Err(
+            KagemushaFoldError::RecursiveAggregationWitnessCountMismatch {
+                expected: public_inputs.hop_count,
+                actual: public_inputs.verifier_witness_count,
+            },
+        );
+    }
+    if public_inputs.append_opening_preflight_digest != [0u8; Hash::LENGTH]
+        && public_inputs.hop_count <= 1
+    {
+        return Err(
+            KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                field: "append_opening_preflight_digest",
+            },
+        );
+    }
+    if public_inputs.append_boundary_digest != [0u8; Hash::LENGTH]
+        && (public_inputs.append_opening_preflight_digest == [0u8; Hash::LENGTH]
+            || public_inputs.hop_count <= 1)
+    {
+        return Err(
+            KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                field: "append_boundary_digest",
+            },
+        );
+    }
+    Ok(())
+}
+
 impl KagemushaRecursiveAggregationProofPublicInputs {
     /// Validate the recursive aggregation proof public-input context.
     ///
@@ -3750,98 +3847,12 @@ impl KagemushaRecursiveAggregationProofPublicInputs {
                 },
             );
         }
-        if self.evidence_digest == [0u8; Hash::LENGTH] {
-            return Err(
-                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
-                    field: "evidence_digest",
-                },
-            );
-        }
-        if self.folded_public_inputs_hash == [0u8; Hash::LENGTH] {
-            return Err(
-                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
-                    field: "folded_public_inputs_hash",
-                },
-            );
-        }
-        if self.aggregation_transcript_digest == [0u8; Hash::LENGTH] {
-            return Err(
-                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
-                    field: "aggregation_transcript_digest",
-                },
-            );
-        }
-        if self.verifier_params_fingerprint == [0u8; Hash::LENGTH] {
-            return Err(
-                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
-                    field: "verifier_params_fingerprint",
-                },
-            );
-        }
-        if self.fixed_window_table_schedule_digest == [0u8; Hash::LENGTH] {
-            return Err(
-                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
-                    field: "fixed_window_table_schedule_digest",
-                },
-            );
-        }
-        if self.fixed_window_shared_table_manifest_digest == [0u8; Hash::LENGTH] {
-            return Err(
-                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
-                    field: "fixed_window_shared_table_manifest_digest",
-                },
-            );
-        }
-        if self.fixed_window_table_base_digest == [0u8; Hash::LENGTH] {
-            return Err(
-                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
-                    field: "fixed_window_table_base_digest",
-                },
-            );
-        }
-        if self.verifier_witness_batch_digest == [0u8; Hash::LENGTH] {
-            return Err(
-                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
-                    field: "verifier_witness_batch_digest",
-                },
-            );
-        }
-        validate_kagemusha_recursive_verifier_opening_len(self.verifier_opening_len)?;
-        if self.hop_count == 0 {
-            return Err(KagemushaFoldError::Empty);
-        }
-        let hop_count =
-            usize::try_from(self.hop_count).map_err(|_| KagemushaFoldError::TooManyHops {
-                max: KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
-                actual: usize::MAX,
-            })?;
-        if hop_count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS {
-            return Err(KagemushaFoldError::TooManyHops {
-                max: KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
-                actual: hop_count,
-            });
-        }
-        if self.verifier_witness_count != self.hop_count {
-            return Err(
-                KagemushaFoldError::RecursiveAggregationWitnessCountMismatch {
-                    expected: self.hop_count,
-                    actual: self.verifier_witness_count,
-                },
-            );
-        }
+        validate_kagemusha_recursive_aggregation_proof_public_input_digests(self)?;
+        validate_kagemusha_recursive_aggregation_proof_public_input_counts(self)?;
         if self.append_opening_preflight_digest != [0u8; Hash::LENGTH] && self.hop_count <= 1 {
             return Err(
                 KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
                     field: "append_opening_preflight_digest",
-                },
-            );
-        }
-        if self.append_boundary_digest != [0u8; Hash::LENGTH]
-            && (self.append_opening_preflight_digest == [0u8; Hash::LENGTH] || self.hop_count <= 1)
-        {
-            return Err(
-                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
-                    field: "append_boundary_digest",
                 },
             );
         }
@@ -10200,7 +10211,7 @@ mod offline_note_tests {
                 "{{\n",
                 "  \"schema\": \"iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1\",\n",
                 "  \"fixture_kind\": \"norito_archives\",\n",
-                "  \"bridge_abi_version\": 6,\n",
+                "  \"native_bridge_abi_version\": 6,\n",
                 "{request_archive_fields},\n",
                 "  \"archives\": [\n",
                 "{entries}\n",
@@ -12361,6 +12372,83 @@ mod offline_note_tests {
             ),
             Err(KagemushaFoldError::RecursiveAggregationWitnessCountMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn kagemusha_recursive_public_inputs_reject_zero_required_digests() {
+        let evidence = sample_kagemusha_recursive_aggregation_evidence();
+        let public_inputs =
+            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(&evidence)
+                .expect("recursive proof public inputs");
+        let zero_digest_cases: [(
+            &'static str,
+            fn(&mut KagemushaRecursiveAggregationProofPublicInputs),
+        ); 8] = [
+            (
+                "evidence_digest",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.evidence_digest = [0u8; Hash::LENGTH];
+                },
+            ),
+            (
+                "folded_public_inputs_hash",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.folded_public_inputs_hash = [0u8; Hash::LENGTH];
+                },
+            ),
+            (
+                "aggregation_transcript_digest",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.aggregation_transcript_digest = [0u8; Hash::LENGTH];
+                },
+            ),
+            (
+                "verifier_params_fingerprint",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.verifier_params_fingerprint = [0u8; Hash::LENGTH];
+                },
+            ),
+            (
+                "fixed_window_table_schedule_digest",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.fixed_window_table_schedule_digest = [0u8; Hash::LENGTH];
+                },
+            ),
+            (
+                "fixed_window_shared_table_manifest_digest",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.fixed_window_shared_table_manifest_digest = [0u8; Hash::LENGTH];
+                },
+            ),
+            (
+                "fixed_window_table_base_digest",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.fixed_window_table_base_digest = [0u8; Hash::LENGTH];
+                },
+            ),
+            (
+                "verifier_witness_batch_digest",
+                |public_inputs: &mut KagemushaRecursiveAggregationProofPublicInputs| {
+                    public_inputs.verifier_witness_batch_digest = [0u8; Hash::LENGTH];
+                },
+            ),
+        ];
+
+        for (expected_field, zero_field) in zero_digest_cases {
+            let mut changed_public_inputs = public_inputs.clone();
+            zero_field(&mut changed_public_inputs);
+            let err = changed_public_inputs
+                .validate_context()
+                .expect_err("zero required digest must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch { field }
+                    if field == expected_field
+                ),
+                "unexpected zero-digest error for {expected_field}: {err:?}"
+            );
+        }
     }
 
     #[test]

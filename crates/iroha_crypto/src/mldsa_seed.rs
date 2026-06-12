@@ -8,6 +8,10 @@ pub mod mldsa65 {
 
     use hkdf::Hkdf;
     use pqcrypto_mldsa::ffi;
+    #[cfg(feature = "rand")]
+    use rand::rngs::OsRng;
+    #[cfg(feature = "rand")]
+    use rand_core::TryCryptoRng;
     use sha2::Sha512;
     use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -65,7 +69,25 @@ pub mod mldsa65 {
     }
 
     pub fn keypair_from_seed(seed: &[u8]) -> Result<(PublicKey, PrivateKey), Error> {
+        validate_seed_material_not_all_zero(seed)?;
         let seed_material = derive_seed_material(seed)?;
+        keypair_from_seed_material(&seed_material)
+    }
+
+    #[cfg(feature = "rand")]
+    pub fn random_keypair() -> Result<(PublicKey, PrivateKey), Error> {
+        random_keypair_from_rng(&mut OsRng)
+    }
+
+    #[cfg(feature = "rand")]
+    fn random_keypair_from_rng<R>(rng: &mut R) -> Result<(PublicKey, PrivateKey), Error>
+    where
+        R: TryCryptoRng,
+    {
+        let mut seed_material = Zeroizing::new([0u8; SEEDBYTES]);
+        rng.try_fill_bytes(seed_material.as_mut())
+            .map_err(|err| Error::KeyGen(format!("ML-DSA OS RNG failed: {err}")))?;
+        validate_seed_material_not_all_zero(seed_material.as_slice())?;
         keypair_from_seed_material(&seed_material)
     }
 
@@ -169,6 +191,15 @@ pub mod mldsa65 {
         kdf.expand(HKDF_INFO, out.as_mut())
             .map_err(|_| Error::KeyGen(String::from("ML-DSA HKDF seed expansion failed")))?;
         Ok(out)
+    }
+
+    fn validate_seed_material_not_all_zero(seed: &[u8]) -> Result<(), Error> {
+        if !seed.is_empty() && seed.iter().all(|&byte| byte == 0) {
+            return Err(Error::KeyGen(String::from(
+                "ML-DSA seed material must not be all zero",
+            )));
+        }
+        Ok(())
     }
 
     #[allow(unsafe_code)]
@@ -333,15 +364,127 @@ pub mod mldsa65 {
 
     #[cfg(test)]
     mod tests {
+        #[cfg(feature = "rand")]
+        use core::fmt;
+
         use pqcrypto_mldsa::mldsa65;
         use pqcrypto_traits::sign::SecretKey as _;
+        #[cfg(feature = "rand")]
+        use rand_core::{TryCryptoRng, TryRngCore};
 
         use super::*;
+
+        #[cfg(feature = "rand")]
+        struct FailingTryRng;
+
+        #[cfg(feature = "rand")]
+        #[derive(Debug)]
+        struct FailingTryRngError;
+
+        #[cfg(feature = "rand")]
+        impl fmt::Display for FailingTryRngError {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("failing ML-DSA RNG")
+            }
+        }
+
+        #[cfg(feature = "rand")]
+        impl TryRngCore for FailingTryRng {
+            type Error = FailingTryRngError;
+
+            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                Err(FailingTryRngError)
+            }
+
+            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+                Err(FailingTryRngError)
+            }
+
+            fn try_fill_bytes(&mut self, _dest: &mut [u8]) -> Result<(), Self::Error> {
+                Err(FailingTryRngError)
+            }
+        }
+
+        #[cfg(feature = "rand")]
+        impl TryCryptoRng for FailingTryRng {}
+
+        #[cfg(feature = "rand")]
+        struct FixedTryRng {
+            byte: u8,
+        }
+
+        #[cfg(feature = "rand")]
+        impl TryRngCore for FixedTryRng {
+            type Error = core::convert::Infallible;
+
+            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                Ok(u32::from_le_bytes([self.byte; 4]))
+            }
+
+            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+                Ok(u64::from_le_bytes([self.byte; 8]))
+            }
+
+            fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+                dest.fill(self.byte);
+                Ok(())
+            }
+        }
+
+        #[cfg(feature = "rand")]
+        impl TryCryptoRng for FixedTryRng {}
 
         #[test]
         fn seeded_public_key_recovers_from_secret_key() {
             let (public, private) =
                 keypair_from_seed(b"iroha:ml-dsa-seed:recover").expect("seeded keypair");
+            let secret = mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
+                .expect("valid ML-DSA secret bytes");
+
+            let recovered = public_key_from_secret(&secret).expect("recover public key");
+
+            assert_eq!(public, recovered);
+        }
+
+        #[test]
+        fn seeded_keypair_rejects_all_zero_seed_material() {
+            match keypair_from_seed(&[0u8; 32]) {
+                Err(Error::KeyGen(message)) => assert!(message.contains("all zero")),
+                Err(err) => panic!("expected all-zero seed KeyGen error, got {err:?}"),
+                Ok(_) => panic!("all-zero ML-DSA seed material must fail"),
+            }
+        }
+
+        #[cfg(feature = "rand")]
+        #[test]
+        fn random_keypair_from_rng_reports_rng_failure() {
+            let mut rng = FailingTryRng;
+
+            match random_keypair_from_rng(&mut rng) {
+                Err(Error::KeyGen(message)) => assert!(message.contains("failing ML-DSA RNG")),
+                Err(err) => panic!("expected RNG KeyGen error, got {err:?}"),
+                Ok(_) => panic!("ML-DSA RNG failure must fail key generation"),
+            }
+        }
+
+        #[cfg(feature = "rand")]
+        #[test]
+        fn random_keypair_from_rng_rejects_all_zero_seed_material() {
+            let mut rng = FixedTryRng { byte: 0 };
+
+            match random_keypair_from_rng(&mut rng) {
+                Err(Error::KeyGen(message)) => assert!(message.contains("all zero")),
+                Err(err) => panic!("expected all-zero seed KeyGen error, got {err:?}"),
+                Ok(_) => panic!("all-zero ML-DSA random seed material must fail"),
+            }
+        }
+
+        #[cfg(feature = "rand")]
+        #[test]
+        fn random_keypair_from_rng_accepts_nonzero_seed_material() {
+            let mut rng = FixedTryRng { byte: 0x42 };
+            let (public, private) =
+                random_keypair_from_rng(&mut rng).expect("nonzero ML-DSA random seed material");
             let secret = mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
                 .expect("valid ML-DSA secret bytes");
 

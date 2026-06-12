@@ -130,6 +130,11 @@ public static class VerifyingKeyBackendTags
         }
 
         var backend = raw;
+        if (backend.Trim() != backend)
+        {
+            throw new ArgumentException($"{context} must not contain surrounding whitespace.", context);
+        }
+
         if (!IsProductionVerifyBackendLabel(backend))
         {
             throw new ArgumentException(

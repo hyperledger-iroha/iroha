@@ -47,15 +47,22 @@ final class ConnectKeyStoreTests: XCTestCase {
         }
     }
 
-    func testSanitizedFilenameUsed() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
-                      "NoritoBridge connect crypto symbols not linked")
+    func testRejectsPaddedLabel() throws {
         let dir = try temporaryDirectory()
         let store = ConnectKeyStore(directory: dir, configuration: .init(preferKeychain: false))
 
-        _ = try store.generateOrLoad(label: "  wallet ")
-        let contents = try FileManager.default.contentsOfDirectory(atPath: dir.path)
-        XCTAssertTrue(contents.contains("wallet.json"))
+        XCTAssertThrowsError(try store.generateOrLoad(label: "  wallet ")) { error in
+            guard case ConnectKeyStoreError.invalidLabel = error else {
+                XCTFail("expected invalidLabel error, got \(error)")
+                return
+            }
+        }
+        XCTAssertThrowsError(try store.delete(label: "wallet\n")) { error in
+            guard case ConnectKeyStoreError.invalidLabel = error else {
+                XCTFail("expected invalidLabel error, got \(error)")
+                return
+            }
+        }
     }
 
     func testDeleteRemovesEntry() throws {

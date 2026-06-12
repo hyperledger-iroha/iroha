@@ -10,6 +10,7 @@ public enum OfflineNoteRedeemPlannerError: Error, LocalizedError, Equatable {
     case exactRedeemRequired
     case emptyBearerAuditTrail
     case outputMismatch
+    case invalidField(String)
 
     public var errorDescription: String? {
         switch self {
@@ -31,6 +32,8 @@ public enum OfflineNoteRedeemPlannerError: Error, LocalizedError, Equatable {
             return "Offline bearer note is missing the audit trail required for defunding."
         case .outputMismatch:
             return "Offline note split output does not match the redemption source."
+        case let .invalidField(field):
+            return "Offline note redeem planner field \(field) is invalid."
         }
     }
 }
@@ -55,16 +58,14 @@ public struct OfflineNoteOwnedInput: Equatable, Sendable {
                 noteSecret: Data,
                 origin: OfflineNoteCommitmentOrigin? = nil,
                 bearerAuditTrail: [OfflineNoteAuditBundle] = []) throws {
-        guard !chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw OfflineNoritoError.invalidMetadata("chain_id")
-        }
-        let normalizedAccountId = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalizedAccountId == keyCertificate.accountId else {
+        let checkedChainId = try Self.exactNonEmptyField(chainId, field: "chain_id")
+        let checkedAccountId = try Self.exactNonEmptyField(accountId, field: "account_id")
+        guard checkedAccountId == keyCertificate.accountId else {
             throw OfflineNoteRedeemPlannerError.accountMismatch
         }
         let normalizedAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
         if let assetAccountId = Self.assetAccountId(normalizedAssetId),
-           assetAccountId != normalizedAccountId {
+           assetAccountId != checkedAccountId {
             throw OfflineNoteRedeemPlannerError.assetAccountMismatch
         }
         let normalizedAmount: String
@@ -81,8 +82,8 @@ public struct OfflineNoteOwnedInput: Equatable, Sendable {
         }
         try OfflineNoteValidation.validateHash(noteCommitment, field: "note_commitment")
         try OfflineNoteValidation.validateRandomBytes(noteSecret, field: "note_secret")
-        self.chainId = chainId
-        self.accountId = normalizedAccountId
+        self.chainId = checkedChainId
+        self.accountId = checkedAccountId
         self.assetId = normalizedAssetId
         self.amount = normalizedAmount
         self.keyCertificate = keyCertificate
@@ -93,7 +94,7 @@ public struct OfflineNoteOwnedInput: Equatable, Sendable {
         _ = try issuedClaim()
         if let origin {
             let expected = try OfflineNoteCommitmentPreimage(
-                chainId: chainId,
+                chainId: checkedChainId,
                 ownerKeyCertificatePayloadHash: keyCertificate.payloadHash(),
                 assetId: normalizedAssetId,
                 amount: normalizedAmount,
@@ -139,6 +140,14 @@ public struct OfflineNoteOwnedInput: Equatable, Sendable {
         return String(assetId[assetId.index(after: separator)...])
     }
 
+    private static func exactNonEmptyField(_ value: String, field: String) throws -> String {
+        guard !value.isEmpty,
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            throw OfflineNoteRedeemPlannerError.invalidField(field)
+        }
+        return value
+    }
+
     static func normalizedAuditTrail(_ audits: [OfflineNoteAuditBundle]) -> [OfflineNoteAuditBundle] {
         var seen: Set<String> = []
         var result: [OfflineNoteAuditBundle] = []
@@ -168,18 +177,27 @@ public struct OfflineNoteOwnedOutput: Equatable, Sendable {
                 keyCertificate: OfflineNoteKeyCertificate,
                 noteSecret: Data,
                 origin: OfflineNoteCommitmentOrigin) throws {
+        let checkedChainId = try Self.exactNonEmptyField(chainId, field: "chain_id")
+        let checkedAccountId = try Self.exactNonEmptyField(accountId, field: "account_id")
         let normalizedAmount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
         let normalizedAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
+        guard checkedAccountId == keyCertificate.accountId else {
+            throw OfflineNoteRedeemPlannerError.accountMismatch
+        }
+        if let assetAccountId = Self.assetAccountId(normalizedAssetId),
+           assetAccountId != checkedAccountId {
+            throw OfflineNoteRedeemPlannerError.assetAccountMismatch
+        }
         let commitment = try OfflineNoteCommitmentPreimage(
-            chainId: chainId,
+            chainId: checkedChainId,
             ownerKeyCertificatePayloadHash: keyCertificate.payloadHash(),
             assetId: normalizedAssetId,
             amount: normalizedAmount,
             noteSecret: noteSecret,
             origin: origin
         ).deriveNoteCommitment()
-        self.chainId = chainId
-        self.accountId = accountId
+        self.chainId = checkedChainId
+        self.accountId = checkedAccountId
         self.assetId = normalizedAssetId
         self.amount = normalizedAmount
         self.keyCertificate = keyCertificate
@@ -218,6 +236,22 @@ public struct OfflineNoteOwnedOutput: Equatable, Sendable {
             ownerKeyCertificatePayloadHash: keyCertificate.payloadHash(),
             noteSecret: noteSecret
         ).deriveInputNullifier()
+    }
+
+    private static func assetAccountId(_ assetId: String) -> String? {
+        guard let separator = assetId.lastIndex(of: "#"),
+              separator < assetId.index(before: assetId.endIndex) else {
+            return nil
+        }
+        return String(assetId[assetId.index(after: separator)...])
+    }
+
+    private static func exactNonEmptyField(_ value: String, field: String) throws -> String {
+        guard !value.isEmpty,
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            throw OfflineNoteRedeemPlannerError.invalidField(field)
+        }
+        return value
     }
 }
 

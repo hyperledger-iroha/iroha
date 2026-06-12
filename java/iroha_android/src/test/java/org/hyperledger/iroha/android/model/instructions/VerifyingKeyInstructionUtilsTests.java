@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.Map;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyRecordDescription;
+import org.hyperledger.iroha.android.model.zk.VerifyingKeyStatus;
 
 public final class VerifyingKeyInstructionUtilsTests {
 
@@ -18,9 +19,11 @@ public final class VerifyingKeyInstructionUtilsTests {
     adversarialPendingBackendAliasesStayFailClosed();
     supportedBackendAliasesRemainNonPending();
     catalogBackendAliasesRejectNonAsciiConfusables();
+    noritoBackendAndStatusParsersRejectNonExactLabels();
     productionVerifierBackendClassifierMirrorsNativeAllowlist();
     inlineKeyCommitmentMustMatchSerializationBackend();
     registerAndUpdateRejectUnsupportedProductionBackends();
+    registerAndUpdateRejectNoncanonicalRecordFields();
     registerAndUpdateRejectBlankNames();
     System.out.println("[IrohaAndroid] VerifyingKeyInstructionUtilsTests passed.");
   }
@@ -199,6 +202,24 @@ public final class VerifyingKeyInstructionUtilsTests {
     }
   }
 
+  private static void noritoBackendAndStatusParsersRejectNonExactLabels() {
+    assert VerifyingKeyBackendTag.HALO2_IPA_PASTA
+        == VerifyingKeyBackendTag.parse("halo2-ipa-pasta");
+    for (final String label :
+        new String[] {" halo2-ipa-pasta", "halo2-ipa-pasta ", "HALO2-IPA-PASTA"}) {
+      assertThrows(
+          () -> VerifyingKeyBackendTag.parse(label),
+          label + " must not parse as an exact Norito backend tag");
+    }
+
+    assert VerifyingKeyStatus.ACTIVE == VerifyingKeyStatus.parse("Active");
+    for (final String label : new String[] {" Active", "Active ", "active", "ACTIVE"}) {
+      assertThrows(
+          () -> VerifyingKeyStatus.parse(label),
+          label + " must not parse as an exact verifying-key status");
+    }
+  }
+
   private static void productionVerifierBackendClassifierMirrorsNativeAllowlist() {
     final String[] supported = {
       "halo2/ipa",
@@ -335,9 +356,20 @@ public final class VerifyingKeyInstructionUtilsTests {
     for (final String backend : unsupported) {
       assert !VerifyingKeyBackendTag.isProductionVerifyBackendLabel(backend)
           : backend + " should remain fail-closed";
-      assertThrows(
-          () -> VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(backend, "backend"),
-          backend + " should not pass production backend validation");
+      final IllegalArgumentException error =
+          assertThrows(
+              () -> VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(backend, "backend"),
+              backend + " should not pass production backend validation");
+      final String trimmedBackend = trimWhitespace(backend);
+      final String expected =
+          trimmedBackend.isEmpty()
+              ? "must not be blank"
+              : trimmedBackend.equals(backend)
+                  ? "unsupported production verifier backend"
+                  : "surrounding whitespace";
+      if (!error.getMessage().contains(expected)) {
+        throw new AssertionError("unexpected backend rejection message: " + error.getMessage());
+      }
     }
   }
 
@@ -417,7 +449,7 @@ public final class VerifyingKeyInstructionUtilsTests {
   private static void registerAndUpdateRejectBlankNames() {
     final VerifyingKeyRecordDescription record =
         VerifyingKeyInstructionUtils.parseRecord(baseArguments(), "halo2/ipa");
-    for (final String name : new String[] {"", "   ", "\t", "\n"}) {
+    for (final String name : new String[] {"", "   ", "\t", "\n", " vk_test", "vk_test "}) {
       assertThrows(
           () ->
               RegisterVerifyingKeyInstruction.builder()
@@ -449,6 +481,99 @@ public final class VerifyingKeyInstructionUtilsTests {
           () -> UpdateVerifyingKeyInstruction.fromArguments(updateArguments),
           "blank update fromArguments name should be rejected");
     }
+  }
+
+  private static void registerAndUpdateRejectNoncanonicalRecordFields() {
+    final Map<String, String> canonicalArguments =
+        VerifyingKeyInstructionUtils.parseRecord(baseArguments(), "halo2/ipa")
+            .toArguments("halo2/ipa");
+    final String[][] cases = {
+      {"record.circuit_id", " vk-test"},
+      {"record.circuit_id", "vk-test "},
+      {"record.backend_tag", " halo2-ipa-pasta"},
+      {"record.backend_tag", "HALO2-IPA-PASTA"},
+      {"record.curve", " pallas"},
+      {"record.curve", "pallas "},
+      {
+        "record.public_inputs_schema_hash_hex",
+        " " + canonicalArguments.get("record.public_inputs_schema_hash_hex")
+      },
+      {
+        "record.public_inputs_schema_hash_hex",
+        canonicalArguments.get("record.public_inputs_schema_hash_hex") + " "
+      },
+      {"record.commitment_hex", " " + canonicalArguments.get("record.commitment_hex")},
+      {"record.commitment_hex", canonicalArguments.get("record.commitment_hex") + " "},
+      {"record.vk_bytes_b64", " " + canonicalArguments.get("record.vk_bytes_b64")},
+      {"record.vk_bytes_b64", canonicalArguments.get("record.vk_bytes_b64") + " "},
+      {"record.vk_len", " " + canonicalArguments.get("record.vk_len")},
+      {"record.max_proof_bytes", " 1024"},
+      {"record.gas_schedule_id", " default"},
+      {"record.gas_schedule_id", "default "},
+      {"record.metadata_uri_cid", " bafy-metadata"},
+      {"record.metadata_uri_cid", "bafy-metadata "},
+      {"record.vk_bytes_cid", " bafy-vk"},
+      {"record.vk_bytes_cid", "bafy-vk "},
+      {"record.activation_height", " 10"},
+      {"record.withdraw_height", "10 "},
+      {"record.deprecation_height", " 10"},
+      {"record.status", " Active"},
+      {"record.status", "active"}
+    };
+    for (final String[] entry : cases) {
+      final Map<String, String> registerArguments = baseArguments();
+      registerArguments.put("backend", "halo2/ipa");
+      registerArguments.put("name", "vk_test");
+      registerArguments.put(entry[0], entry[1]);
+      assertThrows(
+          () -> RegisterVerifyingKeyInstruction.fromArguments(registerArguments),
+          "padded " + entry[0] + " should be rejected by register fromArguments");
+
+      final Map<String, String> updateArguments = baseArguments();
+      updateArguments.put("backend", "halo2/ipa");
+      updateArguments.put("name", "vk_test");
+      updateArguments.put(entry[0], entry[1]);
+      assertThrows(
+          () -> UpdateVerifyingKeyInstruction.fromArguments(updateArguments),
+          "padded " + entry[0] + " should be rejected by update fromArguments");
+    }
+
+    assertThrows(
+        () -> VerifyingKeyRecordDescription.builder().setCircuitId(" vk-test"),
+        "padded direct circuitId should be rejected");
+    assertThrows(
+        () -> VerifyingKeyRecordDescription.builder().setGasScheduleId("default "),
+        "padded direct gasScheduleId should be rejected");
+    assertThrows(
+        () -> VerifyingKeyRecordDescription.builder().setSchemaHashHex(" " + repeatChar('a', 64)),
+        "padded direct schema hash should be rejected");
+    assertThrows(
+        () -> VerifyingKeyRecordDescription.builder().setSchemaHashHex(repeatChar('a', 64) + " "),
+        "padded direct schema hash should be rejected");
+    assertThrows(
+        () -> VerifyingKeyRecordDescription.builder().setCommitmentHex(" " + repeatChar('b', 64)),
+        "padded direct commitment should be rejected");
+    assertThrows(
+        () -> VerifyingKeyRecordDescription.builder().setCommitmentHex(repeatChar('b', 64) + " "),
+        "padded direct commitment should be rejected");
+    assertThrows(
+        () -> VerifyingKeyRecordDescription.builder().setCurve(" pallas"),
+        "padded direct curve should be rejected");
+    assertThrows(
+        () -> VerifyingKeyRecordDescription.builder().setCurve("pallas "),
+        "padded direct curve should be rejected");
+    assertThrows(
+        () -> VerifyingKeyRecordDescription.builder().setMetadataUriCid(" bafy-metadata"),
+        "padded direct metadata CID should be rejected");
+    assertThrows(
+        () -> VerifyingKeyRecordDescription.builder().setMetadataUriCid("bafy-metadata "),
+        "padded direct metadata CID should be rejected");
+    assertThrows(
+        () -> VerifyingKeyRecordDescription.builder().setVkBytesCid(" bafy-vk"),
+        "padded direct verifier-key CID should be rejected");
+    assertThrows(
+        () -> VerifyingKeyRecordDescription.builder().setVkBytesCid("bafy-vk "),
+        "padded direct verifier-key CID should be rejected");
   }
 
   private static Map<String, String> baseArguments() {
@@ -538,11 +663,23 @@ public final class VerifyingKeyInstructionUtilsTests {
     return builder.toString();
   }
 
-  private static void assertThrows(final Runnable runnable, final String message) {
+  private static String trimWhitespace(final String value) {
+    int start = 0;
+    int end = value.length();
+    while (start < end && Character.isWhitespace(value.charAt(start))) {
+      start++;
+    }
+    while (end > start && Character.isWhitespace(value.charAt(end - 1))) {
+      end--;
+    }
+    return value.substring(start, end);
+  }
+
+  private static IllegalArgumentException assertThrows(final Runnable runnable, final String message) {
     try {
       runnable.run();
     } catch (final IllegalArgumentException expected) {
-      return;
+      return expected;
     }
     throw new AssertionError(message);
   }

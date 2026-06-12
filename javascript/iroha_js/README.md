@@ -53,7 +53,7 @@ spend until that archive is shipped and signed for release. A missing packaged
 key, the generic compact-token reservation, and the multi-hop
 verifier-batch reservation still reach the proof-composition reservation and
 remain reserved ABI-7 state. `preferredKagemushaOfflineSpendMode()` selects `recursive_spend_v1`
-when the native host reports bridge ABI 6 or later and every required
+when the native host reports native bridge ABI 6 or later and every required
 recursive-spend method rejects the malformed availability probe, and otherwise
 falls back to `checked_prefold_v1`: `kagemushaRecursiveSpendInit`,
 `kagemushaRecursiveSpendAppend`,
@@ -132,7 +132,7 @@ archive bridge: `isPrivacyNativeAvailable()`, `privacyCapabilitiesV1()`,
 `privacyBuildProofV1(requestArchive)`, and
 `privacyVerifyProofV1(requestArchive)`. The JS SDK does not expose
 algorithm-specific production proof builders while the privacy rows remain
-gated. Native availability requires bridge ABI 6 or later plus successful
+gated. Native availability requires native bridge ABI 6 or later plus successful
 `capabilities`, `build`, and `verify` probes whose operation-specific result
 schema bytes match the called entry point.
 
@@ -183,7 +183,7 @@ import {
 
 assertOfflineCashConfigurationSnapshotUsable(cachedSnapshot, {
   nowMs: Date.now(),
-  requiredBridgeAbiVersion: 7,
+  requiredNativeBridgeAbiVersion: 7,
 });
 
 const controller = new OfflineCashLifecycleController({

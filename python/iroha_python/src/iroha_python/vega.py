@@ -1,4 +1,4 @@
-"""Vega existing-credential ZK SDK dev-fixture helpers."""
+"""Vega existing-credential ZK SDK helpers."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from .verange import (
     _reject_unknown_fields,
     _require_mapping,
     _require_non_blank_string,
+    _require_plain_mapping,
     build_privacy_proof_envelope,
     decode_privacy_proof_envelope,
 )
@@ -38,11 +39,15 @@ __all__ = [
     "VEGA_DOMAIN_SEPARATOR",
     "build_vega_credential_predicate_commitment",
     "build_vega_credential_proof_envelope",
+    "build_vega_credential_predicate_proof_v0",
     "build_vega_credential_dev_proof_fixture",
+    "verify_vega_credential_predicate_proof_v0",
     "verify_vega_credential_proof_locally",
     "buildVegaCredentialPredicateCommitment",
     "buildVegaCredentialProofEnvelope",
+    "buildVegaCredentialPredicateProofV0",
     "buildVegaCredentialDevProofFixture",
+    "verifyVegaCredentialPredicateProofV0",
     "verifyVegaCredentialProofLocally",
 ]
 
@@ -615,7 +620,7 @@ def build_vega_credential_predicate_commitment(
 ) -> dict[str, Any]:
     """Normalize or derive a Vega credential predicate commitment."""
 
-    source = _require_mapping(options, context)
+    source = _require_plain_mapping(options, context)
     _reject_unknown_fields(source, _PREDICATE_FIELDS, context)
     return _normalize_predicate_commitment_from_source(source, context)
 
@@ -680,13 +685,43 @@ _PROOF_FIELDS = {
 def build_vega_credential_proof_envelope(options: Mapping[str, Any]) -> bytes:
     """Build canonical OpenVerifyEnvelope bytes for a prepared Vega proof."""
 
-    source = _require_mapping(options, "vegaCredentialProofEnvelope")
+    source = _require_plain_mapping(options, "vegaCredentialProofEnvelope")
     _reject_unknown_fields(source, _PROOF_FIELDS, "vegaCredentialProofEnvelope")
     parts = _normalize_proof_parts(
         source,
         "vegaCredentialProofEnvelope",
         require_proof_bytes=True,
     )
+    return build_privacy_proof_envelope(
+        {
+            "backend": parts["backend"],
+            "circuitId": parts["circuit_id"],
+            "vkHash": parts["vk_hash"],
+            "publicInputs": parts["public_input_bytes"],
+            "proofBytes": parts["proof_bytes"],
+            "aux": source.get("aux", b""),
+            "maxProofBytes": parts["max_proof_bytes"],
+            "maxPublicInputBytes": parts["max_public_input_bytes"],
+        }
+    )
+
+
+def build_vega_credential_predicate_proof_v0(
+    options: Mapping[str, Any],
+) -> bytes:
+    """Build canonical production Vega credential predicate proof bytes."""
+
+    source = _require_plain_mapping(options, "vegaCredentialPredicateProofV0")
+    _reject_unknown_fields(source, _PROOF_FIELDS, "vegaCredentialPredicateProofV0")
+    parts = _normalize_proof_parts(
+        source,
+        "vegaCredentialPredicateProofV0",
+        require_proof_bytes=True,
+    )
+    if parts["proof_bytes"].startswith(VEGA_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "vegaCredentialPredicateProofV0.proofBytes must not contain a dev fixture proof"
+        )
     return build_privacy_proof_envelope(
         {
             "backend": parts["backend"],
@@ -721,7 +756,7 @@ def _dev_proof_bytes(
 def build_vega_credential_dev_proof_fixture(options: Mapping[str, Any]) -> dict[str, Any]:
     """Build a deterministic Vega credential dev proof fixture."""
 
-    source = _require_mapping(options, "vegaCredentialDevProofFixture")
+    source = _require_plain_mapping(options, "vegaCredentialDevProofFixture")
     _reject_unknown_fields(
         source,
         _PROOF_FIELDS - {"proofBytes", "proof_bytes", "proof"},
@@ -889,7 +924,7 @@ def verify_vega_credential_proof_locally(options: Any) -> dict[str, Any]:
     """Verify a deterministic Vega dev fixture through an OpenVerify envelope."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "vegaCredentialLocalVerification")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(
@@ -973,7 +1008,92 @@ def verify_vega_credential_proof_locally(options: Any) -> dict[str, Any]:
     }
 
 
+def verify_vega_credential_predicate_proof_v0(options: Any) -> dict[str, Any]:
+    """Validate a production Vega credential predicate proof envelope."""
+
+    if isinstance(options, Mapping):
+        source = _require_plain_mapping(options, "vegaCredentialPredicateProofV0")
+    else:
+        source = {"envelope": options}
+    _reject_unknown_fields(
+        source,
+        (
+            _PROOF_FIELDS
+            | {"envelope", "proofEnvelope", "proof_envelope", "bytes"}
+        )
+        - {
+            "backend",
+            "backendTag",
+            "backend_tag",
+            "circuitId",
+            "circuit_id",
+            "vkHash",
+            "vk_hash",
+            "verifierKeyHash",
+            "verifyingKeyHash",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+            "aux",
+            "maxProofBytes",
+            "max_proof_bytes",
+            "maxPublicInputBytes",
+            "max_public_input_bytes",
+            "version",
+        },
+        "vegaCredentialPredicateProofV0",
+    )
+    _envelope_key, envelope_value = _read_single_alias(
+        source,
+        ("envelope", "proofEnvelope", "proof_envelope", "bytes"),
+        "vegaCredentialPredicateProofV0.envelope",
+        "proof envelope",
+    )
+    decoded = decode_privacy_proof_envelope(envelope_value)
+    if decoded["backend"] != "Stark":
+        raise ValueError("vegaCredentialPredicateProofV0.envelope.backend must be Stark")
+    circuit_id = _normalize_circuit_id(
+        decoded["circuit_id"],
+        "vegaCredentialPredicateProofV0.envelope.circuitId",
+    )
+    vk_hash = _fixed_bytes(
+        decoded["vk_hash"],
+        "vegaCredentialPredicateProofV0.envelope.vkHash",
+        32,
+        nonzero=True,
+    )
+    public_inputs = _parse_public_inputs(
+        decoded["public_inputs"],
+        "vegaCredentialPredicateProofV0.publicInputs",
+    )
+    _ensure_verification_expectations(
+        source,
+        public_inputs,
+        "vegaCredentialPredicateProofV0",
+    )
+    if decoded["proof_bytes"].startswith(VEGA_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "vegaCredentialPredicateProofV0 proof bytes must not contain a Vega dev fixture"
+        )
+    return {
+        "ok": True,
+        "production": True,
+        "kind": "vega-existing-credential-zk-v0",
+        "backend": "Stark",
+        "circuit_id": circuit_id,
+        "verifier_key_hash": vk_hash.hex(),
+        "public_inputs": public_inputs,
+        "public_input_bytes": len(decoded["public_inputs"]),
+        "proof_bytes": len(decoded["proof_bytes"]),
+        "aux_bytes": len(decoded["aux"]),
+        "credential_schema": public_inputs["credential_schema"],
+        "expiration_epoch": public_inputs["expiration_epoch"],
+    }
+
+
 buildVegaCredentialPredicateCommitment = build_vega_credential_predicate_commitment
 buildVegaCredentialProofEnvelope = build_vega_credential_proof_envelope
+buildVegaCredentialPredicateProofV0 = build_vega_credential_predicate_proof_v0
 buildVegaCredentialDevProofFixture = build_vega_credential_dev_proof_fixture
+verifyVegaCredentialPredicateProofV0 = verify_vega_credential_predicate_proof_v0
 verifyVegaCredentialProofLocally = verify_vega_credential_proof_locally

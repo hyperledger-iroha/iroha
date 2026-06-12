@@ -18,14 +18,19 @@ object OfflineJsonParser {
             asOptionalBoolean(obj["offline_fountain_qr"], false),
             asOptionalBoolean(obj["offline_sync_optional"], false),
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
-            asOptionalBoolean(obj["offline_kagemusha_abi7"], false),
-            asOptionalString(obj["offline_kagemusha_abi7_mode"]),
-            asOptionalInt(
-                obj["offline_kagemusha_abi7_bridge_abi_version"],
-                "offline_kagemusha_abi7_bridge_abi_version",
+            kagemushaRecursiveCompactAvailable(obj),
+            firstOptionalString(
+                obj,
+                "offline_kagemusha_abi7_mode",
+                "offline_kagemusha_recursive_compact_mode",
             ),
-            asOptionalString(obj["offline_kagemusha_abi7_circuit_id"]),
-            asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false),
+            firstOptionalInt(
+                obj,
+                "offline_kagemusha_abi7_bridge_abi_version",
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            ),
+            kagemushaRecursiveCompactCircuitId(obj),
+            kagemushaRecursiveCompactArtifactsAvailable(obj),
         )
     }
 
@@ -35,15 +40,41 @@ object OfflineJsonParser {
         val obj = expectObject(root, "root")
         return OfflineV2Readiness(
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
-            asOptionalBoolean(obj["offline_kagemusha_abi7"], false),
-            asOptionalString(obj["offline_kagemusha_abi7_mode"]),
-            asOptionalInt(
-                obj["offline_kagemusha_abi7_bridge_abi_version"],
-                "offline_kagemusha_abi7_bridge_abi_version",
+            kagemushaRecursiveCompactAvailable(obj),
+            firstOptionalString(
+                obj,
+                "offline_kagemusha_abi7_mode",
+                "offline_kagemusha_recursive_compact_mode",
             ),
-            asOptionalString(obj["offline_kagemusha_abi7_circuit_id"]),
-            asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false),
+            firstOptionalInt(
+                obj,
+                "offline_kagemusha_abi7_bridge_abi_version",
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            ),
+            kagemushaRecursiveCompactCircuitId(obj),
+            kagemushaRecursiveCompactArtifactsAvailable(obj),
         )
+    }
+
+    private fun kagemushaRecursiveCompactAvailable(obj: Map<String, Any>): Boolean {
+        if (obj.containsKey("offline_kagemusha_abi7")) {
+            return asOptionalBoolean(obj["offline_kagemusha_abi7"], false)
+        }
+        return asOptionalBoolean(obj["offline_kagemusha_recursive_compact_available"], false)
+    }
+
+    private fun kagemushaRecursiveCompactCircuitId(obj: Map<String, Any>): String? {
+        if (obj.containsKey("offline_kagemusha_abi7_circuit_id")) {
+            return asOptionalString(obj["offline_kagemusha_abi7_circuit_id"])
+        }
+        return asOptionalString(obj["offline_kagemusha_recursive_compact_circuit_id"])
+    }
+
+    private fun kagemushaRecursiveCompactArtifactsAvailable(obj: Map<String, Any>): Boolean {
+        if (obj.containsKey("offline_kagemusha_abi7_artifacts")) {
+            return asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false)
+        }
+        return asOptionalBoolean(obj["offline_kagemusha_recursive_compact_artifacts_available"], false)
     }
 
     /** Returns a canonical JSON string for the provided payload (keys sorted). */
@@ -395,6 +426,20 @@ object OfflineJsonParser {
         return if (value is String) value else value.toString()
     }
 
+    private fun firstOptionalString(obj: Map<String, Any>, vararg keys: String): String? {
+        for (key in keys) {
+            if (obj.containsKey(key)) return asOptionalString(obj[key])
+        }
+        return null
+    }
+
+    private fun firstOptionalInt(obj: Map<String, Any>, vararg keys: String): Int? {
+        for (key in keys) {
+            if (obj.containsKey(key)) return asOptionalInt(obj[key], key)
+        }
+        return null
+    }
+
     private fun asLong(value: Any?, path: String): Long {
         return JsonNumbers.asLong(value, path)
     }
@@ -410,7 +455,13 @@ object OfflineJsonParser {
 
     private fun asOptionalInt(value: Any?, path: String): Int? {
         if (value == null) return null
-        val parsed = JsonNumbers.asLong(value, path)
+        val parsed = if (value is String) {
+            val trimmed = value.trim()
+            if (trimmed.isEmpty()) return null
+            trimmed.toLong()
+        } else {
+            JsonNumbers.asLong(value, path)
+        }
         check(parsed in Int.MIN_VALUE..Int.MAX_VALUE) { "$path is outside Int range" }
         return parsed.toInt()
     }

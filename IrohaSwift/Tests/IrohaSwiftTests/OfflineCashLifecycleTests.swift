@@ -95,7 +95,7 @@ final class OfflineCashLifecycleTests: XCTestCase {
             assetDefinitionId: "pkr#sbp",
             offlinePaymentsEnabled: true,
             issuerPublicKeyBase64: "issuer-public-key",
-            bridgeAbiVersion: 7,
+            nativeBridgeAbiVersion: 7,
             artifactSetId: "artifact-set",
             circuitId: "kagemusha-recursive-compact-v1",
             createdAtMs: 100,
@@ -103,7 +103,7 @@ final class OfflineCashLifecycleTests: XCTestCase {
         )
 
         XCTAssertNoThrow(
-            try snapshot.requireUsableForOfflineExchange(nowMs: 999, requiredBridgeAbiVersion: 7)
+            try snapshot.requireUsableForOfflineExchange(nowMs: 999, requiredNativeBridgeAbiVersion: 7)
         )
 
         let missingKey = OfflineCashConfigurationSnapshot(
@@ -111,17 +111,39 @@ final class OfflineCashLifecycleTests: XCTestCase {
             assetDefinitionId: "pkr#sbp",
             offlinePaymentsEnabled: true,
             issuerPublicKeyBase64: " ",
-            bridgeAbiVersion: 7,
+            nativeBridgeAbiVersion: 7,
             createdAtMs: 100
         )
         XCTAssertThrowsError(
-            try missingKey.requireUsableForOfflineExchange(nowMs: 200, requiredBridgeAbiVersion: 7)
+            try missingKey.requireUsableForOfflineExchange(nowMs: 200, requiredNativeBridgeAbiVersion: 7)
         ) { error in
             XCTAssertEqual(error as? OfflineCashConfigurationSnapshotError, .missingIssuerPublicKey)
         }
 
+        for issuerPublicKeyBase64 in [
+            "",
+            " issuer-public-key",
+            "issuer-public-key ",
+            "issuer public key",
+            "issuer-public-key\n",
+            "issuer-public-key\u{2603}"
+        ] {
+            XCTAssertThrowsError(
+                try OfflineCashConfigurationSnapshot(
+                    chainId: "00000042",
+                    assetDefinitionId: "pkr#sbp",
+                    offlinePaymentsEnabled: true,
+                    issuerPublicKeyBase64: issuerPublicKeyBase64,
+                    nativeBridgeAbiVersion: 7,
+                    createdAtMs: 100
+                ).requireUsableForOfflineExchange(nowMs: 200, requiredNativeBridgeAbiVersion: 7)
+            ) { error in
+                XCTAssertEqual(error as? OfflineCashConfigurationSnapshotError, .missingIssuerPublicKey)
+            }
+        }
+
         XCTAssertThrowsError(
-            try snapshot.requireUsableForOfflineExchange(nowMs: 1_000, requiredBridgeAbiVersion: 7)
+            try snapshot.requireUsableForOfflineExchange(nowMs: 1_000, requiredNativeBridgeAbiVersion: 7)
         ) { error in
             XCTAssertEqual(
                 error as? OfflineCashConfigurationSnapshotError,
@@ -135,9 +157,9 @@ final class OfflineCashLifecycleTests: XCTestCase {
                 assetDefinitionId: "pkr#sbp",
                 offlinePaymentsEnabled: false,
                 issuerPublicKeyBase64: "issuer-public-key",
-                bridgeAbiVersion: 7,
+                nativeBridgeAbiVersion: 7,
                 createdAtMs: 100
-            ).requireUsableForOfflineExchange(nowMs: 200, requiredBridgeAbiVersion: 7)
+            ).requireUsableForOfflineExchange(nowMs: 200, requiredNativeBridgeAbiVersion: 7)
         ) { error in
             XCTAssertEqual(error as? OfflineCashConfigurationSnapshotError, .offlinePaymentsDisabled)
         }
@@ -148,13 +170,13 @@ final class OfflineCashLifecycleTests: XCTestCase {
                 assetDefinitionId: "pkr#sbp",
                 offlinePaymentsEnabled: true,
                 issuerPublicKeyBase64: "issuer-public-key",
-                bridgeAbiVersion: 6,
+                nativeBridgeAbiVersion: 6,
                 createdAtMs: 100
-            ).requireUsableForOfflineExchange(nowMs: 200, requiredBridgeAbiVersion: 7)
+            ).requireUsableForOfflineExchange(nowMs: 200, requiredNativeBridgeAbiVersion: 7)
         ) { error in
             XCTAssertEqual(
                 error as? OfflineCashConfigurationSnapshotError,
-                .unsupportedBridgeAbi(required: 7, actual: 6)
+                .unsupportedNativeBridgeAbi(required: 7, actual: 6)
             )
         }
     }

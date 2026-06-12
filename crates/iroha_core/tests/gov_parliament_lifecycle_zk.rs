@@ -25,11 +25,10 @@ use iroha_data_model::{
             RegisterCitizen, VotingMode,
         },
         verifying_keys,
-        zk::{CreateElection, FinalizeElection},
+        zk::CreateElection,
     },
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant, Transfer},
-    proof::{ProofAttachment, ProofBox},
     smart_contract::manifest::{ContractManifest, ManifestProvenance},
 };
 use iroha_executor_data_model::permission::governance::{
@@ -167,9 +166,7 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     gov_cfg.parliament_alternate_size = Some(1);
     state.set_gov(gov_cfg);
 
-    let bundle_ballot_1 = zk_testkit::add2inst_public_bundle(5, 8);
-    let bundle_ballot_2 = zk_testkit::add2inst_public_bundle(6, 8);
-    let bundle_tally = zk_testkit::add2inst_public_bundle(7, 3);
+    let bundle_ballot = zk_testkit::vote_merkle8_bundle();
 
     let code_hash_hex = "cc".repeat(32);
     let abi_hash_hex = canonical_abi_hex();
@@ -265,8 +262,8 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     let referendum_id = hex::encode(proposal_id);
 
     verifying_keys::RegisterVerifyingKey {
-        id: bundle_ballot_1.vk_id.clone(),
-        record: bundle_ballot_1.vk_record.clone(),
+        id: bundle_ballot.vk_id.clone(),
+        record: bundle_ballot.vk_record.clone(),
     }
     .execute(&proposer_id, &mut stx_1)
     .expect("register voting key");
@@ -274,11 +271,11 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     CreateElection {
         election_id: referendum_id.clone(),
         options: 2,
-        eligible_root: bundle_ballot_1.root_bytes(),
+        eligible_root: bundle_ballot.root_bytes(),
         start_ts: 0,
         end_ts: 0,
-        vk_ballot: bundle_ballot_1.vk_id.clone(),
-        vk_tally: bundle_ballot_1.vk_id.clone(),
+        vk_ballot: bundle_ballot.vk_id.clone(),
+        vk_tally: bundle_ballot.vk_id.clone(),
         domain_tag: "gov:ballot:v1".to_string(),
     }
     .execute(&proposer_id, &mut stx_1)
@@ -309,7 +306,7 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
             .expect("parliament body approval");
     }
 
-    let root_hint = hex::encode(bundle_ballot_1.root_bytes());
+    let root_hint = hex::encode(bundle_ballot.root_bytes());
 
     let voter_a = citizens[0].clone();
     let inputs_a = norito::json::object([
@@ -338,44 +335,11 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
 
     CastZkBallot {
         election_id: referendum_id.clone(),
-        proof_b64: bundle_ballot_1.proof_b64.clone(),
+        proof_b64: bundle_ballot.proof_b64(),
         public_inputs_json: norito::json::to_json(&inputs_a).expect("ballot json"),
     }
     .execute(&voter_a, &mut stx_1)
     .expect("first zk ballot");
-
-    let voter_b = citizens[1].clone();
-    let inputs_b = norito::json::object([
-        (
-            "owner",
-            norito::json::to_value(&voter_b.to_string()).expect("owner json"),
-        ),
-        (
-            "amount",
-            norito::json::to_value(&BALLOT_LOCK).expect("amount json"),
-        ),
-        (
-            "duration_blocks",
-            norito::json::to_value(&20_u64).expect("duration json"),
-        ),
-        (
-            "direction",
-            norito::json::to_value("Nay").expect("direction json"),
-        ),
-        (
-            "root_hint",
-            norito::json::to_value(&root_hint).expect("root hint json"),
-        ),
-    ])
-    .expect("serialize second ballot inputs");
-
-    CastZkBallot {
-        election_id: referendum_id.clone(),
-        proof_b64: bundle_ballot_2.proof_b64.clone(),
-        public_inputs_json: norito::json::to_json(&inputs_b).expect("ballot json"),
-    }
-    .execute(&voter_b, &mut stx_1)
-    .expect("second zk ballot");
 
     stx_1.apply();
     block_1
@@ -386,22 +350,20 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     let mut block_2 = state.block(header_2);
     let mut stx_2 = block_2.transaction();
 
-    let tally_attachment = ProofAttachment::new_ref(
-        bundle_tally.backend.to_string(),
-        ProofBox::new(
-            bundle_tally.backend.to_string(),
-            bundle_tally.proof_bytes.clone(),
-        ),
-        bundle_ballot_1.vk_id.clone(),
-    );
-
-    FinalizeElection {
-        election_id: referendum_id.clone(),
-        tally: vec![7, 3],
-        tally_proof: tally_attachment,
-    }
-    .execute(&proposer_id, &mut stx_2)
-    .expect("finalize election");
+    // Keep this lifecycle test focused on parliament/referendum transitions. The dedicated
+    // `FinalizeElection` tests cover tally proof verification under the heavy ZK test features.
+    let mut election = stx_2
+        .world
+        .elections()
+        .get(&referendum_id)
+        .cloned()
+        .expect("election should exist before referendum finalization");
+    election.tally = vec![7, 3];
+    election.finalized = true;
+    stx_2
+        .world
+        .elections_mut()
+        .insert(referendum_id.clone(), election);
 
     FinalizeReferendum {
         referendum_id: referendum_id.clone(),

@@ -23,11 +23,17 @@ public final class OfflineJsonParser {
         asOptionalBoolean(object.get("offline_fountain_qr"), false),
         asOptionalBoolean(object.get("offline_sync_optional"), false),
         asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
-        asOptionalBoolean(object.get("offline_kagemusha_abi7"), false),
-        asNullableString(object.get("offline_kagemusha_abi7_mode")),
-        asOptionalInteger(object.get("offline_kagemusha_abi7_bridge_abi_version")),
-        asNullableString(object.get("offline_kagemusha_abi7_circuit_id")),
-        asOptionalBoolean(object.get("offline_kagemusha_abi7_artifacts"), false));
+        kagemushaRecursiveCompactAvailable(object),
+        firstNullableString(
+            object,
+            "offline_kagemusha_abi7_mode",
+            "offline_kagemusha_recursive_compact_mode"),
+        firstOptionalInteger(
+            object,
+            "offline_kagemusha_abi7_bridge_abi_version",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"),
+        kagemushaRecursiveCompactCircuitId(object),
+        kagemushaRecursiveCompactArtifactsAvailable(object));
   }
 
   public static OfflineV2Readiness parseOfflineV2Readiness(final byte[] payload) {
@@ -35,11 +41,38 @@ public final class OfflineJsonParser {
     final Map<String, Object> object = expectObject(root, "root");
     return new OfflineV2Readiness(
         asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
-        asOptionalBoolean(object.get("offline_kagemusha_abi7"), false),
-        asNullableString(object.get("offline_kagemusha_abi7_mode")),
-        asOptionalInteger(object.get("offline_kagemusha_abi7_bridge_abi_version")),
-        asNullableString(object.get("offline_kagemusha_abi7_circuit_id")),
-        asOptionalBoolean(object.get("offline_kagemusha_abi7_artifacts"), false));
+        kagemushaRecursiveCompactAvailable(object),
+        firstNullableString(
+            object,
+            "offline_kagemusha_abi7_mode",
+            "offline_kagemusha_recursive_compact_mode"),
+        firstOptionalInteger(
+            object,
+            "offline_kagemusha_abi7_bridge_abi_version",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"),
+        kagemushaRecursiveCompactCircuitId(object),
+        kagemushaRecursiveCompactArtifactsAvailable(object));
+  }
+
+  private static boolean kagemushaRecursiveCompactAvailable(final Map<String, Object> object) {
+    if (object.containsKey("offline_kagemusha_abi7")) {
+      return asOptionalBoolean(object.get("offline_kagemusha_abi7"), false);
+    }
+    return asOptionalBoolean(object.get("offline_kagemusha_recursive_compact_available"), false);
+  }
+
+  private static String kagemushaRecursiveCompactCircuitId(final Map<String, Object> object) {
+    if (object.containsKey("offline_kagemusha_abi7_circuit_id")) {
+      return asNullableString(object.get("offline_kagemusha_abi7_circuit_id"));
+    }
+    return asNullableString(object.get("offline_kagemusha_recursive_compact_circuit_id"));
+  }
+
+  private static boolean kagemushaRecursiveCompactArtifactsAvailable(final Map<String, Object> object) {
+    if (object.containsKey("offline_kagemusha_abi7_artifacts")) {
+      return asOptionalBoolean(object.get("offline_kagemusha_abi7_artifacts"), false);
+    }
+    return asOptionalBoolean(object.get("offline_kagemusha_recursive_compact_artifacts_available"), false);
   }
 
   public static String canonicalJson(final byte[] payload) {
@@ -108,6 +141,24 @@ public final class OfflineJsonParser {
     }
     if (value instanceof Number || value instanceof Boolean) {
       return value.toString();
+    }
+    return null;
+  }
+
+  private static String firstNullableString(final Map<String, Object> object, final String... keys) {
+    for (final String key : keys) {
+      if (object.containsKey(key)) {
+        return asNullableString(object.get(key));
+      }
+    }
+    return null;
+  }
+
+  private static Integer firstOptionalInteger(final Map<String, Object> object, final String... keys) {
+    for (final String key : keys) {
+      if (object.containsKey(key)) {
+        return asOptionalInteger(object.get(key));
+      }
     }
     return null;
   }

@@ -126,20 +126,11 @@ def _api_key_token(value: Any, *, label: str) -> str:
     return value
 
 
-def _http_error_detail(exc: urllib.error.HTTPError) -> str:
-    raw = exc.read(TON_ACCOUNT_STATES_MAX_ERROR_BYTES + 1)
-    truncated = len(raw) > TON_ACCOUNT_STATES_MAX_ERROR_BYTES
-    detail = raw[:TON_ACCOUNT_STATES_MAX_ERROR_BYTES].decode("utf-8", "replace")
-    if truncated:
-        detail += "...<truncated>"
-    return detail
-
-
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     decoded: dict[str, Any] = {}
     for key, value in pairs:
         if key in decoded:
-            raise ValueError(f"TON accountStates returned duplicate JSON key {key!r}")
+            raise ValueError("TON accountStates returned duplicate JSON keys")
         decoded[key] = value
     return decoded
 
@@ -165,12 +156,9 @@ def _http_get_json(
         with opener(request, timeout=timeout) as response:
             raw = response.read(TON_ACCOUNT_STATES_MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        detail = _http_error_detail(exc)
-        raise RuntimeError(
-            f"TON accountStates failed with HTTP {exc.code}: {detail}"
-        ) from exc
+        raise RuntimeError(f"TON accountStates failed with HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"TON accountStates request failed: {exc.reason}") from exc
+        raise RuntimeError("TON accountStates request failed") from exc
     if len(raw) > TON_ACCOUNT_STATES_MAX_RESPONSE_BYTES:
         raise RuntimeError(
             "TON accountStates response exceeds "
@@ -186,9 +174,13 @@ def _http_get_json(
     except json.JSONDecodeError as exc:
         raise RuntimeError("TON accountStates returned invalid JSON") from exc
     except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
+        if str(exc) == "TON accountStates returned duplicate JSON keys":
+            raise RuntimeError("TON accountStates returned duplicate JSON keys") from None
+        raise RuntimeError("TON accountStates returned invalid JSON") from exc
     if not isinstance(decoded, dict):
         raise RuntimeError("TON accountStates returned a non-object response")
+    if decoded.get("error") is not None:
+        raise RuntimeError("TON accountStates returned error response")
     return decoded
 
 
@@ -256,8 +248,7 @@ def collect_live_evidence(
         )
     except argparse.ArgumentTypeError as exc:
         raise RuntimeError(
-            "TON accountStates account address must be a canonical raw address: "
-            f"{exc}"
+            "TON accountStates account address must be a canonical raw address"
         ) from exc
     if normalized_account_address != verifier:
         raise RuntimeError("TON accountStates account address does not match verifier contract")
@@ -284,7 +275,7 @@ def collect_live_evidence(
         code_boc_bytes = evidence.parse_code_boc_base64(code_boc, label="code_boc")
         code_boc_hash = evidence.ton_boc_single_root_hash(code_boc_bytes)
     except (argparse.ArgumentTypeError, ValueError) as exc:
-        raise RuntimeError(f"TON verifier account code_boc is invalid: {exc}") from exc
+        raise RuntimeError("TON verifier account code_boc is invalid") from exc
     if code_boc_hash != code_hash:
         raise RuntimeError(
             "TON verifier account code_boc root hash does not match code_hash: "
@@ -315,12 +306,15 @@ def _validate_live_evidence(
             str(live.get("verifier_contract_address", "")),
             label="verifier contract address",
         )
+    except argparse.ArgumentTypeError:
+        raise ValueError("TON live verifier address metadata is invalid") from None
+    try:
         account_address = evidence.normalize_ton_raw_address(
             str(live.get("account_address", "")),
             label="account address",
         )
-    except argparse.ArgumentTypeError as exc:
-        raise ValueError(str(exc)) from exc
+    except argparse.ArgumentTypeError:
+        raise ValueError("TON live account address metadata is invalid") from None
     if account_address != verifier:
         raise ValueError("TON live account address must match verifier contract")
     if live.get("account_status") != "active":
@@ -343,8 +337,8 @@ def _validate_live_evidence(
             live.get("last_transaction_lt"),
             label="last_transaction_lt",
         )
-    except RuntimeError as exc:
-        raise ValueError(str(exc)) from exc
+    except RuntimeError:
+        raise ValueError("TON live last_transaction_lt metadata is invalid") from None
     verifier_code_hash = _parse_hex32(
         str(live.get("verifier_code_hash", "")),
         label="verifier_code_hash",
@@ -367,7 +361,7 @@ def _validate_live_evidence(
         )
         derived_code_boc_root_hash = evidence.ton_boc_single_root_hash(code_boc_bytes)
     except (argparse.ArgumentTypeError, ValueError) as exc:
-        raise ValueError(f"TON live code BoC base64 metadata is invalid: {exc}") from exc
+        raise ValueError("TON live code BoC base64 metadata is invalid") from exc
     if derived_code_boc_root_hash != code_boc_root_hash:
         raise ValueError("TON live code BoC bytes must match code_boc_root_hash")
 
@@ -693,6 +687,39 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+SENSITIVE_CLI_ERROR_MARKERS = (
+    "secret-token",
+    "private-key",
+    "private_key",
+    "password",
+    "passphrase",
+    "bearer ",
+    "authorization",
+    "access-key",
+    "access_key",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "session=",
+    "token=",
+)
+
+
+def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
+    if isinstance(exc, OSError):
+        return fallback
+    text = str(exc)
+    if not text:
+        return fallback
+    lowered = text.lower()
+    if any(marker in lowered for marker in SENSITIVE_CLI_ERROR_MARKERS):
+        return fallback
+    if any((ord(ch) < 0x20 and ch not in "\n\t") or ord(ch) == 0x7F for ch in text):
+        return fallback
+    return text
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -708,8 +735,12 @@ def main(argv: list[str] | None = None) -> int:
             print(render_toml(args, live), end="")
         else:
             print(json.dumps(_summary(args, live), sort_keys=True, indent=2))
-    except (RuntimeError, ValueError) as exc:
-        parser.error(str(exc))
+    except (OSError, RuntimeError, ValueError) as exc:
+        detail = _cli_error_detail(
+            exc,
+            fallback="SCCP TON live evidence collection failed",
+        )
+        parser.exit(2, f"{parser.prog}: error: {detail}\n")
     return 0
 
 

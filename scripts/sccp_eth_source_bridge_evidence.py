@@ -1246,6 +1246,39 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+SENSITIVE_CLI_ERROR_MARKERS = (
+    "secret-token",
+    "private-key",
+    "private_key",
+    "password",
+    "passphrase",
+    "bearer ",
+    "authorization",
+    "access-key",
+    "access_key",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "session=",
+    "token=",
+)
+
+
+def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
+    if isinstance(exc, OSError):
+        return fallback
+    text = str(exc)
+    if not text:
+        return fallback
+    lowered = text.lower()
+    if any(marker in lowered for marker in SENSITIVE_CLI_ERROR_MARKERS):
+        return fallback
+    if any((ord(ch) < 0x20 and ch not in "\n\t") or ord(ch) == 0x7F for ch in text):
+        return fallback
+    return text
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1256,8 +1289,12 @@ def main(argv: list[str] | None = None) -> int:
             print(render_toml(args), end="")
         else:
             print(json.dumps(_json_summary(args), sort_keys=True, indent=2))
-    except ValueError as exc:
-        parser.error(str(exc))
+    except (OSError, ValueError) as exc:
+        detail = _cli_error_detail(
+            exc,
+            fallback="SCCP Ethereum source bridge evidence rendering failed",
+        )
+        parser.exit(2, f"{parser.prog}: error: {detail}\n")
     return 0
 
 

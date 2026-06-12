@@ -425,6 +425,38 @@ def test_package_all_exports_public_sccp_symbols() -> None:
         assert getattr(iroha_torii_client_package, name) is getattr(sccp_module, name)
 
 
+def test_package_root_ton_source_state_cap_uses_public_exports() -> None:
+    input_value = sample_ton_full_light_client_audit_proof_input()
+    shard_request = iroha_torii_client_package.build_ton_shard_state_proof_request(
+        input_value
+    )
+    package_root_ton_debug_proof_family = "debug-proof-family"
+    oversized_package_root_ton_source_state_proof = b"\x01" * (
+        iroha_torii_client_package.SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1
+    )
+
+    with pytest.raises(TypeError, match="TON source-state stark-fri-v1 proof"):
+        iroha_torii_client_package.canonical_ton_sccp_source_state_verification_proof_bytes(
+            {
+                "circuit_id": iroha_torii_client_package.SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+                "proof_family": package_root_ton_debug_proof_family,
+                "proof_bytes": b"\x01\x02\x03",
+            }
+        )
+
+    with pytest.raises(TypeError, match="proofBytes must be at most"):
+        iroha_torii_client_package.wrap_ton_sccp_source_state_verification_proof(
+            oversized_package_root_ton_source_state_proof,
+            shard_request,
+        )
+
+    prover = iroha_torii_client_package.TonSccpSourceStateProver(
+        prove=lambda _request, _options: oversized_package_root_ton_source_state_proof
+    )
+    with pytest.raises(TypeError, match="proofBytes must be at most"):
+        asyncio.run(prover.prove_shard_state(input_value))
+
+
 def test_package_public_surface_excludes_removed_legacy_lane() -> None:
     removed_lane_token = "".join(("sub", "strate"))
     exported_names = set(iroha_torii_client_package.__all__)
@@ -1243,6 +1275,15 @@ def test_solana_route_canary_evidence_binds_programdata_snapshot() -> None:
             solana_sccp_route_canary_evidence_hash(
                 sample_solana_route_canary_evidence(**override)
             )
+    package_root_solana_route_canary_governed_hash_reuse = {
+        "route_allowlist_hash": evidence["source_verifier_material_hash"],
+    }
+    with pytest.raises(TypeError, match="Solana route canary governed hashes"):
+        iroha_torii_client_package.solana_sccp_route_canary_evidence_hash(
+            sample_solana_route_canary_evidence(
+                **package_root_solana_route_canary_governed_hash_reuse
+            )
+        )
 
 
 def test_ton_route_canary_evidence_binds_live_account_snapshot() -> None:
@@ -1300,6 +1341,15 @@ def test_ton_route_canary_evidence_binds_live_account_snapshot() -> None:
             ton_sccp_route_canary_evidence_hash(
                 sample_ton_route_canary_evidence(**override)
             )
+    package_root_ton_route_canary_governed_hash_reuse = {
+        "route_allowlist_hash": evidence["source_verifier_material_hash"],
+    }
+    with pytest.raises(TypeError, match="TON route canary governed hashes"):
+        iroha_torii_client_package.ton_sccp_route_canary_evidence_hash(
+            sample_ton_route_canary_evidence(
+                **package_root_ton_route_canary_governed_hash_reuse
+            )
+        )
 
 
 def test_tron_route_canary_evidence_binds_transaction_transcript() -> None:
@@ -1375,6 +1425,15 @@ def test_tron_route_canary_evidence_binds_transaction_transcript() -> None:
             tron_sccp_route_canary_evidence_hash(
                 sample_tron_route_canary_evidence(**override)
             )
+    package_root_tron_route_canary_governed_hash_reuse = {
+        "route_allowlist_hash": evidence["source_verifier_material_hash"],
+    }
+    with pytest.raises(TypeError, match="TRON route canary governed hashes"):
+        iroha_torii_client_package.tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(
+                **package_root_tron_route_canary_governed_hash_reuse
+            )
+        )
 
 
 def sample_solana_accounts_lt_hash_proof_input(**overrides: Any) -> Dict[str, Any]:
@@ -1588,13 +1647,96 @@ def sample_evm_bundle_fixture(
     target_domain: int = SCCP_DOMAIN_ETH,
     **overrides: Any,
 ) -> Dict[str, Any]:
+    recipient_codec = overrides.pop(
+        "recipient_codec",
+        sccp_module.SCCP_CODEC_EVM_HEX,
+    )
+    recipient = overrides.pop("recipient", "0x" + "11" * 20)
+    route_id = overrides.pop("route_id", "sccp-evm-proof-request")
     return sample_ton_bundle_fixture(
         target_domain=target_domain,
-        recipient_codec=sccp_module.SCCP_CODEC_EVM_HEX,
-        recipient="0x" + "11" * 20,
-        route_id="sccp-evm-proof-request",
+        recipient_codec=recipient_codec,
+        recipient=recipient,
+        route_id=route_id,
         **overrides,
     )
+
+
+def fixed_test_ascii32(value: str) -> bytes:
+    raw = value.encode("utf-8")
+    if len(raw) > 32:
+        raise AssertionError("fixed token field is too long")
+    return raw + b"\x00" * (32 - len(raw))
+
+
+def sample_token_add_bundle_fixture(
+    *,
+    target_domain: int,
+    nonce: int = 327,
+    name: bytes | None = None,
+    symbol: bytes | None = None,
+    finality_proof: bytes = b"\x71\x72",
+) -> Dict[str, Any]:
+    resolved_name = fixed_test_ascii32("Token") if name is None else name
+    resolved_symbol = fixed_test_ascii32("TOK") if symbol is None else symbol
+    if len(resolved_name) != 32 or len(resolved_symbol) != 32:
+        raise AssertionError("fixed token fields must be 32 bytes")
+    payload_body = b"".join(
+        (
+            sccp_module._write_u8(1),
+            sccp_module._write_u32_le(target_domain),
+            sccp_module._write_u64_le(nonce),
+            b"\x11" * 32,
+            sccp_module._write_u8(18),
+            resolved_name,
+            resolved_symbol,
+        )
+    )
+    payload_bytes = b"\x03" + payload_body
+    message_id = "0x" + sccp_module._prefixed_keccak(
+        sccp_module._SCCP_MSG_PREFIX_TOKEN_ADD_V1,
+        payload_body,
+    ).hex()
+    payload_hash = "0x" + sccp_module._prefixed_blake2b(
+        sccp_module._SCCP_PAYLOAD_HASH_PREFIX_V1,
+        payload_bytes,
+    ).hex()
+    commitment = b"".join(
+        (
+            sccp_module._write_u8(1),
+            sccp_module._write_u8(1),
+            sccp_module._write_u32_le(target_domain),
+            bytes.fromhex(message_id.removeprefix("0x")),
+            bytes.fromhex(payload_hash.removeprefix("0x")),
+        )
+    )
+    commitment_root_bytes = sccp_module._prefixed_blake2b(
+        sccp_module._SCCP_HUB_LEAF_PREFIX_V1,
+        commitment,
+    )
+    commitment_root = "0x" + commitment_root_bytes.hex()
+    bundle_bytes = b"".join(
+        (
+            sccp_module._write_u8(1),
+            commitment_root_bytes,
+            sccp_module._write_bytes(commitment),
+            sccp_module._write_bytes(sccp_module._write_u32_le(0)),
+            sccp_module._write_bytes(payload_bytes),
+            sccp_module._write_bytes(finality_proof),
+        )
+    )
+    return {
+        "public_inputs": {
+            "version": 1,
+            "message_id": message_id,
+            "payload_hash": payload_hash,
+            "target_domain": target_domain,
+            "commitment_root": commitment_root,
+            "finality_height": 19,
+            "finality_block_hash": HEX32_A,
+        },
+        "bundle_bytes": bundle_bytes,
+    }
 
 
 def sample_tron_bundle_fixture(**overrides: Any) -> Dict[str, Any]:
@@ -8465,6 +8607,13 @@ def test_builds_ton_full_light_client_audit_role_proof_requests() -> None:
                 "circuit_id": SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
             }
         )
+    with pytest.raises(TypeError, match="TON source-state stark-fri-v1 proof"):
+        canonical_ton_sccp_source_state_verification_proof_bytes(
+            {
+                **input_value["shard_state_verification_proof"],
+                "proof_family": "debug-proof-family",
+            }
+        )
     with pytest.raises(TypeError, match="proofBytes must not be all zero"):
         canonical_ton_sccp_source_state_verification_proof_bytes(
             {
@@ -8597,6 +8746,12 @@ def test_ton_source_state_prover_wraps_shard_and_full_light_audit_role_proofs() 
     assert canonical_ton_sccp_source_state_verification_proof_bytes(wrapped_audit)
     with pytest.raises(TypeError, match="all zero"):
         wrap_ton_sccp_source_state_verification_proof(b"\0\0", shard_request)
+    oversized_proof_bytes = b"\x01" * (SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1)
+    with pytest.raises(TypeError, match="proofBytes must be at most"):
+        wrap_ton_sccp_source_state_verification_proof(
+            oversized_proof_bytes,
+            shard_request,
+        )
     tampered_shard_request = mutable_proof_request(shard_request)
     tampered_shard_request["fastpq_transitions"][0]["new_value"] = "0x00"
     with pytest.raises(TypeError, match="canonical TON source-state request"):
@@ -8755,6 +8910,12 @@ def test_ton_source_state_prover_wraps_shard_and_full_light_audit_role_proofs() 
                     "proof_base64": "AAAA",
                     "version": 1,
                 }
+            ).prove_shard_state(input_value)
+        )
+    with pytest.raises(TypeError, match="proofBytes must be at most"):
+        asyncio.run(
+            TonSccpSourceStateProver(
+                prove=lambda _request, _options: oversized_proof_bytes
             ).prove_shard_state(input_value)
         )
     with pytest.raises(
@@ -9727,6 +9888,31 @@ def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes(
             }
         )
 
+    nul_prefixed_name_bundle = sample_token_add_bundle_fixture(
+        target_domain=SCCP_DOMAIN_TON,
+        name=b"\x00Token" + b"\x00" * 26,
+    )
+    with pytest.raises(TypeError, match=r"bundleBytes\.payload\.name"):
+        build_ton_sccp_proof_request(
+            {
+                **base,
+                "public_inputs": nul_prefixed_name_bundle["public_inputs"],
+                "bundle_bytes": nul_prefixed_name_bundle["bundle_bytes"],
+            }
+        )
+    nul_prefixed_symbol_bundle = sample_token_add_bundle_fixture(
+        target_domain=SCCP_DOMAIN_TON,
+        symbol=b"\x00TOK" + b"\x00" * 28,
+    )
+    with pytest.raises(TypeError, match=r"bundleBytes\.payload\.symbol"):
+        build_ton_sccp_proof_request(
+            {
+                **base,
+                "public_inputs": nul_prefixed_symbol_bundle["public_inputs"],
+                "bundle_bytes": nul_prefixed_symbol_bundle["bundle_bytes"],
+            }
+        )
+
     merkle_proof_with_trailing_byte = ranges["merkle_proof"]["bytes"] + b"\x00"
     with pytest.raises(
         TypeError,
@@ -9800,6 +9986,42 @@ def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes(
                 "bundle_bytes": non_sora_fixture["bundle_bytes"],
             }
         )
+
+    canonical_eip55_sender = "0x52908400098527886E0F7030069857D2E4169EE7"
+    lowercase_required_eip55_sender = "0xde709f2102306220921060314715629080e2fb77"
+    lowercase_required_eip55_source = sample_ton_bundle_fixture(
+        source_domain=SCCP_DOMAIN_ETH,
+        sender_codec=sccp_module.SCCP_CODEC_EVM_HEX,
+        sender=lowercase_required_eip55_sender,
+    )
+    build_ton_sccp_proof_request(
+        {
+            **base,
+            "public_inputs": lowercase_required_eip55_source["public_inputs"],
+            "bundle_bytes": lowercase_required_eip55_source["bundle_bytes"],
+            "source_proof_bytes": b"\x09\x0a",
+        }
+    )
+    for invalid_sender in (
+        canonical_eip55_sender.lower(),
+        lowercase_required_eip55_sender.upper(),
+        "0X" + canonical_eip55_sender[2:],
+        "0x52908400098527886E0F7030069857D2E4169EEZ",
+    ):
+        invalid_source = sample_ton_bundle_fixture(
+            source_domain=SCCP_DOMAIN_ETH,
+            sender_codec=sccp_module.SCCP_CODEC_EVM_HEX,
+            sender=invalid_sender,
+        )
+        with pytest.raises(TypeError, match=r"bundleBytes\.payload\.sender"):
+            build_ton_sccp_proof_request(
+                {
+                    **base,
+                    "public_inputs": invalid_source["public_inputs"],
+                    "bundle_bytes": invalid_source["bundle_bytes"],
+                    "source_proof_bytes": b"\x09\x0a",
+                }
+            )
 
 
 def test_builds_tron_sccp_groth16_proof_request_with_public_signals() -> None:
@@ -9974,6 +10196,41 @@ def test_builds_evm_family_sccp_groth16_proof_request_with_public_signals() -> N
     assert request["request_hash"] == (
         "0x5f36119da9ac289030489afe622d82f12a02277064c161758dda4ad0038c6f84"
     )
+    artifact_request = build_evm_sccp_proof_request(
+        sample_evm_request_input(
+            proofArtifactHash="91" * 32,
+            provingKeyHash="0x" + "92" * 32,
+        )
+    )
+    assert artifact_request["proof_artifact_hash"] == "0x" + "91" * 32
+    assert artifact_request["proving_key_hash"] == "0x" + "92" * 32
+    assert artifact_request["request_hash"] == (
+        "0xb0e2124dde4d5bb58bce3f4ba5bff89523680b9177e9a1043b98db0900870d1a"
+    )
+    assert artifact_request["request_hash"] != request["request_hash"]
+    assert (
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(
+                prover_artifact_hash="0x" + "91" * 32,
+                proving_key_hash="0x" + "92" * 32,
+            )
+        )["request_hash"]
+        == artifact_request["request_hash"]
+    )
+    with pytest.raises(
+        TypeError,
+        match="proof request proofArtifactHash and provingKeyHash must be supplied together",
+    ):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(proofArtifactHash="0x" + "91" * 32)
+        )
+    with pytest.raises(TypeError, match=r"proof request\.proofArtifactHash must not be zero"):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(
+                proofArtifactHash="0x" + "00" * 32,
+                provingKeyHash="0x" + "92" * 32,
+            )
+        )
     assert request["request_hash"] != build_evm_sccp_proof_request(
         sample_evm_request_input(
             bundle_bytes=sample_evm_bundle_fixture(finality_proof=b"\x71\x73")[
@@ -9991,6 +10248,65 @@ def test_builds_evm_family_sccp_groth16_proof_request_with_public_signals() -> N
     assert bsc_request["target_domain"] == SCCP_DOMAIN_BSC
     assert bsc_request["public_signal_words"][2] != request["public_signal_words"][2]
     assert bsc_request["request_hash"] != request["request_hash"]
+
+    canonical_eip55_recipient = "0x52908400098527886E0F7030069857D2E4169EE7"
+    canonical_eip55_bundle = sample_evm_bundle_fixture(
+        recipient=canonical_eip55_recipient
+    )
+    build_evm_sccp_proof_request(
+        sample_evm_request_input(
+            public_inputs=canonical_eip55_bundle["public_inputs"],
+            bundle_bytes=canonical_eip55_bundle["bundle_bytes"],
+        )
+    )
+    lowercase_required_eip55_recipient = "0xde709f2102306220921060314715629080e2fb77"
+    lowercase_required_eip55_bundle = sample_evm_bundle_fixture(
+        recipient=lowercase_required_eip55_recipient
+    )
+    build_evm_sccp_proof_request(
+        sample_evm_request_input(
+            public_inputs=lowercase_required_eip55_bundle["public_inputs"],
+            bundle_bytes=lowercase_required_eip55_bundle["bundle_bytes"],
+        )
+    )
+    for invalid_recipient in (
+        canonical_eip55_recipient.lower(),
+        lowercase_required_eip55_recipient.upper(),
+        "0X" + canonical_eip55_recipient[2:],
+        "0x52908400098527886E0F7030069857D2E4169EEZ",
+    ):
+        invalid_bundle = sample_evm_bundle_fixture(recipient=invalid_recipient)
+        with pytest.raises(TypeError, match=r"bundleBytes\.payload\.recipient"):
+            build_evm_sccp_proof_request(
+                sample_evm_request_input(
+                    public_inputs=invalid_bundle["public_inputs"],
+                    bundle_bytes=invalid_bundle["bundle_bytes"],
+                )
+            )
+    nul_prefixed_name_bundle = sample_token_add_bundle_fixture(
+        target_domain=SCCP_DOMAIN_ETH,
+        name=b"\x00Token" + b"\x00" * 26,
+        finality_proof=b"\x01\x02\x03",
+    )
+    with pytest.raises(TypeError, match=r"bundleBytes\.payload\.name"):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(
+                public_inputs=nul_prefixed_name_bundle["public_inputs"],
+                bundle_bytes=nul_prefixed_name_bundle["bundle_bytes"],
+            )
+        )
+    nul_prefixed_symbol_bundle = sample_token_add_bundle_fixture(
+        target_domain=SCCP_DOMAIN_ETH,
+        symbol=b"\x00TOK" + b"\x00" * 28,
+        finality_proof=b"\x01\x02\x03",
+    )
+    with pytest.raises(TypeError, match=r"bundleBytes\.payload\.symbol"):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(
+                public_inputs=nul_prefixed_symbol_bundle["public_inputs"],
+                bundle_bytes=nul_prefixed_symbol_bundle["bundle_bytes"],
+            )
+        )
 
     changed = build_evm_sccp_proof_request(
         sample_evm_request_input(destination_binding_hash="0x" + "67" * 32)
@@ -11440,6 +11756,59 @@ def test_evm_family_sccp_prover_wraps_externally_generated_proof_bytes() -> None
     assert result["destination_binding_hash"] == input_value["destination_binding"]["binding_hash"]
     assert result["destination_binding"] == input_value["destination_binding"]
     assert len(result["envelope_hash"]) == 66
+
+    artifact_input_value = sample_evm_production_request_input(
+        proof_artifact_hash="0x" + "91" * 32,
+        proving_key_hash="0x" + "92" * 32,
+    )
+    artifact_request = build_evm_sccp_proof_request(artifact_input_value)
+    artifact_proof_bytes = groth16_proof_bytes_for_request(artifact_request)
+    artifact_result = wrap_evm_sccp_proof_result(
+        artifact_proof_bytes,
+        artifact_request,
+    )
+    assert artifact_result["proof_artifact_hash"] == "0x" + "91" * 32
+    assert artifact_result["proving_key_hash"] == "0x" + "92" * 32
+    assert artifact_result["request_hash"] == artifact_request["request_hash"]
+
+    async def prove_with_partial_artifact_metadata(
+        _linked_request: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        return {
+            "proof_bytes": artifact_proof_bytes,
+            "proof_artifact_hash": artifact_request["proof_artifact_hash"],
+        }
+
+    with pytest.raises(
+        TypeError,
+        match="proofResult proofArtifactHash and provingKeyHash must be supplied together",
+    ):
+        asyncio.run(
+            EvmSccpProver(prove=prove_with_partial_artifact_metadata).prove(
+                artifact_input_value
+            )
+        )
+
+    async def prove_with_forged_artifact_metadata(
+        _linked_request: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        return {
+            "proof_bytes": artifact_proof_bytes,
+            "proof_artifact_hash": "0x" + "99" * 32,
+            "proving_key_hash": artifact_request["proving_key_hash"],
+        }
+
+    with pytest.raises(
+        TypeError,
+        match="proofResult proofArtifactHash and provingKeyHash must match request",
+    ):
+        asyncio.run(
+            EvmSccpProver(prove=prove_with_forged_artifact_metadata).prove(
+                artifact_input_value
+            )
+        )
     with pytest.raises(TypeError, match="at most"):
         wrap_evm_sccp_proof_result(
             b"\x01" * (SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1), request
@@ -11513,6 +11882,56 @@ def test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target() -> No
     assert proof_result["destination_binding_hash"] == binding["binding_hash"]
     assert submission["target_domain"] == SCCP_DOMAIN_ETH
     assert facade_submission["destination_binding_hash"] == binding["binding_hash"]
+
+    tampered_ethereum_base64_proof_result = dict(proof_result)
+    tampered_ethereum_base64_proof_result["proof_base64"] = "AAAA"
+    with pytest.raises(
+        TypeError,
+        match=r"proofResult\.proofBase64 must match proofResult\.proofBytes",
+    ):
+        EthereumMainnetSccp().build_ethereum_calldata(
+            {"proof_result": tampered_ethereum_base64_proof_result}
+        )
+
+    artifact_input_value = {
+        **input_value,
+        "proof_artifact_hash": "0x" + "91" * 32,
+        "proving_key_hash": "0x" + "92" * 32,
+    }
+    artifact_request = build_ethereum_mainnet_sccp_destination_proof_request(
+        artifact_input_value
+    )
+    artifact_proof_result = wrap_ethereum_mainnet_sccp_destination_proof_result(
+        groth16_proof_bytes_for_request(artifact_request),
+        artifact_request,
+    )
+    assert artifact_proof_result["proof_artifact_hash"] == "0x" + "91" * 32
+    assert artifact_proof_result["proving_key_hash"] == "0x" + "92" * 32
+    assert artifact_proof_result["request_hash"] == artifact_request["request_hash"]
+    artifact_facade_submission = EthereumMainnetSccp().build_ethereum_calldata(
+        {"proofResult": artifact_proof_result}
+    )
+    assert artifact_facade_submission["destination_binding_hash"] == binding["binding_hash"]
+
+    tampered_artifact_proof_result = dict(artifact_proof_result)
+    tampered_artifact_proof_result["proof_artifact_hash"] = "0x" + "99" * 32
+    with pytest.raises(
+        TypeError,
+        match=r"proofResult\.requestHash must match bundleBytes and sourceProofBytes",
+    ):
+        EthereumMainnetSccp().build_ethereum_calldata(
+            {"proof_result": tampered_artifact_proof_result}
+        )
+
+    partial_artifact_proof_result = dict(artifact_proof_result)
+    partial_artifact_proof_result.pop("proving_key_hash")
+    with pytest.raises(
+        TypeError,
+        match="proofResult proofArtifactHash and provingKeyHash must be supplied together",
+    ):
+        EthereumMainnetSccp().build_ethereum_calldata(
+            {"proof_result": partial_artifact_proof_result}
+        )
 
     async def submit_outbound(
         callback_submission: Mapping[str, Any],
@@ -12603,6 +13022,16 @@ def test_bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target() -> None:
     assert request["destination_binding"]["network_id"] == SCCP_BSC_MAINNET_NETWORK_ID
     assert proof_result["destination_binding_hash"] == binding["binding_hash"]
     assert submission["target_domain"] == SCCP_DOMAIN_BSC
+
+    tampered_bsc_base64_proof_result = dict(proof_result)
+    tampered_bsc_base64_proof_result["proof_base64"] = "AAAA"
+    with pytest.raises(
+        TypeError,
+        match=r"proofResult\.proofBase64 must match proofResult\.proofBytes",
+    ):
+        build_bsc_mainnet_sccp_destination_submission(
+            {"proof_result": tampered_bsc_base64_proof_result}
+        )
 
     async def prove(
         callback_request: Mapping[str, Any],

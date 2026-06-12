@@ -194,9 +194,41 @@ const SNAPSHOT_MERKLE_TMP_FILE_NAME: &str = "snapshot.merkle.json.tmp";
 /// Default chunk size used to derive snapshot Merkle metadata.
 const _DEFAULT_MERKLE_CHUNK_SIZE: NonZeroUsize = defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES;
 const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
+const HARD_FORK_SNAPSHOT_BOOTSTRAP_SHA256_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP_SHA256";
 
 fn hard_fork_snapshot_bootstrap_enabled() -> bool {
     std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
+}
+
+fn hard_fork_snapshot_bootstrap_digest_matches_config(
+    actual_digest: &str,
+    bootstrap_enabled: bool,
+    expected_digest: Option<&str>,
+) -> bool {
+    if !bootstrap_enabled {
+        return false;
+    }
+    let Some(expected) = expected_digest else {
+        return false;
+    };
+    let expected = expected.trim().to_ascii_lowercase();
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        warn!(
+            env = HARD_FORK_SNAPSHOT_BOOTSTRAP_SHA256_ENV,
+            "hard-fork snapshot bootstrap digest override is malformed; ignoring"
+        );
+        return false;
+    }
+    expected == actual_digest
+}
+
+fn hard_fork_snapshot_bootstrap_digest_matches(actual_digest: &str) -> bool {
+    let expected_digest = std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_SHA256_ENV);
+    hard_fork_snapshot_bootstrap_digest_matches_config(
+        actual_digest,
+        hard_fork_snapshot_bootstrap_enabled(),
+        expected_digest.as_deref().and_then(std::ffi::OsStr::to_str),
+    )
 }
 
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
@@ -1056,6 +1088,23 @@ fn restore_space_directory_manifests_from_kura(
     Ok(restored)
 }
 
+fn reconcile_snapshot_hash_height_with_kura(
+    snapshot_hashes: &[HashOf<BlockHeader>],
+    block_count: usize,
+    _kura: &Kura,
+    _hard_fork_snapshot_bootstrap: bool,
+) -> Result<(), TryReadError> {
+    let snapshot_height = snapshot_hashes.len();
+    if snapshot_height <= block_count {
+        return Ok(());
+    }
+
+    Err(TryReadError::MismatchedHeight {
+        snapshot_height,
+        kura_height: block_count,
+    })
+}
+
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn try_read_snapshot_bundle(
@@ -1082,8 +1131,23 @@ fn try_read_snapshot_bundle(
 
     let sig_path = store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME);
     let sig_tmp_path = store_dir.join(SNAPSHOT_SIGNATURE_TMP_FILE_NAME);
-    let signature_used_tmp =
-        verify_signature_with_fallback(&sig_path, &sig_tmp_path, &digest_vec, verification_key)?;
+    let signature_used_tmp = match verify_signature_with_fallback(
+        &sig_path,
+        &sig_tmp_path,
+        &digest_vec,
+        verification_key,
+    ) {
+        Ok(used_tmp) => used_tmp,
+        Err(error) if hard_fork_snapshot_bootstrap_digest_matches(&actual_digest) => {
+            warn!(
+                ?error,
+                digest = %actual_digest,
+                "hard-fork snapshot bootstrap: accepting snapshot signature failure because SHA-256 matches configured audited digest"
+            );
+            false
+        }
+        Err(error) => return Err(error),
+    };
 
     let merkle_path = store_dir.join(SNAPSHOT_MERKLE_FILE_NAME);
     let merkle_tmp_path = store_dir.join(SNAPSHOT_MERKLE_TMP_FILE_NAME);
@@ -1131,13 +1195,13 @@ fn try_read_snapshot_bundle(
         });
     }
     let snapshot_hashes = state.committed_block_hashes_snapshot();
+    reconcile_snapshot_hash_height_with_kura(
+        &snapshot_hashes,
+        block_count,
+        kura,
+        hard_fork_snapshot_bootstrap_enabled(),
+    )?;
     let snapshot_height = snapshot_hashes.len();
-    if snapshot_height > block_count {
-        return Err(TryReadError::MismatchedHeight {
-            snapshot_height,
-            kura_height: block_count,
-        });
-    }
     if snapshot_height > 0
         && !has_offline_note_replay_keys
         && !hard_fork_snapshot_bootstrap_enabled()
@@ -1924,6 +1988,45 @@ mod tests {
     const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
     const TEST_CHAIN_ID: &str = "test-chain";
 
+    #[test]
+    async fn hard_fork_snapshot_bootstrap_digest_fallback_requires_exact_digest() {
+        let digest = "1a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd";
+
+        assert!(hard_fork_snapshot_bootstrap_digest_matches_config(
+            digest,
+            true,
+            Some(digest)
+        ));
+        assert!(hard_fork_snapshot_bootstrap_digest_matches_config(
+            digest,
+            true,
+            Some(&digest.to_ascii_uppercase())
+        ));
+        assert!(hard_fork_snapshot_bootstrap_digest_matches_config(
+            digest,
+            true,
+            Some(&format!("  {digest}\n"))
+        ));
+        assert!(!hard_fork_snapshot_bootstrap_digest_matches_config(
+            digest,
+            false,
+            Some(digest)
+        ));
+        assert!(!hard_fork_snapshot_bootstrap_digest_matches_config(
+            digest,
+            true,
+            Some("2a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd")
+        ));
+        assert!(!hard_fork_snapshot_bootstrap_digest_matches_config(
+            digest,
+            true,
+            Some("not-a-sha256")
+        ));
+        assert!(!hard_fork_snapshot_bootstrap_digest_matches_config(
+            digest, true, None
+        ));
+    }
+
     fn state_factory_with_kura(kura: Arc<Kura>) -> State {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new(
@@ -2561,6 +2664,40 @@ mod tests {
             Err(err) => panic!("unexpected snapshot read error: {err:?}"),
             Ok(_) => panic!("legacy snapshot missing Offline Note replay keys must be rejected"),
         }
+    }
+
+    #[test]
+    async fn hard_fork_snapshot_hash_reconcile_rejects_state_ahead_of_kura() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        let block = signed_block_with_transaction(accepted_log_transaction("canonical"));
+        let canonical_hash = block.hash();
+        store_block_and_mark_state_height(&mut state, &kura, block);
+        let extra_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32]));
+
+        let hashes = vec![canonical_hash, extra_hash];
+        let err = reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura, false)
+            .expect_err("non-hard-fork snapshot ahead of Kura must be rejected");
+        assert!(matches!(
+            err,
+            TryReadError::MismatchedHeight {
+                snapshot_height: 2,
+                kura_height: 1,
+            }
+        ));
+
+        let err = reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura, true)
+            .expect_err("hard-fork snapshot ahead of Kura must also be rejected");
+        assert!(matches!(
+            err,
+            TryReadError::MismatchedHeight {
+                snapshot_height: 2,
+                kura_height: 1,
+            }
+        ));
+
+        reconcile_snapshot_hash_height_with_kura(&[canonical_hash], 1, &kura, true)
+            .expect("hard-fork snapshot at durable Kura height should be accepted");
     }
 
     #[test]

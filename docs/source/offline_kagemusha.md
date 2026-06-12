@@ -88,6 +88,14 @@ backend verifier rejects a proof when a supplied verifier-key envelope carries a
 `CID1` value that normalizes to a different circuit than the proof envelope.
 This keeps Kagemusha ledger state, duplicate-nullifier protection, routing, gas,
 and confidential-policy admission aligned with production shielded transfers.
+Gas metering follows the online boundary. Offline-offline Kagemusha transfers
+do not burn chain gas, and `KagemushaTransfer` contributes zero confidential
+gas when inspected by the chain meter. Online-to-offline top-ups and
+offline-to-online redemptions remain chain transactions and are metered; the
+recursive redemption path charges the final redeem proof, every top-up anchor
+nullifier, recursive proof bytes/public inputs, and any chain-submitted lineage
+witness material including hop proof attachments, previous recursive proofs,
+and Pallas open-envelope archives.
 Kagemusha transfer admission also rejects any byte-identical overlap between
 consumed input nullifiers and newly created output commitments before proof
 decoding, preserving the nullifier/commitment domain separation at the ledger
@@ -310,6 +318,9 @@ artifacts and the proof log to be regular non-symlink, non-hardlinked files
 with readable leaf metadata, requires lineage and compact key artifacts to be
 non-empty, rejects all-zero Reserved-lineage artifacts and obvious plain-text or
 all-zero placeholder compact key artifacts before digest-only acceptance, and
+the compact-key helper rejects secret-looking, control-character, missing,
+symlinked, hardlinked, non-regular, or unreadable `--generator-log` paths
+before reading any release artifacts, and
 classifies artifact/log missing-vs-unreadable state from the lstat-backed
 local-file validators rather than `Path.is_file()`,
 and treats the checked-in ABI-6 manifest plus ABI-7 fail-closed and
@@ -358,7 +369,8 @@ replacement.
 Marker-stuffed proof logs with extra passing tests are rejected
 even when their digest matches the evidence JSON. The evidence JSON and its nested `circuit_ids`,
 `artifacts`, and `tests` objects are closed schemas, so extra release claims are
-rejected instead of ignored; duplicate JSON object keys are also invalid, so
+rejected instead of ignored, with control-character or secret-looking unexpected
+field names redacted in blocker details; duplicate JSON object keys are also invalid, so
 non-standard `NaN`/`Infinity` JSON constants are rejected before schema checks, and
 auditors never have to interpret last-key-wins evidence packets. Proof-evidence
 JSON is parsed from the same opened regular file after path-identity
@@ -371,14 +383,17 @@ before the release cutoff, or future-dated beyond the release validator
 clock-skew allowance, remains blocked
 even when every artifact digest is otherwise valid. Its `generated_at_utc`
 timestamp must use canonical UTC `YYYY-MM-DDTHH:MM:SSZ` form, and recorded proof
-commands with secret-looking material such as `token=` are rejected without
-echoing the secret value. The helper rejects noncanonical `--generated-at-utc`
+commands with surrounding whitespace, control characters, or secret-looking
+material such as `token=` are rejected without echoing unsafe command bytes.
+The helper rejects noncanonical `--generated-at-utc`
 values such as `+00:00` offsets or surrounding whitespace instead of
 normalizing them into the evidence JSON. Direct artifact-dir, proof-log
-corridor, and output-preflight helper calls reject secret-looking artifact,
-proof-log, and output paths before resolving corridors, creating output parents,
-creating temporary evidence files, or writing evidence JSON. The shared local lineage file validator
-also rejects secret-looking evidence, artifact, or proof-log paths and symlinked
+corridor, and output-preflight helper calls reject control-character or
+secret-looking artifact, proof-log, and output paths before resolving
+corridors, creating output parents, creating temporary evidence files, or
+writing evidence JSON. The shared local lineage file validator
+also rejects control-character, secret-looking, parent-segment, or
+backslash-bearing evidence, artifact, or proof-log paths and symlinked
 local-file ancestors before JSON parsing, digest calculation, or proof-log
 reads; both the readiness rollup's direct SHA-256 reader and the lineage
 helper's direct SHA-256 reader repeat that file-shape validation before
@@ -392,13 +407,22 @@ scanner-validated signed-evidence timestamp already present in each accepted slo
 report instead of re-opening slot metadata or signed-evidence JSON during the
 rollup, but still revalidate that it is canonical UTC before comparing
 freshness windows. The rollup rejects symlinked `--repo-root` directories, symlinked
-repo-root ancestors, unreadable repo-root metadata, and direct secret-looking
-repo-root validator inputs before resolving checked-in ABI/source trust roots.
+repo-root ancestors, unreadable repo-root metadata, and direct control-character
+or secret-looking repo-root validator inputs before resolving checked-in
+ABI/source trust roots. Parent-segment and backslash-bearing `--repo-root`
+aliases are rejected before repo-root metadata reads, resolver normalization, or
+trust-root section reads. Parent-segment and backslash-bearing
+`--device-lab-root`, `--lineage-proof-evidence`, and `--compact-key-evidence`
+values are rejected before Android root classification, readiness rollup
+construction, or evidence JSON reads. Trusted signer public-key paths reject the
+same aliases before key loading, OpenSSL lookup, Android slot metadata reads, or
+summary rendering.
 The ABI-6 manifest, ABI-7 marker, and Reserved-lineage release-tooling section
 checks repeat that repo-root preflight before reading their checked-in
 trust-root files, and the lower-level release JSON/source marker file validators
-reject secret-looking direct file paths and unreadable ABI-6 release JSON leaf
-metadata before content parsing.
+reject control-character, secret-looking, parent-segment, or backslash-bearing
+direct file paths plus unreadable ABI-6 release JSON/source-marker leaf metadata
+before content parsing.
 ABI-7 and Reserved-lineage
 source marker text reads also rerun the source-marker file validator immediately
 before loading marker text and bind the opened read to that preflight `lstat()`
@@ -417,8 +441,8 @@ bridge must still map true compact key-material unavailability to
 `KagemushaRecursiveCompactUnavailable` instead of a generic proof error. The
 readiness summary writer also rejects symlinked `--summary-out` ancestors and
 symlinked, hardlinked, non-regular, dangling-symlink, or unreadable-metadata
-output leaves, plus secret-looking direct output paths, before creating missing
-output parent directories, then rechecks the output parent and ancestors before
+output leaves, plus control-character or secret-looking direct output paths,
+before creating missing output parent directories, then rechecks the output parent and ancestors before
 writing and binds post-write readback to the opened summary file identity,
 keeping local rollup artifacts from being emitted through secret or aliased
 paths. The
@@ -428,8 +452,41 @@ directory plus its parent with `lstat()` so unreadable slot or parent metadata
 fails closed before metadata-derived output paths, signatures, or manifest
 refreshes can start from an aliased slot bundle. The shared Android device-lab
 signing path also validates the preserved `attestation/harness-result.json`
-against the slot challenge and copied certificate-chain count before producing
-or binding signed evidence. The shared Android device-lab
+against the slot challenge, copied certificate-chain count, exact StrongBox
+level labels, and canonical lowercase challenge hex before producing or binding
+signed evidence. The slot assembler and scanner apply the same exact-string
+harness policy, so whitespace-normalized harness aliases or level labels cannot
+become signed production evidence. Signed slot metadata must also keep
+`keymint_security_level` as an exact accepted StrongBox label instead of relying
+on case normalization. The verifier `attestation/report.json` must also carry
+`keymint_security_level`, `attestation_security_level`, and
+`keymaster_security_level`, and each must be an exact StrongBox label before a
+slot can be signed or accepted by the scanner. Scanner validation and
+signed-slot assembly also require verifier report app-package, status, and
+level fields to match `attestation/result.json` exactly, and scanner validation binds
+`attestation/result.json` `keymint_security_level` back to `slot.json` exactly,
+so app-package substitutions, non-`ok` status aliases,
+or StrongBox spellings cannot mask a source-artifact splice. The signed-slot
+assembler also rejects unexpected attestation result, report, verifier, D2D
+transcript, or wallet-integrity transcript fields, report schema/verifier drift,
+plus D2D and wallet transcript schema-id drift, before publishing source
+artifacts. It also runs the scanner D2D and wallet transcript semantic
+validators on staged copies before publish, so queue splices, wallet state
+non-rotation, and other scanner-only transcript failures cannot be staged into
+unsigned production slots. Required telemetry, status NDJSON, queue,
+attestation, and runtime-log artifact shape checks now also run on staged
+assembler output before publish, so failed status records, missing runtime
+completion markers, malformed telemetry, noncanonical telemetry identity
+strings, unexpected telemetry, status-event, or pending queue fields, non-`ok`
+status events, non-empty post-handoff pending transactions, or malformed
+pending queue JSON cannot be installed as unsigned production slots. The raw
+Android puller applies the same telemetry field allowlist, status-event field
+and value allowlists, telemetry identity exactness, pending queue field
+allowlist, telemetry app-package binding, and queue empty-after-handoff check
+before raw artifacts can be promoted into a signed slot. When the slot assembler reads attached device identity
+through ADB `getprop`, each response must be exactly one LF-terminated value
+and the value itself must not require trimming before it can be bound into
+signed slot metadata. The shared Android device-lab
 JSON loader rejects duplicate keys and non-standard `NaN`/`Infinity` constants
 before slot metadata, attestation, signed evidence, D2D handoff, or
 wallet-integrity schema validation, and caps those JSON inputs at 16 MiB from
@@ -480,13 +537,18 @@ Low-level signer output writers also
 reject secret-looking signed-evidence and manifest paths before creating output
 parents or writing files, convert absolute signed-evidence output path resolver
 failures into `signed evidence output path could not be resolved`, reject
-unreadable output leaf metadata before write or digest reads, reject dangling
+symlinked absolute signed-evidence output ancestors and symlinked absolute
+output leaves before path resolution can normalize them into the canonical slot
+output, reject backslash-bearing output paths and absolute parent-segment
+aliases before resolver normalization, reject unreadable output leaf metadata before write or digest reads, reject dangling
 symlink output leaves as symlinks even when the target is missing,
 rerun parent and ancestor checks after creating missing output parents, write
 `signed-evidence.json` and `sha256sum.txt` through fsynced same-directory
-temporary files, atomically replace the final outputs, read them back before
-success through opened-file identity binding, and preserve existing outputs if
-replacement fails. The
+temporary files, atomically replace the final outputs, identity-check temporary
+cleanup after failed writes, read them back before success through opened-file
+identity binding, sync the captured output-parent identity after replacement,
+and preserve existing outputs if replacement fails.
+The
 signer JSON outputs for `signed-evidence.json` and `slot.json` also reject
 serialized JSON above 16 MiB before creating temporary files and enforce the
 same cap during opened-file readback.
@@ -504,7 +566,9 @@ parser and verifier calls also reject unreadable-metadata and hardlinked
 files, and the parser binds `sha256sum.txt` bytes to the opened file identity
 so post-preflight regular-file swaps fail closed; manifest bytes are capped at
 1 MiB using both opened-file metadata and streamed byte counts before UTF-8
-decoding. Direct slot-file discovery reports unreadable slot-root and
+decoding. Nonblank manifest lines must not rely on leading or trailing
+whitespace normalization or leading `*` path normalization before digest/path
+parsing. Direct slot-file discovery reports unreadable slot-root and
 artifact-directory metadata through caller error lists, returns no artifacts for
 secret-looking slot paths, symlinked slot ancestors, missing roots,
 non-directory roots, or symlinked slot roots before traversal, and skips
@@ -527,14 +591,16 @@ transcript, report, log, and certificate-chain artifacts keep the 16 MiB cap;
 the offline wallet APK path is capped separately at 64 MiB so arm64 JNI proof
 bridge builds fit without relaxing the smaller evidence artifacts.
 Post-preflight regular-file swaps still fail closed. The Android device-lab root validator
-also rejects secret-looking paths and unreadable root metadata before slot
-discovery, and scan_slot(...) rejects unreadable slot directory or parent metadata
-before slot traversal. Scanner and rollup missing-root decisions also consume
-the same `lstat()`-classified root presence instead of calling `Path.exists()`.
+also rejects secret-looking, control-character, parent-segment, and
+backslash-bearing root paths before root metadata reads or slot discovery, and
+scan_slot(...) rejects unreadable slot directory or parent metadata before slot
+traversal. Scanner and rollup missing-root decisions also consume the same
+`lstat()`-classified root presence instead of calling `Path.exists()`.
 The direct device-lab summary writer rejects
-secret-looking output paths plus unreadable output parent or leaf metadata,
-classifies summary output parents with `lstat()` before any `Path.is_dir()`
-preflight, rechecks created output parents before writing JSON, writes
+secret-looking, control-character, parent-segment, and backslash-bearing output
+paths before parent metadata reads, plus unreadable output parent or leaf
+metadata, classifies summary output parents with `lstat()` before any
+`Path.is_dir()` preflight, rechecks created output parents before writing JSON, writes
 `--json-out` through a fsynced same-directory temporary file, atomically replaces
 the final summary, reads it back through opened-file identity binding before
 success, caps the serialized summary before temporary-file creation and the
@@ -543,6 +609,10 @@ fails. The signed-evidence helper also
 classifies signer-controlled output parents with `lstat()` before write or
 read-back digest preflight, so unreadable parent metadata stays a structured
 signer blocker instead of being hidden by `Path.is_dir()`.
+Scanner summary construction also normalizes finite float values in direct
+report inputs as unsupported summary values and redacts non-finite numbers, so
+release-facing summary JSON cannot preserve injected floating-point scalars that
+the scanner itself would not emit.
 Scanner slot inventory also classifies expected top-level directories,
 `sha256sum.txt`, and recursive file-count entries with `lstat()`, so summary
 presence and file-count fields do not follow symlinks or hide unreadable
@@ -564,15 +634,38 @@ also classifies slot-relative ancestor directories with
 attestation-chain, offline-wallet APK, and signed-evidence artifact paths before
 reading bytes for SHA-256 comparison, then bind the bytes to the opened file
 identity using the same 16 MiB evidence cap and 64 MiB APK cap so
-post-preflight regular-file swaps fail closed. D2D handoff and
+post-preflight regular-file swaps fail closed. The attestation report helper
+also requires `--slot-id` to be an exact canonical single directory name and
+rejects noncanonical certificate-chain path spellings such as
+`attestation/./...`, repeated separators, or trailing slash forms before
+writing `attestation/report.json`; backslash-bearing chain paths are rejected
+through the same pre-report gate. Local certificate-chain source paths also
+reject parent-segment and backslash aliases before ancestor validation or
+metadata reads, and the harness-result source path uses the shared guarded JSON
+loader so parent-segment, backslash, control-character, and secret-looking
+paths fail before metadata reads or parsing. D2D handoff and
 wallet-integrity transcript bindings, including `queue/pending_queue.json`, use
-the same digest-time revalidation before comparing SHA-256 values. Required
+the same digest-time revalidation before comparing SHA-256 values. Signed-slot
+assembly, raw Android pulls, and explicit scanner slot selection also require
+`--slot-id`/`--slot` values to be exact canonical single directory names before
+any slot path is joined or created; backslash-bearing slot IDs fail the same
+safe-name gate. Filesystem-discovered slot directory names are held to the same
+policy before metadata is read. Direct manifest parsing, slot-file inventory,
+digest validation, and signing-helper slot path calls also reject
+parent-segment and backslash-bearing slot path aliases before slot metadata
+reads, manifest rewrites, artifact hashing, or signed-evidence metadata loads.
+Slot-relative manifest and metadata paths must
+also use exact canonical spellings; dot segments, repeated separators, and
+trailing slash aliases fail before digest binding. Required
 status NDJSON and runtime log marker checks also revalidate their slot-relative
 files for symlinks, hardlinks, symlinked artifact directories, non-regular
 files, and secret-looking names immediately before text decoding, with the same
-opened-file identity binding. The shared Android device-lab JSON loader
-also rejects secret-looking
-direct file paths and symlinked ancestor directories before parsing JSON, then
+opened-file identity binding. Status NDJSON must use LF line endings with a
+trailing newline, only exact `ok` status values are accepted, each status line
+must carry the matching slot id, and nonblank status lines must not rely on
+surrounding whitespace being stripped before JSON parsing. The shared Android device-lab JSON loader
+also rejects secret-looking, control-character, parent-segment, and
+backslash-bearing direct file paths and symlinked ancestor directories before parsing JSON, then
 decodes JSON bytes from one opened regular file after preflight path-identity
 revalidation, so direct metadata, attestation, handoff, wallet-integrity, or
 signed-evidence validation cannot read through secret-bearing directories,
@@ -604,12 +697,15 @@ python3 scripts/kagemusha_lineage_proof_evidence.py \
   --artifact-dir artifacts/kagemusha \
   --proof-log artifacts/kagemusha/record-archive-proof.log \
   --elapsed-seconds "$elapsed_seconds" \
+  --max-generated-at-future-skew-seconds 300 \
   --out artifacts/kagemusha/lineage-proof-evidence.json
 
 # If the production proof ran in a detached staging directory, finalize only
 # after its wrapper has written a zero exit marker. The wrapper also captures
 # the lineage key artifacts. With no path flags, the runner and finalizer both
 # use the symlink-free resolution of /tmp, for example /private/tmp on macOS.
+# Explicit staged path flags must already be canonical paths: parent-segment
+# aliases and backslash-bearing strings fail before metadata reads.
 python3 scripts/kagemusha_run_lineage_proof_staged.py \
   --repo-root . \
   --staged-artifact-dir <staged>/artifacts/kagemusha \
@@ -637,12 +733,15 @@ python3 scripts/kagemusha_recursive_compact_key_evidence.py \
   --artifact-dir artifacts/kagemusha \
   --generator-log artifacts/kagemusha/recursive-compact-key-artifacts.log \
   --generated-at-utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --max-generated-at-future-skew-seconds 300 \
   --out artifacts/kagemusha/recursive-compact-key-evidence.json
 
 # If the compact keygen must run detached, run it through the staged wrapper
 # first. It captures the generator log and writes the real process exit marker.
 # With no path flags, the runner and finalizer both use the symlink-free
-# resolution of /tmp, for example /private/tmp on macOS.
+# resolution of /tmp, for example /private/tmp on macOS. Explicit staged path
+# flags must already be canonical paths: parent-segment aliases and
+# backslash-bearing strings fail before metadata reads.
 python3 scripts/kagemusha_run_recursive_compact_keygen_staged.py \
   --staged-artifact-dir <staged>/artifacts/kagemusha \
   --exit-file <staged-exit-file>
@@ -662,15 +761,31 @@ published lineage artifact or `lineage-proof-evidence.json` unless `--replace`
 is explicit. After installing each staged file into the published artifact
 directory, it reopens the published file through the identity-bound artifact
 reader and byte-compares it against the staged source so post-install drift
-fails before the final evidence check. The staged runner first runs the canonical init and append
+fails before the final evidence check, then syncs the captured published
+artifact-directory identity so directory swaps before final fsync fail closed.
+Its temporary staging cleanup also revalidates the captured temp-parent identity
+before removing anything. Rollback cleanup after copy, verification, or publish
+errors also unlinks only paths whose current file identity still matches the
+identity captured immediately after install, so a swapped published artifact is
+reported as a cleanup failure instead of being removed.
+The staged runner first runs the canonical init and append
 `iroha app zk kagemusha lineage-key-artifacts` commands from the staged root so
 the relative `artifacts/kagemusha/...` outputs match the release contract, then
 preserves the real keygen or cargo exit code in `<staged-exit-file>` instead of
 normalizing failures to success. Each init, append, and proof phase also writes
 a closed-schema execution report beside its log, recording the canonical
-command, phase, exit code, elapsed seconds, and log byte count. The runner
-writes `record-archive-proof.log` only after the canonical production command
-returns, writes
+command, phase, exit code, elapsed seconds, log byte count, and
+execution-report SHA-256 of the child log. The keygen and
+proof children write combined stdout/stderr directly to their temporary staged
+log files, and those logs are flushed and fsynced after each child exits so a
+supervisor interruption does not make child output depend on a Python-owned
+pipe. Each temporary child log is installed only after syncing the captured
+output-parent identity, so parent-directory swaps before log fsync fail closed.
+Staged execution-report and run-report command fields are exact non-empty
+strings; values with surrounding whitespace, control characters, or
+secret-looking material are rejected without echoing unsafe bytes.
+The runner writes `record-archive-proof.log` only after the canonical
+production command returns, writes
 `lineage-proof-staged-run.json` with the canonical command, exit code, elapsed
 seconds, proof-log filename, proof-log byte count, and init/append
 lineage-key-artifact log byte counts, and refuses to overwrite previous staged
@@ -686,50 +801,76 @@ replaces stale proof logs, proof execution reports, run reports, elapsed files,
 and exit markers so a previous nonzero proof or keygen marker cannot block a
 validated phase-boundary retry. `--resume-key-artifacts` and `--replace` are
 mutually exclusive, so operators must choose either selective validated resume
-or full staged-output replacement before any cleanup can occur. The
+or full staged-output replacement before any cleanup can occur. Resume,
+`--replace`, and temporary child-log cleanup now remove stale staged files only
+through a parent directory file descriptor when the file identity captured after
+validation or creation still matches at unlink time, so a swapped path is
+reported as cleanup drift instead of being removed. The
 runner reopens each installed metadata file after the atomic rename, checks the
-opened file identity, and compares the exact bytes so marker, elapsed, and JSON
-report drift fails before finalization. The
+opened file identity, syncs the captured output-parent identity, and compares
+the exact bytes so marker, elapsed, and JSON report drift fails before
+finalization. The
 finalizer applies that
-runner-report binding whenever the exit marker claims success, rejects
-exit-code, elapsed-second, proof-log-size, or lineage-key-artifact log-size
-drift between the marker, elapsed file, report, and staged logs, and still
+runner-report binding whenever the exit marker claims success, requires the
+success marker to be exactly `0\n`, requires the staged elapsed-seconds file
+to be the runner's exact positive decimal line with six fractional digits and
+one trailing newline, rejects exit-code, elapsed-second, proof-log-size, or
+lineage-key-artifact log-size drift between the marker, elapsed file, report,
+and staged logs, and still
 refuses to publish any artifacts from nonzero staged exits. Marker failures are
-reported before success-only elapsed, command, timestamp, or run-report checks
-so a partial stage cannot obscure the root failure. When the staged subprocess
+reported with control-character and secret-looking marker values redacted
+before success-only elapsed, command, timestamp, or run-report checks
+so a partial stage cannot obscure the root failure. Staged run-report duplicate
+or unexpected JSON field diagnostics also redact control-character and
+secret-looking keys, including nested `lineage_key_artifact_logs` profile and
+entry-field names. When the staged subprocess
 terminates with a signal-style negative status, the runner returns a
 conventional nonzero wrapper status while preserving the exact subprocess code
 in the staged marker and report.
 The ABI-7 compact-key staged runner applies the same detached-run contract for
 the key-generation command: it runs the canonical
 `iroha app zk kagemusha recursive-compact-key-artifacts` command from the
-staged root, captures `recursive-compact-key-artifacts.log`, preserves the real
-keygen exit code in `<staged-exit-file>`, writes a closed-schema
+staged root, gives the child process direct ownership of the temporary
+`recursive-compact-key-artifacts.log` stdout/stderr target, flushes and fsyncs
+that log after child exit, installs it only after syncing the captured
+output-parent identity, preserves the real keygen exit code in
+`<staged-exit-file>`, writes a closed-schema
 `recursive-compact-key-execution.json` with the canonical command, phase, exit
-code, elapsed seconds, and generator-log byte count, writes
+code, elapsed seconds, generator-log byte count, and execution-report SHA-256
+of the generator log, writes
 `recursive-compact-key-staged-run.json` with the canonical command, exit code,
 elapsed seconds, generator-log filename, and generator-log byte count, and
 refuses to overwrite staged key artifacts, generator logs, execution reports,
 run reports, or exit markers unless `--replace` is explicit. The compact-key
 runner's explicit `--resume-keygen` mode reuses only a complete staged keygen
 whose artifacts, generator log, zero-exit execution report, zero-exit run
-report, and zero exit marker all validate against the canonical command and
-current generator-log byte count. If regular staged outputs are missing,
-nonzero, or malformed, resume replaces the whole compact keygen stage and
-reruns it; symlinked, hardlinked, special, or secret-looking staged outputs
+report, and exact `0\n` exit marker all validate against exact non-empty
+command strings with no surrounding whitespace, control characters, or
+secret-looking material, the canonical command value, and current generator-log
+byte count plus SHA-256 digest. If regular staged outputs are missing,
+nonzero, padded, or malformed, resume replaces the whole compact keygen stage
+and reruns it; symlinked, hardlinked, special, or secret-looking staged outputs
 still fail closed before cleanup. `--resume-keygen` and `--replace` are
 mutually exclusive, so a caller cannot accidentally request both a validated
 resume and destructive staged-output replacement. The compact-key
 runner also reopens marker and JSON report outputs after the atomic rename,
-checks the opened file identity, and compares the exact bytes before returning.
+checks the opened file identity, syncs the captured output-parent identity, and
+compares the exact bytes before returning.
 The compact-key finalizer requires that
-run report whenever the exit marker claims success, rejects exit-code or
+run report whenever the exit marker claims success, requires the success marker
+to be exactly `0\n`, rejects exit-code or
 generator-log-size drift between the marker, report, and staged log, and still
 refuses to publish any artifacts from nonzero staged exits. It also reopens each
 published key artifact, generator log, and evidence JSON after the final
 install and compares the identity-bound readback against the staged bytes before
-success is reported. Marker failures are
-reported before success-only command, timestamp, or run-report checks. The
+success is reported, then syncs the captured published artifact-directory
+identity so directory swaps before final fsync fail closed. Its temporary
+staging cleanup also revalidates the captured temp-parent identity before
+removing anything. Marker failures are
+reported with control-character and secret-looking marker values redacted
+before success-only command, timestamp, or run-report checks. Staged run-report
+duplicate or unexpected JSON field diagnostics also redact control-character
+and secret-looking keys. The
 compact runner uses the same wrapper-exit convention: its process status is
 conventional, but the exact keygen status remains bound in the marker and run
 report.
@@ -799,33 +940,57 @@ release-manifest drift, duplicate JSON keys,
 unexpected top-level, section-level, evidence-inventory, evidence-entry,
 Android manifest, or per-slot Android signed-evidence summary fields, missing
 release section/evidence fields, malformed release section states, timestamps,
-digest maps, size maps, checked-file lists, Android family coverage, Android
-trusted-signer pins, duplicate-binding slot lists, and malformed summary
-digests, malformed or noncanonical summary/manifest timestamps, non-standard
-`NaN`/`Infinity` JSON constants in summaries or manifests,
-per-section blockers in a ready summary,
+ABI constants, projected ABI-6 limits/modes, circuit ids, digest maps, size
+maps, section map inventories, checked-file inventories, Android family
+coverage, readiness-summary Android matrix lists, Android trusted-signer pins,
+readiness-summary trusted-signer digest lists, duplicate-binding slot lists, and
+malformed summary
+digests, malformed, noncanonical, or future-dated summary/manifest timestamps,
+including nested readiness-summary and release-manifest lineage/compact
+evidence-section timestamps plus Android readiness timestamp bounds, non-standard
+`NaN`/`Infinity` JSON constants in summaries or manifests, malformed or
+inventory-mismatched Android readiness slot lists, malformed Android slot
+Kagemusha detail fields, unexpected nested slot/Kagemusha detail fields,
+slot detail/signature-summary binding drift, slot device-family inventory drift,
+accepted Android slot errors or malformed present/file-count summaries,
+accepted Android slot metadata drift from freshly scanned device-lab evidence,
+signed Android evidence whose signer digest is absent from the trusted signer
+digest list,
+missing readiness-summary top-level fields, non-object readiness-summary
+sections, missing readiness-summary section fields, per-section blockers in a
+ready summary, missing release-manifest top-level fields, `ready=false` release
+manifests, non-empty release-manifest blocker lists,
+unsafe Android signed-evidence or slot-artifact map slot ids in saved release
+manifests,
+unexpected fixed-inventory release evidence item keys,
 non-string, unsafe, or noncanonical nested evidence inventory paths, malformed
 nested evidence digests, or missing/boolean/non-integer/non-positive nested evidence sizes in
 existing release manifests,
-secret-looking paths, evidence outside
-`--bundle-root`, secret-looking strings anywhere inside the readiness summary,
+control-character paths, secret-looking paths, evidence outside
+`--bundle-root`, secret-looking strings anywhere inside the readiness summary
+or release manifest, control-character strings anywhere inside either JSON root,
 all-zero lineage artifacts in the lineage inventory, plain-text or all-zero
 placeholder compact key artifacts in the compact-key artifact inventory,
 missing or digest-drifted Android release APK, D2D handoff,
 wallet-integrity, and attestation-chain artifacts, symlinked bundle roots or
-bundle-root ancestors, and
+bundle-root ancestors, noncanonical parent-segment bundle-root aliases,
+backslash-bearing bundle-root aliases, and
 symlinked or hardlinked manifest outputs, and
 records only bundle-relative evidence paths. If any release input path escapes
 `--bundle-root`, or `--bundle-root` itself is a symlink or has a symlink
-ancestor, the verifier stops before loading any readiness JSON, existing release
-manifest, proof evidence, compact-key evidence, Android device-lab tree, or
-artifact inventory.
-Secret-looking trusted signer key paths are rejected before key loading.
+ancestor, or `--bundle-root` contains a parent-segment or backslash alias, the
+verifier stops before loading any readiness JSON, existing release manifest,
+proof evidence, compact-key evidence, Android device-lab tree, artifact
+inventory, or bundle-root metadata.
+Secret-looking trusted signer key paths and trusted signer key paths containing
+control characters are rejected before key loading.
+Control-character `--out` values are rejected before output parent creation.
 Newly-created release-bundle output parents are revalidated before writing so a
 symlinked parent cannot be introduced during output creation. The manifest is
 rejected above 16 MiB before any temporary output is created, written through a
 fsynced temporary file in the target directory, atomically replaced into place,
-synced at the parent directory where supported, and read back through
+synced through an identity-bound parent directory handle where supported, and
+read back through
 opened-file identity binding with the same 16 MiB cap before success is
 reported, and `--out` cannot overwrite any readiness summary, evidence JSON,
 proof log, key artifact, or Android signed-evidence file already hash-bound into the manifest.
@@ -833,11 +998,22 @@ proof log, key artifact, or Android signed-evidence file already hash-bound into
 The helper rejects a symlinked or unreadable-metadata `--artifact-dir` and
 refuses to write `lineage-proof-evidence.json` through symlinked, hardlinked,
 non-regular, dangling-symlink, unreadable-metadata, or symlink-ancestor output aliases
-and rejects all-zero Reserved-lineage artifacts before emitting evidence JSON;
+and rejects all-zero Reserved-lineage artifacts before emitting evidence JSON.
+It also rejects parent-segment and backslash aliases in `--artifact-dir`,
+`--proof-log`, `--generator-log`, and `--out` before resolving paths or reading
+filesystem metadata.
+The direct lineage and compact-key evidence helpers reject `generated_at_utc`
+values more than 300 seconds ahead of the helper clock by default, matching the
+production readiness rollup's future-skew allowance; use
+`--max-generated-at-future-skew-seconds` only to make that local helper bound
+stricter for a controlled release run.
+Its evidence writer also syncs through an identity-bound output parent before
+readback, so parent directory swaps after atomic replacement fail closed;
 the compact key evidence helper applies the same output checks for
 `recursive-compact-key-evidence.json` before reading compact key artifacts, and
-rejects obvious plain-text or all-zero placeholder compact key artifacts before emitting
-evidence JSON. It also requires `recursive-compact-key-artifacts.log` beside the
+also syncs through an identity-bound output parent before readback. It rejects
+obvious plain-text or all-zero placeholder compact key artifacts before emitting
+evidence JSON and requires `recursive-compact-key-artifacts.log` beside the
 key artifacts and verifies that the canonical generator summary sizes match the
 local `.vk`, `.pk`, key-artifacts package, verifier-keys package, and
 `.record.norito` files. The staged compact-key finalizer adds a zero-exit-marker
@@ -846,6 +1022,8 @@ destination overwrites unless `--replace` is explicit, reopens each published
 file after install to compare it with the staged source bytes, and runs the same
 generator-log and evidence checks before reporting staged artifacts as
 published.
+The staged Reserved-lineage and compact-key runners also identity-bind child-log
+parent syncs before accepting installed proof, key-artifact, or generator logs.
 The readiness summary writer, Android device-lab summary writer, Android
 signed-evidence helper, both evidence helpers, and the release-bundle writer
 serialize with strict JSON; non-finite values such as `NaN` and
@@ -853,26 +1031,184 @@ serialize with strict JSON; non-finite values such as `NaN` and
 The lineage and compact-key evidence helpers apply the same strict JSON
 serialization before creating validation scratch files under `--artifact-dir`
 and report validation scratch-file cleanup failures even when the scratch write
-itself fails.
+itself fails. Validation scratch cleanup is identity-checked through the
+scratch file's parent directory, so a swapped validation file is reported as
+cleanup drift instead of being removed.
+The lineage evidence helper validates unsafe `--proof-log` strings before
+artifact-directory metadata checks, so hostile proof-log input cannot trigger
+artifact-dir traversal or metadata reads.
 The readiness summary writer enforces a 16 MiB `--summary-out` cap before
 temporary-file creation, during final opened-file readback, and reports
-temporary-file cleanup failures after write or post-stage output-validation
-errors. The lineage and compact-key
+identity-checked temporary-file cleanup failures after write or post-stage
+output-validation errors. The release-bundle writer applies the same
+identity-bound cleanup before accepting or reporting `--out` artifacts. The lineage and compact-key
 evidence helpers also enforce the readiness evidence JSON byte caps
 before creating `--out` temporary files and again while reading back the opened
 output file after atomic replacement, so oversized same-inode output growth
-cannot be accepted as a verified write, and they report temporary-file cleanup
+cannot be accepted as a verified write, and they report identity-checked temporary-file cleanup
 failures after output write or post-stage output-validation errors.
+The Android raw puller's host `latest-slot.txt` and raw-pull summary writers
+also report identity-checked temporary-file cleanup failures after failed
+writes and refuse to unlink a temp output whose file identity changed before
+cleanup.
 The release-bundle writer applies the same pattern to its manifest output with
 a 16 MiB cap before temporary-file creation and during final opened-file
 readback, and reports temporary-file cleanup failures after write or post-stage
-output-validation errors as structured blockers.
-The Android device-lab summary writer and Android signed-evidence helper
-atomic output writer also report temporary-file cleanup failures after write
-or post-stage output-validation errors instead of swallowing failed cleanup.
+output-validation errors as structured blockers. Its bundle-relative path
+calculator also rejects secret-looking or control-character evidence and
+bundle-root strings before resolving paths for the release inventory, rejects
+parent-segment aliases and backslash-bearing evidence paths before they can
+normalize into manifest entries, rejects parent-segment and backslash-bearing
+`--bundle-root` aliases before bundle-root metadata reads or shared
+bundle-relative path resolution, rejects the same aliases on `--out` before
+manifest writes, rejects them on `--verify-existing` before manifest loading,
+and release evidence entries run the bundle-root containment check before
+hashing evidence bytes.
+The compact-key evidence helper also rejects secret-looking or
+control-character `--artifact-dir` strings inside the generator-log validator
+before any resolve, and resolves only the generator log's parent before the
+local file-shape check so a symlinked log is not followed during corridor
+validation. Direct compact-key evidence builder calls reject explicitly unsafe
+`generator_log_path` strings before artifact-directory metadata checks.
+The Android device-lab summary writer, Android signed-evidence helper, and
+signed-slot assembler JSON metadata writer also report identity-checked
+temporary-file cleanup failures after write or post-stage output-validation
+errors instead of swallowing failed cleanup.
+Direct Android device-lab scanner path preflights reject control-character
+roots, slot paths, JSON artifact paths, trusted signer public keys, and
+`--json-out` destinations before metadata reads, key loading, JSON parsing, or
+slot discovery, or output parent creation. Explicit scanner slot ids are
+validated and deduplicated before root classification, and the direct discovery
+helper repeats that validation before joining ids to the root. Direct
+trusted-signer maps are also screened for unsafe public-key path strings before
+slot metadata reads. The signed-evidence helper applies the same fail-closed
+alias checks to runtime private-key and signer public-key paths before slot
+metadata reads, key metadata reads, or OpenSSL lookup. The production readiness
+rollup applies the same explicit slot-id validation before root classification.
+Root-discovered scanner slots and top-level slot artifact entries are sorted by
+directory name before scanning so JSON summaries, release inputs, and slot
+diagnostics remain deterministic across filesystems.
+Android device-lab and readiness-rollup summary construction copy direct report
+dictionaries through a secret/control-string/non-finite-number sanitizer before
+release-facing JSON rendering, preserve the first value and emit explicit
+diagnostics for redacted report-key collisions, normalize malformed direct report statuses
+to failed rows, normalize non-string direct report keys before JSON rendering,
+redact non-finite direct report numbers, normalize unsupported direct report values,
+normalize malformed direct report error lists to explicit safe placeholders,
+normalize malformed direct Kagemusha report sections, render duplicate-binding
+slot lists through safe slot labels, redact unsafe direct binding slot labels in duplicate and
+malformed-digest blockers, reject malformed direct binding digests before
+duplicate checks, require canonical device-family strings before matrix
+coverage, and only reflect duplicate-binding values and trusted-signer
+summary keys that are canonical lowercase SHA-256 hex digests. Direct
+signed-evidence summary fields are also revalidated before reflection:
+timestamps must be canonical UTC, digest fields must be non-zero lowercase
+SHA-256, artifact paths must be canonical safe relative paths, and multiple
+validated reports must not collapse to the same redacted signed-evidence summary
+slot label.
+The readiness rollup validates caller-provided trusted-signer maps before
+Android root classification and only reflects canonical signer-key SHA-256 ids
+in summaries. Direct release-bundle builders apply the same trusted-signer map
+preflight before bundle-root metadata checks, the verify-existing path applies
+it before manifest loading, and blocked manifests emit only canonical signer
+digests. They also reuse the repo-root alias validator so parent-segment or
+backslash-bearing `--repo-root` aliases stop before bundle-root metadata reads
+or release-bundle JSON loads.
+Direct release-bundle build and verify calls also validate `repo_root` before
+bundle-root metadata checks or readiness/release manifest loading, so unsafe
+repository roots fail without touching bundled evidence.
+Release-bundle verification also binds each `android_signed_evidence` release
+entry and every Android slot artifact release entry back to the Android
+signed-evidence summary path/digest and freshly computed release-evidence size
+before the generic manifest-drift comparison.
+The release bundle Android summary fields, including `duplicate_bindings`, the
+per-slot `signed_evidence` map, device-family lists, and trusted signer digest
+list, are also compared with freshly computed device-lab evidence during both
+readiness-summary comparison and existing-manifest verification before generic
+summary or manifest drift.
+Android covered-family summary drift now fails with an Android-specific blocker
+before generic summary drift.
+Build-time readiness-summary comparison also rejects Android signed-evidence
+slot inventory and per-slot field drift with Android-specific blockers before
+generic summary drift.
+Lineage and compact evidence digest/size maps in the readiness summary also
+fail with section-evidence drift blockers before generic summary drift.
+ABI-6, ABI-7, lineage release-tooling, lineage metadata including the required
+test inventory, and compact metadata including record namespace/version fields
+in the readiness summary fail with section-value drift blockers before generic
+summary drift.
+Existing release-bundle manifests also bind ABI-6, ABI-7, lineage tooling,
+lineage proof evidence, and compact-key evidence section values back to freshly
+computed release evidence before generic manifest drift, so canonical-looking
+section timestamp or map edits fail with a section value binding blocker.
+Lineage and compact release artifact entries, proof-log entries, and the
+compact generator-log entry are likewise checked against their expected
+bundle-relative paths plus release-section digest and size fields before
+generic manifest drift.
+The compact generator-log artifact digest and size maps are also bound to
+freshly computed compact evidence before generic manifest drift.
+Top-level readiness-summary, lineage evidence, compact evidence JSON, and
+compact generator-log entries are also pinned to the canonical release-packet
+filenames, digest, and size fields from freshly computed release evidence
+before generic manifest drift.
+Release-bundle build validation also compares per-slot Android signed-evidence
+summary fields against freshly validated device-lab evidence before generic
+summary drift, so safe but forged slot artifact paths fail with a
+signed-evidence drift blocker.
+Slot-relative artifact path normalizers also reject
+control-character or surrounding-whitespace relative paths before stripping,
+manifest, metadata, signed-evidence, or signer digest reads.
+The signed-evidence helper also rejects control-character slot, private-key,
+public-key, and signed-evidence output paths before metadata reads, OpenSSL
+lookup, JSON parsing, or output parent creation. Its lower-level JSON output
+write/read validators also reject parent-segment and backslash-bearing output
+aliases before output parent metadata reads, so direct helper calls cannot
+normalize those paths after review.
+The Android attestation-report writer rejects control-character local
+certificate-chain source paths before ancestor validation or metadata reads,
+matching the slot-relative certificate-chain path preflight.
+The signed-slot assembler source-copy preflight rejects control-character,
+parent-segment, and backslash-bearing artifact source paths before ancestor
+validation, metadata reads, or destination directory creation, and its
+device-lab root path preflight rejects control-character, parent-segment, and
+backslash-bearing roots before root classification or directory creation. Slot
+assembler source metadata strings also reject control characters before they
+can be copied into signed slot metadata. The signed-slot assembler source digest preflights reject blank or noncanonical attestation challenge, app-signing, and offline-policy SHA-256 fields before unsigned staging output or signed evidence can be published.
+The Android raw puller and signed-slot assembler now also report temporary
+staging directory removal failures and block success when the original staging
+directory cannot be removed; identity-swapped staging directories are still
+preserved instead of removed.
+Raw partial-install cleanup also reports removal failures, so a failed install
+cannot hide an unremoved partially-created slot directory.
+The raw puller also redacts control-character or secret-looking unexpected
+top-level install-source names before reporting raw slot install failures.
+It now rejects control-character output-root, summary-output, raw-slot, and
+raw artifact path strings, plus parent-segment and backslash-bearing
+output-root, summary-output, and raw-slot aliases, before ADB access, metadata
+reads, directory creation, or error reporting can expose the raw bytes; raw
+`attestation/result.json` identity strings and raw tar-member paths also reject
+control characters before evidence assembly or tar path normalization, and
+noncanonical tar member spellings such as `./` or repeated separators fail
+instead of being normalized into accepted evidence paths. It also accepts only
+the uncompressed `tar -cf -` stream emitted by the Android exporter, so
+compressed archive streams fail before extraction.
 All of these release-output writers also fail closed if the parent-directory
 sync after atomic replacement fails, so a release/readiness artifact is not
-accepted as durable when the directory entry cannot be fsynced.
+accepted as durable when the directory entry cannot be fsynced. The readiness
+summary and release-bundle writers also reject parent-directory identity swaps
+before that fsync, so a replaced output cannot be accepted after its target
+directory has been exchanged. The staged lineage and compact-key finalizers use
+the same identity discipline for rollback cleanup: failed publish paths are
+removed only while their publish-time identity is still present.
+If a staged finalizer cannot remove a publish-time file during rollback, that
+cleanup failure is returned with the original publish failure instead of being
+silently swallowed. Finalizer temporary staging directory cleanup also reports
+removal failures and can block success; cleanup still preserves a directory
+whose identity changed before removal.
+Staged lineage and compact-key runner/finalizer path validators reject
+control-character staging, exit-marker, elapsed-seconds, artifact, and output
+paths before ancestor validation, metadata reads, or staged output cleanup can
+start.
 Android signed-evidence canonical signature payloads also serialize with strict
 JSON before hashing, signing, or verification, so non-standard constants cannot
 become signed bytes.
@@ -890,13 +1226,13 @@ post-replace symlink or regular-file swaps as `--out changed while being read`.
 Input and output corridor resolution failures return structured `--proof-log
 parent`, `--out parent`, or `--artifact-dir` blockers instead of raw resolver
 errors. The shared evidence builder also rejects secret-looking
-`--artifact-dir`/`--proof-log`
+or control-character `--artifact-dir`/`--proof-log`
 paths and detached proof logs that are not the canonical
 `record-archive-proof.log` directly under `--artifact-dir` before hashing
 artifacts or reading the proof log. Direct validation and output-writer helpers
-also reject secret-looking artifact or output paths before creating temporary
-directories or writing evidence JSON, and final evidence-output write failures
-return `--out could not be written`. The readiness rollup and evidence helper
+also reject control-character or secret-looking artifact or output paths before
+creating temporary directories or writing evidence JSON, and final
+evidence-output write failures return `--out could not be written`. The readiness rollup and evidence helper
 both convert read-time failures while hashing lineage artifacts or proof logs
 into structured blockers after rerunning the local-file preflight.
 Do not set `IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN` for that proof run;
@@ -1312,7 +1648,7 @@ verifier metadata for every private hop before compact proof generation.
 The Python SDK exposes the same record-backed compact-token prover through the
 native PyO3 extension, so Python wallets no longer need to drop to the C bridge
 to exercise the production Kagemusha path.
-Bridge ABI 7 keeps the recursive compact-token entry point
+Native bridge ABI 7 keeps the recursive compact-token entry point
 `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`.
 The ABI-7 recursive compact-token symbols now route one-hop
 `kagemusha-recursive-compact-v1` compact proving when the native proof bundle
@@ -1734,7 +2070,7 @@ The dedicated `Kagemusha Payload Benchmark` workflow runs
 `ci/check_kagemusha_recursive_spend_payload_bench.sh` on relevant Kagemusha
 payload, accumulator, and proof-surface changes and uploads the reduced-sample
 Criterion summary.
-Bridge ABI 6 also retains
+Native bridge ABI 6 also retains
 `connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes`.
 That proof-carrying entry point accepts the same record-backed bundle plus a
 Norito archive of proof-derived Pallas opening envelopes, enforces active
@@ -1802,7 +2138,7 @@ recursive-spend Kagemusha provers as available only when the loaded bridge
 returns the expected Kagemusha rejection without output bytes, and the Swift
 recursive-spend wrapper refuses to select `recursive_spend_v1` unless the full
 ABI-6-or-later surface passes that probe.
-Bridge ABI 7 exposes fail-closed reserved symbols for
+Native bridge ABI 7 exposes fail-closed reserved symbols for
 `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`
 plus
 `connect_norito_kagemusha_verify_recursive_compact_payment_token` for the
@@ -1919,8 +2255,8 @@ capability checks.
 JavaScript/Node and Python now require an ABI-6-or-later native version probe
 before reporting recursive spend as available or selecting `recursive_spend_v1`;
 the Node NAPI host exports `connectNoritoBridgeAbiVersion`, while the Python
-PyO3 extension exports `kagemusha_recursive_spend_bridge_abi_version`.
-Kotlin/JVM and Java Android also call the bridge ABI-version JNI probe and
+PyO3 extension exports `kagemusha_recursive_spend_native_bridge_abi_version`.
+Kotlin/JVM and Java Android also call the native bridge ABI-version JNI probe and
 probe the verify plus both lineage-witness JNI symbols before reporting
 recursive spend as available or defaulting to `recursive_spend_v1`. C#
 publishes the same ABI-6-or-later requirement and probes verify plus both

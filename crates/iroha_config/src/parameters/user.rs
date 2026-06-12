@@ -4881,7 +4881,83 @@ impl SccpRouteManifest {
         )
     }
 
+    fn reject_forbidden_bsc_aliases(role: &str, aliases: &[(&'static str, Option<&str>)]) {
+        let present = aliases
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .is_some_and(|value| !value.trim().is_empty())
+                    .then_some(*name)
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            present.is_empty(),
+            "SCCP BSC route manifest {role} must not use TRON aliases: {}",
+            present.join(", ")
+        );
+    }
+
+    fn resolve_single_required_alias(
+        role: &str,
+        trim_aliases: bool,
+        aliases: &[(&'static str, Option<&str>)],
+    ) -> String {
+        let mut resolved: Option<(&'static str, String)> = None;
+        for (name, value) in aliases {
+            let Some(value) = value else {
+                continue;
+            };
+            let value = if trim_aliases { value.trim() } else { value };
+            assert!(
+                !value.trim().is_empty(),
+                "SCCP route manifest {role} alias `{name}` must not be empty"
+            );
+            if let Some((previous_name, _)) = resolved.as_ref() {
+                panic!(
+                    "SCCP BSC route manifest {role} must not use multiple aliases: `{previous_name}` and `{name}`"
+                );
+            }
+            resolved = Some((*name, value.to_owned()));
+        }
+        let expected = aliases
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        resolved.map_or_else(
+            || panic!("SCCP route manifest requires {role} using one of: {expected}"),
+            |(_, value)| value,
+        )
+    }
+
     fn source_bridge_address(&self, trim_aliases: bool) -> String {
+        if self.counterparty_domain == Self::BSC_COUNTERPARTY_DOMAIN {
+            Self::reject_forbidden_bsc_aliases(
+                "source bridge address",
+                &[(
+                    "sccp_tron_source_bridge_address",
+                    self.sccp_tron_source_bridge_address.as_deref(),
+                )],
+            );
+            return Self::resolve_single_required_alias(
+                "source bridge address",
+                trim_aliases,
+                &[
+                    (
+                        "source_bridge_address",
+                        self.source_bridge_address.as_deref(),
+                    ),
+                    (
+                        "sccp_bsc_source_bridge_address",
+                        self.sccp_bsc_source_bridge_address.as_deref(),
+                    ),
+                    (
+                        "bsc_source_bridge_address",
+                        self.bsc_source_bridge_address.as_deref(),
+                    ),
+                ],
+            );
+        }
         Self::resolve_required_alias(
             "source bridge address",
             trim_aliases,
@@ -4907,6 +4983,32 @@ impl SccpRouteManifest {
     }
 
     fn destination_verifier_address(&self, trim_aliases: bool) -> String {
+        if self.counterparty_domain == Self::BSC_COUNTERPARTY_DOMAIN {
+            Self::reject_forbidden_bsc_aliases(
+                "destination verifier address",
+                &[(
+                    "tron_verifier_address",
+                    self.tron_verifier_address.as_deref(),
+                )],
+            );
+            return Self::resolve_single_required_alias(
+                "destination verifier address",
+                trim_aliases,
+                &[
+                    (
+                        "destination_verifier_address",
+                        self.destination_verifier_address.as_deref(),
+                    ),
+                    ("verifier_address", self.verifier_address.as_deref()),
+                    (
+                        "sccp_bsc_destination_verifier_address",
+                        self.sccp_bsc_destination_verifier_address.as_deref(),
+                    ),
+                    ("bsc_verifier_address", self.bsc_verifier_address.as_deref()),
+                    ("evm_verifier_address", self.evm_verifier_address.as_deref()),
+                ],
+            );
+        }
         Self::resolve_required_alias(
             "destination verifier address",
             trim_aliases,
@@ -5289,6 +5391,12 @@ impl SccpRouteManifest {
                 ],
             );
         }
+        if !self.production_ready && self.post_deploy_full_toml_ready == Some(true) {
+            assert!(
+                post_deploy_offline_full_toml_sha256.is_some(),
+                "SCCP route manifest post_deploy_full_toml_ready = true requires post_deploy_offline_full_toml_sha256"
+            );
+        }
         let disabled_reason = if !self.production_ready
             && uses_diagnostic_verifier_key_hash
             && self.disabled_reason.is_none()
@@ -5364,15 +5472,15 @@ mod sccp_route_manifest_user_config_tests {
             taira_xor_token_address: "0x1111111111111111111111111111111111111111".to_owned(),
             taira_xor_bridge_address: "0x2222222222222222222222222222222222222222".to_owned(),
             source_bridge_address: None,
-            sccp_bsc_source_bridge_address: None,
+            sccp_bsc_source_bridge_address: Some(SOURCE_BRIDGE.to_owned()),
             bsc_source_bridge_address: None,
-            sccp_tron_source_bridge_address: Some(SOURCE_BRIDGE.to_owned()),
+            sccp_tron_source_bridge_address: None,
             destination_verifier_address: None,
             verifier_address: None,
-            sccp_bsc_destination_verifier_address: None,
+            sccp_bsc_destination_verifier_address: Some(VERIFIER.to_owned()),
             bsc_verifier_address: None,
             evm_verifier_address: None,
-            tron_verifier_address: Some(VERIFIER.to_owned()),
+            tron_verifier_address: None,
             verifier_code_hash: format!("0x{}", "45".repeat(32)),
             verifier_key_hash: format!("0x{}", "46".repeat(32)),
             proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
@@ -5488,18 +5596,34 @@ mod sccp_route_manifest_user_config_tests {
     }
 
     #[test]
-    fn legacy_tron_route_address_fields_still_parse() {
-        let actual = route_manifest().parse();
+    #[should_panic(
+        expected = "SCCP BSC route manifest source bridge address must not use TRON aliases"
+    )]
+    fn bsc_route_rejects_legacy_tron_source_bridge_alias() {
+        let mut manifest = route_manifest();
+        manifest.sccp_bsc_source_bridge_address = None;
+        manifest.sccp_tron_source_bridge_address = Some(SOURCE_BRIDGE.to_owned());
 
-        assert_eq!(actual.sccp_tron_source_bridge_address, SOURCE_BRIDGE);
-        assert_eq!(actual.tron_verifier_address, VERIFIER);
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP BSC route manifest destination verifier address must not use TRON aliases"
+    )]
+    fn bsc_route_rejects_legacy_tron_verifier_alias() {
+        let mut manifest = route_manifest();
+        manifest.sccp_bsc_destination_verifier_address = None;
+        manifest.tron_verifier_address = Some(VERIFIER.to_owned());
+
+        let _ = manifest.parse();
     }
 
     #[test]
     fn generic_bsc_route_address_aliases_parse_into_runtime_fields() {
         let mut manifest = route_manifest();
-        manifest.sccp_tron_source_bridge_address = None;
-        manifest.tron_verifier_address = None;
+        manifest.sccp_bsc_source_bridge_address = None;
+        manifest.sccp_bsc_destination_verifier_address = None;
         manifest.source_bridge_address = Some(format!(" {SOURCE_BRIDGE} "));
         manifest.destination_verifier_address = Some(VERIFIER.to_owned());
 
@@ -5512,10 +5636,9 @@ mod sccp_route_manifest_user_config_tests {
     #[test]
     fn bsc_specific_route_address_aliases_parse_into_runtime_fields() {
         let mut manifest = route_manifest();
-        manifest.sccp_tron_source_bridge_address = None;
-        manifest.tron_verifier_address = None;
         manifest.sccp_bsc_source_bridge_address = Some(SOURCE_BRIDGE.to_owned());
         manifest.bsc_verifier_address = Some(VERIFIER.to_owned());
+        manifest.sccp_bsc_destination_verifier_address = None;
 
         let actual = manifest.parse();
 
@@ -5524,17 +5647,12 @@ mod sccp_route_manifest_user_config_tests {
     }
 
     #[test]
-    fn matching_legacy_and_generic_route_aliases_are_allowed() {
+    #[should_panic(expected = "must not use multiple aliases")]
+    fn matching_generic_and_bsc_route_aliases_are_rejected() {
         let mut manifest = route_manifest();
         manifest.source_bridge_address = Some(SOURCE_BRIDGE.to_owned());
-        manifest.sccp_bsc_source_bridge_address = Some(SOURCE_BRIDGE.to_owned());
-        manifest.destination_verifier_address = Some(VERIFIER.to_owned());
-        manifest.evm_verifier_address = Some(VERIFIER.to_owned());
 
-        let actual = manifest.parse();
-
-        assert_eq!(actual.sccp_tron_source_bridge_address, SOURCE_BRIDGE);
-        assert_eq!(actual.tron_verifier_address, VERIFIER);
+        let _ = manifest.parse();
     }
 
     #[test]
@@ -5582,7 +5700,7 @@ mod sccp_route_manifest_user_config_tests {
     }
 
     #[test]
-    #[should_panic(expected = "source bridge address aliases disagree")]
+    #[should_panic(expected = "must not use multiple aliases")]
     fn conflicting_source_bridge_aliases_are_rejected() {
         let mut manifest = route_manifest();
         manifest.source_bridge_address =
@@ -5643,7 +5761,7 @@ mod sccp_route_manifest_user_config_tests {
     }
 
     #[test]
-    #[should_panic(expected = "destination verifier address aliases disagree")]
+    #[should_panic(expected = "must not use multiple aliases")]
     fn conflicting_destination_verifier_aliases_are_rejected() {
         let mut manifest = route_manifest();
         manifest.destination_verifier_address =
@@ -5722,9 +5840,9 @@ mod sccp_route_manifest_user_config_tests {
         manifest.network_id_hex = format!("0x{}", "AB".repeat(32));
         manifest.taira_xor_token_address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned();
         manifest.taira_xor_bridge_address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned();
-        manifest.sccp_tron_source_bridge_address =
+        manifest.sccp_bsc_source_bridge_address =
             Some("0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC".to_owned());
-        manifest.tron_verifier_address =
+        manifest.sccp_bsc_destination_verifier_address =
             Some("0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD".to_owned());
         manifest.verifier_code_hash = format!("0x{}", "A1".repeat(32));
         manifest.verifier_key_hash = format!("0x{}", "B2".repeat(32));
@@ -6093,7 +6211,7 @@ mod sccp_route_manifest_user_config_tests {
     #[should_panic(expected = "source bridge address must be non-zero")]
     fn bsc_route_rejects_zero_evm_addresses() {
         let mut manifest = route_manifest();
-        manifest.sccp_tron_source_bridge_address =
+        manifest.sccp_bsc_source_bridge_address =
             Some("0x0000000000000000000000000000000000000000".to_owned());
 
         let _ = manifest.parse();
@@ -6112,6 +6230,32 @@ mod sccp_route_manifest_user_config_tests {
     #[should_panic(expected = "production_ready requires post_deploy_offline_full_toml_sha256")]
     fn production_ready_bsc_route_requires_offline_full_toml_hash() {
         let mut manifest = production_ready_route_manifest();
+        manifest.post_deploy_offline_full_toml_sha256 = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "post_deploy_full_toml_ready = true requires post_deploy_offline_full_toml_sha256"
+    )]
+    fn disabled_bsc_route_claiming_full_toml_ready_requires_offline_full_toml_hash() {
+        let mut manifest = route_manifest();
+        manifest.post_deploy_full_toml_ready = Some(true);
+        manifest.post_deploy_offline_full_toml_sha256 = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "post_deploy_full_toml_ready = true requires post_deploy_offline_full_toml_sha256"
+    )]
+    fn disabled_tron_route_claiming_full_toml_ready_requires_offline_full_toml_hash() {
+        let mut manifest = production_ready_tron_route_manifest();
+        manifest.production_ready = false;
+        manifest.disabled_reason = Some("diagnostic route".to_owned());
+        manifest.post_deploy_full_toml_ready = Some(true);
         manifest.post_deploy_offline_full_toml_sha256 = None;
 
         let _ = manifest.parse();

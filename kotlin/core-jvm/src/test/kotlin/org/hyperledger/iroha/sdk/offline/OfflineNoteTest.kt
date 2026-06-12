@@ -43,6 +43,11 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.crypto.Signer
+import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoDecoder
+import org.hyperledger.iroha.sdk.norito.NoritoEncoder
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.norito.TypeAdapter
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
@@ -274,6 +279,62 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun verifyingKeyBoxCanonicalEncodingMatchesStandaloneCodec() {
+        val sourceBytes = byteArrayOf(1, 2, 3)
+        val verifyingKey = OfflineNote.VerifyingKeyBox("halo2/ipa", sourceBytes)
+        sourceBytes[0] = 0x7f.toByte()
+
+        assertEquals("halo2/ipa", verifyingKey.backend)
+        assertContentEquals(byteArrayOf(1, 2, 3), verifyingKey.bytes())
+
+        val returnedBytes = verifyingKey.bytes()
+        returnedBytes[1] = 0x7e.toByte()
+        assertContentEquals(byteArrayOf(1, 2, 3), verifyingKey.bytes())
+
+        val expected = VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", byteArrayOf(1, 2, 3))
+        assertContentEquals(expected, OfflineNote.encodeVerifyingKeyBox(verifyingKey))
+        assertContentEquals(expected, verifyingKey.noritoEncoded())
+
+        assertIllegalArgumentContains("verifying key backend must not be empty") {
+            OfflineNote.VerifyingKeyBox(" ", byteArrayOf(1))
+        }
+        assertIllegalArgumentContains("verifying key backend must not contain surrounding whitespace") {
+            OfflineNote.VerifyingKeyBox(" halo2/ipa ", byteArrayOf(1))
+        }
+        assertIllegalArgumentContains("verifying key bytes must not be empty") {
+            OfflineNote.VerifyingKeyBox("halo2/ipa", ByteArray(0))
+        }
+    }
+
+    @Test
+    fun verifyingKeyBoxStandaloneCodecDecodesAndRejectsMalformedArchives() {
+        val encoded = VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", byteArrayOf(1, 2, 3))
+        val decoded = VerifyingKeyBoxCodec.decodeNorito(encoded)
+
+        assertEquals("halo2/ipa", decoded.backend)
+        assertContentEquals(byteArrayOf(1, 2, 3), decoded.bytes())
+        val decodedBytes = decoded.bytes()
+        decodedBytes[0] = 0x7f.toByte()
+        assertContentEquals(byteArrayOf(1, 2, 3), decoded.bytes())
+        assertContentEquals(encoded, VerifyingKeyBoxCodec.encodeNorito(decoded.backend, decoded.bytes()))
+
+        assertIllegalArgumentContains("backend must not contain surrounding whitespace") {
+            VerifyingKeyBoxCodec.decodeNorito(rawVerifyingKeyBoxNorito(" halo2/ipa ", byteArrayOf(1)))
+        }
+        assertIllegalArgumentContains("bytes must not be empty") {
+            VerifyingKeyBoxCodec.decodeNorito(rawVerifyingKeyBoxNorito("halo2/ipa", ByteArray(0)))
+        }
+        assertIllegalArgumentContains("Trailing bytes after VerifyingKeyBox field decode") {
+            VerifyingKeyBoxCodec.decodeNorito(
+                rawVerifyingKeyBoxNoritoFields(
+                    encodeString("halo2/ipa", compact = true) + byteArrayOf(0),
+                    encodeBytesVec(byteArrayOf(1)),
+                ),
+            )
+        }
+    }
+
+    @Test
     fun kagemushaRecursiveSpendNativeProverValidatesInput() {
         assertEquals(
             "recursive_spend_v1",
@@ -283,7 +344,7 @@ class OfflineNoteTest {
             "checked_prefold_v1",
             KagemushaRecursiveSpendProver.preferredMode(false).wireName,
         )
-        assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
             "kagemusha-recursive-aggregation-v1",
             KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -302,7 +363,7 @@ class OfflineNoteTest {
         assertTrue(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = {
                     KagemushaRecursiveSpendProver.expectIllegalArgumentProbe {
                         throw IllegalArgumentException("empty archive probe")
@@ -313,42 +374,42 @@ class OfflineNoteTest {
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { false },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 5 },
+                nativeBridgeAbiVersionProbe = { 5 },
                 probeSymbol = { true },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { throw IllegalArgumentException("broken ABI probe") },
+                nativeBridgeAbiVersionProbe = { throw IllegalArgumentException("broken ABI probe") },
                 probeSymbol = { error("probe must not run") },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = { throw UnsatisfiedLinkError("missing library") },
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { true },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { throw UnsatisfiedLinkError("missing recursive spend symbol") },
             ),
         )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
-                bridgeAbiVersion = { 6 },
+                nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { throw SecurityException("native bridge denied") },
             ),
         )
@@ -950,16 +1011,35 @@ class OfflineNoteTest {
     }
 
     @Test
-    fun recursiveProofMetadataNormalizesAndRejectsMalformedVerifierKeys() {
+    fun recursiveProofMetadataRejectsPaddedAndMalformedVerifierKeys() {
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNote.VerifyingKeyIdReference(
+                "  ${OfflineNote.RECURSIVE_BACKEND}  ",
+                OfflineNote.RECURSIVE_VERIFIER_NAME,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNote.VerifyingKeyIdReference(
+                OfflineNote.RECURSIVE_BACKEND,
+                "  ${OfflineNote.RECURSIVE_VERIFIER_NAME}  ",
+            )
+        }
         val verifier = OfflineNote.VerifyingKeyIdReference(
-            "  ${OfflineNote.RECURSIVE_BACKEND}  ",
-            "  ${OfflineNote.RECURSIVE_VERIFIER_NAME}  ",
+            OfflineNote.RECURSIVE_BACKEND,
+            OfflineNote.RECURSIVE_VERIFIER_NAME,
         )
         assertEquals(OfflineNote.RECURSIVE_BACKEND, verifier.backend)
         assertEquals(OfflineNote.RECURSIVE_VERIFIER_NAME, verifier.name)
 
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNote.ProofBox(
+                "  ${OfflineNote.RECURSIVE_BACKEND}  ",
+                byteArrayOf(0x01),
+            )
+        }
+
         val proof = OfflineNote.ProofBox(
-            "  ${OfflineNote.RECURSIVE_BACKEND}  ",
+            OfflineNote.RECURSIVE_BACKEND,
             byteArrayOf(0x01),
         )
         assertEquals(OfflineNote.RECURSIVE_BACKEND, proof.backend)
@@ -969,6 +1049,158 @@ class OfflineNoteTest {
         }
         assertFailsWith<IllegalArgumentException> {
             OfflineNote.VerifyingKeyIdReference(OfflineNote.RECURSIVE_BACKEND, "offline:note")
+        }
+    }
+
+    @Test
+    fun commitmentOriginIdsRejectSurroundingWhitespace() {
+        val issuerLoad = OfflineNote.CommitmentOrigin.IssuerLoad("operation-1", "lineage-1", 0)
+        assertEquals("operation-1", issuerLoad.operationId)
+        assertEquals("lineage-1", issuerLoad.lineageId)
+
+        val p2pOutput = OfflineNote.CommitmentOrigin.P2pOutput("payment-1", 0)
+        assertEquals("payment-1", p2pOutput.paymentRequestId)
+
+        assertIllegalArgumentContains("operation_id must not contain surrounding whitespace") {
+            OfflineNote.CommitmentOrigin.IssuerLoad(" operation-1", "lineage-1", 0)
+        }
+        assertIllegalArgumentContains("operation_id must not contain surrounding whitespace") {
+            OfflineNote.CommitmentOrigin.IssuerLoad("operation-1\n", "lineage-1", 0)
+        }
+        assertIllegalArgumentContains("lineage_id must not contain surrounding whitespace") {
+            OfflineNote.CommitmentOrigin.IssuerLoad("operation-1", " lineage-1", 0)
+        }
+        assertIllegalArgumentContains("payment_request_id must not contain surrounding whitespace") {
+            OfflineNote.CommitmentOrigin.P2pOutput("payment-1 ", 0)
+        }
+    }
+
+    @Test
+    fun derivationPreimageIdsRejectSurroundingWhitespace() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainId = string(derivation, "chain_id")
+        val assetId = string(obj(chain, "issue"), "asset_id")
+        val paymentRequestId = string(derivation, "payment_request_id")
+        val hash = ByteArray(32) { 0x11.toByte() }
+        val origin = OfflineNote.CommitmentOrigin.IssuerLoad(
+            string(derivation, "issuer_load_operation_id"),
+            string(derivation, "issuer_load_lineage_id"),
+            0,
+        )
+
+        OfflineNote.NoteCommitmentPreimage(
+            chainId = chainId,
+            ownerKeyCertificatePayloadHash = hash,
+            assetId = assetId,
+            amount = "1",
+            noteSecret = hash,
+            origin = origin,
+        )
+        OfflineNote.InputNullifierPreimage(
+            chainId = chainId,
+            sourceNoteCommitment = hash,
+            ownerKeyCertificatePayloadHash = hash,
+            noteSecret = hash,
+        )
+        OfflineNote.PaymentTokenIdPreimage(
+            chainId = chainId,
+            paymentRequestId = paymentRequestId,
+            createdAtMs = 1_700_000_000_000L,
+            tokenNonce = hash,
+            senderKeyCertificatePayloadHash = hash,
+            inputNullifiers = listOf(hash),
+            outputCommitments = listOf(hash),
+        )
+
+        assertIllegalArgumentContains("chain_id must not contain surrounding whitespace") {
+            OfflineNote.NoteCommitmentPreimage(
+                chainId = " $chainId",
+                ownerKeyCertificatePayloadHash = hash,
+                assetId = assetId,
+                amount = "1",
+                noteSecret = hash,
+                origin = origin,
+            )
+        }
+        assertIllegalArgumentContains("chain_id must not contain surrounding whitespace") {
+            OfflineNote.InputNullifierPreimage(
+                chainId = "$chainId\n",
+                sourceNoteCommitment = hash,
+                ownerKeyCertificatePayloadHash = hash,
+                noteSecret = hash,
+            )
+        }
+        assertIllegalArgumentContains("payment_request_id must not contain surrounding whitespace") {
+            OfflineNote.PaymentTokenIdPreimage(
+                chainId = chainId,
+                paymentRequestId = "$paymentRequestId ",
+                createdAtMs = 1_700_000_000_000L,
+                tokenNonce = hash,
+                senderKeyCertificatePayloadHash = hash,
+                inputNullifiers = listOf(hash),
+                outputCommitments = listOf(hash),
+            )
+        }
+    }
+
+    @Test
+    fun offlineNoteDomainsRejectSubstitutionAndPadding() {
+        val fixture = loadFixture()
+        val certificate = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val audit = audit(fixture)
+        val redeem = redeem(fixture)
+        val claim = audit.inputClaims.first()
+        val auditPublic = audit.publicInputs()
+        val redeemPublic = redeem.publicInputs()
+
+        assertIllegalArgumentContains("unsupported key certificate payload domain") {
+            OfflineNote.KeyCertificatePayload(
+                domain = "${OfflineNote.KEY_CERTIFICATE_PAYLOAD_DOMAIN} ",
+                version = certificate.version,
+                platform = certificate.platform,
+                keyId = certificate.keyId,
+                deviceId = certificate.deviceId,
+                accountId = certificate.accountId,
+                publicKey = certificate.publicKey(),
+                assertionScheme = certificate.assertionScheme,
+                assertionKeyAlgorithm = certificate.assertionKeyAlgorithm,
+                assertionPublicKey = certificate.assertionPublicKey(),
+                assertionUsageCountLimit = certificate.assertionUsageCountLimit,
+                oneUse = certificate.oneUse,
+            )
+        }
+        assertIllegalArgumentContains("unsupported issued claim domain") {
+            OfflineNote.IssuedClaim(
+                domain = "${OfflineNote.ISSUED_CLAIM_DOMAIN}\n",
+                noteCommitment = claim.noteCommitment(),
+                keyCertificatePayloadHash = claim.keyCertificatePayloadHash(),
+                assetId = claim.assetId,
+                amount = claim.amount,
+            )
+        }
+        assertIllegalArgumentContains("unsupported redeem public inputs domain") {
+            OfflineNote.RedeemPublicInputs(
+                domain = "forged:${OfflineNote.REDEEM_PUBLIC_INPUTS_DOMAIN}",
+                sourceNoteCommitment = redeemPublic.sourceNoteCommitment(),
+                inputNullifiers = redeemPublic.inputNullifiers(),
+                keyCertificatePayloadHash = redeemPublic.keyCertificatePayloadHash(),
+                recipient = redeemPublic.recipient,
+                assetId = redeemPublic.assetId,
+                amount = redeemPublic.amount,
+            )
+        }
+        assertIllegalArgumentContains("unsupported audit public inputs domain") {
+            OfflineNote.AuditPublicInputs(
+                domain = " ${OfflineNote.AUDIT_PUBLIC_INPUTS_DOMAIN}",
+                tokenId = auditPublic.tokenId(),
+                keyCertificatePayloadHash = auditPublic.keyCertificatePayloadHash(),
+                inputNullifiers = auditPublic.inputNullifiers(),
+                inputClaims = auditPublic.inputClaims,
+                outputCommitments = auditPublic.outputCommitments(),
+                outputClaims = auditPublic.outputClaims,
+            )
         }
     }
 
@@ -1362,6 +1594,52 @@ class OfflineNoteTest {
             OfflineNoteReceiptAckCodec.decodeText(
                 OfflineNoteReceiptAckCodec.TEXT_PREFIX +
                     Base64.getUrlEncoder().withoutPadding().encodeToString(malformed),
+            )
+        }
+    }
+
+    @Test
+    fun receiptAckRejectsPaddedIdentifiers() {
+        val fixture = loadFixture()
+        val payment = obj(fixture, "payment_token")
+        val token = OfflineNotePaymentTokenCodec.decodeNorito(
+            base64Bytes(string(obj(fixture, "sdk_interop"), "payment_token_norito_base64")),
+        )
+        val recipientAccountId = string(payment, "recipient_account_id")
+        val acceptedAtMs = long(obj(fixture, "receipt_ack"), "accepted_at_ms")
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiptAck(
+                chainId = " ${token.chainId}",
+                paymentRequestId = token.paymentRequestId,
+                tokenId = token.tokenId(),
+                recipientAccountId = recipientAccountId,
+                acceptedAtMs = acceptedAtMs,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiptAck(
+                chainId = token.chainId,
+                paymentRequestId = "${token.paymentRequestId}\n",
+                tokenId = token.tokenId(),
+                recipientAccountId = recipientAccountId,
+                acceptedAtMs = acceptedAtMs,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiptAck(
+                chainId = token.chainId,
+                paymentRequestId = token.paymentRequestId,
+                tokenId = token.tokenId(),
+                recipientAccountId = "$recipientAccountId ",
+                acceptedAtMs = acceptedAtMs,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiptAck.fromPaymentToken(
+                token = token,
+                recipientAccountId = " $recipientAccountId",
+                acceptedAtMs = acceptedAtMs,
             )
         }
     }
@@ -2362,6 +2640,42 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun walletNoteScopeIdsRejectSurroundingWhitespace() {
+        val fixture = loadFixture()
+        val derivation = obj(obj(fixture, "chain_vectors"), "derivation")
+        val senderCertificate = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val note = sourceWalletNote(fixture, senderCertificate)
+        val spentPaymentRequestId = string(derivation, "payment_request_id")
+
+        fun copy(
+            chainId: String = note.chainId,
+            accountId: String = note.accountId,
+            spentPaymentRequestId: String? = note.spentPaymentRequestId,
+        ): OfflineNoteWalletNote =
+            OfflineNoteWalletNote(
+                chainId = chainId,
+                accountId = accountId,
+                assetId = note.assetId,
+                amount = note.canonicalAmount,
+                keyCertificate = note.keyCertificate,
+                noteCommitment = note.noteCommitment(),
+                noteSecret = note.noteSecret(),
+                origin = note.origin,
+                bearerAuditTrail = note.bearerAuditTrail(),
+                state = note.state,
+                createdAtMs = note.createdAtMs,
+                updatedAtMs = note.updatedAtMs,
+                spentPaymentRequestId = spentPaymentRequestId,
+            )
+
+        assertEquals(spentPaymentRequestId, copy(spentPaymentRequestId = spentPaymentRequestId).spentPaymentRequestId)
+        assertFailsWith<IllegalArgumentException> { copy(chainId = " ${note.chainId}") }
+        assertFailsWith<IllegalArgumentException> { copy(accountId = "${note.accountId}\n") }
+        assertFailsWith<IllegalArgumentException> { copy(spentPaymentRequestId = "$spentPaymentRequestId ") }
+        assertFailsWith<IllegalArgumentException> { copy(spentPaymentRequestId = "") }
+    }
+
+    @Test
     fun walletLoadDerivesCommitmentBeforeIssuerSubmission() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -2517,8 +2831,9 @@ class OfflineNoteTest {
                 "signature_base64" to "nested-device-signature-is-not-body-auth",
             ),
         )
-        val executor = OfflineIssuerExecutor(certificateJson)
+        val executor = OfflineIssuerExecutor(certificateJson, serverStateHash = " lineage-state-hash ")
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        var nowMs = 1_700_000_000_000L
         val client = ToriiOfflineNoteIssuerClient(
             canonicalAuth = ToriiCanonicalRequestAuth(accountId, keyPair.private),
             deviceBindingProvider = object : OfflineNoteIssuerDeviceBindingProvider {
@@ -2530,11 +2845,13 @@ class OfflineNoteTest {
             },
             executor = executor,
             baseUri = URI.create("https://torii.example"),
-            clock = java.util.function.LongSupplier { 1_700_000_000_000L },
+            clock = java.util.function.LongSupplier { nowMs },
             nonceGenerator = SequenceIdGenerator(
                 "operation-refill-1",
                 "auth-refill-1",
                 "auth-issue-1",
+                "operation-refill-2",
+                "auth-refill-2",
             ),
         )
 
@@ -2584,6 +2901,13 @@ class OfflineNoteTest {
         assertEquals("0", string(issueBody, "local_balance"))
         assertEquals("auth-issue-1", string(issueBody, "nonce"))
         assertNotNull(obj(issueBody, "lineage_state"))
+
+        nowMs = 1_700_000_060_001L
+        val refillContext = client.prepareLoad("chain-1", accountId, assetDefinitionId, "7").join()
+        assertEquals("operation-refill-2", refillContext.operationId)
+        assertEquals(3, executor.requests.size)
+        val secondRefillBody = executor.requestBody(2)
+        assertEquals(" lineage-state-hash ", string(secondRefillBody, "local_state_hash"))
     }
 
     @Test
@@ -4498,6 +4822,7 @@ class OfflineNoteTest {
 
     private inner class OfflineIssuerExecutor(
         private val certificateJson: Map<String, Any?>,
+        private val serverStateHash: String? = null,
     ) : HttpTransportExecutor {
         val requests = ArrayList<TransportRequest>()
 
@@ -4546,8 +4871,8 @@ class OfflineNoteTest {
             return copy
         }
 
-        private fun lineageState(revision: Long, balance: String): Map<String, Any?> =
-            linkedMapOf(
+        private fun lineageState(revision: Long, balance: String): Map<String, Any?> {
+            val state = linkedMapOf<String, Any?>(
                 "lineage_id" to "lineage-1",
                 "server_revision" to revision,
                 "pending_local_revision" to revision,
@@ -4557,6 +4882,11 @@ class OfflineNoteTest {
                     "expires_at_ms" to 1_700_000_060_000L,
                 ),
             )
+            if (serverStateHash != null) {
+                state["server_state_hash"] = serverStateHash
+            }
+            return state
+        }
     }
 
     private object BindingProofProvider : OfflineNoteProofProvider {
@@ -4773,6 +5103,39 @@ class OfflineNoteTest {
         writeField(out, encodeString(wireName, compact), compact)
         writeField(out, encodeBytesVec(wirePayload), compact)
         return out.toByteArray()
+    }
+
+    private fun rawVerifyingKeyBoxNorito(backend: String, bytes: ByteArray): ByteArray =
+        rawVerifyingKeyBoxNoritoFields(
+            encodeString(backend, compact = true),
+            encodeBytesVec(bytes),
+        )
+
+    private fun rawVerifyingKeyBoxNoritoFields(
+        backendFieldPayload: ByteArray,
+        bytesFieldPayload: ByteArray,
+    ): ByteArray {
+        val adapter = object : TypeAdapter<Unit> {
+            override fun encode(encoder: NoritoEncoder, value: Unit) {
+                writeVerifyingKeyBoxRawField(encoder, backendFieldPayload)
+                writeVerifyingKeyBoxRawField(encoder, bytesFieldPayload)
+            }
+
+            override fun decode(decoder: NoritoDecoder): Unit =
+                throw AssertionError("raw VerifyingKeyBox test adapter is encode-only")
+        }
+        return NoritoCodec.encode(
+            Unit,
+            "iroha_data_model::proof::VerifyingKeyBox",
+            adapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun writeVerifyingKeyBoxRawField(encoder: NoritoEncoder, payload: ByteArray) {
+        val compact = encoder.flags and NoritoHeader.COMPACT_LEN != 0
+        encoder.writeLength(payload.size.toLong(), compact)
+        encoder.writeBytes(payload)
     }
 
     private fun encodeString(value: String, compact: Boolean): ByteArray {

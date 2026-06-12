@@ -8882,6 +8882,14 @@ test("builds TON full light-client audit role proof requests", () => {
     () =>
       canonicalTonSccpSourceStateVerificationProofBytes({
         ...input.shardStateVerificationProof,
+        proofFamily: "debug-proof-family",
+      }),
+    /TON source-state stark-fri-v1 proof/u,
+  );
+  assert.throws(
+    () =>
+      canonicalTonSccpSourceStateVerificationProofBytes({
+        ...input.shardStateVerificationProof,
         proofBytes: new Uint8Array([0, 0, 0]),
       }),
     /proofBytes must not be all zero/,
@@ -9032,6 +9040,17 @@ test("wraps TON source-state proof requests with user-side proof bytes", async (
       ),
     /proofBytes must not be all zero/,
   );
+  const oversizedTonSourceStateProofBytes = new Uint8Array(
+    SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1,
+  ).fill(1);
+  assert.throws(
+    () =>
+      wrapTonSccpSourceStateVerificationProof(
+        oversizedTonSourceStateProofBytes,
+        shardRequest,
+      ),
+    /proofBytes must be at most/u,
+  );
   const tamperedShardRequest = mutableFastpqProofRequest(shardRequest);
   tamperedShardRequest.fastpqTransitions[0].newValue = "0x00";
   assert.throws(
@@ -9140,6 +9159,15 @@ test("wraps TON source-state proof requests with user-side proof bytes", async (
     /canonical TON source-state request/u,
   );
   assert.equal(preflightCallbackInvoked, false);
+  const oversizedTonCallbackProver = new TonSccpSourceStateProver({
+    prove() {
+      return oversizedTonSourceStateProofBytes;
+    },
+  });
+  await assert.rejects(
+    () => oversizedTonCallbackProver.proveShardState(input),
+    /proofBytes must be at most/u,
+  );
 
   const roles = [];
   const prover = new TonSccpSourceStateProver({

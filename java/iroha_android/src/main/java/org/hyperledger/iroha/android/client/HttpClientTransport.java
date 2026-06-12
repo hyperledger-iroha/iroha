@@ -2085,6 +2085,9 @@ public final class HttpClientTransport implements IrohaClient {
     if (request.feeSponsor() != null) {
       payload.put("fee_sponsor", normalizeNonBlank(request.feeSponsor(), "feeSponsor"));
     }
+    if (request.memo() != null) {
+      payload.put("memo", normalizeNonBlank(request.memo(), "memo"));
+    }
     final List<String> instructions = new ArrayList<>();
     int index = 0;
     for (final byte[] instruction : request.instructions()) {

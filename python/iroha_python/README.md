@@ -87,13 +87,13 @@ snapshot = OfflineCashConfigurationSnapshot(
     asset_definition_id="pkr#sbp",
     offline_payments_enabled=True,
     issuer_public_key_base64=cached_issuer_key_base64,
-    bridge_abi_version=7,
+    native_bridge_abi_version=7,
     created_at_ms=cached_at_ms,
     expires_at_ms=expires_at_ms,
 )
 snapshot.require_usable_for_offline_exchange(
     now_ms=current_time_ms,
-    required_bridge_abi_version=7,
+    required_native_bridge_abi_version=7,
 )
 
 controller = OfflineCashLifecycleController(
@@ -147,7 +147,7 @@ multi-hop verifier-batch reservation still reach the proof-composition
 reservation and remain reserved ABI-7 state; unavailable compact surfaces raise
 `RuntimeError` before wallet code can treat reserved admission as success.
 `preferred_kagemusha_offline_spend_mode()` selects
-`recursive_spend_v1` when the native extension reports bridge ABI 6 or later
+`recursive_spend_v1` when the native extension reports native bridge ABI 6 or later
 and every required recursive-spend method rejects the malformed availability
 probe, and otherwise falls back to `checked_prefold_v1`:
 `kagemusha_recursive_spend_init`,
@@ -236,7 +236,7 @@ production-capable flows. Python exports
 builders `buildConfidentialTransferProofV2()` and
 `buildConfidentialUnshieldProofV3()` with Pythonic snake-case aliases. These
 helpers do not bypass the fail-closed production gate or BOI evidence
-requirements. Native availability requires bridge ABI 6 or
+requirements. Native availability requires native bridge ABI 6 or
 later plus successful `capabilities`, `build`, and `verify` probes whose
 operation-specific result schema bytes match the called entry point.
 

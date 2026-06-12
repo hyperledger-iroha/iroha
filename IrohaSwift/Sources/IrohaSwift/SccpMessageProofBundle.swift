@@ -464,11 +464,10 @@ private func validateCanonicalSccpBundleCodecBytes(
         }
     case sccpBundleCodecEvmHex:
         guard let text = String(data: raw, encoding: .utf8),
-              text.count == 42,
-              text.hasPrefix("0x"),
-              text.dropFirst(2).allSatisfy({ $0.isHexDigit }) else {
+              Data(text.utf8) == raw else {
             throw SccpMessageProofBundleError.invalid(field)
         }
+        try validateCanonicalSccpBundleEvmHexAddress(text, field: field)
     case sccpBundleCodecSolanaBase58:
         guard let text = String(data: raw, encoding: .utf8) else {
             throw SccpMessageProofBundleError.invalid(field)
@@ -549,8 +548,47 @@ private func appendSccpBundleU32Le(_ value: UInt32, to out: inout Data) {
 }
 
 private func fixedAsciiFieldIsNonEmpty(_ raw: Data) -> Bool {
-    raw.contains { byte in
-        byte != 0 && byte >= 0x20 && byte <= 0x7e
+    let prefix = raw[..<(raw.firstIndex(of: 0) ?? raw.endIndex)]
+    return prefix.contains { $0 != 0 }
+}
+
+private func validateCanonicalSccpBundleEvmHexAddress(_ text: String, field: String) throws {
+    guard text.hasPrefix("0x") else {
+        throw SccpMessageProofBundleError.invalid(field)
+    }
+    let payload = Array(text.utf8.dropFirst(2))
+    guard text.utf8.count == 42,
+          payload.count == 40,
+          payload.allSatisfy({ byte in
+              (byte >= 0x30 && byte <= 0x39) ||
+              (byte >= 0x41 && byte <= 0x46) ||
+              (byte >= 0x61 && byte <= 0x66)
+          }) else {
+        throw SccpMessageProofBundleError.invalid(field)
+    }
+    let lowercasePayload = payload.map { byte -> UInt8 in
+        if byte >= 0x41 && byte <= 0x46 {
+            return byte + 0x20
+        }
+        return byte
+    }
+    let checksum = irohaKeccak256(Data(lowercasePayload))
+    for (index, byte) in payload.enumerated() {
+        if byte >= 0x30 && byte <= 0x39 {
+            continue
+        }
+        let checksumByte = checksum[index / 2]
+        let checksumNibble = index % 2 == 0 ? checksumByte >> 4 : checksumByte & 0x0f
+        let shouldBeUppercase = checksumNibble >= 8
+        if shouldBeUppercase {
+            guard byte >= 0x41 && byte <= 0x46 else {
+                throw SccpMessageProofBundleError.invalid(field)
+            }
+        } else {
+            guard byte >= 0x61 && byte <= 0x66 else {
+                throw SccpMessageProofBundleError.invalid(field)
+            }
+        }
     }
 }
 

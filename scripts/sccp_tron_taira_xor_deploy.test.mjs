@@ -1672,6 +1672,14 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
       [
         {
           postDeployLiveEvidence: {
+            post_deploy_production_blockers: ["route overlay still pending"],
+          },
+        },
+        /productionReady requires empty postDeployLiveEvidence production blocker lists.*post_deploy_production_blockers: route overlay still pending/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
             route_canary_production_blockers: [" padded "],
           },
         },

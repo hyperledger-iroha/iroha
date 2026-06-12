@@ -84,79 +84,83 @@ struct TransactionInputValidator {
     }
 
     private static func sanitizeChainId(_ chainId: String) throws -> String {
-        let trimmed = chainId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw TransactionInputError.emptyChainId
+        let checked = try requireExactNonEmpty(
+            chainId,
+            empty: .emptyChainId,
+            invalid: { .invalidChainId($0) }
+        )
+        if checked.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            throw TransactionInputError.invalidChainId(checked)
         }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw TransactionInputError.invalidChainId(trimmed)
-        }
-        return trimmed
+        return checked
     }
 
     static func sanitizeAccountId(_ accountId: String, field: String) throws -> String {
-        let trimmed = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw TransactionInputError.emptyAccountId(field: field)
+        let checked = try requireExactNonEmpty(
+            accountId,
+            empty: .emptyAccountId(field: field),
+            invalid: { .malformedAccountId(field: field, value: $0) }
+        )
+        if checked.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            throw TransactionInputError.malformedAccountId(field: field, value: checked)
         }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
-        }
-        if trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$") {
-            throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
+        if checked.contains("@") || checked.contains("#") || checked.contains("$") {
+            throw TransactionInputError.malformedAccountId(field: field, value: checked)
         }
         do {
-            let address = try AccountAddress.parseEncodedSwiftOnly(trimmed, expectedPrefix: nil)
+            let address = try AccountAddress.parseEncodedSwiftOnly(checked, expectedPrefix: nil)
             return try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
         } catch {
-            throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
+            throw TransactionInputError.malformedAccountId(field: field, value: checked)
         }
     }
 
     static func sanitizeRwaId(_ rwaId: String, field: String) throws -> String {
-        let trimmed = rwaId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw TransactionInputError.emptyRwaId(field: field)
+        let checked = try requireExactNonEmpty(
+            rwaId,
+            empty: .emptyRwaId(field: field),
+            invalid: { .malformedRwaId(field: field, value: $0) }
+        )
+        if checked.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            throw TransactionInputError.malformedRwaId(field: field, value: checked)
         }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw TransactionInputError.malformedRwaId(field: field, value: trimmed)
-        }
-        let parts = trimmed.split(separator: "$", omittingEmptySubsequences: false)
+        let parts = checked.split(separator: "$", omittingEmptySubsequences: false)
         guard parts.count == 2 else {
-            throw TransactionInputError.malformedRwaId(field: field, value: trimmed)
+            throw TransactionInputError.malformedRwaId(field: field, value: checked)
         }
         let hashPart = String(parts[0])
         let domainPart = String(parts[1])
         let hexScalars = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
         guard hashPart.count == 64, hashPart.unicodeScalars.allSatisfy({ hexScalars.contains($0) }) else {
-            throw TransactionInputError.malformedRwaId(field: field, value: trimmed)
+            throw TransactionInputError.malformedRwaId(field: field, value: checked)
         }
         let sanitizedDomain = try sanitizeDomainId(domainPart, field: field)
         return "\(hashPart.lowercased())$\(sanitizedDomain)"
     }
 
     private static func sanitizeAssetDefinitionId(_ assetDefinitionId: String) throws -> String {
-        let trimmed = assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw TransactionInputError.emptyAssetDefinitionId
-        }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw TransactionInputError.malformedAssetDefinitionId(trimmed)
+        let checked = try requireExactNonEmpty(
+            assetDefinitionId,
+            empty: .emptyAssetDefinitionId,
+            invalid: { .malformedAssetDefinitionId($0) }
+        )
+        if checked.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            throw TransactionInputError.malformedAssetDefinitionId(checked)
         }
         let definitionLiteral: String
         let scopeSuffix: String
-        if let (definition, scope) = parseAssetBalanceScopeSuffix(trimmed) {
+        if let (definition, scope) = parseAssetBalanceScopeSuffix(checked) {
             definitionLiteral = definition
             scopeSuffix = scope
         } else {
-            definitionLiteral = trimmed
+            definitionLiteral = checked
             scopeSuffix = ""
         }
         guard AssetDefinitionAddress.looksCanonical(definitionLiteral) else {
-            throw TransactionInputError.malformedAssetDefinitionId(trimmed)
+            throw TransactionInputError.malformedAssetDefinitionId(checked)
         }
         if AssetDefinitionAddress.decode(definitionLiteral) == nil {
-            throw TransactionInputError.malformedAssetDefinitionId(trimmed)
+            throw TransactionInputError.malformedAssetDefinitionId(checked)
         }
         return definitionLiteral + scopeSuffix
     }
@@ -181,58 +185,74 @@ struct TransactionInputValidator {
     }
 
     static func sanitizeDomainId(_ domainId: String, field: String) throws -> String {
-        let trimmed = domainId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw TransactionInputError.emptyDomainId(field: field)
-        }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
-            || trimmed.contains("@")
-            || trimmed.contains("#")
-            || trimmed.contains("$")
+        let checked = try requireExactNonEmpty(
+            domainId,
+            empty: .emptyDomainId(field: field),
+            invalid: { .malformedDomainId(field: field, value: $0) }
+        )
+        if checked.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
+            || checked.contains("@")
+            || checked.contains("#")
+            || checked.contains("$")
         {
-            throw TransactionInputError.malformedDomainId(field: field, value: trimmed)
+            throw TransactionInputError.malformedDomainId(field: field, value: checked)
         }
-        let parts = trimmed.split(separator: ".", omittingEmptySubsequences: false)
+        let parts = checked.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 2,
               !parts[0].isEmpty,
               !parts[1].isEmpty
         else {
-            throw TransactionInputError.malformedDomainId(field: field, value: trimmed)
+            throw TransactionInputError.malformedDomainId(field: field, value: checked)
         }
         do {
             let name = try AccountAddress.canonicalizeDomainLabel(String(parts[0]))
             let dataspace = try AccountAddress.canonicalizeDomainLabel(String(parts[1]))
             return "\(name).\(dataspace)"
         } catch {
-            throw TransactionInputError.malformedDomainId(field: field, value: trimmed)
+            throw TransactionInputError.malformedDomainId(field: field, value: checked)
         }
     }
 
     static func sanitizeLabel(_ label: String, field: String) throws -> String {
-        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw TransactionInputError.emptyLabel(field: field)
-        }
-        if trimmed.count > 32 || trimmed != trimmed.lowercased() {
-            throw TransactionInputError.malformedLabel(field: field, value: trimmed)
+        let checked = try requireExactNonEmpty(
+            label,
+            empty: .emptyLabel(field: field),
+            invalid: { .malformedLabel(field: field, value: $0) }
+        )
+        if checked.count > 32 || checked != checked.lowercased() {
+            throw TransactionInputError.malformedLabel(field: field, value: checked)
         }
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789_-")
-        if trimmed.unicodeScalars.contains(where: { !allowed.contains($0) }) {
-            throw TransactionInputError.malformedLabel(field: field, value: trimmed)
+        if checked.unicodeScalars.contains(where: { !allowed.contains($0) }) {
+            throw TransactionInputError.malformedLabel(field: field, value: checked)
         }
-        return trimmed
+        return checked
     }
 
     private static func sanitizeAssetId(_ assetId: String) throws -> String {
-        let trimmed = assetId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw TransactionInputError.emptyAssetId
-        }
+        let checked = try requireExactNonEmpty(
+            assetId,
+            empty: .emptyAssetId,
+            invalid: { .malformedAssetId($0) }
+        )
         do {
-            return try sanitizeAssetDefinitionId(trimmed)
+            return try sanitizeAssetDefinitionId(checked)
         } catch {
-            throw TransactionInputError.malformedAssetId(trimmed)
+            throw TransactionInputError.malformedAssetId(checked)
         }
+    }
+
+    private static func requireExactNonEmpty(_ value: String,
+                                             empty: TransactionInputError,
+                                             invalid: (String) -> TransactionInputError) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw empty
+        }
+        guard trimmed == value else {
+            throw invalid(value)
+        }
+        return value
     }
 
     static func sanitizeMetadataTarget(_ target: MetadataTarget) throws -> MetadataTarget {

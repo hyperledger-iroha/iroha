@@ -75,8 +75,8 @@ class OfflineNoteWalletNote @JvmOverloads constructor(
     val canonicalAmount: String
 
     init {
-        require(chainId.trim().isNotEmpty()) { "chainId must not be blank" }
-        require(accountId.trim().isNotEmpty()) { "accountId must not be blank" }
+        requireExactNonBlankOfflineNoteField(chainId, "chainId")
+        requireExactNonBlankOfflineNoteField(accountId, "accountId")
         require(_noteSecret.size == 32) { "note_secret must be exactly 32 bytes" }
         canonicalAmount = OfflineNote.IssuedClaim(
             noteCommitment = _noteCommitment,
@@ -84,7 +84,8 @@ class OfflineNoteWalletNote @JvmOverloads constructor(
             assetId = assetId,
             amount = amount,
         ).canonicalAmount
-        this.spentPaymentRequestId = spentPaymentRequestId?.trim()?.takeIf { it.isNotEmpty() }
+        this.spentPaymentRequestId =
+            spentPaymentRequestId?.let { requireExactNonBlankOfflineNoteField(it, "spentPaymentRequestId") }
     }
 
     constructor(
@@ -724,10 +725,10 @@ class OfflineNoteReceiptAck(
     private val _tokenId = tokenId.copyOf()
 
     init {
-        require(chainId.isNotBlank()) { "chainId must not be blank" }
-        require(paymentRequestId.isNotBlank()) { "paymentRequestId must not be blank" }
+        requireNonBlankUnpaddedReceiptField(chainId, "chainId")
+        requireNonBlankUnpaddedReceiptField(paymentRequestId, "paymentRequestId")
         require(_tokenId.size == 32) { "tokenId must be 32 bytes" }
-        require(recipientAccountId.isNotBlank()) { "recipientAccountId must not be blank" }
+        requireNonBlankUnpaddedReceiptField(recipientAccountId, "recipientAccountId")
         require(acceptedAtMs > 0L) { "acceptedAtMs must be positive" }
     }
 
@@ -751,8 +752,10 @@ class OfflineNoteReceiptAck(
             recipientAccountId: String,
             acceptedAtMs: Long,
         ): OfflineNoteReceiptAck {
-            val checkedRecipient = recipientAccountId.trim()
-            require(checkedRecipient.isNotEmpty()) { "recipientAccountId must not be blank" }
+            val checkedRecipient = requireNonBlankUnpaddedReceiptField(
+                recipientAccountId,
+                "recipientAccountId",
+            )
             require(receiptAckTokenHasRecipientOutput(token, checkedRecipient)) {
                 "payment token does not contain recipient output"
             }
@@ -765,6 +768,16 @@ class OfflineNoteReceiptAck(
             )
         }
     }
+}
+
+private fun requireNonBlankUnpaddedReceiptField(value: String, field: String): String {
+    return requireExactNonBlankOfflineNoteField(value, field)
+}
+
+private fun requireExactNonBlankOfflineNoteField(value: String, field: String): String {
+    require(value.trim().isNotEmpty()) { "$field must not be blank" }
+    require(value.trim() == value) { "$field must not contain surrounding whitespace" }
+    return value
 }
 
 private fun receiptAckTokenHasRecipientOutput(
@@ -1355,8 +1368,8 @@ class OfflineNoteWallet @JvmOverloads constructor(
     }
 
     init {
-        require(chainId.trim().isNotEmpty()) { "chainId must not be blank" }
-        require(accountId.trim().isNotEmpty()) { "accountId must not be blank" }
+        requireExactNonBlankOfflineNoteField(chainId, "chainId")
+        requireExactNonBlankOfflineNoteField(accountId, "accountId")
     }
 
     fun listNotes(): List<OfflineNoteWalletNote> = store.listNotes()

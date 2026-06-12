@@ -6719,7 +6719,9 @@ pub struct SccpRouteManifestDto {
     /// Counterparty TairaXOR bridge contract address.
     pub taira_xor_bridge_address: String,
     /// Generic SCCP source bridge contract address.
-    pub source_bridge_address: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source_bridge_address: Option<String>,
     /// BSC SCCP source bridge contract address.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -6733,9 +6735,13 @@ pub struct SccpRouteManifestDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub sccp_tron_source_bridge_address: Option<String>,
     /// Generic destination verifier contract address.
-    pub destination_verifier_address: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub destination_verifier_address: Option<String>,
     /// Generic verifier contract address.
-    pub verifier_address: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub verifier_address: Option<String>,
     /// BSC destination verifier contract address.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -6953,15 +6959,15 @@ fn sccp_route_manifest_dto(
         network_id_hex: manifest.network_id_hex.clone(),
         taira_xor_token_address: manifest.taira_xor_token_address.clone(),
         taira_xor_bridge_address: manifest.taira_xor_bridge_address.clone(),
-        source_bridge_address: source_bridge_address.clone(),
+        source_bridge_address: (!is_bsc).then(|| source_bridge_address.clone()),
         sccp_bsc_source_bridge_address: is_bsc.then(|| source_bridge_address.clone()),
-        bsc_source_bridge_address: is_bsc.then(|| source_bridge_address.clone()),
+        bsc_source_bridge_address: None,
         sccp_tron_source_bridge_address: is_tron.then(|| source_bridge_address.clone()),
-        destination_verifier_address: verifier_address.clone(),
-        verifier_address: verifier_address.clone(),
+        destination_verifier_address: (!is_bsc).then(|| verifier_address.clone()),
+        verifier_address: None,
         sccp_bsc_destination_verifier_address: is_bsc.then(|| verifier_address.clone()),
-        bsc_verifier_address: is_bsc.then(|| verifier_address.clone()),
-        evm_verifier_address: is_bsc.then(|| verifier_address.clone()),
+        bsc_verifier_address: None,
+        evm_verifier_address: None,
         tron_verifier_address: is_tron.then(|| verifier_address.clone()),
         sccp_tron_destination_verifier_address: is_tron.then(|| verifier_address.clone()),
         destination_rollout: SccpRouteManifestDestinationRolloutDto {
@@ -12250,38 +12256,20 @@ mod sccp_message_backend_tests {
             dto.destination_rollout.verifier_identity,
             "0x4444444444444444444444444444444444444444"
         );
-        assert_eq!(
-            dto.source_bridge_address,
-            "0x3333333333333333333333333333333333333333"
-        );
+        assert_eq!(dto.source_bridge_address.as_deref(), None);
         assert_eq!(
             dto.sccp_bsc_source_bridge_address.as_deref(),
             Some("0x3333333333333333333333333333333333333333")
         );
-        assert_eq!(
-            dto.bsc_source_bridge_address.as_deref(),
-            Some("0x3333333333333333333333333333333333333333")
-        );
-        assert_eq!(
-            dto.destination_verifier_address,
-            "0x4444444444444444444444444444444444444444"
-        );
-        assert_eq!(
-            dto.verifier_address,
-            "0x4444444444444444444444444444444444444444"
-        );
+        assert_eq!(dto.bsc_source_bridge_address.as_deref(), None);
+        assert_eq!(dto.destination_verifier_address.as_deref(), None);
+        assert_eq!(dto.verifier_address.as_deref(), None);
         assert_eq!(
             dto.sccp_bsc_destination_verifier_address.as_deref(),
             Some("0x4444444444444444444444444444444444444444")
         );
-        assert_eq!(
-            dto.bsc_verifier_address.as_deref(),
-            Some("0x4444444444444444444444444444444444444444")
-        );
-        assert_eq!(
-            dto.evm_verifier_address.as_deref(),
-            Some("0x4444444444444444444444444444444444444444")
-        );
+        assert_eq!(dto.bsc_verifier_address.as_deref(), None);
+        assert_eq!(dto.evm_verifier_address.as_deref(), None);
         assert!(dto.sccp_tron_source_bridge_address.is_none());
         assert!(dto.tron_verifier_address.is_none());
         assert!(dto.sccp_tron_destination_verifier_address.is_none());
@@ -12322,6 +12310,28 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
+    fn sccp_route_manifest_json_omits_wrong_chain_aliases() {
+        let bsc_dto = sccp_route_manifest_dto(&sample_sccp_route_manifest_for_domain(
+            iroha_sccp::SCCP_DOMAIN_BSC,
+        ));
+        let bsc_json = norito::json::to_json_pretty(&bsc_dto).expect("serialize BSC route DTO");
+        assert!(bsc_json.contains("sccp_bsc_destination_verifier_address"));
+        assert!(!bsc_json.contains("sccp_tron_source_bridge_address"));
+        assert!(!bsc_json.contains("tron_verifier_address"));
+        assert!(!bsc_json.contains("sccp_tron_destination_verifier_address"));
+
+        let tron_dto = sccp_route_manifest_dto(&sample_sccp_route_manifest_for_domain(
+            iroha_sccp::SCCP_DOMAIN_TRON,
+        ));
+        let tron_json = norito::json::to_json_pretty(&tron_dto).expect("serialize TRON route DTO");
+        assert!(tron_json.contains("sccp_tron_destination_verifier_address"));
+        assert!(tron_json.contains("tron_verifier_address"));
+        assert!(!tron_json.contains("sccp_bsc_source_bridge_address"));
+        assert!(!tron_json.contains("sccp_bsc_destination_verifier_address"));
+        assert!(!tron_json.contains("bsc_verifier_address"));
+    }
+
+    #[test]
     fn configured_bsc_route_manifest_snapshot_uses_evm_backend() {
         let mut zk = iroha_core::state::default_zk_config();
         zk.sccp_route_manifests.clear();
@@ -12340,18 +12350,17 @@ mod sccp_message_backend_tests {
             routes[0].destination_rollout.verifier_backend,
             iroha_sccp::SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
         );
+        assert_eq!(routes[0].source_bridge_address.as_deref(), None);
+        assert_eq!(routes[0].bsc_source_bridge_address.as_deref(), None);
         assert_eq!(
-            routes[0].source_bridge_address,
-            "0x3333333333333333333333333333333333333333"
-        );
-        assert_eq!(
-            routes[0].bsc_source_bridge_address.as_deref(),
+            routes[0].sccp_bsc_source_bridge_address.as_deref(),
             Some("0x3333333333333333333333333333333333333333")
         );
         assert_eq!(
-            routes[0].bsc_verifier_address.as_deref(),
+            routes[0].sccp_bsc_destination_verifier_address.as_deref(),
             Some("0x4444444444444444444444444444444444444444")
         );
+        assert_eq!(routes[0].bsc_verifier_address.as_deref(), None);
         assert!(routes[0].sccp_tron_source_bridge_address.is_none());
         assert!(routes[0].tron_verifier_address.is_none());
         assert!(routes[0].sccp_tron_destination_verifier_address.is_none());
@@ -12364,12 +12373,12 @@ mod sccp_message_backend_tests {
 
         assert_eq!(dto.counterparty_domain, iroha_sccp::SCCP_DOMAIN_TRON);
         assert_eq!(
-            dto.source_bridge_address,
-            "0x3333333333333333333333333333333333333333"
+            dto.source_bridge_address.as_deref(),
+            Some("0x3333333333333333333333333333333333333333")
         );
         assert_eq!(
-            dto.destination_verifier_address,
-            "0x4444444444444444444444444444444444444444"
+            dto.destination_verifier_address.as_deref(),
+            Some("0x4444444444444444444444444444444444444444")
         );
         assert_eq!(
             dto.sccp_tron_source_bridge_address.as_deref(),
@@ -21010,11 +21019,27 @@ fn normalize_fee_sponsor_literal(fee_sponsor: Option<String>) -> Result<Option<S
 }
 
 #[cfg(feature = "app_api")]
+fn normalize_transaction_memo(memo: Option<String>) -> Option<String> {
+    memo.map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(feature = "app_api")]
 fn build_fee_sponsor_metadata(fee_sponsor: Option<&str>) -> Metadata {
     let mut metadata = Metadata::default();
     if let Some(fee_sponsor) = fee_sponsor {
         let sponsor_key = Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`");
         metadata.insert(sponsor_key, IrohaJson::new(fee_sponsor.to_owned()));
+    }
+    metadata
+}
+
+#[cfg(feature = "app_api")]
+fn build_multisig_propose_metadata(fee_sponsor: Option<&str>, memo: Option<&str>) -> Metadata {
+    let mut metadata = build_fee_sponsor_metadata(fee_sponsor);
+    if let Some(memo) = memo {
+        let memo_key = Name::from_str("memo").expect("static metadata key `memo`");
+        metadata.insert(memo_key, IrohaJson::new(memo.to_owned()));
     }
     metadata
 }
@@ -22753,6 +22778,21 @@ mod multisig_contract_call_tests {
         assert!(metadata.get("contract_address").is_some());
         assert!(metadata.get("contract_entrypoint").is_some());
         assert!(metadata.get("contract_payload").is_none());
+    }
+
+    #[test]
+    fn multisig_propose_metadata_includes_normalized_memo() {
+        assert_eq!(
+            normalize_transaction_memo(Some("  QR invoice 42  ".to_owned())).as_deref(),
+            Some("QR invoice 42")
+        );
+        assert!(normalize_transaction_memo(Some("  ".to_owned())).is_none());
+        assert!(normalize_transaction_memo(None).is_none());
+
+        let metadata = build_multisig_propose_metadata(Some("sponsor@cbsi"), Some("QR invoice 42"));
+        let json = metadata_to_json(&metadata);
+        assert_eq!(json["fee_sponsor"].as_str(), Some("sponsor@cbsi"));
+        assert_eq!(json["memo"].as_str(), Some("QR invoice 42"));
     }
 }
 
@@ -25862,6 +25902,7 @@ seiyaku BlobPayloadNormalizeTest {
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
+                memo: None,
                 instructions: vec![instruction],
             }),
         )
@@ -25906,6 +25947,7 @@ seiyaku BlobPayloadNormalizeTest {
                 signature_b64: Some("AQID".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
+                memo: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -25926,6 +25968,7 @@ seiyaku BlobPayloadNormalizeTest {
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
+                memo: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -25946,6 +25989,7 @@ seiyaku BlobPayloadNormalizeTest {
                 signature_b64: Some("  ".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
+                memo: None,
                 instructions: vec![instruction],
             }),
         )
@@ -25976,6 +26020,7 @@ seiyaku BlobPayloadNormalizeTest {
                 signature_b64: Some("AQID".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
+                memo: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -26004,6 +26049,7 @@ seiyaku BlobPayloadNormalizeTest {
                 signature_b64: Some("AQID".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
+                memo: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -26029,6 +26075,7 @@ seiyaku BlobPayloadNormalizeTest {
                 signature_b64: Some("not base64".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
+                memo: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -26050,6 +26097,7 @@ seiyaku BlobPayloadNormalizeTest {
                 signature_b64: Some(forged_signature_b64),
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
+                memo: None,
                 instructions: vec![instruction],
             }),
         )
@@ -26089,6 +26137,7 @@ seiyaku BlobPayloadNormalizeTest {
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
                 fee_sponsor: None,
+                memo: None,
                 instructions: vec![instruction],
             }),
         )
@@ -26119,6 +26168,7 @@ seiyaku BlobPayloadNormalizeTest {
             signature_b64: None,
             creation_time_ms: Some(1_700_000_000_345),
             fee_sponsor: None,
+            memo: None,
             instructions: vec![instruction.clone()],
         };
 
@@ -26253,6 +26303,7 @@ seiyaku BlobPayloadNormalizeTest {
             signature_b64: None,
             creation_time_ms: Some(1_700_000_000_345),
             fee_sponsor: None,
+            memo: None,
             instructions: vec![instruction],
         };
         let raw = norito::json::to_string(&request).expect("serialize multisig propose dto");
@@ -26920,9 +26971,11 @@ pub async fn handle_post_multisig_propose(
         signature_b64,
         creation_time_ms,
         fee_sponsor,
+        memo,
         instructions,
     } = req;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
+    let memo = normalize_transaction_memo(memo);
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
 
@@ -26941,7 +26994,10 @@ pub async fn handle_post_multisig_propose(
         dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let builder = builder
-        .with_metadata(build_fee_sponsor_metadata(fee_sponsor.as_deref()))
+        .with_metadata(build_multisig_propose_metadata(
+            fee_sponsor.as_deref(),
+            memo.as_deref(),
+        ))
         .with_instructions([dm::InstructionBox::from(propose_instruction)]);
 
     let response =
@@ -30066,6 +30122,9 @@ pub struct MultisigProposeDto {
     /// Optional fee sponsor account literal forwarded to transaction metadata.
     #[norito(default)]
     pub fee_sponsor: Option<String>,
+    /// Optional user-facing transfer memo forwarded to transaction metadata.
+    #[norito(default)]
+    pub memo: Option<String>,
     /// Instruction batch that will be wrapped inside `MultisigPropose`.
     pub instructions: Vec<iroha_data_model::isi::InstructionBox>,
 }
@@ -36860,6 +36919,7 @@ struct TxProjection {
     entrypoint_kind: String,
     entrypoint_hash: String,
     result_ok: bool,
+    memo: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -39816,6 +39876,9 @@ fn project_tx(
             entrypoint_kind,
             entrypoint_hash: entry_hash,
             result_ok,
+            memo: tx_metadata_string(tx, "memo")
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
         }
     }
 }
@@ -59509,6 +59572,9 @@ fn tx_projections_to_json(items: &[TxProjection]) -> Vec<norito::json::Value> {
                 norito::json::Value::from(it.entrypoint_hash.clone()),
             );
             m.insert("result_ok".into(), norito::json::Value::from(it.result_ok));
+            if let Some(memo) = it.memo.as_ref().filter(|value| !value.trim().is_empty()) {
+                m.insert("memo".into(), norito::json::Value::from(memo.clone()));
+            }
             norito::json::Value::Object(m)
         })
         .collect()
@@ -62141,6 +62207,7 @@ mod tx_projection_display_tests {
             entrypoint_hash: "deadbeef".into(),
             entrypoint_kind: "unknown".into(),
             result_ok: true,
+            memo: None,
         };
         let items = tx_projections_to_json(&[projection]);
         let authority = items[0]
@@ -62159,6 +62226,7 @@ mod tx_projection_display_tests {
             entrypoint_hash: "cafebabe".into(),
             entrypoint_kind: "unknown".into(),
             result_ok: false,
+            memo: None,
         };
         let items = tx_projections_to_json(&[projection]);
         let authority = items[0]
@@ -62166,6 +62234,20 @@ mod tx_projection_display_tests {
             .and_then(norito::json::Value::as_str)
             .expect("authority field");
         assert_eq!(authority, account.to_string());
+    }
+
+    #[test]
+    fn projections_emit_memo_when_present() {
+        let projection = TxProjection {
+            authority: None,
+            timestamp_ms: Some(123),
+            entrypoint_hash: "feedbabe".into(),
+            entrypoint_kind: "unknown".into(),
+            result_ok: true,
+            memo: Some("QR invoice 42".to_owned()),
+        };
+        let items = tx_projections_to_json(&[projection]);
+        assert_eq!(items[0]["memo"].as_str(), Some("QR invoice 42"));
     }
 
     #[test]
@@ -62187,6 +62269,7 @@ mod tx_projection_display_tests {
             entrypoint_hash: "deadbeef".into(),
             entrypoint_kind: "unknown".into(),
             result_ok: true,
+            memo: None,
         };
         let items = tx_projections_to_json(&[projection]);
         assert!(
@@ -70728,7 +70811,8 @@ pub async fn handle_v1_explorer_blocks(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
-        let total_items = state.committed_height() as u64;
+        let committed_hashes = state.committed_block_hashes_snapshot();
+        let total_items = u64::try_from(committed_hashes.len()).unwrap_or(u64::MAX);
         let page = pagination.page.max(1);
         let per_page = pagination.per_page.max(1);
         let total_pages = total_items.div_ceil(per_page);
@@ -70743,12 +70827,12 @@ pub async fn handle_v1_explorer_blocks(
                 })?;
                 let nonzero_height = NonZeroUsize::new(height_usize)
                     .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-                let block = state.block_by_height(nonzero_height).ok_or_else(|| {
-                    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                        iroha_data_model::query::error::QueryExecutionFail::NotFound,
-                    ))
-                })?;
-                items.push(crate::explorer::ExplorerBlockDto::from_block(&block));
+                let dto = state
+                    .block_by_height(nonzero_height)
+                    .map(|block| crate::explorer::ExplorerBlockDto::from_block(&block))
+                    .or_else(|| explorer_hash_only_block_dto(&committed_hashes, nonzero_height))
+                    .ok_or_else(explorer_not_found)?;
+                items.push(dto);
             }
         }
         let pagination_meta = crate::explorer::ExplorerPaginationMeta {
@@ -70765,6 +70849,88 @@ pub async fn handle_v1_explorer_blocks(
     })();
     record_explorer_endpoint_result(&telemetry, ENDPOINT_EXPLORER_BLOCKS, started, &response);
     response
+}
+
+#[cfg(all(test, feature = "app_api"))]
+#[tokio::test]
+async fn explorer_blocks_falls_back_to_hash_only_committed_journal() {
+    let state = Arc::new(CoreState::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        iroha_core::query::store::LiveQueryStore::start_test(),
+    ));
+    let first =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
+    let second =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+    let first_hash = first.to_string();
+    let second_hash = second.to_string();
+    {
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(first);
+        block_hashes.push_for_tests(second);
+        block_hashes.commit_for_tests();
+    }
+
+    let response = handle_v1_explorer_blocks(
+        state.clone(),
+        MaybeTelemetry::disabled(),
+        crate::explorer::ExplorerPaginationQuery {
+            page: 1,
+            per_page: 1,
+        },
+    )
+    .await
+    .expect("hash-only explorer block list should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+    assert_eq!(
+        payload
+            .get("pagination")
+            .and_then(|value| value.get("total_items"))
+            .and_then(norito::json::Value::as_u64),
+        Some(2)
+    );
+    let latest = payload
+        .get("items")
+        .and_then(norito::json::Value::as_array)
+        .and_then(|items| items.first())
+        .expect("latest block item");
+    assert_eq!(
+        latest.get("height").and_then(norito::json::Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        latest.get("hash").and_then(norito::json::Value::as_str),
+        Some(second_hash.as_str())
+    );
+    assert_eq!(
+        latest
+            .get("prev_block_hash")
+            .and_then(norito::json::Value::as_str),
+        Some(first_hash.as_str())
+    );
+
+    let detail =
+        handle_v1_explorer_block_detail(state, MaybeTelemetry::disabled(), second_hash.clone())
+            .await
+            .expect("hash-only explorer block detail should succeed");
+    assert_eq!(detail.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(detail.into_body(), usize::MAX)
+        .await
+        .expect("detail body");
+    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("detail json");
+    assert_eq!(
+        payload.get("height").and_then(norito::json::Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        payload.get("hash").and_then(norito::json::Value::as_str),
+        Some(second_hash.as_str())
+    );
 }
 
 #[cfg(feature = "app_api")]
@@ -73294,6 +73460,35 @@ enum ExplorerBlockIdentifier {
 }
 
 #[cfg(feature = "app_api")]
+fn explorer_hash_only_block_dto(
+    committed_hashes: &[HashOf<BlockHeader>],
+    height: NonZeroUsize,
+) -> Option<crate::explorer::ExplorerBlockDto> {
+    let index = height.get().checked_sub(1)?;
+    let hash = committed_hashes.get(index).copied()?;
+    let prev_block_hash = index
+        .checked_sub(1)
+        .and_then(|prev_index| committed_hashes.get(prev_index).copied());
+    let height_u64 = u64::try_from(height.get()).ok()?;
+    Some(crate::explorer::ExplorerBlockDto::from_hash_only(
+        height_u64,
+        hash,
+        prev_block_hash,
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn height_for_committed_hash(
+    committed_hashes: &[HashOf<BlockHeader>],
+    hash: HashOf<BlockHeader>,
+) -> Option<NonZeroUsize> {
+    committed_hashes
+        .iter()
+        .position(|candidate| *candidate == hash)
+        .and_then(|index| NonZeroUsize::new(index.saturating_add(1)))
+}
+
+#[cfg(feature = "app_api")]
 fn parse_block_identifier(raw: &str) -> Result<ExplorerBlockIdentifier, Error> {
     let trimmed = raw.trim();
     if let Ok(height_value) = trimmed.parse::<u64>() {
@@ -73322,12 +73517,23 @@ pub async fn handle_v1_explorer_block_detail(
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
         let lookup = parse_block_identifier(&identifier)?;
-        let block = match lookup {
-            ExplorerBlockIdentifier::Height(height) => state.block_by_height(height),
-            ExplorerBlockIdentifier::Hash(hash) => state.block_by_hash(hash),
+        let committed_hashes = state.committed_block_hashes_snapshot();
+        let dto = match lookup {
+            ExplorerBlockIdentifier::Height(height) => state
+                .block_by_height(height)
+                .map(|block| crate::explorer::ExplorerBlockDto::from_block(block.as_ref()))
+                .or_else(|| explorer_hash_only_block_dto(&committed_hashes, height)),
+            ExplorerBlockIdentifier::Hash(hash) => state
+                .block_by_hash(hash)
+                .map(|block| crate::explorer::ExplorerBlockDto::from_block(block.as_ref()))
+                .or_else(|| {
+                    state
+                        .block_height_by_hash(hash)
+                        .or_else(|| height_for_committed_hash(&committed_hashes, hash))
+                        .and_then(|height| explorer_hash_only_block_dto(&committed_hashes, height))
+                }),
         }
         .ok_or_else(explorer_not_found)?;
-        let dto = crate::explorer::ExplorerBlockDto::from_block(block.as_ref());
         Ok(JsonBody(dto).into_response())
     })();
     record_explorer_endpoint_result(

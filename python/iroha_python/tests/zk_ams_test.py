@@ -6,13 +6,17 @@ import pytest
 
 from iroha_python import (
     buildZkAmsAdmissionBatch,
+    buildZkAmsAdmissionBatchProofV0,
     buildZkAmsAdmissionDevProofFixture,
     buildZkAmsAdmissionProofEnvelope,
     build_zk_ams_admission_batch,
+    build_zk_ams_admission_batch_proof_v0,
     build_zk_ams_admission_dev_proof_fixture,
     build_zk_ams_admission_proof_envelope,
     decode_privacy_proof_envelope,
+    verifyZkAmsAdmissionBatchProofV0,
     verifyZkAmsAdmissionProofLocally,
+    verify_zk_ams_admission_batch_proof_v0,
     verify_zk_ams_admission_proof_locally,
 )
 from iroha_python.verange import build_privacy_proof_envelope
@@ -59,6 +63,24 @@ def test_zk_ams_builders_normalize_batches_and_proof_envelopes() -> None:
     ].hex()
     assert prepared_inputs["domain_separator"] == "boi:zk-ams:pilot:v0"
 
+    production_envelope = build_zk_ams_admission_batch_proof_v0(
+        {
+            **base,
+            "vkHash": bytes([0x66]) * 32,
+            "proofBytes": b"production-zk-ams-admission-proof",
+        }
+    )
+    production_verified = verify_zk_ams_admission_batch_proof_v0(
+        {"envelope": production_envelope, **base}
+    )
+    assert production_verified["ok"] is True
+    assert production_verified["production"] is True
+    assert production_verified["kind"] == "zk-ams-recursive-admission-v0"
+    assert production_verified["batch_size"] == 2
+    assert production_verified["admission_batch_root"] == batch[
+        "admission_batch_root"
+    ].hex()
+
     fixture = build_zk_ams_admission_dev_proof_fixture(
         {**base, "vkHash": bytes([0x66]) * 32}
     )
@@ -90,10 +112,88 @@ def test_zk_ams_package_root_exports_catalog_entrypoint_aliases() -> None:
     )
     assert decode_privacy_proof_envelope(prepared)["proof_bytes"] == b"prepared-zk-ams-proof"
 
+    production_envelope = buildZkAmsAdmissionBatchProofV0(
+        {
+            **base,
+            "vkHash": bytes([0x66]) * 32,
+            "proofBytes": b"production-zk-ams-admission-proof",
+        }
+    )
+    production_verified = verifyZkAmsAdmissionBatchProofV0(
+        {"envelope": production_envelope, **base}
+    )
+    assert production_verified["production"] is True
+    assert production_verified["admission_batch_root"] == batch[
+        "admission_batch_root"
+    ].hex()
+
     fixture = buildZkAmsAdmissionDevProofFixture({**base, "vkHash": bytes([0x66]) * 32})
     verified = verifyZkAmsAdmissionProofLocally({"envelope": fixture["envelope"], **base})
     assert verified["ok"] is True
     assert verified["admission_batch_root"] == batch["admission_batch_root"].hex()
+
+
+def test_zk_ams_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class ZkAmsDict(dict):
+        pass
+
+    base = _base()
+    proof_options = {
+        **base,
+        "vkHash": bytes([0x66]) * 32,
+        "proofBytes": b"production-zk-ams-admission-proof",
+    }
+
+    for helper in (build_zk_ams_admission_batch, buildZkAmsAdmissionBatch):
+        with pytest.raises(TypeError, match="zkAmsAdmissionBatch"):
+            helper(ZkAmsDict(base))
+
+    for helper in (
+        build_zk_ams_admission_proof_envelope,
+        buildZkAmsAdmissionProofEnvelope,
+    ):
+        with pytest.raises(TypeError, match="zkAmsAdmissionProofEnvelope"):
+            helper(ZkAmsDict(proof_options))
+
+    for helper in (
+        build_zk_ams_admission_batch_proof_v0,
+        buildZkAmsAdmissionBatchProofV0,
+    ):
+        with pytest.raises(TypeError, match="zkAmsAdmissionBatchProofV0"):
+            helper(ZkAmsDict(proof_options))
+
+    for helper in (
+        build_zk_ams_admission_dev_proof_fixture,
+        buildZkAmsAdmissionDevProofFixture,
+    ):
+        with pytest.raises(TypeError, match="zkAmsAdmissionDevProofFixture"):
+            helper(ZkAmsDict({**base, "vkHash": bytes([0x66]) * 32}))
+
+    production_proof = build_zk_ams_admission_batch_proof_v0(proof_options)
+    raw_verified = verify_zk_ams_admission_batch_proof_v0(production_proof)
+    assert raw_verified["ok"] is True
+
+    verify_options = {"envelope": production_proof, **base}
+    for helper in (
+        verify_zk_ams_admission_batch_proof_v0,
+        verifyZkAmsAdmissionBatchProofV0,
+    ):
+        with pytest.raises(TypeError, match="zkAmsAdmissionBatchProofV0"):
+            helper(ZkAmsDict(verify_options))
+
+    fixture = build_zk_ams_admission_dev_proof_fixture(
+        {**base, "vkHash": bytes([0x66]) * 32}
+    )
+    local_verified = verify_zk_ams_admission_proof_locally(fixture["envelope"])
+    assert local_verified["ok"] is True
+
+    local_options = {**verify_options, "envelope": fixture["envelope"]}
+    for helper in (
+        verify_zk_ams_admission_proof_locally,
+        verifyZkAmsAdmissionProofLocally,
+    ):
+        with pytest.raises(TypeError, match="zkAmsAdmissionLocalVerification"):
+            helper(ZkAmsDict(local_options))
 
 
 @pytest.mark.parametrize(
@@ -239,3 +339,21 @@ def test_zk_ams_local_verifier_rejects_tampered_dev_fixtures() -> None:
             match="zkAmsAdmissionLocalVerification|privacyProofEnvelope",
         ):
             verify_zk_ams_admission_proof_locally(case)
+
+
+def test_zk_ams_production_builder_and_verifier_reject_dev_fixtures() -> None:
+    fixture_input = {**_base(), "vkHash": bytes([0x66]) * 32}
+    fixture = build_zk_ams_admission_dev_proof_fixture(fixture_input)
+
+    with pytest.raises(ValueError, match="dev fixture"):
+        build_zk_ams_admission_batch_proof_v0(
+            {
+                **fixture_input,
+                "proofBytes": fixture["proof_bytes"],
+            }
+        )
+
+    with pytest.raises(ValueError, match="dev fixture"):
+        verify_zk_ams_admission_batch_proof_v0(
+            {"envelope": fixture["envelope"], **_base()}
+        )

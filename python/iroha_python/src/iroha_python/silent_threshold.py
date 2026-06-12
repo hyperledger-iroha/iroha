@@ -1,4 +1,4 @@
-"""Silent-threshold anonymous credential SDK dev-fixture helpers."""
+"""Silent-threshold anonymous credential SDK helpers."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from .verange import (
     _reject_unknown_fields,
     _require_mapping,
     _require_non_blank_string,
+    _require_plain_mapping,
     build_privacy_proof_envelope,
     decode_privacy_proof_envelope,
 )
@@ -40,11 +41,15 @@ __all__ = [
     "SILENT_THRESHOLD_DOMAIN_SEPARATOR",
     "build_silent_threshold_credential_commitments",
     "build_silent_threshold_credential_envelope",
+    "build_silent_threshold_credential_showing_proof_v0",
     "build_silent_threshold_credential_dev_proof_fixture",
+    "verify_silent_threshold_credential_showing_proof_v0",
     "verify_silent_threshold_credential_proof_locally",
     "buildSilentThresholdCredentialCommitments",
     "buildSilentThresholdCredentialEnvelope",
+    "buildSilentThresholdCredentialShowingProofV0",
     "buildSilentThresholdCredentialDevProofFixture",
+    "verifySilentThresholdCredentialShowingProofV0",
     "verifySilentThresholdCredentialProofLocally",
 ]
 
@@ -462,7 +467,7 @@ def build_silent_threshold_credential_commitments(
 ) -> dict[str, Any]:
     """Normalize silent-threshold credential public-input commitments."""
 
-    source = _require_mapping(options, "silentThresholdCredentialCommitments")
+    source = _require_plain_mapping(options, "silentThresholdCredentialCommitments")
     _reject_unknown_fields(
         source,
         _COMMON_FIELDS,
@@ -695,13 +700,43 @@ _ENVELOPE_FIELDS = {
 def build_silent_threshold_credential_envelope(options: Mapping[str, Any]) -> bytes:
     """Build canonical OpenVerifyEnvelope bytes for a prepared silent-threshold proof."""
 
-    source = _require_mapping(options, "silentThresholdCredentialEnvelope")
+    source = _require_plain_mapping(options, "silentThresholdCredentialEnvelope")
     _reject_unknown_fields(source, _ENVELOPE_FIELDS, "silentThresholdCredentialEnvelope")
     parts = _proof_parts(
         source,
         "silentThresholdCredentialEnvelope",
         require_proof_bytes=True,
     )
+    return build_privacy_proof_envelope(
+        {
+            "backend": parts["backend"],
+            "circuitId": parts["circuit_id"],
+            "vkHash": parts["vk_hash"],
+            "publicInputs": parts["public_input_bytes"],
+            "proofBytes": parts["proof_bytes"],
+            "aux": source.get("aux", b""),
+            "maxProofBytes": parts["max_proof_bytes"],
+            "maxPublicInputBytes": parts["max_public_input_bytes"],
+        }
+    )
+
+
+def build_silent_threshold_credential_showing_proof_v0(
+    options: Mapping[str, Any],
+) -> bytes:
+    """Build canonical production silent-threshold credential showing proof bytes."""
+
+    source = _require_plain_mapping(options, "silentThresholdCredentialShowingProofV0")
+    _reject_unknown_fields(source, _ENVELOPE_FIELDS, "silentThresholdCredentialShowingProofV0")
+    parts = _proof_parts(
+        source,
+        "silentThresholdCredentialShowingProofV0",
+        require_proof_bytes=True,
+    )
+    if parts["proof_bytes"].startswith(SILENT_THRESHOLD_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "silentThresholdCredentialShowingProofV0.proofBytes must not contain a dev fixture proof"
+        )
     return build_privacy_proof_envelope(
         {
             "backend": parts["backend"],
@@ -738,7 +773,7 @@ def build_silent_threshold_credential_dev_proof_fixture(
 ) -> dict[str, Any]:
     """Build a deterministic silent-threshold dev proof fixture."""
 
-    source = _require_mapping(options, "silentThresholdCredentialDevProofFixture")
+    source = _require_plain_mapping(options, "silentThresholdCredentialDevProofFixture")
     _reject_unknown_fields(
         source,
         _ENVELOPE_FIELDS - {"proofBytes", "proof_bytes", "proof"},
@@ -930,7 +965,10 @@ def verify_silent_threshold_credential_proof_locally(options: Any) -> dict[str, 
     """Verify a deterministic silent-threshold dev fixture."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(
+            options,
+            "silentThresholdCredentialLocalVerification",
+        )
     else:
         source = {"envelope": options}
     _reject_unknown_fields(
@@ -992,10 +1030,82 @@ def verify_silent_threshold_credential_proof_locally(options: Any) -> dict[str, 
     }
 
 
+def verify_silent_threshold_credential_showing_proof_v0(
+    options: Any,
+) -> dict[str, Any]:
+    """Validate a production silent-threshold credential showing proof envelope."""
+
+    if isinstance(options, Mapping):
+        source = _require_plain_mapping(
+            options,
+            "silentThresholdCredentialShowingProofV0",
+        )
+    else:
+        source = {"envelope": options}
+    _reject_unknown_fields(
+        source,
+        _COMMON_FIELDS | {"envelope", "proofEnvelope", "proof_envelope", "bytes"},
+        "silentThresholdCredentialShowingProofV0",
+    )
+    _envelope_key, envelope_value = _read_single_alias(
+        source,
+        ("envelope", "proofEnvelope", "proof_envelope", "bytes"),
+        "silentThresholdCredentialShowingProofV0.envelope",
+        "proof envelope",
+    )
+    decoded = decode_privacy_proof_envelope(envelope_value)
+    if decoded["backend"] != "Stark":
+        raise ValueError(
+            "silentThresholdCredentialShowingProofV0.envelope.backend must be Stark"
+        )
+    circuit_id = _normalize_circuit_id(
+        decoded["circuit_id"],
+        "silentThresholdCredentialShowingProofV0.envelope.circuitId",
+    )
+    vk_hash = _fixed_bytes(
+        decoded["vk_hash"],
+        "silentThresholdCredentialShowingProofV0.envelope.vkHash",
+        32,
+        nonzero=True,
+    )
+    public_inputs = _parse_public_inputs(
+        decoded["public_inputs"],
+        "silentThresholdCredentialShowingProofV0.publicInputs",
+    )
+    _ensure_expectations(
+        source,
+        public_inputs,
+        "silentThresholdCredentialShowingProofV0",
+    )
+    if decoded["proof_bytes"].startswith(SILENT_THRESHOLD_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "silentThresholdCredentialShowingProofV0 proof bytes must not contain a silent-threshold dev fixture"
+        )
+    return {
+        "ok": True,
+        "production": True,
+        "kind": "silent-threshold-anoncred-v0",
+        "backend": "Stark",
+        "circuit_id": circuit_id,
+        "verifier_key_hash": vk_hash.hex(),
+        "public_inputs": public_inputs,
+        "public_input_bytes": len(decoded["public_inputs"]),
+        "proof_bytes": len(decoded["proof_bytes"]),
+        "aux_bytes": len(decoded["aux"]),
+        "showing_nullifier": public_inputs["showing_nullifier"],
+    }
+
+
 buildSilentThresholdCredentialCommitments = build_silent_threshold_credential_commitments
 buildSilentThresholdCredentialEnvelope = build_silent_threshold_credential_envelope
+buildSilentThresholdCredentialShowingProofV0 = (
+    build_silent_threshold_credential_showing_proof_v0
+)
 buildSilentThresholdCredentialDevProofFixture = (
     build_silent_threshold_credential_dev_proof_fixture
+)
+verifySilentThresholdCredentialShowingProofV0 = (
+    verify_silent_threshold_credential_showing_proof_v0
 )
 verifySilentThresholdCredentialProofLocally = (
     verify_silent_threshold_credential_proof_locally

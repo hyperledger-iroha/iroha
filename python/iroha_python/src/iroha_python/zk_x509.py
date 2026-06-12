@@ -1,4 +1,4 @@
-"""ZK-X.509 on-chain identity SDK dev-fixture helpers."""
+"""ZK-X.509 on-chain identity SDK helpers."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from .verange import (
     _reject_unknown_fields,
     _require_mapping,
     _require_non_blank_string,
+    _require_plain_mapping,
     build_privacy_proof_envelope,
     decode_privacy_proof_envelope,
 )
@@ -40,11 +41,15 @@ __all__ = [
     "ZK_X509_DOMAIN_SEPARATOR",
     "build_zk_x509_identity_commitments",
     "build_zk_x509_identity_envelope",
+    "build_zk_x509_identity_proof_v0",
     "build_zk_x509_identity_dev_proof_fixture",
+    "verify_zk_x509_identity_proof_v0",
     "verify_zk_x509_identity_proof_locally",
     "buildZkX509IdentityCommitments",
     "buildZkX509IdentityEnvelope",
+    "buildZkX509IdentityProofV0",
     "buildZkX509IdentityDevProofFixture",
+    "verifyZkX509IdentityProofV0",
     "verifyZkX509IdentityProofLocally",
 ]
 
@@ -524,7 +529,7 @@ _COMMON_FIELDS = {
 def build_zk_x509_identity_commitments(options: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize ZK-X.509 identity proof public-input commitments."""
 
-    source = _require_mapping(options, "zkX509IdentityCommitments")
+    source = _require_plain_mapping(options, "zkX509IdentityCommitments")
     _reject_unknown_fields(source, _COMMON_FIELDS, "zkX509IdentityCommitments")
     parts = _commitment_parts(source, "zkX509IdentityCommitments")
     return {
@@ -746,9 +751,33 @@ _ENVELOPE_FIELDS = {
 def build_zk_x509_identity_envelope(options: Mapping[str, Any]) -> bytes:
     """Build canonical OpenVerifyEnvelope bytes for a prepared ZK-X.509 proof."""
 
-    source = _require_mapping(options, "zkX509IdentityEnvelope")
+    source = _require_plain_mapping(options, "zkX509IdentityEnvelope")
     _reject_unknown_fields(source, _ENVELOPE_FIELDS, "zkX509IdentityEnvelope")
     parts = _proof_parts(source, "zkX509IdentityEnvelope", require_proof_bytes=True)
+    return build_privacy_proof_envelope(
+        {
+            "backend": parts["backend"],
+            "circuitId": parts["circuit_id"],
+            "vkHash": parts["vk_hash"],
+            "publicInputs": parts["public_input_bytes"],
+            "proofBytes": parts["proof_bytes"],
+            "aux": source.get("aux", b""),
+            "maxProofBytes": parts["max_proof_bytes"],
+            "maxPublicInputBytes": parts["max_public_input_bytes"],
+        }
+    )
+
+
+def build_zk_x509_identity_proof_v0(options: Mapping[str, Any]) -> bytes:
+    """Build canonical production ZK-X.509 identity proof envelope bytes."""
+
+    source = _require_plain_mapping(options, "zkX509IdentityProofV0")
+    _reject_unknown_fields(source, _ENVELOPE_FIELDS, "zkX509IdentityProofV0")
+    parts = _proof_parts(source, "zkX509IdentityProofV0", require_proof_bytes=True)
+    if parts["proof_bytes"].startswith(ZK_X509_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "zkX509IdentityProofV0.proofBytes must not contain a dev fixture proof"
+        )
     return build_privacy_proof_envelope(
         {
             "backend": parts["backend"],
@@ -783,7 +812,7 @@ def _dev_proof_bytes(
 def build_zk_x509_identity_dev_proof_fixture(options: Mapping[str, Any]) -> dict[str, Any]:
     """Build a deterministic ZK-X.509 identity dev proof fixture."""
 
-    source = _require_mapping(options, "zkX509IdentityDevProofFixture")
+    source = _require_plain_mapping(options, "zkX509IdentityDevProofFixture")
     _reject_unknown_fields(
         source,
         _ENVELOPE_FIELDS - {"proofBytes", "proof_bytes", "proof"},
@@ -977,7 +1006,7 @@ def verify_zk_x509_identity_proof_locally(options: Any) -> dict[str, Any]:
     """Verify a deterministic ZK-X.509 identity dev fixture."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "zkX509IdentityLocalVerification")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(
@@ -1033,7 +1062,64 @@ def verify_zk_x509_identity_proof_locally(options: Any) -> dict[str, Any]:
     }
 
 
+def verify_zk_x509_identity_proof_v0(options: Any) -> dict[str, Any]:
+    """Validate a production ZK-X.509 identity proof envelope binding."""
+
+    if isinstance(options, Mapping):
+        source = _require_plain_mapping(options, "zkX509IdentityProofV0")
+    else:
+        source = {"envelope": options}
+    _reject_unknown_fields(
+        source,
+        _COMMON_FIELDS | {"envelope", "proofEnvelope", "proof_envelope", "bytes"},
+        "zkX509IdentityProofV0",
+    )
+    _envelope_key, envelope_value = _read_single_alias(
+        source,
+        ("envelope", "proofEnvelope", "proof_envelope", "bytes"),
+        "zkX509IdentityProofV0.envelope",
+        "proof envelope",
+    )
+    decoded = decode_privacy_proof_envelope(envelope_value)
+    if decoded["backend"] != "Stark":
+        raise ValueError("zkX509IdentityProofV0.envelope.backend must be Stark")
+    circuit_id = _normalize_circuit_id(
+        decoded["circuit_id"],
+        "zkX509IdentityProofV0.envelope.circuitId",
+    )
+    vk_hash = _fixed_bytes(
+        decoded["vk_hash"],
+        "zkX509IdentityProofV0.envelope.vkHash",
+        32,
+        nonzero=True,
+    )
+    public_inputs = _parse_public_inputs(
+        decoded["public_inputs"],
+        "zkX509IdentityProofV0.publicInputs",
+    )
+    _ensure_expectations(source, public_inputs, "zkX509IdentityProofV0")
+    if decoded["proof_bytes"].startswith(ZK_X509_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "zkX509IdentityProofV0 proof bytes must not contain a ZK-X.509 dev fixture"
+        )
+    return {
+        "ok": True,
+        "production": True,
+        "kind": "zk-x509-onchain-identity-v0",
+        "backend": "Stark",
+        "circuit_id": circuit_id,
+        "verifier_key_hash": vk_hash.hex(),
+        "public_inputs": public_inputs,
+        "public_input_bytes": len(decoded["public_inputs"]),
+        "proof_bytes": len(decoded["proof_bytes"]),
+        "aux_bytes": len(decoded["aux"]),
+        "address_binding": public_inputs["address_binding"],
+    }
+
+
 buildZkX509IdentityCommitments = build_zk_x509_identity_commitments
 buildZkX509IdentityEnvelope = build_zk_x509_identity_envelope
+buildZkX509IdentityProofV0 = build_zk_x509_identity_proof_v0
 buildZkX509IdentityDevProofFixture = build_zk_x509_identity_dev_proof_fixture
+verifyZkX509IdentityProofV0 = verify_zk_x509_identity_proof_v0
 verifyZkX509IdentityProofLocally = verify_zk_x509_identity_proof_locally

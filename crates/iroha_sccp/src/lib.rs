@@ -31814,6 +31814,82 @@ pub fn decode_sccp_source_chain_proof_envelope(
     norito::decode_from_bytes(proof_bytes).ok()
 }
 
+/// Recover a source-chain proof envelope from bytes against governed deployment material.
+pub fn recover_sccp_source_chain_proof_envelope_with_material_and_deployment(
+    source_domain: u32,
+    target_domain: u32,
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    let proof = decode_sccp_source_chain_proof_envelope(proof_bytes)?;
+    (proof.source_domain == source_domain
+        && proof.target_domain == target_domain
+        && verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
+            &proof, material, deployment,
+        ))
+    .then_some(proof)
+}
+
+/// Recover a production source-chain proof envelope from governed deployment material.
+pub fn recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+    source_domain: u32,
+    target_domain: u32,
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    let proof = decode_sccp_source_chain_proof_envelope(proof_bytes)?;
+    (proof.source_domain == source_domain
+        && proof.target_domain == target_domain
+        && verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+            &proof, material, deployment,
+        ))
+    .then_some(proof)
+}
+
+/// Recover an Ethereum mainnet -> SORA source proof envelope from governed deployment material.
+pub fn recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if material.source_domain != SCCP_DOMAIN_ETH
+        || deployment.source_domain != SCCP_DOMAIN_ETH
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        SCCP_DOMAIN_ETH,
+        SCCP_DOMAIN_SORA,
+        proof_bytes,
+        material,
+        deployment,
+    )
+}
+
+/// Recover a BSC mainnet -> SORA source proof envelope from governed deployment material.
+pub fn recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if material.source_domain != SCCP_DOMAIN_BSC
+        || deployment.source_domain != SCCP_DOMAIN_BSC
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        SCCP_DOMAIN_BSC,
+        SCCP_DOMAIN_SORA,
+        proof_bytes,
+        material,
+        deployment,
+    )
+}
+
 pub fn decode_sccp_source_consensus_proof(
     proof_bytes: &[u8],
 ) -> Option<SccpSourceConsensusProofV1> {
@@ -31855,6 +31931,38 @@ pub fn recover_nexus_sccp_message_transparent_proof_allow_unready(
     let proof = decode_nexus_sccp_message_transparent_proof(proof_bytes)?;
     (verify_nexus_sccp_message_transparent_proof_structure_allow_unready(&proof, allow_unready)
         && proof.message_backend == backend)
+        .then_some(proof)
+}
+
+/// Recover a typed transparent proof artifact against governed source-adapter material.
+pub fn recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+    backend: &str,
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<NexusSccpMessageTransparentProofV1> {
+    let proof = decode_nexus_sccp_message_transparent_proof(proof_bytes)?;
+    (verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment(
+        &proof,
+        material,
+        deployment,
+    ) && proof.message_backend == backend)
+        .then_some(proof)
+}
+
+/// Recover a deployment-bound transparent proof while allowing only the destination manifest gate.
+pub fn recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+    backend: &str,
+    proof_bytes: &[u8],
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<NexusSccpMessageTransparentProofV1> {
+    let proof = decode_nexus_sccp_message_transparent_proof(proof_bytes)?;
+    (verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+        &proof,
+        material,
+        deployment,
+    ) && proof.message_backend == backend)
         .then_some(proof)
 }
 
@@ -41527,7 +41635,21 @@ mod tests {
         )));
 
         let mut payload = add;
+        payload.name = [0; 32];
+        payload.name[1..6].copy_from_slice(b"Token");
+        assert!(!verify_sccp_payload_structure(&SccpPayloadV1::TokenAdd(
+            payload
+        )));
+
+        let mut payload = add;
         payload.symbol = [0; 32];
+        assert!(!verify_sccp_payload_structure(&SccpPayloadV1::TokenAdd(
+            payload
+        )));
+
+        let mut payload = add;
+        payload.symbol = [0; 32];
+        payload.symbol[1..4].copy_from_slice(b"TOK");
         assert!(!verify_sccp_payload_structure(&SccpPayloadV1::TokenAdd(
             payload
         )));
@@ -60651,6 +60773,82 @@ mod tests {
             )
         );
 
+        let mut replayed_trust_anchor = deployment.clone();
+        replayed_trust_anchor.source_trust_anchor_hash[0] ^= 0x01;
+        assert!(!sccp_source_adapter_engine_deployment_matches_material(
+            &material,
+            &replayed_trust_anchor,
+        ));
+        assert!(!sccp_source_chain_proof_matches_adapter_deployment(
+            &deployment_bound_proof,
+            &replayed_trust_anchor,
+        ));
+        assert!(
+            !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                SCCP_DOMAIN_ETH,
+                &material,
+                &replayed_trust_anchor,
+            ),
+            "deployment readiness must reject replayed source trust anchors"
+        );
+
+        let mut replayed_inclusion = deployment.clone();
+        replayed_inclusion.message_inclusion_verifier_hash[0] ^= 0x01;
+        assert!(!sccp_source_adapter_engine_deployment_matches_material(
+            &material,
+            &replayed_inclusion,
+        ));
+        assert!(!sccp_source_chain_proof_matches_adapter_deployment(
+            &deployment_bound_proof,
+            &replayed_inclusion,
+        ));
+        assert!(
+            !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                SCCP_DOMAIN_ETH,
+                &material,
+                &replayed_inclusion,
+            ),
+            "deployment readiness must reject replayed message-inclusion verifier hashes"
+        );
+
+        let mut replayed_finality_policy = deployment.clone();
+        replayed_finality_policy.finality_policy_hash[0] ^= 0x01;
+        assert!(!sccp_source_adapter_engine_deployment_matches_material(
+            &material,
+            &replayed_finality_policy,
+        ));
+        assert!(!sccp_source_chain_proof_matches_adapter_deployment(
+            &deployment_bound_proof,
+            &replayed_finality_policy,
+        ));
+        assert!(
+            !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                SCCP_DOMAIN_ETH,
+                &material,
+                &replayed_finality_policy,
+            ),
+            "deployment readiness must reject replayed finality-policy hashes"
+        );
+
+        let mut replayed_source_bridge_code = deployment.clone();
+        replayed_source_bridge_code.source_bridge_emitter_code_hash[0] ^= 0x01;
+        assert!(!sccp_source_adapter_engine_deployment_matches_material(
+            &material,
+            &replayed_source_bridge_code,
+        ));
+        assert!(!sccp_source_chain_proof_matches_adapter_deployment(
+            &deployment_bound_proof,
+            &replayed_source_bridge_code,
+        ));
+        assert!(
+            !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                SCCP_DOMAIN_ETH,
+                &material,
+                &replayed_source_bridge_code,
+            ),
+            "deployment readiness must reject replayed source bridge code hashes"
+        );
+
         let mut replayed_vk_hash = deployment.clone();
         replayed_vk_hash.adapter_verifier_vk_hash[0] ^= 0x01;
         assert!(!sccp_source_adapter_engine_deployment_matches_material(
@@ -63043,56 +63241,76 @@ mod tests {
             "deployment-aware Solana production admission must reject missing audit role proof capsules"
         );
 
-        let mut replayed_audit_deployment = audited_deployment.clone();
-        replayed_audit_deployment.solana_bank_fork_choice_verifier_hash[0] ^= 0x01;
-        assert!(
-            sccp_solana_full_light_client_gate_hash_from_deployment_v1(
-                &material,
-                &replayed_audit_deployment,
-            )
-            .is_some()
-        );
-        assert!(
-            sccp_source_adapter_ready_with_material_and_deployment_for_domain(
-                SCCP_DOMAIN_SOL,
-                &material,
-                &replayed_audit_deployment,
-            )
-        );
-        assert!(
-            !sccp_source_chain_proof_matches_adapter_deployment(&proof, &replayed_audit_deployment,),
-            "Solana source proofs must be bound to the exact audited full-light-client deployment"
-        );
-        assert!(
-            !verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
-                &proof,
-                &material,
-                &replayed_audit_deployment,
-            )
-        );
-        assert!(
-            verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
-                &bundle,
-                &material,
-                &replayed_audit_deployment,
-            )
-            .is_none()
-        );
+        let audit_role_replays: [(&str, fn(&mut SccpSourceAdapterEngineDeploymentV1)); 3] = [
+            ("Tower replay", |deployment| {
+                deployment.solana_tower_replay_verifier_hash[0] ^= 0x01;
+            }),
+            ("full AccountsDB lattice", |deployment| {
+                deployment.solana_full_accountsdb_lattice_verifier_hash[0] ^= 0x01;
+            }),
+            ("bank/fork-choice", |deployment| {
+                deployment.solana_bank_fork_choice_verifier_hash[0] ^= 0x01;
+            }),
+        ];
+        for (label, mutate_deployment) in audit_role_replays {
+            let mut replayed_audit_deployment = audited_deployment.clone();
+            mutate_deployment(&mut replayed_audit_deployment);
+            assert!(
+                sccp_solana_full_light_client_gate_hash_from_deployment_v1(
+                    &material,
+                    &replayed_audit_deployment,
+                )
+                .is_some(),
+                "Solana {label} replay remains a well-shaped audited deployment"
+            );
+            assert!(
+                sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                    SCCP_DOMAIN_SOL,
+                    &material,
+                    &replayed_audit_deployment,
+                ),
+                "Solana {label} replay remains generally source-adapter ready"
+            );
+            assert!(
+                !sccp_source_chain_proof_matches_adapter_deployment(
+                    &proof,
+                    &replayed_audit_deployment,
+                ),
+                "Solana source proofs must be bound to the exact audited {label} deployment"
+            );
+            assert!(
+                !verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+                    &proof,
+                    &material,
+                    &replayed_audit_deployment,
+                ),
+                "Solana production verification must reject replayed {label} audit deployments"
+            );
+            assert!(
+                verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+                    &bundle,
+                    &material,
+                    &replayed_audit_deployment,
+                )
+                .is_none(),
+                "Solana bundle admission must reject replayed {label} audit deployments"
+            );
 
-        let mut spliced_audit_proof = proof.clone();
-        mutate_source_verifier_evidence(&mut spliced_audit_proof, |evidence| {
-            evidence.source_adapter_deployment_hash =
-                sccp_source_adapter_engine_deployment_hash(&replayed_audit_deployment);
-            evidence.source_adapter_deployment_receipt_hash =
-                replayed_audit_deployment.deployment_receipt_hash;
-        });
-        assert!(
-            !sccp_source_chain_proof_matches_adapter_deployment(
-                &spliced_audit_proof,
-                &replayed_audit_deployment,
-            ),
-            "Solana deployment evidence spliced after OpenVerify binding must fail"
-        );
+            let mut spliced_audit_proof = proof.clone();
+            mutate_source_verifier_evidence(&mut spliced_audit_proof, |evidence| {
+                evidence.source_adapter_deployment_hash =
+                    sccp_source_adapter_engine_deployment_hash(&replayed_audit_deployment);
+                evidence.source_adapter_deployment_receipt_hash =
+                    replayed_audit_deployment.deployment_receipt_hash;
+            });
+            assert!(
+                !sccp_source_chain_proof_matches_adapter_deployment(
+                    &spliced_audit_proof,
+                    &replayed_audit_deployment,
+                ),
+                "Solana {label} deployment evidence spliced after OpenVerify binding must fail"
+            );
+        }
     }
 
     #[test]
@@ -63639,6 +63857,77 @@ mod tests {
             "deployment-aware TON production admission must reject missing audit role proof capsules"
         );
 
+        let audit_role_replays: [(&str, fn(&mut SccpSourceAdapterEngineDeploymentV1)); 3] = [
+            ("masterchain config", |deployment| {
+                deployment.ton_masterchain_config_verifier_hash[0] ^= 0x01;
+            }),
+            ("validator-set transition", |deployment| {
+                deployment.ton_validator_set_transition_verifier_hash[0] ^= 0x01;
+            }),
+            ("shard-accounts dictionary", |deployment| {
+                deployment.ton_shard_accounts_dictionary_verifier_hash[0] ^= 0x01;
+            }),
+        ];
+        for (label, mutate_deployment) in audit_role_replays {
+            let mut replayed_audit_deployment = audited_deployment.clone();
+            mutate_deployment(&mut replayed_audit_deployment);
+            assert!(
+                sccp_ton_full_light_client_gate_hash_from_deployment_v1(
+                    &material,
+                    &replayed_audit_deployment,
+                )
+                .is_some(),
+                "TON {label} replay remains a well-shaped audited deployment"
+            );
+            assert!(
+                sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                    SCCP_DOMAIN_TON,
+                    &material,
+                    &replayed_audit_deployment,
+                ),
+                "TON {label} replay remains generally source-adapter ready"
+            );
+            assert!(
+                !sccp_source_chain_proof_matches_adapter_deployment(
+                    &deployment_bound_proof,
+                    &replayed_audit_deployment,
+                ),
+                "TON source proofs must be bound to the exact audited {label} deployment"
+            );
+            assert!(
+                !verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+                    &deployment_bound_proof,
+                    &material,
+                    &replayed_audit_deployment,
+                ),
+                "TON production verification must reject replayed {label} audit deployments"
+            );
+            assert!(
+                verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+                    &deployment_bound_bundle,
+                    &material,
+                    &replayed_audit_deployment,
+                )
+                .is_none(),
+                "TON bundle admission must reject replayed {label} audit deployments"
+            );
+
+            let mut spliced_audit_proof = deployment_bound_proof.clone();
+            mutate_source_verifier_evidence(&mut spliced_audit_proof, |evidence| {
+                evidence.source_adapter_deployment_hash =
+                    sccp_source_adapter_engine_deployment_hash(&replayed_audit_deployment);
+                evidence.source_adapter_deployment_receipt_hash =
+                    replayed_audit_deployment.deployment_receipt_hash;
+            });
+            assert!(
+                !sccp_source_chain_proof_matches_adapter_deployment(
+                    &spliced_audit_proof,
+                    &replayed_audit_deployment,
+                ),
+                "TON {label} deployment evidence spliced after OpenVerify binding must fail"
+            );
+        }
+
         let mut wrong_source_state_deployment = deployment.clone();
         wrong_source_state_deployment.source_state_verifier_hash[0] ^= 0x01;
         assert!(!sccp_source_adapter_engine_deployment_matches_material(
@@ -64142,6 +64431,195 @@ mod tests {
             .is_some(),
             "TRON deployment-bound bundles can reach production admission only through transaction Merkle source-call proof"
         );
+
+        #[derive(Clone, Copy)]
+        struct TronDeploymentReplay {
+            source_trust_anchor_hash: H256,
+            consensus_verifier_hash: H256,
+            message_inclusion_verifier_hash: H256,
+            source_bridge_emitter_address: [u8; 20],
+            source_bridge_emitter_code_hash: H256,
+            source_bridge_network_id: H256,
+            source_bridge_owner_address: [u8; 20],
+            finality_policy_hash: H256,
+            deployment_receipt_hash: H256,
+        }
+
+        let original_tron_replay = TronDeploymentReplay {
+            source_trust_anchor_hash: sample_tron_witness_schedule_hash(),
+            consensus_verifier_hash: [0x32; 32],
+            message_inclusion_verifier_hash: [0x33; 32],
+            source_bridge_emitter_address: sample_tron_message_emitter_address(),
+            source_bridge_emitter_code_hash: sample_tron_source_bridge_code_hash(),
+            source_bridge_network_id: sample_tron_source_bridge_network_id(),
+            source_bridge_owner_address: sample_tron_source_bridge_owner_address(),
+            finality_policy_hash: [0x34; 32],
+            deployment_receipt_hash: [0x35; 32],
+        };
+        let build_replayed_tron_deployment = |replay: TronDeploymentReplay| {
+            let source_bridge_config_hash = sccp_tron_source_bridge_config_hash_v1(
+                replay.source_bridge_network_id,
+                SCCP_DOMAIN_TRON,
+                SCCP_DOMAIN_SORA,
+                replay.source_bridge_emitter_address,
+                replay.source_bridge_owner_address,
+            )
+            .expect("coherent replayed TRON source bridge config");
+            let replayed_material =
+                sccp_tron_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                    replay.source_trust_anchor_hash,
+                    replay.consensus_verifier_hash,
+                    replay.message_inclusion_verifier_hash,
+                    replay.source_bridge_emitter_address,
+                    replay.source_bridge_emitter_code_hash,
+                    replay.source_bridge_network_id,
+                    replay.source_bridge_owner_address,
+                    source_bridge_config_hash,
+                    replay.finality_policy_hash,
+                )
+                .expect("coherent replayed TRON source material");
+            assert!(sccp_source_verifier_material_is_production_ready(
+                &replayed_material,
+            ));
+            let replayed_deployment = sccp_source_adapter_engine_deployment_from_material_v1(
+                &replayed_material,
+                replay.deployment_receipt_hash,
+            )
+            .expect("coherent replayed TRON deployment");
+            assert!(sccp_source_adapter_engine_deployment_matches_material(
+                &replayed_material,
+                &replayed_deployment,
+            ));
+            assert!(
+                sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                    SCCP_DOMAIN_TRON,
+                    &replayed_material,
+                    &replayed_deployment,
+                ),
+                "replayed TRON deployment remains generally source-adapter ready"
+            );
+            assert!(
+                sccp_tron_dpos_source_gate_hash_from_deployment_v1(
+                    &replayed_material,
+                    &replayed_deployment,
+                )
+                .is_some(),
+                "replayed TRON deployment keeps a coherent DPoS/source-call gate"
+            );
+            (replayed_material, replayed_deployment)
+        };
+        let replayed_tron_deployments = [
+            (
+                "source trust anchor",
+                TronDeploymentReplay {
+                    source_trust_anchor_hash: [0x42; 32],
+                    ..original_tron_replay
+                },
+            ),
+            (
+                "consensus verifier",
+                TronDeploymentReplay {
+                    consensus_verifier_hash: [0x43; 32],
+                    ..original_tron_replay
+                },
+            ),
+            (
+                "message-inclusion verifier",
+                TronDeploymentReplay {
+                    message_inclusion_verifier_hash: [0x44; 32],
+                    ..original_tron_replay
+                },
+            ),
+            (
+                "source bridge emitter",
+                TronDeploymentReplay {
+                    source_bridge_emitter_address: [0x46; 20],
+                    ..original_tron_replay
+                },
+            ),
+            (
+                "source bridge runtime code",
+                TronDeploymentReplay {
+                    source_bridge_emitter_code_hash: [0x56; 32],
+                    ..original_tron_replay
+                },
+            ),
+            (
+                "source bridge network id",
+                TronDeploymentReplay {
+                    source_bridge_network_id: [0x57; 32],
+                    ..original_tron_replay
+                },
+            ),
+            (
+                "source bridge owner",
+                TronDeploymentReplay {
+                    source_bridge_owner_address: [0x58; 20],
+                    ..original_tron_replay
+                },
+            ),
+            (
+                "finality policy",
+                TronDeploymentReplay {
+                    finality_policy_hash: [0x36; 32],
+                    ..original_tron_replay
+                },
+            ),
+            (
+                "deployment receipt",
+                TronDeploymentReplay {
+                    deployment_receipt_hash: [0x37; 32],
+                    ..original_tron_replay
+                },
+            ),
+        ];
+        for (label, replay) in replayed_tron_deployments {
+            let (replayed_material, replayed_deployment) = build_replayed_tron_deployment(replay);
+            assert_ne!(
+                sccp_source_adapter_engine_deployment_hash(&replayed_deployment),
+                deployment_hash,
+                "TRON replay fixture for {label} must use a distinct deployment hash"
+            );
+            assert!(
+                !sccp_source_chain_proof_matches_adapter_deployment(
+                    &deployment_bound_proof,
+                    &replayed_deployment,
+                ),
+                "TRON source proofs must be bound to the exact {label} deployment"
+            );
+            assert!(
+                !verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+                    &deployment_bound_proof,
+                    &replayed_material,
+                    &replayed_deployment,
+                ),
+                "TRON production verification must reject coherent replayed {label} deployments"
+            );
+            assert!(
+                verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+                    &deployment_bound_bundle,
+                    &replayed_material,
+                    &replayed_deployment,
+                )
+                .is_none(),
+                "TRON bundle admission must reject coherent replayed {label} deployments"
+            );
+
+            let mut spliced_tron_proof = deployment_bound_proof.clone();
+            mutate_source_verifier_evidence(&mut spliced_tron_proof, |evidence| {
+                evidence.source_adapter_deployment_hash =
+                    sccp_source_adapter_engine_deployment_hash(&replayed_deployment);
+                evidence.source_adapter_deployment_receipt_hash =
+                    replayed_deployment.deployment_receipt_hash;
+            });
+            assert!(
+                !sccp_source_chain_proof_matches_adapter_deployment(
+                    &spliced_tron_proof,
+                    &replayed_deployment,
+                ),
+                "TRON {label} deployment evidence spliced after OpenVerify binding must fail"
+            );
+        }
 
         let legacy_receipt_bundle = sample_transfer_bundle(SCCP_DOMAIN_TRON, SCCP_DOMAIN_SORA, 709);
         assert!(
@@ -65884,7 +66362,13 @@ mod tests {
             b"0x52908400098527886e0f7030069857d2e4169ee7"
         ));
         assert!(!validate_evm_hex_codec(
+            b"0xDE709F2102306220921060314715629080E2FB77"
+        ));
+        assert!(!validate_evm_hex_codec(
             b"0X52908400098527886E0F7030069857D2E4169EE7"
+        ));
+        assert!(!validate_evm_hex_codec(
+            b"0x52908400098527886E0F7030069857D2E4169EEZ"
         ));
 
         let bad_evm = SccpPayloadV1::Transfer(TransferPayloadV1 {
@@ -67607,6 +68091,36 @@ mod tests {
             )
             .is_some()
         );
+        let recovered_source_proof =
+            recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .expect("recover BSC deployment-bound source proof bytes");
+        assert_eq!(recovered_source_proof.message_id, proof.message_id);
+        assert!(
+            recover_sccp_source_chain_proof_envelope_with_material_and_deployment(
+                SCCP_DOMAIN_BSC,
+                SCCP_DOMAIN_SORA,
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_some(),
+            "structural source proof byte recovery must accept exact BSC deployment material"
+        );
+        assert!(
+            recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+                SCCP_DOMAIN_ETH,
+                SCCP_DOMAIN_SORA,
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "source proof byte recovery must reject copied BSC proof bytes under an ETH source label"
+        );
         let artifact =
             build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
                 &bundle,
@@ -67639,6 +68153,35 @@ mod tests {
             ),
             "BSC local admission package must verify without outbound EVM Groth16 calldata"
         );
+        let artifact_bytes = to_bytes(&artifact).expect("encode BSC local admission artifact");
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &artifact.message_backend,
+                &artifact_bytes,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "normal recovery must keep the disabled destination manifest gate closed"
+        );
+        let recovered = recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+            &artifact.message_backend,
+            &artifact_bytes,
+            &material,
+            &deployment,
+        )
+        .expect("recover BSC deployment-bound local admission artifact");
+        assert_eq!(recovered.public_inputs, artifact.public_inputs);
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                "sccp/stark-fri-v1/eth",
+                &artifact_bytes,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "deployment-bound recovery must reject backend-label drift"
+        );
 
         let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
             SCCP_DOMAIN_BSC,
@@ -67656,6 +68199,15 @@ mod tests {
             .is_none(),
             "BSC facade must reject source proofs that omit deployment evidence"
         );
+        assert!(
+            recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &material_only_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "BSC source proof byte recovery must reject material-only proofs"
+        );
         let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_BSC, SCCP_DOMAIN_ETH, 709);
         assert!(
             verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
@@ -67666,6 +68218,15 @@ mod tests {
             .is_none(),
             "BSC facade must reject non-SORA destination bundles"
         );
+        assert!(
+            recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_target_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "BSC source proof byte recovery must reject non-SORA targets"
+        );
         let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 710);
         assert!(
             verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
@@ -67675,6 +68236,15 @@ mod tests {
             )
             .is_none(),
             "BSC facade must reject non-BSC source bundles"
+        );
+        assert!(
+            recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_source_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "BSC source proof byte recovery must reject non-BSC proof bytes"
         );
 
         let mut replayed_receipt = deployment.clone();
@@ -67695,6 +68265,183 @@ mod tests {
             ),
             "BSC local admission artifacts must reject replayed deployment receipts"
         );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact.message_backend,
+                &artifact_bytes,
+                &material,
+                &replayed_receipt,
+            )
+            .is_none(),
+            "BSC recovery must reject replayed deployment receipts"
+        );
+        assert!(
+            recover_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &replayed_receipt,
+            )
+            .is_none(),
+            "BSC source proof byte recovery must reject replayed deployment receipts"
+        );
+
+        #[derive(Clone, Copy)]
+        struct BscDeploymentReplay {
+            source_trust_anchor_hash: H256,
+            consensus_verifier_hash: H256,
+            message_inclusion_verifier_hash: H256,
+            finality_policy_hash: H256,
+            source_bridge_emitter_address: [u8; 20],
+            source_bridge_emitter_code_hash: H256,
+            deployment_receipt_hash: H256,
+        }
+
+        let original_bsc_replay = BscDeploymentReplay {
+            source_trust_anchor_hash: sample_bsc_validator_set_hash(),
+            consensus_verifier_hash: [0xB2; 32],
+            message_inclusion_verifier_hash: [0xC3; 32],
+            finality_policy_hash: [0xD4; 32],
+            source_bridge_emitter_address: sample_evm_message_emitter_address(SCCP_DOMAIN_BSC),
+            source_bridge_emitter_code_hash: sample_evm_source_bridge_code_hash(SCCP_DOMAIN_BSC),
+            deployment_receipt_hash: [0xE6; 32],
+        };
+        let build_replayed_bsc_deployment = |replay: BscDeploymentReplay| {
+            let replayed_material =
+                sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                    SCCP_DOMAIN_BSC,
+                    replay.source_trust_anchor_hash,
+                    replay.consensus_verifier_hash,
+                    replay.message_inclusion_verifier_hash,
+                    replay.finality_policy_hash,
+                    replay.source_bridge_emitter_address,
+                    replay.source_bridge_emitter_code_hash,
+                )
+                .expect("coherent replayed BSC source material");
+            assert!(sccp_source_verifier_material_is_production_ready(
+                &replayed_material,
+            ));
+            let replayed_deployment = build_sccp_bsc_mainnet_source_adapter_deployment(
+                &replayed_material,
+                replay.deployment_receipt_hash,
+            )
+            .expect("coherent replayed BSC deployment");
+            assert!(sccp_source_adapter_engine_deployment_matches_material(
+                &replayed_material,
+                &replayed_deployment,
+            ));
+            assert!(
+                sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                    SCCP_DOMAIN_BSC,
+                    &replayed_material,
+                    &replayed_deployment,
+                ),
+                "replayed BSC deployment remains generally source-adapter ready"
+            );
+            (replayed_material, replayed_deployment)
+        };
+        let replayed_bsc_deployments = [
+            (
+                "source trust anchor",
+                BscDeploymentReplay {
+                    source_trust_anchor_hash: [0x61; 32],
+                    ..original_bsc_replay
+                },
+            ),
+            (
+                "consensus verifier",
+                BscDeploymentReplay {
+                    consensus_verifier_hash: [0x62; 32],
+                    ..original_bsc_replay
+                },
+            ),
+            (
+                "message-inclusion verifier",
+                BscDeploymentReplay {
+                    message_inclusion_verifier_hash: [0x63; 32],
+                    ..original_bsc_replay
+                },
+            ),
+            (
+                "finality policy",
+                BscDeploymentReplay {
+                    finality_policy_hash: [0x64; 32],
+                    ..original_bsc_replay
+                },
+            ),
+            (
+                "source bridge emitter",
+                BscDeploymentReplay {
+                    source_bridge_emitter_address: [0x65; 20],
+                    ..original_bsc_replay
+                },
+            ),
+            (
+                "source bridge runtime code",
+                BscDeploymentReplay {
+                    source_bridge_emitter_code_hash: [0x66; 32],
+                    ..original_bsc_replay
+                },
+            ),
+            (
+                "deployment receipt",
+                BscDeploymentReplay {
+                    deployment_receipt_hash: [0x67; 32],
+                    ..original_bsc_replay
+                },
+            ),
+        ];
+        for (label, replay) in replayed_bsc_deployments {
+            let (replayed_material, replayed_deployment) = build_replayed_bsc_deployment(replay);
+            assert_ne!(
+                sccp_source_adapter_engine_deployment_hash(&replayed_deployment),
+                sccp_source_adapter_engine_deployment_hash(&deployment),
+                "BSC replay fixture for {label} must use a distinct deployment"
+            );
+            assert!(
+                !sccp_source_chain_proof_matches_adapter_deployment(&proof, &replayed_deployment),
+                "BSC source proofs must be bound to the exact {label} deployment"
+            );
+            assert!(
+                !verify_sccp_bsc_mainnet_source_chain_proof_envelope_production(
+                    &proof,
+                    &replayed_material,
+                    &replayed_deployment,
+                ),
+                "BSC production verification must reject coherent replayed {label} deployments"
+            );
+            assert!(
+                verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                    &bundle,
+                    &replayed_material,
+                    &replayed_deployment,
+                )
+                .is_none(),
+                "BSC bundle admission must reject coherent replayed {label} deployments"
+            );
+            assert!(
+                !verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                    &artifact,
+                    &replayed_material,
+                    &replayed_deployment,
+                ),
+                "BSC local admission artifacts must reject coherent replayed {label} deployments"
+            );
+
+            let mut spliced_bsc_proof = proof.clone();
+            mutate_source_verifier_evidence(&mut spliced_bsc_proof, |evidence| {
+                evidence.source_adapter_deployment_hash =
+                    sccp_source_adapter_engine_deployment_hash(&replayed_deployment);
+                evidence.source_adapter_deployment_receipt_hash =
+                    replayed_deployment.deployment_receipt_hash;
+            });
+            assert!(
+                !sccp_source_chain_proof_matches_adapter_deployment(
+                    &spliced_bsc_proof,
+                    &replayed_deployment,
+                ),
+                "BSC {label} deployment evidence spliced after OpenVerify binding must fail"
+            );
+        }
 
         let eth_material =
             sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
@@ -67816,6 +68563,36 @@ mod tests {
             )
             .is_some()
         );
+        let recovered_source_proof =
+            recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .expect("recover ETH deployment-bound source proof bytes");
+        assert_eq!(recovered_source_proof.message_id, proof.message_id);
+        assert!(
+            recover_sccp_source_chain_proof_envelope_with_material_and_deployment(
+                SCCP_DOMAIN_ETH,
+                SCCP_DOMAIN_SORA,
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_some(),
+            "structural source proof byte recovery must accept exact ETH deployment material"
+        );
+        assert!(
+            recover_sccp_source_chain_proof_envelope_for_production_with_material_and_deployment(
+                SCCP_DOMAIN_BSC,
+                SCCP_DOMAIN_SORA,
+                &bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "source proof byte recovery must reject copied ETH proof bytes under a BSC source label"
+        );
 
         let artifact =
             build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
@@ -67849,6 +68626,35 @@ mod tests {
             ),
             "ETH local admission package must verify without outbound EVM Groth16 calldata"
         );
+        let artifact_bytes = to_bytes(&artifact).expect("encode ETH local admission artifact");
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
+                &artifact.message_backend,
+                &artifact_bytes,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "normal recovery must keep the disabled destination manifest gate closed"
+        );
+        let recovered = recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+            &artifact.message_backend,
+            &artifact_bytes,
+            &material,
+            &deployment,
+        )
+        .expect("recover ETH deployment-bound local admission artifact");
+        assert_eq!(recovered.public_inputs, artifact.public_inputs);
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                "sccp/stark-fri-v1/bsc",
+                &artifact_bytes,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "deployment-bound recovery must reject backend-label drift"
+        );
 
         let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
             SCCP_DOMAIN_ETH,
@@ -67866,6 +68672,15 @@ mod tests {
             .is_none(),
             "ETH facade must reject source proofs that omit deployment evidence"
         );
+        assert!(
+            recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &material_only_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "ETH source proof byte recovery must reject material-only proofs"
+        );
         let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC, 713);
         assert!(
             verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
@@ -67876,6 +68691,15 @@ mod tests {
             .is_none(),
             "ETH facade must reject non-SORA destination bundles"
         );
+        assert!(
+            recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_target_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "ETH source proof byte recovery must reject non-SORA targets"
+        );
         let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_BSC, SCCP_DOMAIN_SORA, 714);
         assert!(
             verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
@@ -67885,6 +68709,15 @@ mod tests {
             )
             .is_none(),
             "ETH facade must reject non-ETH source bundles"
+        );
+        assert!(
+            recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_source_bundle.finality_proof,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "ETH source proof byte recovery must reject non-ETH proof bytes"
         );
 
         let mut replayed_receipt = deployment.clone();
@@ -67904,6 +68737,25 @@ mod tests {
                 &replayed_receipt,
             ),
             "ETH local admission artifacts must reject replayed deployment receipts"
+        );
+        assert!(
+            recover_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact.message_backend,
+                &artifact_bytes,
+                &material,
+                &replayed_receipt,
+            )
+            .is_none(),
+            "ETH recovery must reject replayed deployment receipts"
+        );
+        assert!(
+            recover_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &bundle.finality_proof,
+                &material,
+                &replayed_receipt,
+            )
+            .is_none(),
+            "ETH source proof byte recovery must reject replayed deployment receipts"
         );
 
         let bsc_material =

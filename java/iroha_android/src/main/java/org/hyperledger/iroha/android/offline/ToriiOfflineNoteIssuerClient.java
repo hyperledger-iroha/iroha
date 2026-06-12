@@ -222,8 +222,8 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
     body.put("local_revision", pending.preIssueRevision);
     body.put("note_commitment", request.noteCommitmentHex());
     final Object stateHash = pending.lineageState.get("server_state_hash");
-    if (stateHash instanceof String value && !value.trim().isEmpty()) {
-      body.put("local_state_hash", value.trim());
+    if (stateHash instanceof String value && !value.isEmpty()) {
+      body.put("local_state_hash", value);
     }
     addDeviceProof(
         body,

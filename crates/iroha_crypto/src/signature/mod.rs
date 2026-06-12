@@ -310,6 +310,9 @@ impl Signature {
     /// Fails if the message doesn't pass verification
     pub fn verify(&self, public_key: &PublicKey, payload: &[u8]) -> Result<(), Error> {
         let public_key_full = public_key_full_cached(public_key)?;
+        if signature_payload_is_all_zero(&self.payload) {
+            return Err(Error::BadSignature);
+        }
         match &public_key_full {
             PublicKeyFull::Ed25519(pk) => {
                 ed25519::Ed25519Sha512::verify(payload, &self.payload, pk)
@@ -358,13 +361,17 @@ impl Signature {
                 }
                 let mut raw = [0u8; Sm2Signature::LENGTH];
                 raw.copy_from_slice(self.payload.as_ref());
-                let signature = Sm2Signature::from_bytes(&raw).map_err(Error::Parse)?;
+                let signature = Sm2Signature::from_bytes(&raw).map_err(|_| Error::BadSignature)?;
                 pk.verify(payload, &signature)
             }
         }?;
 
         Ok(())
     }
+}
+
+fn signature_payload_is_all_zero(payload: &[u8]) -> bool {
+    !payload.is_empty() && payload.iter().all(|&byte| byte == 0)
 }
 
 fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore::Error> {
@@ -817,6 +824,35 @@ mod tests {
             .expect_err("malformed public key must fail verification");
 
         assert!(matches!(err, Error::Parse(_)));
+    }
+
+    #[test]
+    fn signature_verify_rejects_all_zero_payload_before_backend() {
+        let key_pair = KeyPair::try_from_seed(vec![0x44; 32], Algorithm::Ed25519)
+            .expect("seeded Ed25519 keypair");
+        let signature = Signature::from_bytes(&[0u8; 64]);
+
+        let err = signature
+            .verify(key_pair.public_key(), b"message")
+            .expect_err("all-zero signature payload must fail closed");
+
+        assert!(matches!(err, Error::BadSignature));
+    }
+
+    #[test]
+    #[cfg(feature = "sm")]
+    fn signature_verify_rejects_malformed_sm2_payload_as_bad_signature() {
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x45; 32], Algorithm::Sm2).expect("seeded SM2 keypair");
+        let mut payload = [0u8; crate::Sm2Signature::LENGTH];
+        payload[crate::Sm2Signature::LENGTH - 1] = 1;
+        let signature = Signature::from_bytes(&payload);
+
+        let err = signature
+            .verify(key_pair.public_key(), b"message")
+            .expect_err("malformed SM2 signature payload must fail closed");
+
+        assert!(matches!(err, Error::BadSignature));
     }
 
     #[test]

@@ -87,9 +87,11 @@ impl MlDsaSuite {
     /// Validate a public key encoding for this suite.
     ///
     /// # Errors
-    /// Returns an error when the byte string has the wrong encoded length.
+    /// Returns an error when the byte string has the wrong encoded length or
+    /// contains inert all-zero key material.
     pub fn validate_public_key(self, bytes: &[u8]) -> Result<(), MlDsaError> {
-        validate_mldsa_public_key_len(self, bytes)
+        validate_mldsa_public_key_len(self, bytes)?;
+        validate_mldsa_material_not_all_zero(self, self.public_key_kind(), bytes)
     }
 
     /// Validate a secret key encoding for this suite.
@@ -98,6 +100,8 @@ impl MlDsaSuite {
     /// Returns an error when the byte string has the wrong encoded length or
     /// internally inconsistent public material.
     pub fn validate_secret_key(self, bytes: &[u8]) -> Result<(), MlDsaError> {
+        validate_mldsa_secret_key_len(self, bytes)?;
+        validate_mldsa_material_not_all_zero(self, self.secret_key_kind(), bytes)?;
         backend::validate_secret_key(self, bytes)
     }
 
@@ -107,15 +111,19 @@ impl MlDsaSuite {
     /// Returns an error when the secret key is malformed or internally
     /// inconsistent.
     pub fn public_key_from_secret_key(self, bytes: &[u8]) -> Result<Vec<u8>, MlDsaError> {
+        validate_mldsa_secret_key_len(self, bytes)?;
+        validate_mldsa_material_not_all_zero(self, self.secret_key_kind(), bytes)?;
         backend::public_key_from_secret_key(self, bytes)
     }
 
     /// Validate a detached signature encoding for this suite.
     ///
     /// # Errors
-    /// Returns an error when the byte string has the wrong encoded length.
+    /// Returns an error when the byte string has the wrong encoded length or
+    /// contains inert all-zero signature material.
     pub fn validate_signature(self, bytes: &[u8]) -> Result<(), MlDsaError> {
-        validate_mldsa_signature_len(self, bytes)
+        validate_mldsa_signature_len(self, bytes)?;
+        validate_mldsa_material_not_all_zero(self, self.signature_kind(), bytes)
     }
 
     const fn public_key_kind(self) -> &'static str {
@@ -215,6 +223,14 @@ pub enum MlDsaError {
         /// Identifier of the malformed secret-key component.
         kind: &'static str,
     },
+    /// Encoded material is length-valid but inert.
+    #[error("{suite:?} {kind} must not be all zero")]
+    InertKeyMaterial {
+        /// Suite identifier.
+        suite: MlDsaSuite,
+        /// Identifier of the inert material.
+        kind: &'static str,
+    },
     /// Hedged RNG seed construction failed.
     #[error(transparent)]
     Rng(#[from] RngError),
@@ -255,6 +271,30 @@ fn validate_mldsa_len(
             },
         ))
     }
+}
+
+fn validate_mldsa_material_not_all_zero(
+    suite: MlDsaSuite,
+    kind: &'static str,
+    bytes: &[u8],
+) -> Result<(), MlDsaError> {
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(MlDsaError::InertKeyMaterial { suite, kind });
+    }
+    Ok(())
+}
+
+fn validate_mldsa_seed_material_not_all_zero(
+    suite: MlDsaSuite,
+    seed: &HedgedRngSeed,
+) -> Result<(), MlDsaError> {
+    if seed.is_all_zero() {
+        return Err(MlDsaError::InertKeyMaterial {
+            suite,
+            kind: "ML-DSA seed material",
+        });
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Error)]
@@ -309,12 +349,14 @@ pub fn generate_mldsa_keypair_from_rng<R: TryCryptoRng + ?Sized>(
 /// Deterministically generate an ML-DSA keypair from explicit seed material.
 ///
 /// # Errors
-/// Returns backend encoding errors.
+/// Returns an error when seed material is all zero, or when generated material
+/// fails backend validation.
 pub fn generate_mldsa_keypair_from_seed(
     suite: MlDsaSuite,
     seed: HedgedRngSeed,
     personalization: &[u8],
 ) -> Result<MlDsaKeyPair, MlDsaError> {
+    validate_mldsa_seed_material_not_all_zero(suite, &seed)?;
     let mut rng = deterministic_chacha20_rng(seed, personalization);
     generate_mldsa_keypair(suite, &mut rng)
 }
@@ -388,8 +430,8 @@ pub fn verify_mldsa(
     if context.len() > ML_DSA_CONTEXT_MAX_LEN {
         return Err(MlDsaError::ContextTooLong { len: context.len() });
     }
-    validate_mldsa_public_key_len(suite, public_key)?;
-    validate_mldsa_signature_len(suite, signature)?;
+    suite.validate_public_key(public_key)?;
+    suite.validate_signature(signature)?;
     match suite {
         MlDsaSuite::MlDsa44 => {
             let pk = mldsa44::PublicKey::from_bytes(public_key)
@@ -497,6 +539,31 @@ mod tests {
 
     impl TryCryptoRng for FailingPqSeedRng {}
 
+    struct FixedPqSeedRng {
+        seed: [u8; 32],
+    }
+
+    impl TryRngCore for FixedPqSeedRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes(self.seed[..4].try_into().unwrap()))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes(self.seed[..8].try_into().unwrap()))
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            for (index, byte) in dst.iter_mut().enumerate() {
+                *byte = self.seed[index % self.seed.len()];
+            }
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedPqSeedRng {}
+
     fn seeded_keypair(suite: MlDsaSuite, seed: u8, personalization: &'static [u8]) -> MlDsaKeyPair {
         generate_mldsa_keypair_from_seed(
             suite,
@@ -510,6 +577,19 @@ mod tests {
         match err {
             MlDsaError::SecretKeyMismatch { .. } => {}
             other => panic!("expected secret-key mismatch, got {other:?}"),
+        }
+    }
+
+    fn assert_inert_key_material(err: MlDsaError, suite: MlDsaSuite, expected_kind_fragment: &str) {
+        match err {
+            MlDsaError::InertKeyMaterial {
+                suite: actual,
+                kind,
+            } => {
+                assert_eq!(actual.suite_id(), suite.suite_id());
+                assert!(kind.contains(expected_kind_fragment));
+            }
+            other => panic!("expected inert ML-DSA material, got {other:?}"),
         }
     }
 
@@ -583,6 +663,16 @@ mod tests {
     }
 
     #[test]
+    fn from_rng_keypair_rejects_all_zero_seed_material() {
+        let mut rng = FixedPqSeedRng { seed: [0_u8; 32] };
+        match generate_mldsa_keypair_from_rng(MlDsaSuite::MlDsa44, &mut rng) {
+            Err(MlDsaError::Rng(RngError)) => {}
+            Ok(_) => panic!("ML-DSA keypair all-zero seed material must be rejected"),
+            Err(other) => panic!("expected ML-DSA inert seed RNG error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn from_rng_signing_reports_seed_failure() {
         let suite = MlDsaSuite::MlDsa44;
         let keypair = seeded_keypair(suite, 0xA4, b"failing-sign-seed-keygen");
@@ -592,6 +682,19 @@ mod tests {
             Err(MlDsaError::Rng(RngError)) => {}
             Ok(_) => panic!("ML-DSA signing seed RNG failure must be reported"),
             Err(other) => panic!("expected ML-DSA signing RNG error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_rng_signing_rejects_all_zero_seed_material() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = seeded_keypair(suite, 0xA5, b"inert-sign-seed-keygen");
+        let mut rng = FixedPqSeedRng { seed: [0_u8; 32] };
+
+        match sign_mldsa_from_rng(suite, keypair.secret_key(), b"", b"message", &mut rng) {
+            Err(MlDsaError::Rng(RngError)) => {}
+            Ok(_) => panic!("ML-DSA signing all-zero seed material must be rejected"),
+            Err(other) => panic!("expected ML-DSA inert signing seed error, got {other:?}"),
         }
     }
 
@@ -610,6 +713,33 @@ mod tests {
 
             assert_eq!(first.public_key(), second.public_key());
             assert_eq!(first.secret_key(), second.secret_key());
+        }
+    }
+
+    #[test]
+    fn seeded_keypair_rejects_all_zero_seed_material() {
+        for suite in [
+            MlDsaSuite::MlDsa44,
+            MlDsaSuite::MlDsa65,
+            MlDsaSuite::MlDsa87,
+        ] {
+            let err = generate_mldsa_keypair_from_seed(
+                suite,
+                HedgedRngSeed::from_entropy([0_u8; 32]),
+                b"seeded-keygen",
+            )
+            .expect_err("all-zero ML-DSA seed material must be rejected");
+
+            match err {
+                MlDsaError::InertKeyMaterial {
+                    suite: actual,
+                    kind,
+                } => {
+                    assert_eq!(actual.suite_id(), suite.suite_id());
+                    assert_eq!(kind, "ML-DSA seed material");
+                }
+                other => panic!("unexpected ML-DSA all-zero seed error: {other:?}"),
+            }
         }
     }
 
@@ -854,6 +984,18 @@ mod tests {
     fn suite_validation_helpers_reject_wrong_lengths() {
         let suite = MlDsaSuite::MlDsa65;
         let keypair = seeded_keypair(suite, 0xD5, b"validation-helper-keygen");
+        let mut rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xD5; 32]),
+            b"validation-helper-sign",
+        );
+        let signature = sign_mldsa(
+            suite,
+            keypair.secret_key(),
+            b"",
+            b"validation-helper",
+            &mut rng,
+        )
+        .expect("generated signature");
 
         for (label, err) in [
             (
@@ -876,15 +1018,100 @@ mod tests {
             }
         }
 
-        validate_mldsa_public_key(suite, &vec![0u8; suite.public_key_len()])
-            .expect("canonical public key length");
+        validate_mldsa_public_key(suite, keypair.public_key()).expect("generated public key");
         validate_mldsa_secret_key(suite, keypair.secret_key()).expect("generated secret key");
-        validate_mldsa_signature(suite, &vec![0u8; suite.signature_len()])
-            .expect("canonical signature length");
+        validate_mldsa_signature(suite, signature.as_bytes()).expect("generated signature");
 
         let err = validate_mldsa_secret_key(suite, &vec![0u8; suite.secret_key_len()])
             .expect_err("length-valid but inconsistent secret key must fail");
-        assert_secret_key_mismatch(err);
+        assert_inert_key_material(err, suite, "secret key");
+    }
+
+    #[test]
+    fn validation_rejects_all_zero_public_key_material() {
+        for suite in [
+            MlDsaSuite::MlDsa44,
+            MlDsaSuite::MlDsa65,
+            MlDsaSuite::MlDsa87,
+        ] {
+            let keypair = seeded_keypair(
+                suite,
+                suite.suite_id().wrapping_add(0x11),
+                b"zero-public-keypair",
+            );
+            let mut rng = deterministic_chacha20_rng(
+                HedgedRngSeed::from_entropy([suite.suite_id().wrapping_add(0x12); 32]),
+                b"zero-public-sign",
+            );
+            let message = b"zero public key";
+            let signature = sign_mldsa(suite, keypair.secret_key(), b"", message, &mut rng)
+                .expect("signature succeeds");
+            let public_key = vec![0u8; suite.public_key_len()];
+
+            let err = validate_mldsa_public_key(suite, &public_key)
+                .expect_err("all-zero public key material must fail");
+            assert_inert_key_material(err, suite, "public key");
+
+            let err = verify_mldsa(suite, &public_key, b"", message, signature.as_bytes())
+                .expect_err("all-zero public key must fail before verification");
+            assert_inert_key_material(err, suite, "public key");
+        }
+    }
+
+    #[test]
+    fn validation_rejects_all_zero_secret_key_material() {
+        for suite in [
+            MlDsaSuite::MlDsa44,
+            MlDsaSuite::MlDsa65,
+            MlDsaSuite::MlDsa87,
+        ] {
+            let secret_key = vec![0u8; suite.secret_key_len()];
+
+            let err = validate_mldsa_secret_key(suite, &secret_key)
+                .expect_err("all-zero secret key material must fail validation");
+            assert_inert_key_material(err, suite, "secret key");
+
+            let err = mldsa_public_key_from_secret_key(suite, &secret_key)
+                .expect_err("all-zero secret key must not reconstruct public material");
+            assert_inert_key_material(err, suite, "secret key");
+
+            let mut rng = deterministic_chacha20_rng(
+                HedgedRngSeed::from_entropy([suite.suite_id().wrapping_add(0x13); 32]),
+                b"zero-secret-sign",
+            );
+            let err = sign_mldsa(suite, &secret_key, b"", b"message", &mut rng)
+                .expect_err("all-zero secret key must fail direct signing");
+            assert_inert_key_material(err, suite, "secret key");
+
+            let mut failing_rng = FailingPqSeedRng;
+            let err = sign_mldsa_from_rng(suite, &secret_key, b"", b"message", &mut failing_rng)
+                .expect_err("all-zero secret key must fail before RNG seeding");
+            assert_inert_key_material(err, suite, "secret key");
+        }
+    }
+
+    #[test]
+    fn validation_rejects_all_zero_signature_material() {
+        for suite in [
+            MlDsaSuite::MlDsa44,
+            MlDsaSuite::MlDsa65,
+            MlDsaSuite::MlDsa87,
+        ] {
+            let keypair = seeded_keypair(
+                suite,
+                suite.suite_id().wrapping_add(0x14),
+                b"zero-signature-keypair",
+            );
+            let signature = vec![0u8; suite.signature_len()];
+
+            let err = validate_mldsa_signature(suite, &signature)
+                .expect_err("all-zero signature material must fail");
+            assert_inert_key_material(err, suite, "signature");
+
+            let err = verify_mldsa(suite, keypair.public_key(), b"", b"message", &signature)
+                .expect_err("all-zero signature must fail before verification");
+            assert_inert_key_material(err, suite, "signature");
+        }
     }
 
     #[test]

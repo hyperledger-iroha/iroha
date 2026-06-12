@@ -65,29 +65,47 @@ public sealed class OfflineCashLifecycleTests
             AssetDefinitionId: "pkr#sbp",
             OfflinePaymentsEnabled: true,
             IssuerPublicKeyBase64: "issuer-key",
-            BridgeAbiVersion: 7,
+            NativeBridgeAbiVersion: 7,
             CreatedAtMs: 100,
             ExpiresAtMs: 1_000);
 
-        snapshot.RequireUsableForOfflineExchange(nowMs: 999, requiredBridgeAbiVersion: 7);
+        snapshot.RequireUsableForOfflineExchange(nowMs: 999, requiredNativeBridgeAbiVersion: 7);
 
         var missingKey = snapshot with { IssuerPublicKeyBase64 = " " };
         var error = Assert.Throws<OfflineCashConfigurationSnapshotException>(
             () => missingKey.RequireUsableForOfflineExchange(nowMs: 200));
         Assert.Equal("missing_issuer_public_key", error.Code);
 
+        foreach (var issuerKey in new[]
+        {
+            "",
+            " issuer-key",
+            "issuer-key ",
+            "issuer key",
+            "issuer-key\n",
+            "issuer-key\u2603",
+        })
+        {
+            var noncanonical = snapshot with { IssuerPublicKeyBase64 = issuerKey };
+            error = Assert.Throws<OfflineCashConfigurationSnapshotException>(
+                () => noncanonical.RequireUsableForOfflineExchange(
+                    nowMs: 200,
+                    requiredNativeBridgeAbiVersion: 7));
+            Assert.Equal("missing_issuer_public_key", error.Code);
+        }
+
         var disabled = snapshot with { OfflinePaymentsEnabled = false };
         error = Assert.Throws<OfflineCashConfigurationSnapshotException>(
-            () => disabled.RequireUsableForOfflineExchange(nowMs: 200, requiredBridgeAbiVersion: 7));
+            () => disabled.RequireUsableForOfflineExchange(nowMs: 200, requiredNativeBridgeAbiVersion: 7));
         Assert.Equal("offline_payments_disabled", error.Code);
 
-        var staleAbi = snapshot with { BridgeAbiVersion = 6 };
+        var staleAbi = snapshot with { NativeBridgeAbiVersion = 6 };
         error = Assert.Throws<OfflineCashConfigurationSnapshotException>(
-            () => staleAbi.RequireUsableForOfflineExchange(nowMs: 200, requiredBridgeAbiVersion: 7));
-        Assert.Equal("unsupported_bridge_abi", error.Code);
+            () => staleAbi.RequireUsableForOfflineExchange(nowMs: 200, requiredNativeBridgeAbiVersion: 7));
+        Assert.Equal("unsupported_native_bridge_abi", error.Code);
 
         error = Assert.Throws<OfflineCashConfigurationSnapshotException>(
-            () => snapshot.RequireUsableForOfflineExchange(nowMs: 1_000, requiredBridgeAbiVersion: 7));
+            () => snapshot.RequireUsableForOfflineExchange(nowMs: 1_000, requiredNativeBridgeAbiVersion: 7));
         Assert.Equal("expired", error.Code);
     }
 

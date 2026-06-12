@@ -1,4 +1,4 @@
-"""Jindo lattice PCS SDK dev-fixture helpers."""
+"""Jindo lattice PCS SDK helpers."""
 
 from __future__ import annotations
 
@@ -16,15 +16,18 @@ from .verange import (
     _canonical_json_bytes,
     _decode_privacy_proof_envelope_internal,
     _fixed_bytes,
+    _normalize_backend,
     _normalize_backend_allowing_unsupported,
     _positive_u32,
     _read_single_alias,
     _reject_unknown_fields,
     _require_mapping,
     _require_non_blank_string,
+    _require_plain_mapping,
 )
 
 JINDO_BACKEND = "unsupported"
+JINDO_PRODUCTION_BACKEND = "lattice-pcs-sis"
 JINDO_CIRCUIT_ID = "lattice/jindo-pcs-v0:jindo_lattice_pcs_zk_v0"
 JINDO_DOMAIN_SEPARATOR = "iroha:jindo:lattice-pcs:v0"
 JINDO_DEV_PROOF_PREFIX = b"iroha:jindo:dev-fixture:v0:"
@@ -35,15 +38,20 @@ JINDO_MAX_PARAMETER_BYTES = 1024 * 1024
 
 __all__ = [
     "JINDO_BACKEND",
+    "JINDO_PRODUCTION_BACKEND",
     "JINDO_CIRCUIT_ID",
     "JINDO_DOMAIN_SEPARATOR",
     "build_jindo_lattice_public_inputs",
     "build_jindo_lattice_proof_envelope",
+    "build_jindo_lattice_proof_v0",
     "build_jindo_lattice_dev_proof_fixture",
+    "verify_jindo_polynomial_commitment_v0",
     "verify_jindo_lattice_proof_locally",
     "buildJindoLatticePublicInputs",
     "buildJindoLatticeProofEnvelope",
+    "buildJindoLatticeProofV0",
     "buildJindoLatticeDevProofFixture",
+    "verifyJindoPolynomialCommitmentV0",
     "verifyJindoLatticeProofLocally",
 ]
 
@@ -65,6 +73,16 @@ def _normalize_backend_tag(value: Any, context: str) -> str:
             f"{context} must remain unsupported until a production Jindo backend is registered"
         )
     return JINDO_BACKEND
+
+
+def _normalize_production_backend_tag(value: Any, context: str) -> str:
+    _tag, decoded = _normalize_backend(
+        JINDO_PRODUCTION_BACKEND if value is _MISSING or value is None else value,
+        context,
+    )
+    if decoded != "LatticePcsSis":
+        raise ValueError(f"{context} must identify the production Jindo LatticePcsSis backend")
+    return JINDO_PRODUCTION_BACKEND
 
 
 def _normalize_circuit_id(value: Any, context: str) -> str:
@@ -474,7 +492,7 @@ _COMMON_FIELDS = {
 def build_jindo_lattice_public_inputs(options: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize Jindo lattice PCS public inputs for SDK/dev-fixture use."""
 
-    source = _require_mapping(options, "jindoLatticePublicInputs")
+    source = _require_plain_mapping(options, "jindoLatticePublicInputs")
     _reject_unknown_fields(source, _COMMON_FIELDS, "jindoLatticePublicInputs")
     parts = _public_input_parts(source, "jindoLatticePublicInputs")
     return {
@@ -585,6 +603,7 @@ def _proof_parts(
     context: str,
     *,
     require_proof_bytes: bool,
+    production_backend: bool = False,
 ) -> dict[str, Any]:
     _backend_key, backend_value = _read_single_alias(
         source,
@@ -626,7 +645,11 @@ def _proof_parts(
         f"{context}.maxProofBytes",
     )
     return {
-        "backend": _normalize_backend_tag(backend_value, f"{context}.backendTag"),
+        "backend": (
+            _normalize_production_backend_tag(backend_value, f"{context}.backendTag")
+            if production_backend
+            else _normalize_backend_tag(backend_value, f"{context}.backendTag")
+        ),
         "circuit_id": _normalize_circuit_id(circuit_value, f"{context}.circuitId"),
         "vk_hash": _fixed_bytes(vk_hash_value, f"{context}.vkHash", 32, nonzero=True),
         "inputs": parts,
@@ -677,7 +700,7 @@ _ENVELOPE_FIELDS = {
 def build_jindo_lattice_proof_envelope(options: Mapping[str, Any]) -> bytes:
     """Build canonical OpenVerifyEnvelope bytes for a prepared Jindo proof."""
 
-    source = _require_mapping(options, "jindoLatticeProofEnvelope")
+    source = _require_plain_mapping(options, "jindoLatticeProofEnvelope")
     _reject_unknown_fields(source, _ENVELOPE_FIELDS, "jindoLatticeProofEnvelope")
     parts = _proof_parts(source, "jindoLatticeProofEnvelope", require_proof_bytes=True)
     return _build_privacy_proof_envelope_internal(
@@ -692,6 +715,33 @@ def build_jindo_lattice_proof_envelope(options: Mapping[str, Any]) -> bytes:
             "maxPublicInputBytes": parts["max_public_input_bytes"],
         },
         allow_unsupported_backend=True,
+    )
+
+
+def build_jindo_lattice_proof_v0(options: Mapping[str, Any]) -> bytes:
+    """Build canonical production Jindo lattice PCS proof envelope bytes."""
+
+    source = _require_plain_mapping(options, "jindoLatticeProofV0")
+    _reject_unknown_fields(source, _ENVELOPE_FIELDS, "jindoLatticeProofV0")
+    parts = _proof_parts(
+        source,
+        "jindoLatticeProofV0",
+        require_proof_bytes=True,
+        production_backend=True,
+    )
+    if parts["proof_bytes"].startswith(JINDO_DEV_PROOF_PREFIX):
+        raise ValueError("jindoLatticeProofV0.proofBytes must not contain a dev fixture proof")
+    return _build_privacy_proof_envelope_internal(
+        {
+            "backend": parts["backend"],
+            "circuitId": parts["circuit_id"],
+            "vkHash": parts["vk_hash"],
+            "publicInputs": parts["public_input_bytes"],
+            "proofBytes": parts["proof_bytes"],
+            "aux": source.get("aux", b""),
+            "maxProofBytes": parts["max_proof_bytes"],
+            "maxPublicInputBytes": parts["max_public_input_bytes"],
+        },
     )
 
 
@@ -715,7 +765,7 @@ def _dev_proof_bytes(
 def build_jindo_lattice_dev_proof_fixture(options: Mapping[str, Any]) -> dict[str, Any]:
     """Build a deterministic Jindo lattice PCS dev proof fixture."""
 
-    source = _require_mapping(options, "jindoLatticeDevProofFixture")
+    source = _require_plain_mapping(options, "jindoLatticeDevProofFixture")
     _reject_unknown_fields(
         source,
         _ENVELOPE_FIELDS - {"proofBytes", "proof_bytes", "proof"},
@@ -901,7 +951,7 @@ def verify_jindo_lattice_proof_locally(options: Any) -> dict[str, Any]:
     """Verify a deterministic Jindo lattice PCS dev fixture."""
 
     if isinstance(options, Mapping):
-        source = options
+        source = _require_plain_mapping(options, "jindoLatticeLocalVerification")
     else:
         source = {"envelope": options}
     _reject_unknown_fields(
@@ -962,7 +1012,66 @@ def verify_jindo_lattice_proof_locally(options: Any) -> dict[str, Any]:
     }
 
 
+def verify_jindo_polynomial_commitment_v0(options: Any) -> dict[str, Any]:
+    """Validate a production Jindo lattice PCS proof envelope binding."""
+
+    if isinstance(options, Mapping):
+        source = _require_plain_mapping(options, "jindoPolynomialCommitmentV0")
+    else:
+        source = {"envelope": options}
+    _reject_unknown_fields(
+        source,
+        _COMMON_FIELDS | {"envelope", "proofEnvelope", "proof_envelope", "bytes"},
+        "jindoPolynomialCommitmentV0",
+    )
+    _envelope_key, envelope_value = _read_single_alias(
+        source,
+        ("envelope", "proofEnvelope", "proof_envelope", "bytes"),
+        "jindoPolynomialCommitmentV0.envelope",
+        "proof envelope",
+    )
+    decoded = _decode_privacy_proof_envelope_internal(envelope_value)
+    if decoded["backend"] != "LatticePcsSis":
+        raise ValueError(
+            "jindoPolynomialCommitmentV0.envelope.backend must be LatticePcsSis"
+        )
+    circuit_id = _normalize_circuit_id(
+        decoded["circuit_id"],
+        "jindoPolynomialCommitmentV0.envelope.circuitId",
+    )
+    vk_hash = _fixed_bytes(
+        decoded["vk_hash"],
+        "jindoPolynomialCommitmentV0.envelope.vkHash",
+        32,
+        nonzero=True,
+    )
+    public_inputs = _parse_public_inputs(
+        decoded["public_inputs"],
+        "jindoPolynomialCommitmentV0.publicInputs",
+    )
+    _ensure_expectations(source, public_inputs, "jindoPolynomialCommitmentV0")
+    if decoded["proof_bytes"].startswith(JINDO_DEV_PROOF_PREFIX):
+        raise ValueError(
+            "jindoPolynomialCommitmentV0 proof bytes must not contain a Jindo dev fixture"
+        )
+    return {
+        "ok": True,
+        "production": True,
+        "kind": "jindo-lattice-pcs-zk-v0",
+        "backend": "LatticePcsSis",
+        "circuit_id": circuit_id,
+        "verifier_key_hash": vk_hash.hex(),
+        "public_inputs": public_inputs,
+        "public_input_bytes": len(decoded["public_inputs"]),
+        "proof_bytes": len(decoded["proof_bytes"]),
+        "aux_bytes": len(decoded["aux"]),
+        "parameter_hash": public_inputs["parameter_hash"],
+    }
+
+
 buildJindoLatticePublicInputs = build_jindo_lattice_public_inputs
 buildJindoLatticeProofEnvelope = build_jindo_lattice_proof_envelope
+buildJindoLatticeProofV0 = build_jindo_lattice_proof_v0
 buildJindoLatticeDevProofFixture = build_jindo_lattice_dev_proof_fixture
+verifyJindoPolynomialCommitmentV0 = verify_jindo_polynomial_commitment_v0
 verifyJindoLatticeProofLocally = verify_jindo_lattice_proof_locally

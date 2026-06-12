@@ -47,9 +47,9 @@ KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES = {
         KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME
     ),
 }
-KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6
-KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7
-KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xFFFF_FFFF
+KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6
+KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7
+KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION = 0xFFFF_FFFF
 KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1"
 KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT = (
     "recursive compact Kagemusha payment-token multi-hop proving requires the "
@@ -135,8 +135,8 @@ __all__ = [
     "KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
-    "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
-    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
@@ -226,7 +226,7 @@ _NATIVE_METHODS = (
     "kagemusha_recursive_spend_verify",
     "kagemusha_recursive_spend_redeem",
 )
-_RECURSIVE_SPEND_ABI_VERSION_METHOD = "kagemusha_recursive_spend_bridge_abi_version"
+_RECURSIVE_SPEND_ABI_VERSION_METHOD = "kagemusha_recursive_spend_native_bridge_abi_version"
 _MALFORMED_NATIVE_PROBE_ARCHIVE = b"\x00"
 _KAGEMUSHA_NORITO_HEADER_BYTES = 40
 _KAGEMUSHA_NORITO_MAX_HEADER_PADDING_BYTES = 64
@@ -430,7 +430,7 @@ def _kagemusha_lineage_verifier_key_envelope_circuit_id(
                 or any(byte < 0x20 or byte > 0x7E for byte in payload)
             ):
                 raise ValueError("lineage_verifier_key")
-            circuit_id = payload.decode("utf-8").strip()
+            circuit_id = payload.decode("utf-8")
             if not circuit_id:
                 raise ValueError("lineage_verifier_key")
         elif tag == _KAGEMUSHA_ZK1_TLV_IPAK:
@@ -650,7 +650,7 @@ def _recursive_spend_abi_version(module: object) -> int | None:
         isinstance(version, bool)
         or not isinstance(version, int)
         or version < 0
-        or version > KAGEMUSHA_MAX_BRIDGE_ABI_VERSION
+        or version > KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION
     ):
         return None
     return version
@@ -660,7 +660,7 @@ def _has_recursive_spend_abi(module: object) -> bool:
     version = _recursive_spend_abi_version(module)
     return (
         version is not None
-        and version >= KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION
+        and version >= KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
     )
 
 
@@ -668,7 +668,7 @@ def _has_recursive_compact_abi(module: object) -> bool:
     version = _recursive_spend_abi_version(module)
     return (
         version is not None
-        and version >= KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION
+        and version >= KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
     )
 
 
@@ -692,14 +692,14 @@ def _require_complete_recursive_spend_surface(module: object) -> None:
     if not _has_recursive_spend_abi(module):
         raise RuntimeError(
             "recursive Kagemusha support requires native bridge ABI "
-            f"{KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION}"
+            f"{KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION}"
         )
     missing = _missing_recursive_spend_methods(module)
     if missing:
         missing_list = ", ".join(missing)
         raise RuntimeError(
             "recursive Kagemusha support requires the complete native bridge ABI "
-            f"{KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION} surface; "
+            f"{KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION} surface; "
             f"missing: {missing_list}"
         )
     if not _probe_recursive_spend_surface(module):
@@ -1298,7 +1298,7 @@ def _prove_verified_recursive_compact_payment_token(
     if not is_kagemusha_recursive_compact_payment_token_prover_available():
         raise RuntimeError(
             "recursive compact Kagemusha payment-token prover requires native "
-            "bridge ABI 7 with compact prover and verifier symbols"
+            "native bridge ABI 7 with compact prover and verifier symbols"
         )
     return _call_native_archive_method(
         _RECURSIVE_COMPACT_TOKEN_METHOD,
@@ -1325,7 +1325,7 @@ def _verify_recursive_compact_payment_token(
     if not is_kagemusha_recursive_compact_payment_token_verifier_available():
         raise RuntimeError(
             "recursive compact Kagemusha payment-token verifier requires native "
-            "bridge ABI 7 with the compact verifier symbol"
+            "native bridge ABI 7 with the compact verifier symbol"
         )
     result = _native_method(_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD)(
         compact_token,
@@ -1464,12 +1464,11 @@ def _normalize_kagemusha_instruction_archive_type(
 ) -> KagemushaInstructionArchiveType:
     if not isinstance(instruction_type, str):
         raise TypeError("instruction_type must be a string")
-    normalized = instruction_type.strip()
-    if normalized not in KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES:
+    if instruction_type not in KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES:
         raise ValueError(
             "instruction_type must be KagemushaTransfer or RedeemKagemushaRecursive"
         )
-    return normalized  # type: ignore[return-value]
+    return instruction_type  # type: ignore[return-value]
 
 
 def kagemusha_instruction_archive_instruction(

@@ -507,9 +507,7 @@ impl AdmissionTokenVerifier {
         self.suite
             .validate_public_key(&self.public_key)
             .map_err(VerifyError::Signature)?;
-        self.suite
-            .validate_signature(token.signature())
-            .map_err(VerifyError::Signature)
+        validate_token_signature_material(self.suite, token.signature())
     }
 }
 
@@ -989,6 +987,20 @@ fn unix_time_from_secs(secs: u64) -> Option<SystemTime> {
     UNIX_EPOCH.checked_add(Duration::from_secs(secs))
 }
 
+fn validate_token_signature_material(
+    suite: MlDsaSuite,
+    signature: &[u8],
+) -> Result<(), VerifyError> {
+    let expected = suite.signature_len();
+    if signature.len() == expected && signature.iter().all(|&byte| byte == 0) {
+        return Err(VerifyError::InertSignature);
+    }
+    suite
+        .validate_signature(signature)
+        .map_err(VerifyError::Signature)?;
+    Ok(())
+}
+
 fn fill_random<R: TryCryptoRng>(
     rng: &mut R,
     operation: &'static str,
@@ -998,7 +1010,14 @@ fn fill_random<R: TryCryptoRng>(
         .map_err(|err| MintError::RandomBytes {
             operation,
             message: err.to_string(),
-        })
+        })?;
+    if dest.iter().all(|&byte| byte == 0) {
+        return Err(MintError::RandomBytes {
+            operation,
+            message: "rng returned all-zero material".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Errors surfaced while decoding a token frame.
@@ -1125,6 +1144,9 @@ pub enum VerifyError {
     /// Signature verification failed.
     #[error("ml-dsa verification failed: {0}")]
     Signature(MlDsaError),
+    /// Signature material was an inert all-zero placeholder.
+    #[error("admission token signature material must not be all zero")]
+    InertSignature,
     /// Replay store failure.
     #[error("token replay store error: {0}")]
     Store(TokenStoreError),
@@ -1203,6 +1225,29 @@ mod tests {
     }
 
     impl TryCryptoRng for FailingTryRng {}
+
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedTryRng {}
 
     #[test]
     fn signing_body_matches_legacy_contiguous_layout() {
@@ -1701,6 +1746,23 @@ mod tests {
     }
 
     #[test]
+    fn fill_random_rejects_all_zero_nonce_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+        let mut nonce = [0u8; 16];
+
+        let err = fill_random(&mut rng, "minting admission token nonce", &mut nonce)
+            .expect_err("all-zero token nonce material must fail");
+
+        match err {
+            MintError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "minting admission token nonce");
+                assert!(message.contains("all-zero material"));
+            }
+            other => panic!("expected all-zero nonce RandomBytes error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn decode_rejects_zero_ttl() {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
@@ -1957,6 +2019,89 @@ mod tests {
             .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
             .expect_err("bad signature length must fail");
         assert_mldsa_bad_encoding(err, "signature");
+        assert_eq!(store.lock().expect("store lock").len(now), 0);
+    }
+
+    #[test]
+    fn verifier_rejects_short_all_zero_signature_as_bad_encoding() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = generate_mldsa_keypair(suite).expect("ML-DSA keypair generation");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = issued + Duration::from_secs(300);
+        let mut rng = StdRng::seed_from_u64(0x51A0);
+        let mut token = AdmissionToken::mint(
+            suite,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+        token.signature.fill(0);
+        token.signature.truncate(token.signature.len() - 1);
+
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
+        let store: Arc<Mutex<dyn TokenStore + Send>> =
+            Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+        let verifier = AdmissionTokenVerifier::new(
+            suite,
+            keypair.public_key().to_vec(),
+            Duration::from_secs(900),
+            Duration::from_secs(5),
+        )
+        .with_replay_store(store.clone());
+        let now = issued + Duration::from_secs(5);
+
+        let err = verifier
+            .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
+            .expect_err("short all-zero signature must remain a malformed signature");
+        assert_mldsa_bad_encoding(err, "signature");
+        assert_eq!(store.lock().expect("store lock").len(now), 0);
+    }
+
+    #[test]
+    fn verifier_rejects_all_zero_signature_before_backend_and_replay_store() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = generate_mldsa_keypair(suite).expect("ML-DSA keypair generation");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = issued + Duration::from_secs(300);
+        let mut rng = StdRng::seed_from_u64(0x5A);
+        let mut token = AdmissionToken::mint(
+            suite,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+        token.signature.fill(0);
+
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
+        let store: Arc<Mutex<dyn TokenStore + Send>> =
+            Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+        let verifier = AdmissionTokenVerifier::new(
+            suite,
+            keypair.public_key().to_vec(),
+            Duration::from_secs(900),
+            Duration::from_secs(5),
+        )
+        .with_replay_store(store.clone());
+        let now = issued + Duration::from_secs(5);
+
+        let err = verifier
+            .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
+            .expect_err("all-zero signature must fail before backend verification");
+        assert!(matches!(err, VerifyError::InertSignature));
         assert_eq!(store.lock().expect("store lock").len(now), 0);
     }
 

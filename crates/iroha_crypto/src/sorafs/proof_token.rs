@@ -339,6 +339,9 @@ impl ProofToken {
                     expected: SIGNATURE_LENGTH,
                     actual: sig_slice.len(),
                 })?;
+        if signature_bytes_are_all_zero(&sig_bytes) {
+            return Err(DecodeError::InertSignature);
+        }
         let signature = Signature::from_bytes(&sig_bytes);
 
         Ok(Self {
@@ -422,6 +425,9 @@ impl ProofToken {
     pub fn verify_signature(&self, verifying_key: &VerifyingKey) -> Result<(), VerificationError> {
         if verifying_key.is_weak() {
             return Err(VerificationError::InvalidSignature);
+        }
+        if signature_bytes_are_all_zero(&self.signature.to_bytes()) {
+            return Err(VerificationError::InertSignature);
         }
         let body = self
             .body_without_signature()
@@ -611,6 +617,9 @@ pub enum DecodeError {
         /// Actual bytes remaining in the frame.
         actual: usize,
     },
+    /// Signature bytes were an inert all-zero placeholder.
+    #[error("proof token signature material must not be all zero")]
+    InertSignature,
     /// Base64 payload was malformed.
     #[error("invalid base64 payload")]
     Base64,
@@ -622,6 +631,9 @@ pub enum VerificationError {
     /// Ed25519 signature did not verify with the supplied key.
     #[error("invalid proof token signature")]
     InvalidSignature,
+    /// Signature bytes were an inert all-zero placeholder.
+    #[error("proof token signature material must not be all zero")]
+    InertSignature,
     /// Secret re-computed digest did not match the token body.
     #[error("blinded digest mismatch")]
     BlindedDigestMismatch,
@@ -646,7 +658,14 @@ fn fill_random<R: TryCryptoRng>(
         .map_err(|err| MintError::RandomBytes {
             operation,
             message: err.to_string(),
-        })
+        })?;
+    if dest.iter().all(|&byte| byte == 0) {
+        return Err(MintError::RandomBytes {
+            operation,
+            message: "rng returned all-zero material".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn encode_base64_url_no_pad(bytes: &[u8]) -> String {
@@ -696,6 +715,10 @@ fn signing_message(body: &[u8]) -> Vec<u8> {
     out
 }
 
+fn signature_bytes_are_all_zero(signature: &[u8; SIGNATURE_LENGTH]) -> bool {
+    signature.iter().all(|&byte| byte == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use curve25519_dalek::{
@@ -743,6 +766,29 @@ mod tests {
     }
 
     impl TryCryptoRng for FailingTryRng {}
+
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedTryRng {}
 
     #[test]
     fn mint_roundtrip() {
@@ -806,6 +852,23 @@ mod tests {
                 assert!(message.contains("failing proof token RNG"));
             }
             other => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fill_random_rejects_all_zero_token_id_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+        let mut token_id = [0u8; 16];
+
+        let err = fill_random(&mut rng, "minting proof token id", &mut token_id)
+            .expect_err("all-zero proof token id material must fail");
+
+        match err {
+            MintError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "minting proof token id");
+                assert!(message.contains("all-zero material"));
+            }
+            other => panic!("expected all-zero token id RandomBytes error, got {other:?}"),
         }
     }
 
@@ -981,6 +1044,43 @@ mod tests {
         bytes[FRAME_MAGIC.len() + 1] = 0x80;
         let err = ProofToken::decode(&bytes).expect_err("unknown flags should fail");
         assert!(matches!(err, DecodeError::InvalidFlags(0x80)));
+    }
+
+    #[test]
+    fn decode_rejects_all_zero_signature_material() {
+        let token = ProofToken {
+            token_id: [0x24; 16],
+            moderation: ModerationAction::Block,
+            issued_at: 10,
+            expires_at: None,
+            entry_ids: vec!["denylist/entry".to_string()],
+            blinded_digest: [0x42; 32],
+            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+        };
+
+        let err = ProofToken::decode(&token.encode())
+            .expect_err("all-zero proof-token signature must fail decoding");
+
+        assert!(matches!(err, DecodeError::InertSignature));
+    }
+
+    #[test]
+    fn verify_signature_rejects_all_zero_signature_material() {
+        let token = ProofToken {
+            token_id: [0x24; 16],
+            moderation: ModerationAction::Block,
+            issued_at: 10,
+            expires_at: None,
+            entry_ids: vec!["denylist/entry".to_string()],
+            blinded_digest: [0x42; 32],
+            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+        };
+
+        let err = token
+            .verify_signature(&test_signing_key().verifying_key())
+            .expect_err("all-zero proof-token signature must fail verification");
+
+        assert!(matches!(err, VerificationError::InertSignature));
     }
 
     #[test]

@@ -853,6 +853,7 @@ class HttpClientTransport(
                 payload["creation_time_ms"] = request.creationTimeMs
             }
             if (request.feeSponsor != null) payload["fee_sponsor"] = normalizeNonBlank(request.feeSponsor, "feeSponsor")
+            if (request.memo != null) payload["memo"] = normalizeNonBlank(request.memo, "memo")
             payload["instructions"] = request.instructions.mapIndexed { index, instruction ->
                 require(instruction.isNotEmpty()) { "instructions[$index] must not be empty" }
                 Base64.getEncoder().encodeToString(instruction)

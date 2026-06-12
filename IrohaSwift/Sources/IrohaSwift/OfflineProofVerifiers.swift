@@ -40,7 +40,10 @@ public struct CounterpartyOfflineProofVerifier: CounterpartyOfflineProofVerifyin
         binding: ToriiOfflineDeviceBinding,
         expectedChallengeHashHex: String?
     ) throws {
-        switch binding.platform.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        switch try Self.supportedPlatform(
+            binding.platform,
+            error: OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
+        ) {
         case "ios":
             guard let expectedChallengeHashHex else {
                 throw OfflineProofVerifierError.invalidBinding("Missing offline device binding challenge hash.")
@@ -61,13 +64,32 @@ public struct CounterpartyOfflineProofVerifier: CounterpartyOfflineProofVerifyin
         binding: ToriiOfflineDeviceBinding,
         proof: ToriiOfflineDeviceProof
     ) throws {
-        switch binding.platform.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        switch try Self.supportedPlatform(
+            binding.platform,
+            error: OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
+        ) {
         case "ios":
             try iosVerifier.verifyDeviceProof(binding: binding, proof: proof)
         case "android":
             try androidVerifier.verifyDeviceProof(binding: binding, proof: proof)
         default:
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
+        }
+    }
+
+    private static func supportedPlatform(
+        _ value: String,
+        error: OfflineProofVerifierError
+    ) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed == value else {
+            throw error
+        }
+        switch value.lowercased() {
+        case "ios", "android":
+            return value.lowercased()
+        default:
+            throw error
         }
     }
 }

@@ -355,9 +355,7 @@ impl Sm2PublicKey {
             }
         }
 
-        let sig = signature
-            .as_sm2()
-            .map_err(|_| Error::Parse(ParseError("invalid SM2 signature".into())))?;
+        let sig = signature.as_sm2().map_err(|_| Error::BadSignature)?;
         self.0
             .verify(message, &sig)
             .map_err(|_| Error::BadSignature)
@@ -474,6 +472,11 @@ impl Sm2PrivateKey {
         for _ in 0..SM2_RANDOM_KEY_ATTEMPTS {
             rng.try_fill_bytes(secret.as_mut())
                 .map_err(|err| ParseError(format!("SM2 RNG failed: {err}")))?;
+            if secret.iter().all(|&byte| byte == 0) {
+                return Err(ParseError(
+                    "SM2 RNG returned all-zero seed material".to_owned(),
+                ));
+            }
             if let Ok(private) = Self::from_bytes(distid.clone(), secret.as_ref()) {
                 return Ok(private);
             }
@@ -513,6 +516,8 @@ impl Sm2PrivateKey {
     /// Returns [`ParseError`] when a valid key cannot be derived within the retry budget.
     pub fn from_seed(distid: impl Into<String>, seed: &[u8]) -> Result<Self, ParseError> {
         let distid = distid.into();
+        validate_distid(&distid)?;
+        validate_seed_material_not_all_zero(seed)?;
         let mut counter: u32 = 0;
         loop {
             let mut hasher = Sha512::new();
@@ -625,6 +630,15 @@ impl Sm2PrivateKey {
         bytes.zeroize();
         Self::from_bytes(distid, buf.as_ref())
     }
+}
+
+fn validate_seed_material_not_all_zero(seed: &[u8]) -> Result<(), ParseError> {
+    if !seed.is_empty() && seed.iter().all(|&byte| byte == 0) {
+        return Err(ParseError(
+            "SM2 seed material must not be all zero".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Encode an SM2 public key payload with an explicit distinguishing identifier.
@@ -776,6 +790,12 @@ impl Sm2Signature {
     /// # Errors
     /// Returns [`ParseError`] when `bytes` do not describe a valid SM2 signature.
     pub fn from_bytes(bytes: &[u8; Self::LENGTH]) -> Result<Self, ParseError> {
+        if bytes.iter().all(|&byte| byte == 0) {
+            return Err(ParseError("invalid SM2 signature: all-zero payload".into()));
+        }
+        if bytes[..32].iter().all(|&byte| byte == 0) || bytes[32..].iter().all(|&byte| byte == 0) {
+            return Err(ParseError("invalid SM2 signature: zero scalar".into()));
+        }
         sm::parse_signature(bytes).map_err(|_| ParseError("invalid SM2 signature".into()))?;
         let mut r = [0u8; 32];
         r.copy_from_slice(&bytes[..32]);
@@ -858,7 +878,8 @@ impl Sm2Signature {
     /// Prefer [`Self::try_as_der`] on production error-propagating paths.
     #[must_use]
     pub fn as_der(&self) -> Vec<u8> {
-        self.try_as_der().unwrap_or_default()
+        self.try_as_der()
+            .expect("SM2 DER export should fit short-form lengths for 32-byte integers")
     }
 }
 
@@ -3044,6 +3065,29 @@ mod tests {
 
     impl TryCryptoRng for FailingTryRng {}
 
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedTryRng {}
+
     struct IntrinsicPolicyGuard {
         previous: SmIntrinsicPolicy,
         _lock: std::sync::MutexGuard<'static, ()>,
@@ -3418,6 +3462,42 @@ mod tests {
     }
 
     #[test]
+    fn sm2_signature_from_bytes_rejects_zero_scalars_before_backend() {
+        let all_zero = [0u8; Sm2Signature::LENGTH];
+        let err = Sm2Signature::from_bytes(&all_zero)
+            .expect_err("all-zero SM2 signature must fail before backend parsing");
+        assert!(err.to_string().contains("all-zero"));
+
+        let mut zero_r = [0u8; Sm2Signature::LENGTH];
+        zero_r[Sm2Signature::LENGTH - 1] = 1;
+        let err =
+            Sm2Signature::from_bytes(&zero_r).expect_err("zero r scalar must fail before backend");
+        assert!(err.to_string().contains("zero scalar"));
+
+        let mut zero_s = [0u8; Sm2Signature::LENGTH];
+        zero_s[31] = 1;
+        let err =
+            Sm2Signature::from_bytes(&zero_s).expect_err("zero s scalar must fail before backend");
+        assert!(err.to_string().contains("zero scalar"));
+    }
+
+    #[test]
+    fn sm2_public_key_verify_maps_malformed_signature_to_bad_signature() {
+        let private =
+            Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, [0x13; 32]).expect("secret key");
+        let public = private.public_key();
+        let mut s = [0u8; 32];
+        s[31] = 1;
+        let malformed = Sm2Signature { r: [0u8; 32], s };
+
+        let err = public
+            .verify(b"message", &malformed)
+            .expect_err("malformed in-memory signature must fail closed");
+
+        assert!(matches!(err, Error::BadSignature));
+    }
+
+    #[test]
     fn sm2_try_sign_roundtrip_and_verify() {
         let private =
             Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, [0x12; 32]).expect("secret key");
@@ -3508,6 +3588,42 @@ mod tests {
             original.public_key().to_sec1_bytes(false),
             restored.public_key().to_sec1_bytes(false)
         );
+    }
+
+    #[test]
+    fn sm2_from_seed_rejects_all_zero_seed_material() {
+        match Sm2PrivateKey::from_seed(Sm2PublicKey::DEFAULT_DISTID, &[0u8; 32]) {
+            Err(err) => assert!(
+                err.to_string().contains("all zero"),
+                "unexpected all-zero seed error: {err:?}"
+            ),
+            Ok(_) => panic!("all-zero SM2 seed material must fail"),
+        }
+    }
+
+    #[test]
+    fn sm2_try_random_rejects_all_zero_rng_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+
+        match Sm2PrivateKey::try_random(Sm2PublicKey::DEFAULT_DISTID, &mut rng) {
+            Err(err) => assert!(
+                err.to_string().contains("all-zero seed material"),
+                "unexpected all-zero RNG error: {err:?}"
+            ),
+            Ok(_) => panic!("all-zero SM2 RNG material must fail"),
+        }
+    }
+
+    #[test]
+    fn sm2_from_seed_rejects_invalid_distid_before_derivation() {
+        let oversized_distid = "x".repeat((u16::MAX as usize / 8) + 1);
+        match Sm2PrivateKey::from_seed(&oversized_distid, b"valid-seed") {
+            Err(err) => assert!(
+                err.to_string().contains("exceeds 65535 bits"),
+                "unexpected distid error: {err:?}"
+            ),
+            Ok(_) => panic!("oversized SM2 distinguishing identifier must fail"),
+        }
     }
 
     #[test]
@@ -3626,6 +3742,7 @@ mod tests {
             .expect("SM2 DER short-form lengths fit");
 
         assert_eq!(checked, signature.as_der());
+        assert!(!checked.is_empty(), "SM2 DER export must not be empty");
         assert_eq!(
             checked.get(1).copied().map(usize::from),
             Some(checked.len() - 2)

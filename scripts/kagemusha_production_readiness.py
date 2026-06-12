@@ -25,6 +25,7 @@ import check_android_device_lab_slot as device_lab  # noqa: E402
 
 SUMMARY_SCHEMA = "iroha.kagemusha.production_readiness.v1"
 ABI6_MANIFEST_PATH = "fixtures/kagemusha_recursive_spend_abi6/manifest.json"
+ABI6_MANIFEST_SCHEMA = "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1"
 LINEAGE_PROOF_EVIDENCE_SCHEMA = "iroha.kagemusha.lineage_proof_evidence.v1"
 LINEAGE_PROOF_EVIDENCE_FILENAME = "lineage-proof-evidence.json"
 DEFAULT_LINEAGE_PROOF_EVIDENCE_PATH = f"artifacts/kagemusha/{LINEAGE_PROOF_EVIDENCE_FILENAME}"
@@ -37,6 +38,43 @@ DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS = 300
 ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL = "<local-device-lab-root>"
 LINEAGE_PROOF_EVIDENCE_SUMMARY_LABEL = "<lineage-proof-evidence>"
 COMPACT_KEY_EVIDENCE_SUMMARY_LABEL = "<recursive-compact-key-evidence>"
+EVIDENCE_CONTROL_STRING_REDACTION = "<redacted-control-string>"
+EVIDENCE_NONFINITE_NUMBER_REDACTION = "<redacted-non-finite-number>"
+EVIDENCE_NON_STRING_KEY_REDACTION = "<redacted-non-string-key>"
+EVIDENCE_UNSUPPORTED_VALUE_REDACTION = "<redacted-unsupported-value>"
+EVIDENCE_ERRORS_NORMALIZED_FIELD = "android_report_errors_normalized"
+EVIDENCE_ERROR_REDACTION = "<malformed-android-report-error>"
+ANDROID_SIGNED_EVIDENCE_SUMMARY_FIELDS: tuple[tuple[str, str], ...] = (
+    ("signed_at_utc", "signed_at_utc"),
+    ("signed_evidence_artifact_sha256", "artifact_sha256"),
+    ("signed_evidence_signer_public_key_sha256", "signer_public_key_sha256"),
+    ("offline_wallet_apk_path", "offline_wallet_apk_path"),
+    ("offline_wallet_apk_sha256", "offline_wallet_apk_sha256"),
+    ("d2d_payment_transcript_path", "d2d_payment_transcript_path"),
+    ("d2d_payment_transcript_sha256", "d2d_payment_transcript_sha256"),
+    ("wallet_integrity_transcript_path", "wallet_integrity_transcript_path"),
+    ("wallet_integrity_transcript_sha256", "wallet_integrity_transcript_sha256"),
+    ("attestation_certificate_chain_path", "attestation_certificate_chain_path"),
+    ("attestation_certificate_chain_sha256", "attestation_certificate_chain_sha256"),
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS = frozenset(
+    (
+        "artifact_sha256",
+        "signer_public_key_sha256",
+        "offline_wallet_apk_sha256",
+        "d2d_payment_transcript_sha256",
+        "wallet_integrity_transcript_sha256",
+        "attestation_certificate_chain_sha256",
+    )
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_FIELDS = frozenset(
+    (
+        "offline_wallet_apk_path",
+        "d2d_payment_transcript_path",
+        "wallet_integrity_transcript_path",
+        "attestation_certificate_chain_path",
+    )
+)
 MAX_ABI6_MANIFEST_JSON_BYTES = 1024 * 1024
 MAX_REPO_SOURCE_MARKER_BYTES = 8 * 1024 * 1024
 MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES = 16 * 1024 * 1024
@@ -312,6 +350,42 @@ def _secret_looking_path_blocker(
 ) -> dict[str, Any] | None:
     if value is not None and device_lab.SECRET_RE.search(value):
         return blocker(code, f"{label} must not contain secret-looking material")
+    if value is not None and device_lab._contains_control_character(value):
+        return blocker(code, f"{label} must not contain control characters")
+    return None
+
+
+def _repo_root_shape_blocker(root: Path) -> dict[str, Any] | None:
+    """Reject repo-root aliases before filesystem metadata reads."""
+
+    root_text = str(root)
+    if "\\" in root_text:
+        return blocker(
+            "kagemusha_repo_root_path_invalid",
+            "--repo-root must not contain backslashes",
+        )
+    if ".." in root.parts:
+        return blocker(
+            "kagemusha_repo_root_path_invalid",
+            "--repo-root must be a canonical directory path",
+        )
+    return None
+
+
+def _cli_path_shape_blocker(
+    value: str | None,
+    *,
+    label: str,
+    code: str,
+) -> dict[str, Any] | None:
+    """Reject local CLI path aliases before resolver normalization."""
+
+    if value is None:
+        return None
+    if "\\" in value:
+        return blocker(code, f"{label} must not contain backslashes")
+    if ".." in Path(value).parts:
+        return blocker(code, f"{label} must be a canonical path")
     return None
 
 
@@ -325,6 +399,9 @@ def validate_repo_root_path(root: Path) -> list[dict[str, Any]]:
     )
     if secret_blocker is not None:
         return [secret_blocker]
+    shape_blocker = _repo_root_shape_blocker(root)
+    if shape_blocker is not None:
+        return [shape_blocker]
     errors: list[str] = []
     try:
         root_mode = root.lstat().st_mode
@@ -380,11 +457,24 @@ def validate_cli_path_arguments(args: argparse.Namespace) -> list[dict[str, Any]
         item = _secret_looking_path_blocker(value, label=label, code=code)
         if item is not None:
             blockers.append(item)
+            continue
+        if label not in ("--repo-root", "--summary-out"):
+            item = _cli_path_shape_blocker(value, label=label, code=code)
+            if item is not None:
+                blockers.append(item)
     if not any(item["code"] == "kagemusha_repo_root_path_invalid" for item in blockers):
         repo_root_errors = validate_repo_root_path(Path(args.repo_root))
         blockers.extend(repo_root_errors)
     for index, value in enumerate(args.trusted_signer_public_keys or []):
         item = _secret_looking_path_blocker(
+            value,
+            label=f"--trusted-signer-public-key[{index}]",
+            code="android_trusted_signer_path_invalid",
+        )
+        if item is not None:
+            blockers.append(item)
+            continue
+        item = _cli_path_shape_blocker(
             value,
             label=f"--trusted-signer-public-key[{index}]",
             code="android_trusted_signer_path_invalid",
@@ -412,6 +502,34 @@ def parse_utc_timestamp(value: str, label: str) -> tuple[dt.datetime | None, dic
     return parsed.astimezone(dt.timezone.utc), None
 
 
+def _append_evidence_timestamp_string_blockers(
+    blockers: list[dict[str, Any]],
+    *,
+    code_prefix: str,
+    label: str,
+    raw: str,
+) -> bool:
+    """Append string-shape blockers and return whether parsing must be skipped."""
+
+    if raw != raw.strip():
+        blockers.append(
+            blocker(
+                f"{code_prefix}_timestamp_surrounding_whitespace",
+                f"{label} generated_at_utc must not contain surrounding whitespace",
+                generated_at_utc=_display_evidence_value(raw),
+            )
+        )
+    if device_lab._contains_control_character(raw):
+        blockers.append(
+            blocker(
+                f"{code_prefix}_timestamp_control_character",
+                f"{label} generated_at_utc must not contain control characters",
+            )
+        )
+        return True
+    return False
+
+
 class DuplicateJsonKeyError(ValueError):
     """Raised when a JSON object contains a duplicate key."""
 
@@ -429,7 +547,11 @@ class NonFiniteJsonConstantError(ValueError):
 
 
 def _display_json_key(key: str) -> str:
-    return device_lab.SECRET_PATH_REDACTION if device_lab.SECRET_RE.search(key) else key
+    if device_lab.SECRET_RE.search(key):
+        return device_lab.SECRET_PATH_REDACTION
+    if device_lab._contains_control_character(key):
+        return device_lab.CONTROL_PATH_REDACTION
+    return key
 
 
 def _reject_duplicate_json_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -572,8 +694,15 @@ def _validate_release_local_json_file_for_read(
 ) -> tuple[os.stat_result | None, list[str]]:
     """Reject local release JSON files and return the read identity."""
 
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         return None, [f"{label} path must not contain secret-looking material"]
+    if device_lab._contains_control_character(path_text):
+        return None, [f"{label} path must not contain control characters"]
+    if "\\" in path_text:
+        return None, [f"{label} path must not contain backslashes"]
+    if ".." in path.parts:
+        return None, [f"{label} path must be canonical"]
     release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(
         path,
         f"{label} ancestor directory",
@@ -605,8 +734,15 @@ def _validate_repo_source_marker_file_for_read(
 ) -> tuple[os.stat_result | None, list[str]]:
     """Reject checked-in marker files that could alias external bytes."""
 
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         return None, [f"{label} path must not contain secret-looking material"]
+    if device_lab._contains_control_character(path_text):
+        return None, [f"{label} path must not contain control characters"]
+    if "\\" in path_text:
+        return None, [f"{label} path must not contain backslashes"]
+    if ".." in path.parts:
+        return None, [f"{label} path must be canonical"]
     errors = [
         *device_lab.validate_no_symlink_ancestors(
             path,
@@ -774,11 +910,11 @@ def check_abi6_reserved_lineage(repo_root: Path) -> dict[str, Any]:
     manifest, blockers = _load_json(manifest_path)
     if manifest is not None:
         details["schema"] = manifest.get("schema")
-        details["bridge_abi_version"] = manifest.get("bridge_abi_version")
+        details["native_bridge_abi_version"] = manifest.get("native_bridge_abi_version")
         details["operation_count"] = manifest.get("operation_count")
-        if manifest.get("schema") != "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1":
+        if manifest.get("schema") != ABI6_MANIFEST_SCHEMA:
             blockers.append(blocker("abi6_manifest_schema", "ABI-6 manifest schema mismatch"))
-        if manifest.get("bridge_abi_version") != 6:
+        if manifest.get("native_bridge_abi_version") != 6:
             blockers.append(
                 blocker("abi6_manifest_bridge_version", "ABI-6 manifest must advertise bridge ABI 6")
             )
@@ -948,8 +1084,15 @@ def _validate_lineage_local_file_for_read(
 ) -> tuple[os.stat_result | None, list[str]]:
     """Reject local lineage evidence files that could alias external bytes."""
 
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         return None, [f"{label} path must not contain secret-looking material"]
+    if device_lab._contains_control_character(path_text):
+        return None, [f"{label} path must not contain control characters"]
+    if "\\" in path_text:
+        return None, [f"{label} path must not contain backslashes"]
+    if ".." in path.parts:
+        return None, [f"{label} path must be canonical"]
     ancestor_errors = device_lab.validate_no_symlink_ancestors(
         path,
         f"{label} ancestor directory",
@@ -1242,9 +1385,13 @@ def _require_rust_function_contract(
 def validate_lineage_proof_command(command: Any, expected_name: str) -> list[str]:
     """Return validation errors for the production Reserved-lineage proof command."""
 
-    if not isinstance(command, str) or not command.strip():
+    if not isinstance(command, str) or not command:
         return ["--command must be a non-empty string"]
     errors: list[str] = []
+    if command != command.strip():
+        errors.append("--command must not contain surrounding whitespace")
+    if device_lab._contains_control_character(command):
+        errors.append("--command must not contain control characters")
     expected_command = expected_lineage_proof_command(expected_name)
     expected_tokens = (
         "cargo",
@@ -1283,9 +1430,13 @@ def validate_lineage_proof_command(command: Any, expected_name: str) -> list[str
 def validate_compact_key_command(command: Any) -> list[str]:
     """Return validation errors for the ABI-7 recursive compact keygen command."""
 
-    if not isinstance(command, str) or not command.strip():
+    if not isinstance(command, str) or not command:
         return ["--command must be a non-empty string"]
     errors: list[str] = []
+    if command != command.strip():
+        errors.append("--command must not contain surrounding whitespace")
+    if device_lab._contains_control_character(command):
+        errors.append("--command must not contain control characters")
     expected_command = expected_compact_key_command()
     expected_tokens = (
         "iroha",
@@ -1601,12 +1752,20 @@ def _require_compact_key_artifact_size(
 
 
 def _display_evidence_field(field: str) -> str:
-    return device_lab.SECRET_PATH_REDACTION if device_lab.SECRET_RE.search(field) else field
+    if device_lab.SECRET_RE.search(field):
+        return device_lab.SECRET_PATH_REDACTION
+    if device_lab._contains_control_character(field):
+        return EVIDENCE_CONTROL_STRING_REDACTION
+    return field
 
 
 def _display_evidence_value(value: Any) -> Any:
     if isinstance(value, str) and device_lab.SECRET_RE.search(value):
         return device_lab.SECRET_PATH_REDACTION
+    if isinstance(value, str) and device_lab._contains_control_character(value):
+        return EVIDENCE_CONTROL_STRING_REDACTION
+    if isinstance(value, float) and not math.isfinite(value):
+        return EVIDENCE_NONFINITE_NUMBER_REDACTION
     return value
 
 
@@ -1728,7 +1887,16 @@ def check_lineage_proof_evidence(
     else:
         generated_at_raw = generated_at_text
         details["generated_at_utc"] = _display_evidence_value(generated_at_raw)
-        if device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at_raw) is None:
+        skip_timestamp_parse = _append_evidence_timestamp_string_blockers(
+            blockers,
+            code_prefix="lineage_proof_evidence",
+            label="Reserved-lineage proof evidence",
+            raw=generated_at_raw,
+        )
+        if (
+            not skip_timestamp_parse
+            and device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at_raw) is None
+        ):
             blockers.append(
                 blocker(
                     "lineage_proof_evidence_timestamp_noncanonical",
@@ -1736,31 +1904,32 @@ def check_lineage_proof_evidence(
                     generated_at_utc=_display_evidence_value(generated_at_raw),
                 )
             )
-        generated_at, parse_blocker = parse_utc_timestamp(
-            generated_at_raw,
-            "Reserved-lineage proof evidence generated_at_utc",
-        )
-        if parse_blocker is not None:
-            parse_blocker["code"] = "lineage_proof_evidence_timestamp_invalid"
-            blockers.append(parse_blocker)
-        elif min_generated_at is not None and generated_at is not None and generated_at < min_generated_at:
-            blockers.append(
-                blocker(
-                    "lineage_proof_evidence_stale",
-                    "Reserved-lineage proof evidence predates the required release evidence cutoff",
-                    generated_at_utc=_display_evidence_value(generated_at_raw),
-                    min_generated_at_utc=min_generated_at.isoformat().replace("+00:00", "Z"),
-                )
+        if not skip_timestamp_parse:
+            generated_at, parse_blocker = parse_utc_timestamp(
+                generated_at_raw,
+                "Reserved-lineage proof evidence generated_at_utc",
             )
-        elif max_generated_at is not None and generated_at is not None and generated_at > max_generated_at:
-            blockers.append(
-                blocker(
-                    "lineage_proof_evidence_future_dated",
-                    "Reserved-lineage proof evidence is ahead of the release validator clock skew",
-                    generated_at_utc=_display_evidence_value(generated_at_raw),
-                    max_generated_at_utc=max_generated_at.isoformat().replace("+00:00", "Z"),
+            if parse_blocker is not None:
+                parse_blocker["code"] = "lineage_proof_evidence_timestamp_invalid"
+                blockers.append(parse_blocker)
+            elif min_generated_at is not None and generated_at is not None and generated_at < min_generated_at:
+                blockers.append(
+                    blocker(
+                        "lineage_proof_evidence_stale",
+                        "Reserved-lineage proof evidence predates the required release evidence cutoff",
+                        generated_at_utc=_display_evidence_value(generated_at_raw),
+                        min_generated_at_utc=min_generated_at.isoformat().replace("+00:00", "Z"),
+                    )
                 )
-            )
+            elif max_generated_at is not None and generated_at is not None and generated_at > max_generated_at:
+                blockers.append(
+                    blocker(
+                        "lineage_proof_evidence_future_dated",
+                        "Reserved-lineage proof evidence is ahead of the release validator clock skew",
+                        generated_at_utc=_display_evidence_value(generated_at_raw),
+                        max_generated_at_utc=max_generated_at.isoformat().replace("+00:00", "Z"),
+                    )
+                )
 
     expected_scalars = {
         "opening_len": EXPECTED_LINEAGE_PROOF_OPENING_LEN,
@@ -2249,7 +2418,16 @@ def check_compact_key_evidence(
     else:
         compact_generated_at_raw = generated_at_text
         details["generated_at_utc"] = _display_evidence_value(compact_generated_at_raw)
-        if device_lab.SIGNED_AT_UTC_RE.fullmatch(compact_generated_at_raw) is None:
+        skip_timestamp_parse = _append_evidence_timestamp_string_blockers(
+            blockers,
+            code_prefix="compact_key_evidence",
+            label="ABI-7 recursive compact key evidence",
+            raw=compact_generated_at_raw,
+        )
+        if (
+            not skip_timestamp_parse
+            and device_lab.SIGNED_AT_UTC_RE.fullmatch(compact_generated_at_raw) is None
+        ):
             blockers.append(
                 blocker(
                     "compact_key_evidence_timestamp_noncanonical",
@@ -2257,31 +2435,32 @@ def check_compact_key_evidence(
                     generated_at_utc=_display_evidence_value(compact_generated_at_raw),
                 )
             )
-        generated_at, parse_blocker = parse_utc_timestamp(
-            compact_generated_at_raw,
-            "ABI-7 recursive compact key evidence generated_at_utc",
-        )
-        if parse_blocker is not None:
-            parse_blocker["code"] = "compact_key_evidence_timestamp_invalid"
-            blockers.append(parse_blocker)
-        elif min_generated_at is not None and generated_at is not None and generated_at < min_generated_at:
-            blockers.append(
-                blocker(
-                    "compact_key_evidence_stale",
-                    "ABI-7 recursive compact key evidence predates the required release evidence cutoff",
-                    generated_at_utc=_display_evidence_value(compact_generated_at_raw),
-                    min_generated_at_utc=min_generated_at.isoformat().replace("+00:00", "Z"),
-                )
+        if not skip_timestamp_parse:
+            generated_at, parse_blocker = parse_utc_timestamp(
+                compact_generated_at_raw,
+                "ABI-7 recursive compact key evidence generated_at_utc",
             )
-        elif max_generated_at is not None and generated_at is not None and generated_at > max_generated_at:
-            blockers.append(
-                blocker(
-                    "compact_key_evidence_future_dated",
-                    "ABI-7 recursive compact key evidence is ahead of the release validator clock skew",
-                    generated_at_utc=_display_evidence_value(compact_generated_at_raw),
-                    max_generated_at_utc=max_generated_at.isoformat().replace("+00:00", "Z"),
+            if parse_blocker is not None:
+                parse_blocker["code"] = "compact_key_evidence_timestamp_invalid"
+                blockers.append(parse_blocker)
+            elif min_generated_at is not None and generated_at is not None and generated_at < min_generated_at:
+                blockers.append(
+                    blocker(
+                        "compact_key_evidence_stale",
+                        "ABI-7 recursive compact key evidence predates the required release evidence cutoff",
+                        generated_at_utc=_display_evidence_value(compact_generated_at_raw),
+                        min_generated_at_utc=min_generated_at.isoformat().replace("+00:00", "Z"),
+                    )
                 )
-            )
+            elif max_generated_at is not None and generated_at is not None and generated_at > max_generated_at:
+                blockers.append(
+                    blocker(
+                        "compact_key_evidence_future_dated",
+                        "ABI-7 recursive compact key evidence is ahead of the release validator clock skew",
+                        generated_at_utc=_display_evidence_value(compact_generated_at_raw),
+                        max_generated_at_utc=max_generated_at.isoformat().replace("+00:00", "Z"),
+                    )
+                )
 
     expected_scalars = {
         "opening_len": EXPECTED_COMPACT_KEY_OPENING_LEN,
@@ -2833,58 +3012,204 @@ def _slot_reports(
     ], []
 
 
-def _redact_secret_strings(value: Any) -> tuple[Any, bool]:
-    """Return a copy with secret-looking strings redacted plus a match flag."""
+def _redact_secret_strings(value: Any) -> tuple[Any, bool, bool, bool, bool]:
+    """Return a redacted copy plus unsafe-material/key flags."""
 
     if isinstance(value, str):
         if device_lab.SECRET_RE.search(value):
-            return device_lab.SECRET_PATH_REDACTION, True
-        return value, False
+            return device_lab.SECRET_PATH_REDACTION, True, False, False, False
+        if device_lab._contains_control_character(value):
+            return EVIDENCE_CONTROL_STRING_REDACTION, True, False, False, False
+        return value, False, False, False, False
+    if value is None or isinstance(value, (bool, int)):
+        return value, False, False, False, False
+    if isinstance(value, float) and not math.isfinite(value):
+        return EVIDENCE_NONFINITE_NUMBER_REDACTION, True, False, False, False
+    if isinstance(value, float):
+        return value, False, False, False, False
     if isinstance(value, list):
         redacted_items = []
         matched = False
+        key_collision = False
+        non_string_key = False
+        unsupported_value = False
         for item in value:
-            redacted_item, item_matched = _redact_secret_strings(item)
+            (
+                redacted_item,
+                item_matched,
+                item_key_collision,
+                item_non_string_key,
+                item_unsupported_value,
+            ) = _redact_secret_strings(item)
             redacted_items.append(redacted_item)
             matched = matched or item_matched
-        return redacted_items, matched
+            key_collision = key_collision or item_key_collision
+            non_string_key = non_string_key or item_non_string_key
+            unsupported_value = unsupported_value or item_unsupported_value
+        return redacted_items, matched, key_collision, non_string_key, unsupported_value
     if isinstance(value, dict):
         redacted: dict[Any, Any] = {}
         matched = False
+        key_collision = False
+        non_string_key = False
+        unsupported_value = False
         for key, item in value.items():
-            redacted_key, key_matched = _redact_secret_strings(key)
-            redacted_item, item_matched = _redact_secret_strings(item)
+            if isinstance(key, str):
+                (
+                    redacted_key,
+                    key_matched,
+                    nested_key_collision,
+                    nested_non_string_key,
+                    nested_unsupported_value,
+                ) = _redact_secret_strings(key)
+            else:
+                redacted_key = EVIDENCE_NON_STRING_KEY_REDACTION
+                key_matched = True
+                nested_key_collision = False
+                nested_non_string_key = True
+                nested_unsupported_value = False
+            (
+                redacted_item,
+                item_matched,
+                item_key_collision,
+                item_non_string_key,
+                item_unsupported_value,
+            ) = _redact_secret_strings(item)
+            if redacted_key in redacted:
+                key_collision = True
+                matched = True
+                continue
             redacted[redacted_key] = redacted_item
             matched = matched or key_matched or item_matched
-        return redacted, matched
-    return value, False
+            key_collision = key_collision or nested_key_collision or item_key_collision
+            non_string_key = (
+                non_string_key or nested_non_string_key or item_non_string_key
+            )
+            unsupported_value = (
+                unsupported_value
+                or nested_unsupported_value
+                or item_unsupported_value
+            )
+        return redacted, matched, key_collision, non_string_key, unsupported_value
+    return EVIDENCE_UNSUPPORTED_VALUE_REDACTION, True, False, False, True
 
 
 def _sanitize_android_reports(
     reports: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Redact report-local secret material before rollup summary serialization."""
+    """Redact report-local unsafe material before rollup summary serialization."""
 
     sanitized: list[dict[str, Any]] = []
     blockers: list[dict[str, Any]] = []
     for report in reports:
-        redacted_report, matched = _redact_secret_strings(report)
+        (
+            redacted_report,
+            matched,
+            key_collision,
+            non_string_key,
+            unsupported_value,
+        ) = (
+            _redact_secret_strings(report)
+        )
         if isinstance(redacted_report, dict):
             sanitized_report = redacted_report
         else:
             sanitized_report = {"slot": "<invalid-slot-report>", "status": "error"}
             matched = True
+        errors_normalized = False
+        if "errors" in sanitized_report:
+            safe_errors, errors_normalized = _android_report_errors_value(
+                sanitized_report["errors"]
+            )
+            sanitized_report["errors"] = safe_errors
+            if errors_normalized:
+                sanitized_report[EVIDENCE_ERRORS_NORMALIZED_FIELD] = True
         sanitized.append(sanitized_report)
         slot = sanitized_report.get("slot")
         if matched:
             blockers.append(
                 blocker(
-                    "android_device_lab_report_secret_material",
-                    "Android device-lab report contains secret-looking material",
+                    "android_device_lab_report_unsafe_material",
+                    "Android device-lab report contains secret-looking, control-character, or non-finite material",
+                    slot=slot if isinstance(slot, str) else "<invalid-slot-report>",
+                )
+            )
+        if key_collision:
+            blockers.append(
+                blocker(
+                    "android_device_lab_report_redacted_key_collision",
+                    "Android device-lab report keys collide after unsafe-material redaction",
+                    slot=slot if isinstance(slot, str) else "<invalid-slot-report>",
+                )
+            )
+        if non_string_key:
+            blockers.append(
+                blocker(
+                    "android_device_lab_report_non_string_key",
+                    "Android device-lab report contains a non-string key",
+                    slot=slot if isinstance(slot, str) else "<invalid-slot-report>",
+                )
+            )
+        if unsupported_value:
+            blockers.append(
+                blocker(
+                    "android_device_lab_report_unsupported_value",
+                    "Android device-lab report contains a non-JSON value",
+                    slot=slot if isinstance(slot, str) else "<invalid-slot-report>",
+                )
+            )
+        if errors_normalized:
+            blockers.append(
+                blocker(
+                    "android_device_lab_report_errors_malformed",
+                    "Android device-lab report errors must be a list of strings",
                     slot=slot if isinstance(slot, str) else "<invalid-slot-report>",
                 )
             )
     return sanitized, blockers
+
+
+def _android_report_errors_value(value: Any) -> tuple[list[str], bool]:
+    """Return a readiness-summary-safe list of Android report error strings."""
+
+    if not isinstance(value, list):
+        return [EVIDENCE_ERROR_REDACTION], True
+    errors: list[str] = []
+    normalized = False
+    for item in value:
+        if isinstance(item, str):
+            safe_item = _display_evidence_value(item)
+            errors.append(safe_item if isinstance(safe_item, str) else EVIDENCE_ERROR_REDACTION)
+        else:
+            errors.append(EVIDENCE_ERROR_REDACTION)
+            normalized = True
+    return errors, normalized
+
+
+def _android_report_errors(report: dict[str, Any]) -> list[str]:
+    """Return only normalized Android report errors for release-facing blockers."""
+
+    errors, _normalized = _android_report_errors_value(report.get("errors", []))
+    return errors
+
+
+def _android_report_kagemusha(report: dict[str, Any]) -> dict[str, Any]:
+    """Return Kagemusha report details only when they are shaped as an object."""
+
+    kagemusha = report.get("kagemusha")
+    return kagemusha if isinstance(kagemusha, dict) else {}
+
+
+def _android_report_device_family(report: dict[str, Any]) -> str | None:
+    """Return a canonical Kagemusha device family from a sanitized report."""
+
+    family = _android_report_kagemusha(report).get("device_family")
+    if (
+        isinstance(family, str)
+        and family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+    ):
+        return family
+    return None
 
 
 def _check_android_signed_evidence_freshness(
@@ -2905,7 +3230,7 @@ def _check_android_signed_evidence_freshness(
                 )
             )
             continue
-        signed_at_text = report.get("kagemusha", {}).get("signed_at_utc")
+        signed_at_text = _android_report_kagemusha(report).get("signed_at_utc")
         if not isinstance(signed_at_text, str) or not signed_at_text:
             blockers.append(
                 blocker(
@@ -2981,10 +3306,22 @@ def _check_android_matrix_unique_bindings(
             if report.get("status") != "ok":
                 continue
             slot = report.get("slot")
-            value = report.get("kagemusha", {}).get(field)
+            value = _android_report_kagemusha(report).get(field)
             if not isinstance(slot, str) or not isinstance(value, str) or not value:
                 continue
-            seen.setdefault(value, []).append(slot)
+            safe_slot = _display_evidence_value(slot)
+            if field.endswith("_sha256") and device_lab.SHA256_HEX_RE.fullmatch(value) is None:
+                blockers.append(
+                    blocker(
+                        "android_device_lab_binding_digest_invalid",
+                        "Android device-lab production binding digests must be lowercase sha256 hex",
+                        slot=safe_slot,
+                        field=field,
+                        value_sha256=_display_evidence_value(value),
+                    )
+                )
+                continue
+            seen.setdefault(value, []).append(safe_slot)
         for value, slots in sorted(seen.items()):
             if len(slots) <= 1:
                 continue
@@ -3004,6 +3341,113 @@ def _check_android_matrix_unique_bindings(
     return blockers
 
 
+def _is_redacted_evidence_value(value: str) -> bool:
+    return value in {
+        device_lab.SECRET_PATH_REDACTION,
+        device_lab.CONTROL_PATH_REDACTION,
+        EVIDENCE_CONTROL_STRING_REDACTION,
+        EVIDENCE_NONFINITE_NUMBER_REDACTION,
+        EVIDENCE_NON_STRING_KEY_REDACTION,
+        EVIDENCE_UNSUPPORTED_VALUE_REDACTION,
+    }
+
+
+def _valid_android_signed_evidence_summary_value(
+    target_key: str,
+    value: Any,
+) -> str | None:
+    if not isinstance(value, str) or not value or _is_redacted_evidence_value(value):
+        return None
+    if target_key == "signed_at_utc":
+        return value if device_lab.SIGNED_AT_UTC_RE.fullmatch(value) else None
+    if target_key in ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS:
+        if device_lab.SHA256_HEX_RE.fullmatch(value) and value != "0" * 64:
+            return value
+        return None
+    if target_key in ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_FIELDS:
+        path_errors: list[str] = []
+        normalized = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+            value,
+            path_errors,
+            f"Android signed-evidence summary {target_key}",
+        )
+        if normalized is not None and normalized == value:
+            return value
+        return None
+    return value
+
+
+def _check_android_signed_evidence_summary_values(
+    reports: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Reject direct reports with malformed release-facing signed-evidence fields."""
+
+    blockers: list[dict[str, Any]] = []
+    seen_slots: set[str] = set()
+    for report in reports:
+        if report.get("status") != "ok":
+            continue
+        raw_slot = report.get("slot")
+        slot = (
+            _display_evidence_value(raw_slot)
+            if isinstance(raw_slot, str)
+            else "<invalid-slot-report>"
+        )
+        if slot in seen_slots:
+            blockers.append(
+                blocker(
+                    "android_signed_evidence_summary_slot_collision",
+                    "validated Android device-lab reports must not collapse to the same signed-evidence summary slot",
+                    slot=slot,
+                )
+            )
+        else:
+            seen_slots.add(slot)
+        kagemusha = report.get("kagemusha")
+        if not isinstance(kagemusha, dict):
+            blockers.append(
+                blocker(
+                    "android_signed_evidence_summary_missing",
+                    "validated Android device-lab report is missing signed-evidence summary fields",
+                    slot=slot,
+                )
+            )
+            continue
+        for source_key, target_key in ANDROID_SIGNED_EVIDENCE_SUMMARY_FIELDS:
+            value = kagemusha.get(source_key)
+            if not isinstance(value, str) or not value:
+                blockers.append(
+                    blocker(
+                        "android_signed_evidence_summary_missing",
+                        "validated Android device-lab report is missing a signed-evidence summary field",
+                        slot=slot,
+                        field=target_key,
+                    )
+                )
+                continue
+            if _valid_android_signed_evidence_summary_value(target_key, value) is None:
+                blockers.append(
+                    blocker(
+                        "android_signed_evidence_summary_invalid",
+                        "validated Android device-lab report has a malformed signed-evidence summary field",
+                        slot=slot,
+                        field=target_key,
+                    )
+                )
+                continue
+            if target_key == "signed_at_utc":
+                _, parse_blocker = parse_utc_timestamp(
+                    value,
+                    "Android signed-evidence summary signed_at_utc",
+                )
+                if parse_blocker is not None:
+                    parse_blocker["code"] = "android_signed_evidence_summary_invalid"
+                    parse_blocker["slot"] = slot
+                    parse_blocker["field"] = target_key
+                    blockers.append(parse_blocker)
+    return blockers
+
+
 def _android_signed_evidence_summary(reports: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
     """Return path-safe signed-evidence details for valid Android slots."""
 
@@ -3012,41 +3456,34 @@ def _android_signed_evidence_summary(reports: list[dict[str, Any]]) -> dict[str,
         if report.get("status") != "ok":
             continue
         slot = report.get("slot")
-        kagemusha = report.get("kagemusha", {})
+        kagemusha = _android_report_kagemusha(report)
         if not isinstance(slot, str) or not isinstance(kagemusha, dict):
             continue
         entry: dict[str, str] = {}
-        for source_key, target_key in (
-            ("signed_at_utc", "signed_at_utc"),
-            ("signed_evidence_artifact_sha256", "artifact_sha256"),
-            ("signed_evidence_signer_public_key_sha256", "signer_public_key_sha256"),
-            ("offline_wallet_apk_path", "offline_wallet_apk_path"),
-            ("offline_wallet_apk_sha256", "offline_wallet_apk_sha256"),
-            ("d2d_payment_transcript_path", "d2d_payment_transcript_path"),
-            ("d2d_payment_transcript_sha256", "d2d_payment_transcript_sha256"),
-            (
-                "wallet_integrity_transcript_path",
-                "wallet_integrity_transcript_path",
-            ),
-            (
-                "wallet_integrity_transcript_sha256",
-                "wallet_integrity_transcript_sha256",
-            ),
-            (
-                "attestation_certificate_chain_path",
-                "attestation_certificate_chain_path",
-            ),
-            (
-                "attestation_certificate_chain_sha256",
-                "attestation_certificate_chain_sha256",
-            ),
-        ):
-            value = kagemusha.get(source_key)
-            if isinstance(value, str) and value:
+        for source_key, target_key in ANDROID_SIGNED_EVIDENCE_SUMMARY_FIELDS:
+            value = _valid_android_signed_evidence_summary_value(
+                target_key,
+                kagemusha.get(source_key),
+            )
+            if value is not None:
                 entry[target_key] = value
         if entry:
-            signed_evidence[slot] = entry
+            safe_slot = _display_evidence_value(slot)
+            if isinstance(safe_slot, str) and safe_slot not in signed_evidence:
+                signed_evidence[safe_slot] = entry
     return signed_evidence
+
+
+def _safe_trusted_signer_public_key_sha256(
+    trusted_signer_public_keys: dict[str, Path],
+) -> list[str]:
+    """Return only canonical trusted signer ids safe for readiness summaries."""
+
+    return sorted(
+        key
+        for key in trusted_signer_public_keys
+        if isinstance(key, str) and device_lab.SHA256_HEX_RE.fullmatch(key)
+    )
 
 
 def check_android_device_lab(
@@ -3060,10 +3497,41 @@ def check_android_device_lab(
     """Check strict Android signed evidence and standard family coverage."""
 
     blockers: list[dict[str, Any]] = []
+    trusted_signer_public_key_sha256 = _safe_trusted_signer_public_key_sha256(
+        trusted_signer_public_keys
+    )
+    signer_map_blockers = [
+        blocker("android_trusted_signer_invalid", error)
+        for error in device_lab.validate_trusted_signer_public_key_map(
+            trusted_signer_public_keys
+        )
+    ]
     validated_slot_ids, slot_id_errors = device_lab.validate_slot_ids(slot_ids)
     slot_id_blockers = [
         blocker("android_device_lab_slot_id_invalid", error) for error in slot_id_errors
     ]
+    if signer_map_blockers or slot_id_blockers:
+        return {
+            "ok": False,
+            "root": ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL,
+            "slots": [],
+            "covered_device_families": [],
+            "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+            "duplicate_bindings": {},
+            "signed_evidence": {},
+            "min_signed_at_utc": (
+                min_signed_at.isoformat().replace("+00:00", "Z")
+                if min_signed_at is not None
+                else None
+            ),
+            "max_signed_at_utc": (
+                max_signed_at.isoformat().replace("+00:00", "Z")
+                if max_signed_at is not None
+                else None
+            ),
+            "trusted_signer_public_key_sha256": trusted_signer_public_key_sha256,
+            "blockers": [*signer_map_blockers, *slot_id_blockers],
+        }
     blockers.extend(slot_id_blockers)
     root_exists, root_errors = device_lab.classify_device_lab_root_path(root)
     if root_errors:
@@ -3088,7 +3556,7 @@ def check_android_device_lab(
                 if max_signed_at is not None
                 else None
             ),
-            "trusted_signer_public_key_sha256": sorted(trusted_signer_public_keys),
+            "trusted_signer_public_key_sha256": trusted_signer_public_key_sha256,
             "blockers": [*root_blockers, *slot_id_blockers],
         }
     if not root_exists:
@@ -3110,7 +3578,7 @@ def check_android_device_lab(
                 if max_signed_at is not None
                 else None
             ),
-            "trusted_signer_public_key_sha256": sorted(trusted_signer_public_keys),
+            "trusted_signer_public_key_sha256": trusted_signer_public_key_sha256,
             "blockers": [
                 blocker(
                     "android_device_lab_root_missing",
@@ -3145,16 +3613,17 @@ def check_android_device_lab(
                     "android_device_lab_slot_invalid",
                     f"Android device-lab slot {report.get('slot')} is invalid",
                     slot=report.get("slot"),
-                    errors=report.get("errors", []),
+                    errors=_android_report_errors(report),
                 )
             )
 
     covered = sorted(
         {
-            report.get("kagemusha", {}).get("device_family")
+            family
             for report in reports
+            for family in [_android_report_device_family(report)]
             if report.get("status") == "ok"
-            and report.get("kagemusha", {}).get("device_family") is not None
+            and family is not None
         }
     )
     missing = [
@@ -3171,6 +3640,7 @@ def check_android_device_lab(
             )
         )
     blockers.extend(_check_android_matrix_unique_bindings(reports))
+    blockers.extend(_check_android_signed_evidence_summary_values(reports))
     if min_signed_at is not None or max_signed_at is not None:
         blockers.extend(
             _check_android_signed_evidence_freshness(
@@ -3198,7 +3668,7 @@ def check_android_device_lab(
             if max_signed_at is not None
             else None
         ),
-        "trusted_signer_public_key_sha256": sorted(trusted_signer_public_keys),
+        "trusted_signer_public_key_sha256": trusted_signer_public_key_sha256,
         "blockers": blockers,
     }
 
@@ -3277,6 +3747,13 @@ def validate_summary_output_path(path: Path) -> list[dict[str, Any]]:
     )
     if secret_blocker is not None:
         return [secret_blocker]
+    shape_blocker = _cli_path_shape_blocker(
+        str(path),
+        label="--summary-out",
+        code=SUMMARY_OUT_PATH_INVALID_CODE,
+    )
+    if shape_blocker is not None:
+        return [shape_blocker]
     parent = path.parent
     parent_exists, parent_blockers = _validate_summary_output_parent(path)
     if parent_blockers:
@@ -3472,15 +3949,92 @@ def _read_summary_output_text(
         ]
 
 
-def _cleanup_summary_output(path: Path) -> list[dict[str, Any]]:
+def _cleanup_summary_output(
+    path: Path,
+    expected_identity: tuple[int, int] | None,
+) -> list[dict[str, Any]]:
+    if expected_identity is None:
+        return [
+            _summary_out_blocker("--summary-out temporary file metadata could not be read")
+        ]
     try:
-        path.unlink()
-    except FileNotFoundError:
-        return []
+        parent_fd = os.open(path.parent, _directory_open_flags())
     except OSError:
         return [
             _summary_out_blocker("--summary-out temporary file could not be removed")
         ]
+    try:
+        try:
+            temp_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [
+                _summary_out_blocker(
+                    "--summary-out temporary file could not be removed"
+                )
+            ]
+        if (
+            not stat.S_ISREG(temp_stat.st_mode)
+            or _file_identity(temp_stat) != expected_identity
+        ):
+            return [
+                _summary_out_blocker(
+                    "--summary-out temporary file changed before cleanup"
+                )
+            ]
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return [
+                _summary_out_blocker(
+                    "--summary-out temporary file could not be removed"
+                )
+            ]
+    finally:
+        os.close(parent_fd)
+    return []
+
+
+def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _sync_summary_output_parent(
+    parent: Path,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[dict[str, Any]]:
+    try:
+        parent_fd = os.open(parent, _directory_open_flags())
+    except OSError:
+        return [_summary_out_blocker("--summary-out parent directory could not be synced")]
+    try:
+        parent_stat = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            return [_summary_out_blocker("--summary-out parent directory could not be synced")]
+        if expected_identity is not None and _file_identity(parent_stat) != expected_identity:
+            return [_summary_out_blocker("--summary-out parent directory changed before sync")]
+        os.fsync(parent_fd)
+    except OSError:
+        return [_summary_out_blocker("--summary-out parent directory could not be synced")]
+    finally:
+        os.close(parent_fd)
     return []
 
 
@@ -3490,6 +4044,18 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
     errors = validate_summary_output_path(path)
     if errors:
         return errors
+    parent_exists, parent_errors = _validate_summary_output_parent(
+        path,
+        missing_message="--summary-out parent must be a directory",
+    )
+    if parent_errors:
+        return parent_errors
+    if not parent_exists:
+        return [_summary_out_blocker("--summary-out parent must be a directory")]
+    try:
+        parent_identity = _file_identity(path.parent.lstat())
+    except OSError:
+        return [_summary_out_blocker("--summary-out parent directory metadata could not be read")]
     try:
         summary_text = json.dumps(
             summary,
@@ -3511,6 +4077,7 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
             )
         ]
     tmp_path: Path | None = None
+    tmp_identity: tuple[int, int] | None = None
     write_blockers: list[dict[str, Any]] = []
     try:
         with tempfile.NamedTemporaryFile(
@@ -3522,6 +4089,7 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
+            tmp_identity = _file_identity(os.fstat(handle.fileno()))
             handle.write(summary_text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -3540,19 +4108,15 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
         )
     finally:
         if tmp_path is not None:
-            write_blockers.extend(_cleanup_summary_output(tmp_path))
+            write_blockers.extend(_cleanup_summary_output(tmp_path, tmp_identity))
     if write_blockers:
         return write_blockers
-    try:
-        parent_fd = os.open(path.parent, os.O_RDONLY)
-    except OSError:
-        return [_summary_out_blocker("--summary-out parent directory could not be synced")]
-    try:
-        os.fsync(parent_fd)
-    except OSError:
-        return [_summary_out_blocker("--summary-out parent directory could not be synced")]
-    finally:
-        os.close(parent_fd)
+    sync_blockers = _sync_summary_output_parent(
+        path.parent,
+        expected_identity=parent_identity,
+    )
+    if sync_blockers:
+        return sync_blockers
     errors = validate_summary_output_path(path)
     if errors:
         return errors

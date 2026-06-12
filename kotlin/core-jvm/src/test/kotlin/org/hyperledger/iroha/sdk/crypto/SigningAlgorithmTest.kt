@@ -42,9 +42,19 @@ class SigningAlgorithmTest {
 
     @Test
     fun unsupportedAndUnicodeConfusableAliasesFailClosed() {
-        assertEquals(SigningAlgorithm.ED25519, SigningAlgorithm.fromAlgorithmName(null))
-        assertEquals(SigningAlgorithm.ED25519, SigningAlgorithm.fromAlgorithmName(""))
-        assertEquals(SigningAlgorithm.ED25519, SigningAlgorithm.fromAlgorithmName("   "))
+        for (algorithm in listOf(null, "", "   ")) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                SigningAlgorithm.fromAlgorithmName(algorithm)
+            }
+            assertEquals("signing algorithm must be a non-empty string", error.message)
+        }
+
+        for (algorithm in listOf(" ed25519", "ed25519 ", "\ted25519")) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                SigningAlgorithm.fromAlgorithmName(algorithm)
+            }
+            assertEquals("signing algorithm must not contain surrounding whitespace", error.message)
+        }
 
         for (algorithm in listOf(
             "unknown",

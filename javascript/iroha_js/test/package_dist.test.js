@@ -35,8 +35,8 @@ import {
   KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT,
   KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
-  KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION,
-  KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
@@ -187,10 +187,12 @@ import {
   buildTonShardStateProofRequest,
   buildTonSccpFullLightClientAuditProofRequest,
   buildTonSccpFullLightClientAuditProofRequests,
+  TonSccpSourceStateProver,
   buildTronSccpProofRequest,
   buildTronSccpSubmission,
   tronSccpDestinationBinding,
   wrapTonSccpProofResult,
+  wrapTonSccpSourceStateVerificationProof,
   wrapTronSccpProofResult,
   wrapSolanaSccpProofResult,
   preferredKagemushaOfflineSpendMode,
@@ -220,16 +222,54 @@ import {
   privacyVerifyProofV1,
   getPrivacyCapabilities,
   buildPrivacyProofEnvelope,
+  buildZkAtPolicyProofV1,
   buildZkAtDevProofFixture,
+  verifyZkAtPolicyProofV1,
+  buildZkAmsAdmissionBatchProofV0,
   buildZkAmsAdmissionDevProofFixture,
+  verifyZkAmsAdmissionBatchProofV0,
+  buildVegaCredentialPredicateProofV0,
   buildVegaCredentialDevProofFixture,
+  verifyVegaCredentialPredicateProofV0,
+  buildSilentThresholdCredentialShowingProofV0,
   buildSilentThresholdCredentialDevProofFixture,
+  verifySilentThresholdCredentialShowingProofV0,
   buildZkX509IdentityDevProofFixture,
+  buildZkX509IdentityProofV0,
+  verifyZkX509IdentityProofV0,
+  buildJindoLatticePublicInputs,
+  buildJindoLatticeProofEnvelope,
+  buildJindoLatticeProofV0,
   buildJindoLatticeDevProofFixture,
+  verifyJindoPolynomialCommitmentV0,
+  verifyJindoLatticeProofLocally,
+  buildSisHintsCredentialCommitments,
+  buildSisHintsCredentialEnvelope,
+  buildSisHintsAnonymousCredentialProofV0,
   buildSisHintsCredentialDevProofFixture,
+  verifySisHintsAnonymousCredentialProofV0,
+  verifySisHintsCredentialProofLocally,
   buildAnonymousPgcReceiverSet,
+  buildAnonymousPgcAccountCommitmentInstruction,
+  buildAnonymousPgcKOutOfNProofV1,
+  verifyAnonymousPgcKOutOfNProofV1,
+  buildAnonymousPgcTransferInstruction,
   buildAnonymousPgcDevProofFixture,
   buildVeRangeDevProofFixture,
+  buildOrchardActionBundleProofV1,
+  buildOrchardActionBundleInstruction,
+  buildPenumbraSpendProofV1,
+  buildPenumbraOutputProofV1,
+  buildPenumbraShieldedPoolTransaction,
+  buildFcmpPlusPlusMembershipProofV1,
+  buildFcmpPlusPlusTransferInstruction,
+  buildMidenStarkTransactionProofV1,
+  buildMidenNoteTransactionInstruction,
+  buildAztecPrivateKernelProofV1,
+  buildAztecPrivateRollupTransactionInstruction,
+  buildPqMaspStarkTransferProofV0,
+  buildPqMaspStarkRegisterPoolInstruction,
+  buildPqMaspStarkTransferInstruction,
   noritoDecodePrivacyProofEnvelope,
   canonicalBscCommitMessageBytes,
   canonicalBscCommitSealBytes,
@@ -1066,11 +1106,11 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
-    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
-    "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
@@ -1144,7 +1184,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1, "recursive_compact_v1");
   assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1, "recursive_spend_v1");
   assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1, "checked_prefold_v1");
-  assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION, 7);
+  assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 7);
   assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1, "kagemusha-recursive-compact-v1");
   assert.equal(
     KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
@@ -1164,7 +1204,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     isKagemushaRecursiveCompactUnavailable("recursive compact proof composition unavailable"),
     false,
   );
-  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION, 6);
+  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 6);
   assert.equal(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND, "halo2/ipa");
   assert.equal(
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -1478,6 +1518,9 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     [{ ...initArtifacts, verifierOpeningLen: 3 }, /verifier_opening_len/],
     [{ ...initArtifacts, verifierOpeningLen: true }, /verifier_opening_len/],
     [{ ...initArtifacts, lineageVerifierKeyBackend: "halo2/kzg" }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageVerifierKeyBackend: " halo2/ipa" }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageVerifierKeyBackend: "halo2/ipa " }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageVerifierKeyBackend: "HALO2/IPA" }, /lineage_verifier_key/],
     [{ ...initArtifacts, lineageVerifierKey: Buffer.alloc(0) }, /lineage_verifier_key/],
     [{ ...initArtifacts, lineageProvingKeyArchive: Buffer.alloc(0) }, /lineage_proving_key_archive/],
     [{ ...initArtifacts, lineageVerifierKey: "not-bytes" }, /lineage_verifier_key/],
@@ -2000,7 +2043,7 @@ test("package dist Kagemusha recursive compact requires key packages before nati
   try {
     globalThis.__IROHA_NATIVE_BINDING__ = {
       connectNoritoBridgeAbiVersion() {
-        return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION;
+        return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
       },
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         ...args
@@ -2230,11 +2273,119 @@ test("package dist entrypoint exports privacy native archive helpers", () => {
   assert.deepEqual(fresh.privacyCriteria, capabilities.privacyCriteria);
 });
 
+test("package dist entrypoint exports production component privacy helpers", () => {
+  const declarationExports = declarationExportNames();
+  for (const name of [
+    "buildJindoLatticeProofV0",
+    "verifyJindoPolynomialCommitmentV0",
+    "buildSisHintsAnonymousCredentialProofV0",
+    "verifySisHintsAnonymousCredentialProofV0",
+    "buildZkAtPolicyProofV1",
+    "verifyZkAtPolicyProofV1",
+    "buildZkAmsAdmissionBatchProofV0",
+    "verifyZkAmsAdmissionBatchProofV0",
+    "buildVegaCredentialPredicateProofV0",
+    "verifyVegaCredentialPredicateProofV0",
+    "buildSilentThresholdCredentialShowingProofV0",
+    "verifySilentThresholdCredentialShowingProofV0",
+    "buildZkX509IdentityProofV0",
+    "verifyZkX509IdentityProofV0",
+    "buildAnonymousPgcAccountCommitmentInstruction",
+    "buildAnonymousPgcKOutOfNProofV1",
+    "verifyAnonymousPgcKOutOfNProofV1",
+    "buildAnonymousPgcTransferInstruction",
+  ]) {
+    assert.match(DIST_INDEX_TEXT, new RegExp(`\\b${name}\\b`, "u"));
+    assert.ok(declarationExports.has(name), `missing declaration export ${name}`);
+  }
+  assert.equal(typeof buildJindoLatticeProofV0, "function");
+  assert.equal(typeof verifyJindoPolynomialCommitmentV0, "function");
+  assert.equal(typeof buildSisHintsAnonymousCredentialProofV0, "function");
+  assert.equal(typeof verifySisHintsAnonymousCredentialProofV0, "function");
+  assert.equal(typeof buildZkAtPolicyProofV1, "function");
+  assert.equal(typeof verifyZkAtPolicyProofV1, "function");
+  assert.equal(typeof buildZkAmsAdmissionBatchProofV0, "function");
+  assert.equal(typeof verifyZkAmsAdmissionBatchProofV0, "function");
+  assert.equal(typeof buildVegaCredentialPredicateProofV0, "function");
+  assert.equal(typeof verifyVegaCredentialPredicateProofV0, "function");
+  assert.equal(typeof buildSilentThresholdCredentialShowingProofV0, "function");
+  assert.equal(typeof verifySilentThresholdCredentialShowingProofV0, "function");
+  assert.equal(typeof buildZkX509IdentityProofV0, "function");
+  assert.equal(typeof verifyZkX509IdentityProofV0, "function");
+  assert.equal(typeof buildAnonymousPgcAccountCommitmentInstruction, "function");
+  assert.equal(typeof buildAnonymousPgcKOutOfNProofV1, "function");
+  assert.equal(typeof verifyAnonymousPgcKOutOfNProofV1, "function");
+  assert.equal(typeof buildAnonymousPgcTransferInstruction, "function");
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface JindoPolynomialCommitmentVerificationResult[\s\S]*production: true;[\s\S]*kind: "jindo-lattice-pcs-zk-v0";[\s\S]*backend: "LatticePcsSis";/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface SisHintsAnonymousCredentialVerificationResult[\s\S]*production: true;[\s\S]*kind: "sis-hints-anoncred-pq-v0";[\s\S]*backend: "SisWithHints";/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface ZkX509IdentityProductionVerificationResult[\s\S]*production: true;[\s\S]*kind: "zk-x509-onchain-identity-v0";[\s\S]*backend: "Stark";/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface ZkAtPolicyProofVerificationResult[\s\S]*production: true;[\s\S]*kind: "zkat-policy-private-auth-v1";[\s\S]*backend: "Stark";/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface ZkAmsAdmissionProductionVerificationResult[\s\S]*production: true;[\s\S]*kind: "zk-ams-recursive-admission-v0";[\s\S]*backend: "Stark";/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface VegaCredentialProductionVerificationResult[\s\S]*production: true;[\s\S]*kind: "vega-existing-credential-zk-v0";[\s\S]*backend: "Stark";/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface SilentThresholdCredentialProductionVerificationResult[\s\S]*production: true;[\s\S]*kind: "silent-threshold-anoncred-v0";[\s\S]*backend: "Stark";/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface AnonymousPgcProofV1VerificationResult[\s\S]*production: true;[\s\S]*kind: "anonymous-pgc-k-out-of-n-v1";[\s\S]*backend: "Stark";/u,
+  );
+});
+
+test("package dist ZK-AMS production helpers reject dev fixture bytes", () => {
+  const fixtureInput = {
+    issuerRoot: Buffer.alloc(32, 0x91),
+    admissionNullifiers: [Buffer.alloc(32, 0xa1), Buffer.alloc(32, 0xa2)],
+    anonymousAccountCommitments: [Buffer.alloc(32, 0xb1), Buffer.alloc(32, 0xb2)],
+    recursiveProof: Buffer.from("zk-ams:recursive-proof:batch-7"),
+    domainSeparator: "boi:zk-ams:pilot:v0",
+    vkHash: Buffer.alloc(32, 0x66),
+  };
+  const fixture = buildZkAmsAdmissionDevProofFixture(fixtureInput);
+  assert.throws(
+    () => buildZkAmsAdmissionBatchProofV0({
+      ...fixtureInput,
+      proofBytes: fixture.proofBytes,
+    }),
+    /dev fixture proof/,
+  );
+  assert.throws(
+    () => verifyZkAmsAdmissionBatchProofV0({
+      envelope: fixture.envelope,
+      issuerRoot: fixtureInput.issuerRoot,
+      admissionNullifiers: fixtureInput.admissionNullifiers,
+      anonymousAccountCommitments: fixtureInput.anonymousAccountCommitments,
+      recursiveProof: fixtureInput.recursiveProof,
+      domainSeparator: fixtureInput.domainSeparator,
+    }),
+    /dev fixture/,
+  );
+});
+
 test("package dist privacy proof envelopes preserve pending production backend tags", () => {
   const vkHash = Buffer.alloc(32, 0x66);
   const cases = [
     ["halo2-ipa-orchard", "Halo2IpaOrchard"],
     ["halo2/ipa/orchard", "Halo2IpaOrchard"],
+    ["halo2-pasta-action-bundle", "Halo2IpaOrchard"],
     ["orchard", "Halo2IpaOrchard"],
     ["zcash-orchard", "Halo2IpaOrchard"],
     ["groth16-bls12-377", "Groth16Bls12377"],
@@ -2246,6 +2397,7 @@ test("package dist privacy proof envelopes preserve pending production backend t
     ["halo2/ipa/penumbra", "Groth16Bls12377"],
     ["halo2/ipa/masp", "Groth16Bls12377"],
     ["fcmp-plus-plus-curve-tree", "FcmpPlusPlusCurveTree"],
+    ["fcmp-plus-plus-curve-trees-bulletproofs", "FcmpPlusPlusCurveTree"],
     ["fcmp++", "FcmpPlusPlusCurveTree"],
     ["monero-fcmp++", "FcmpPlusPlusCurveTree"],
     ["halo2/ipa/monero", "FcmpPlusPlusCurveTree"],
@@ -2265,8 +2417,10 @@ test("package dist privacy proof envelopes preserve pending production backend t
     ["stark/fri/sha256_goldilocks.v1", "Stark"],
     ["miden-stark", "MidenStark"],
     ["stark/fri/miden", "MidenStark"],
+    ["stark-vm-note-transaction", "MidenStark"],
     ["aztec-plonkish-private-kernel", "AztecPlonkishPrivateKernel"],
     ["aztec/private-kernel", "AztecPlonkishPrivateKernel"],
+    ["plonkish-private-kernel-rollup", "AztecPlonkishPrivateKernel"],
     ["pq-masp-stark-fri", "PqMaspStarkFri"],
     ["stark/fri/pq-masp-stark-fri", "PqMaspStarkFri"],
     ["post-quantum-masp", "PqMaspStarkFri"],
@@ -2308,6 +2462,477 @@ test("package dist privacy proof envelopes preserve pending production backend t
     const decoded = noritoDecodePrivacyProofEnvelope(encoded);
     assert.equal(decoded.backend, expected);
   }
+});
+
+test("package dist research privacy adapters build envelopes and reject class options", () => {
+  class PrivacyOptions {
+    constructor(values) {
+      Object.assign(this, values);
+    }
+  }
+
+  const options = {
+    vkHash: Buffer.alloc(32, 0x42),
+    publicInputs: Buffer.from("production-research-public-inputs"),
+    proofBytes: Buffer.from("production-research-proof"),
+  };
+  const proofHelpers = [
+    [buildOrchardActionBundleProofV1, "Halo2IpaOrchard"],
+    [buildPenumbraSpendProofV1, "Groth16Bls12377"],
+    [buildPenumbraOutputProofV1, "Groth16Bls12377"],
+    [buildFcmpPlusPlusMembershipProofV1, "FcmpPlusPlusCurveTree"],
+    [buildMidenStarkTransactionProofV1, "MidenStark"],
+    [buildAztecPrivateKernelProofV1, "AztecPlonkishPrivateKernel"],
+    [buildPqMaspStarkTransferProofV0, "PqMaspStarkFri"],
+  ];
+  for (const [helper, expectedBackend] of proofHelpers) {
+    const envelope = helper(options);
+    const decoded = noritoDecodePrivacyProofEnvelope(envelope);
+    assert.equal(decoded.backend, expectedBackend);
+    assert.deepEqual(decoded.proof_bytes, Array.from(options.proofBytes));
+    assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
+  }
+
+  const instructionHelpers = [
+    [buildOrchardActionBundleInstruction, "zk::SubmitOrchardActionBundle"],
+    [buildPenumbraShieldedPoolTransaction, "zk::SubmitPenumbraShieldedPoolTransaction"],
+    [buildFcmpPlusPlusTransferInstruction, "zk::SubmitFcmpPlusPlusTransfer"],
+    [buildMidenNoteTransactionInstruction, "zk::SubmitMidenNoteTransaction"],
+    [buildAztecPrivateRollupTransactionInstruction, "zk::SubmitAztecPrivateRollupTransaction"],
+    [buildPqMaspStarkRegisterPoolInstruction, "zk::SubmitPqMaspStarkTransfer"],
+    [buildPqMaspStarkTransferInstruction, "zk::SubmitPqMaspStarkTransfer"],
+  ];
+  for (const [helper, instructionKind] of instructionHelpers) {
+    const instruction = helper(options);
+    assert.equal(instruction.instruction, instructionKind);
+    assert.ok(instruction.proof_envelope_sha256);
+    assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
+  }
+
+  const instruction = buildOrchardActionBundleInstruction({
+    ...options,
+    metadata: { purpose: "boundary-test" },
+  });
+  assert.deepEqual(instruction.metadata, { purpose: "boundary-test" });
+  assert.throws(
+    () =>
+      buildOrchardActionBundleInstruction({
+        ...options,
+        metadata: new PrivacyOptions({ purpose: "test" }),
+      }),
+    /plain object/,
+  );
+});
+
+test("package dist Jindo production helpers reject dev fixture bytes", () => {
+  const base = {
+    polynomialJson: { ring: "Rq", degree: 1024, digest: "poly" },
+    openingClaimJson: { point: "x=42", value_digest: "value" },
+    querySetJson: { queries: [0, 7, 42] },
+    parametersJson: { scheme: "jindo-pcs-v0", q_bits: 64 },
+    domainSeparator: "boi:jindo:pcs:pilot:v0",
+  };
+  const vkHash = Buffer.alloc(32, 0xaa);
+  const proof = buildJindoLatticeProofV0({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-jindo-lattice-proof"),
+  });
+  const decoded = noritoDecodePrivacyProofEnvelope(proof);
+  assert.equal(decoded.backend, "LatticePcsSis");
+
+  const verified = verifyJindoPolynomialCommitmentV0({
+    envelope: proof,
+    ...base,
+  });
+  assert.equal(verified.production, true);
+  assert.equal(verified.kind, "jindo-lattice-pcs-zk-v0");
+
+  assert.throws(
+    () => verifyJindoLatticeProofLocally({ envelope: proof, ...base }),
+    /must be Unsupported/,
+  );
+
+  const fixture = buildJindoLatticeDevProofFixture({ ...base, vkHash });
+  assert.throws(
+    () => verifyJindoPolynomialCommitmentV0({ envelope: fixture.envelope, ...base }),
+    /(unsupported tag|must be LatticePcsSis)/,
+  );
+  assert.throws(
+    () =>
+      buildJindoLatticeProofV0({
+        ...base,
+        vkHash,
+        proofBytes: fixture.proofBytes,
+      }),
+    /dev fixture/,
+  );
+
+  const devEncodedAsLattice = buildPrivacyProofEnvelope({
+    backend: "lattice-pcs-sis",
+    circuitId: decoded.circuit_id,
+    vkHash,
+    publicInputs: decoded.public_inputs,
+    proofBytes: fixture.proofBytes,
+  });
+  assert.throws(
+    () => verifyJindoPolynomialCommitmentV0({ envelope: devEncodedAsLattice, ...base }),
+    /dev fixture/,
+  );
+
+  for (const backend of ["unsupported", "stark/fri/sha256-goldilocks"]) {
+    assert.throws(
+      () =>
+        buildJindoLatticeProofV0({
+          ...base,
+          backend,
+          vkHash,
+          proofBytes: Buffer.from("production-jindo-lattice-proof"),
+        }),
+      /backend/,
+    );
+  }
+});
+
+test("package dist Jindo and SIS public helpers reject class-instance options", () => {
+  class PrivacyOptions {
+    constructor(values) {
+      Object.assign(this, values);
+    }
+  }
+
+  const jindoBase = {
+    polynomialJson: { ring: "Rq", degree: 1024, digest: "poly" },
+    openingClaimJson: { point: "x=42", value_digest: "value" },
+    querySetJson: { queries: [0, 7, 42] },
+    parametersJson: { scheme: "jindo-pcs-v0", q_bits: 64 },
+    domainSeparator: "boi:jindo:pcs:pilot:v0",
+  };
+  const jindoProofOptions = {
+    ...jindoBase,
+    vkHash: Buffer.alloc(32, 0xaa),
+    proofBytes: Buffer.from("production-jindo-lattice-proof"),
+  };
+
+  for (const [helper, options] of [
+    [buildJindoLatticePublicInputs, jindoBase],
+    [buildJindoLatticeProofEnvelope, jindoProofOptions],
+    [buildJindoLatticeProofV0, jindoProofOptions],
+    [buildJindoLatticeDevProofFixture, {
+      ...jindoBase,
+      vkHash: Buffer.alloc(32, 0xaa),
+    }],
+  ]) {
+    assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
+  }
+
+  const jindoProof = buildJindoLatticeProofV0(jindoProofOptions);
+  assert.equal(verifyJindoPolynomialCommitmentV0(jindoProof).ok, true);
+  assert.throws(
+    () =>
+      verifyJindoPolynomialCommitmentV0(
+        new PrivacyOptions({ envelope: jindoProof, ...jindoBase }),
+      ),
+    /plain object/,
+  );
+
+  const jindoFixture = buildJindoLatticeDevProofFixture({
+    ...jindoBase,
+    vkHash: Buffer.alloc(32, 0xaa),
+  });
+  assert.equal(verifyJindoLatticeProofLocally(jindoFixture.envelope).ok, true);
+  assert.throws(
+    () =>
+      verifyJindoLatticeProofLocally(
+        new PrivacyOptions({ envelope: jindoFixture.envelope, ...jindoBase }),
+      ),
+    /plain object/,
+  );
+
+  const sisBase = {
+    issuerJson: { issuer: "boi", scheme: "sis-hints-v0" },
+    credentialJson: { credential_type: "wallet", nonce: "n-1" },
+    showingPolicyJson: { verifier: "boi", purpose: "wallet" },
+    parametersJson: { scheme: "sis-hints-anoncred-v0", q_bits: 64 },
+    domainSeparator: "boi:sis-hints:pilot:v0",
+  };
+  const sisProofOptions = {
+    ...sisBase,
+    vkHash: Buffer.alloc(32, 0xbb),
+    proofBytes: Buffer.from("production-sis-hints-proof"),
+  };
+
+  for (const [helper, options] of [
+    [buildSisHintsCredentialCommitments, sisBase],
+    [buildSisHintsCredentialEnvelope, sisProofOptions],
+    [buildSisHintsAnonymousCredentialProofV0, sisProofOptions],
+    [buildSisHintsCredentialDevProofFixture, {
+      ...sisBase,
+      vkHash: Buffer.alloc(32, 0xbb),
+    }],
+  ]) {
+    assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
+  }
+
+  const sisProof = buildSisHintsAnonymousCredentialProofV0(sisProofOptions);
+  assert.equal(verifySisHintsAnonymousCredentialProofV0(sisProof).ok, true);
+  assert.throws(
+    () =>
+      verifySisHintsAnonymousCredentialProofV0(
+        new PrivacyOptions({ envelope: sisProof, ...sisBase }),
+      ),
+    /plain object/,
+  );
+
+  const sisFixture = buildSisHintsCredentialDevProofFixture({
+    ...sisBase,
+    vkHash: Buffer.alloc(32, 0xbb),
+  });
+  assert.equal(verifySisHintsCredentialProofLocally(sisFixture.envelope).ok, true);
+  assert.throws(
+    () =>
+      verifySisHintsCredentialProofLocally(
+        new PrivacyOptions({ envelope: sisFixture.envelope, ...sisBase }),
+      ),
+    /plain object/,
+  );
+});
+
+test("package dist SIS-with-hints production helpers reject dev fixture bytes", () => {
+  const base = {
+    issuerJson: { issuer: "boi", scheme: "sis-hints-v0" },
+    credentialJson: { credential_type: "wallet", nonce: "n-1" },
+    showingPolicyJson: { verifier: "boi", purpose: "wallet" },
+    parametersJson: { scheme: "sis-hints-anoncred-v0", q_bits: 64 },
+    domainSeparator: "boi:sis-hints:pilot:v0",
+  };
+  const vkHash = Buffer.alloc(32, 0xbb);
+  const proof = buildSisHintsAnonymousCredentialProofV0({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-sis-hints-proof"),
+  });
+  const decoded = noritoDecodePrivacyProofEnvelope(proof);
+  assert.equal(decoded.backend, "SisWithHints");
+
+  const verified = verifySisHintsAnonymousCredentialProofV0({
+    envelope: proof,
+    ...base,
+  });
+  assert.equal(verified.production, true);
+  assert.equal(verified.kind, "sis-hints-anoncred-pq-v0");
+
+  const fixture = buildSisHintsCredentialDevProofFixture({ ...base, vkHash });
+  assert.throws(
+    () => verifySisHintsAnonymousCredentialProofV0({ envelope: fixture.envelope, ...base }),
+    /(unsupported tag|must be SisWithHints)/,
+  );
+  assert.throws(
+    () =>
+      buildSisHintsAnonymousCredentialProofV0({
+        ...base,
+        vkHash,
+        proofBytes: fixture.proofBytes,
+      }),
+    /dev fixture/,
+  );
+
+  const devEncodedAsSisHints = buildPrivacyProofEnvelope({
+    backend: "sis-with-hints",
+    circuitId: decoded.circuit_id,
+    vkHash,
+    publicInputs: decoded.public_inputs,
+    proofBytes: fixture.proofBytes,
+  });
+  assert.throws(
+    () =>
+      verifySisHintsAnonymousCredentialProofV0({
+        envelope: devEncodedAsSisHints,
+        ...base,
+      }),
+    /dev fixture/,
+  );
+});
+
+test("package dist Vega production helpers reject dev fixture bytes", () => {
+  const accountId = AccountAddress.fromAccount({
+    publicKey: Buffer.alloc(32, 0x10),
+  }).toI105(0x02f1);
+  const base = {
+    issuerJson: { did: "did:example:issuer:boi", key: "issuer-key-1" },
+    predicateJson: { kind: "age_over", attribute: "age", threshold: 18 },
+    credentialSchema: "boi-age-credential-v1",
+    accountId,
+    expirationEpoch: 42,
+    domainSeparator: "boi:vega:pilot:v0",
+  };
+  const vkHash = Buffer.alloc(32, 0x77);
+  const proof = buildVegaCredentialPredicateProofV0({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-vega-predicate-proof"),
+  });
+  const decoded = noritoDecodePrivacyProofEnvelope(proof);
+  assert.equal(decoded.backend, "Stark");
+
+  const verified = verifyVegaCredentialPredicateProofV0({
+    envelope: proof,
+    ...base,
+  });
+  assert.equal(verified.production, true);
+  assert.equal(verified.kind, "vega-existing-credential-zk-v0");
+
+  const fixture = buildVegaCredentialDevProofFixture({ ...base, vkHash });
+  assert.throws(
+    () => verifyVegaCredentialPredicateProofV0({ envelope: fixture.envelope, ...base }),
+    /dev fixture/,
+  );
+  assert.throws(
+    () =>
+      buildVegaCredentialPredicateProofV0({
+        ...base,
+        vkHash,
+        proofBytes: fixture.proofBytes,
+      }),
+    /dev fixture/,
+  );
+});
+
+test("package dist silent-threshold production helpers reject dev fixture bytes", () => {
+  const base = {
+    issuerSetJson: { threshold: 2, issuers: ["a", "b", "c"] },
+    thresholdPolicyJson: { threshold: 2, purpose: "wallet" },
+    credentialShowingJson: { credential_type: "wallet", nonce: "n-1" },
+    verifierPolicyJson: { verifier: "boi", purpose: "wallet" },
+    domainSeparator: "boi:silent-threshold:pilot:v0",
+  };
+  const vkHash = Buffer.alloc(32, 0x88);
+  const proof = buildSilentThresholdCredentialShowingProofV0({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-silent-threshold-showing-proof"),
+  });
+  const decoded = noritoDecodePrivacyProofEnvelope(proof);
+  assert.equal(decoded.backend, "Stark");
+
+  const verified = verifySilentThresholdCredentialShowingProofV0({
+    envelope: proof,
+    ...base,
+  });
+  assert.equal(verified.production, true);
+  assert.equal(verified.kind, "silent-threshold-anoncred-v0");
+
+  const fixture = buildSilentThresholdCredentialDevProofFixture({ ...base, vkHash });
+  assert.throws(
+    () =>
+      verifySilentThresholdCredentialShowingProofV0({
+        envelope: fixture.envelope,
+        ...base,
+      }),
+    /dev fixture/,
+  );
+  assert.throws(
+    () =>
+      buildSilentThresholdCredentialShowingProofV0({
+        ...base,
+        vkHash,
+        proofBytes: fixture.proofBytes,
+      }),
+    /dev fixture/,
+  );
+});
+
+test("package dist ZK-X.509 production helpers reject dev fixture bytes", () => {
+  const accountId = AccountAddress.fromAccount({
+    publicKey: Buffer.alloc(32, 0x10),
+  }).toI105(0x02f1);
+  const base = {
+    caRootJson: { root: "boi-root-ca", version: 1 },
+    certificatePolicyJson: { eku: ["clientAuth"], policy: "wallet" },
+    revocationJson: { epoch: 7, root: "revocation-root" },
+    subjectJson: { cn: "Bank A", lei: "5493001KJTIIGC8Y1R12" },
+    accountId,
+    domainSeparator: "boi:zk-x509:pilot:v0",
+  };
+  const vkHash = Buffer.alloc(32, 0x99);
+  const proof = buildZkX509IdentityProofV0({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-zk-x509-identity-proof"),
+  });
+  const decoded = noritoDecodePrivacyProofEnvelope(proof);
+  assert.equal(decoded.backend, "Stark");
+
+  const verified = verifyZkX509IdentityProofV0({
+    envelope: proof,
+    ...base,
+  });
+  assert.equal(verified.production, true);
+  assert.equal(verified.kind, "zk-x509-onchain-identity-v0");
+
+  const fixture = buildZkX509IdentityDevProofFixture({ ...base, vkHash });
+  assert.throws(
+    () =>
+      verifyZkX509IdentityProofV0({
+        envelope: fixture.envelope,
+        ...base,
+      }),
+    /dev fixture/,
+  );
+  assert.throws(
+    () =>
+      buildZkX509IdentityProofV0({
+        ...base,
+        vkHash,
+        proofBytes: fixture.proofBytes,
+      }),
+    /dev fixture/,
+  );
+});
+
+test("package dist zkAt production helpers reject dev fixture bytes", () => {
+  const accountId = AccountAddress.fromAccount({
+    publicKey: Buffer.alloc(32, 0x10),
+  }).toI105(0x02f1);
+  const base = {
+    policyJson: { threshold: 2, roles: ["ops", "risk", "treasury"] },
+    policyEpoch: 7,
+    policySchema: "boi-hidden-threshold-v1",
+    payload: Buffer.from("zkat:transparent-transfer:42"),
+    accountId,
+    actionClass: "transparent_transfer",
+    domainSeparator: "boi:zkat:v1",
+  };
+  const vkHash = Buffer.alloc(32, 0x55);
+  const proof = buildZkAtPolicyProofV1({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("production-zkat-policy-proof"),
+  });
+  const decoded = noritoDecodePrivacyProofEnvelope(proof);
+  assert.equal(decoded.backend, "Stark");
+
+  const verified = verifyZkAtPolicyProofV1({
+    envelope: proof,
+    ...base,
+  });
+  assert.equal(verified.production, true);
+  assert.equal(verified.kind, "zkat-policy-private-auth-v1");
+
+  const fixture = buildZkAtDevProofFixture({ ...base, vkHash });
+  assert.throws(
+    () => verifyZkAtPolicyProofV1({ envelope: fixture.envelope, ...base }),
+    /dev fixture/,
+  );
+  assert.throws(
+    () =>
+      buildZkAtPolicyProofV1({
+        ...base,
+        vkHash,
+        proofBytes: fixture.proofBytes,
+      }),
+    /dev fixture/,
+  );
 });
 
 test("package dist privacy proof envelopes reject production metadata claims", () => {
@@ -2525,6 +3150,19 @@ test("package dist privacy dev proof fixtures reject production metadata claims"
       );
     }
   }
+
+  const veRangePayload = Buffer.from("transfer:alice@wonderland:bob@wonderland:42");
+  const veRangeCommitments = [Buffer.alloc(32, 0x44), Buffer.alloc(32, 0x45)];
+  const veRangeFixture = buildVeRangeDevProofFixture({
+    commitments: veRangeCommitments,
+    bitLength: 64,
+    commitmentScheme: "pedersen-v1",
+    domainSeparator: "boi:amount-range:v1",
+    payload: veRangePayload,
+    vkHash: Buffer.alloc(32, 0x55),
+  });
+  assert.equal(veRangeFixture.production, false);
+  assert.equal(veRangeFixture.kind, "verange-dev-fixture-v1");
 });
 
 test("package dist privacy native availability rejects coerced ABI versions", () => {
@@ -3317,9 +3955,9 @@ test("package dist privacyProofRequestV1 clears component copies after native di
     };
     assert.deepEqual(
       privacyProofRequestV1({
-        algorithmId: "verange-transparent-range-v1",
-        entrypoint: "buildVeRangeProofV1",
-        vkRef: "bulletproofs:verange_transparent_range_v1",
+        algorithmId: "zk-ace-pq-authorization-v0",
+        entrypoint: "buildZkAceAuthorizationProofV1",
+        vkRef: "stark-fri:zk_ace_pq_authorization_v0",
         publicInputs,
         witness,
         proof,
@@ -3337,9 +3975,9 @@ test("package dist privacyProofRequestV1 clears component copies after native di
     let error;
     try {
       privacyProofRequestV1({
-        algorithmId: "verange-transparent-range-v1",
-        entrypoint: "buildVeRangeProofV1",
-        vkRef: "bulletproofs:verange_transparent_range_v1",
+        algorithmId: "zk-ace-pq-authorization-v0",
+        entrypoint: "buildZkAceAuthorizationProofV1",
+        vkRef: "stark-fri:zk_ace_pq_authorization_v0",
         publicInputs,
         witness,
         proof,
@@ -3680,6 +4318,7 @@ test("package declarations do not advertise privacy production metadata inputs",
     "SisHintsCredentialEnvelopeInput",
     "AnonymousPgcDevProofFixtureInput",
     "VeRangeProofEnvelopeInput",
+    "VeRangeProofV1Input",
     "VeRangeDevProofFixtureInput",
   ]) {
     const declaration = declarationInterface(name);
@@ -4511,6 +5150,110 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
   );
 });
 
+test("package dist entrypoint enforces SCCP route-canary role separation", () => {
+  const distSolanaRouteCanaryEvidence = {
+    routeAllowlistHash: `0x${"31".repeat(32)}`,
+    destinationBindingHash: sccpDestinationBindingHash(SCCP_DOMAIN_SOL),
+    sourceVerifierMaterialHash: `0x${"33".repeat(32)}`,
+    sourceAdapterEngineDeploymentHash: `0x${"34".repeat(32)}`,
+    verifierIdentity: "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3",
+    verifierCodeHash:
+      "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
+    solanaRpcCommitment: "finalized",
+    solanaProgramOwner: SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
+    solanaProgramdataOwner: SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
+    solanaProgramImmutable: true,
+    solanaProgramAccountDataBase64:
+      "AgAAABERERERERERERERERERERERERERERERERERERERERER",
+    solanaProgramdataAddress: "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+    solanaProgramdataSlot: "4321",
+    solanaExpectedProgramdataSlot: "4321",
+    solanaProgramAccountContextSlot: "5000",
+    solanaProgramdataAccountContextSlot: "5001",
+    solanaProgramdataMetadataBlake2b256:
+      "0x2b5f26278ea949463e97c1dc5e53a821b82515b405454a1b0e3cd652c3b00209",
+    solanaProgramdataMetadataBase64:
+      "AwAAAOEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    solanaProgramdataExecutableBlake2b256:
+      "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
+    solanaProgramdataExecutableBase64: "f0VMRgECAwQF",
+  };
+  const distSolanaRouteCanaryGovernedHashReuse = {
+    ...distSolanaRouteCanaryEvidence,
+    routeAllowlistHash: distSolanaRouteCanaryEvidence.sourceVerifierMaterialHash,
+  };
+  assert.throws(
+    () =>
+      solanaSccpRouteCanaryEvidenceHash(
+        distSolanaRouteCanaryGovernedHashReuse,
+      ),
+    /Solana route canary governed hashes/u,
+  );
+
+  const distTonRouteCanaryEvidence = {
+    routeAllowlistHash: `0x${"31".repeat(32)}`,
+    destinationBindingHash: sccpDestinationBindingHash(SCCP_DOMAIN_TON),
+    sourceVerifierMaterialHash: `0x${"33".repeat(32)}`,
+    sourceAdapterEngineDeploymentHash: `0x${"34".repeat(32)}`,
+    verifierContractAddress: `0:${"11".repeat(32)}`,
+    verifierCodeHash: `0x${"44".repeat(32)}`,
+    accountStatus: "active",
+    accountStateHash: `0x${"55".repeat(32)}`,
+    lastTransactionLt: "123456789",
+    lastTransactionHash: `0x${"66".repeat(32)}`,
+    verifierCodeBocRootHash: `0x${"44".repeat(32)}`,
+  };
+  const distTonRouteCanaryGovernedHashReuse = {
+    ...distTonRouteCanaryEvidence,
+    routeAllowlistHash: distTonRouteCanaryEvidence.sourceVerifierMaterialHash,
+  };
+  assert.throws(
+    () => tonSccpRouteCanaryEvidenceHash(distTonRouteCanaryGovernedHashReuse),
+    /TON route canary governed hashes/u,
+  );
+
+  const distTronRouteCanaryEvidence = {
+    routeAllowlistHash:
+      "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
+    destinationBindingHash:
+      "0x17c953ad5b8c9a2b6f7102aca993fa7c427d018505cf4f58fac35ea454caba7f",
+    sourceVerifierMaterialHash:
+      "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8",
+    sourceAdapterEngineDeploymentHash:
+      "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
+    networkId: `0x${"33".repeat(32)}`,
+    verifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+    verifierCodeHash: `0x${"bb".repeat(32)}`,
+    verifierKeyHash: `0x${"cc".repeat(32)}`,
+    transactionId: `0x${"fa".repeat(32)}`,
+    transactionOwnerAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    blockNumber: 234n,
+    blockTimestamp: 567000n,
+    logIndex: 0,
+    messageId: `0x${"dd".repeat(32)}`,
+    callDataSha256:
+      "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+    payloadHash: `0x${"ab".repeat(32)}`,
+    commitmentRoot: `0x${"ee".repeat(32)}`,
+    finalityHeight: `0x${"00".repeat(31)}7b`,
+    finalityBlockHash: `0x${"cd".repeat(32)}`,
+    statementHash: `0x${"f1".repeat(32)}`,
+    usedMessageProof: true,
+    rawDataOwnerMatchesTransaction: true,
+    signatureSha256: `0x${"c4".repeat(32)}`,
+    signatureRecoveredAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    signatureRecoversToOwner: true,
+  };
+  const distTronRouteCanaryGovernedHashReuse = {
+    ...distTronRouteCanaryEvidence,
+    routeAllowlistHash: distTronRouteCanaryEvidence.sourceVerifierMaterialHash,
+  };
+  assert.throws(
+    () => tronSccpRouteCanaryEvidenceHash(distTronRouteCanaryGovernedHashReuse),
+    /TRON route canary governed hashes/u,
+  );
+});
+
 test("package dist entrypoint exports Solana tower lockout helpers", () => {
   assert.equal(SCCP_DOMAIN_SOL, 3);
   assert.equal(SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH, 32n);
@@ -4602,6 +5345,94 @@ test("package dist entrypoint exports Solana account opening helpers", () => {
   assert.equal(typeof tonSccpFullLightClientAuditOpenVerifySchemaDescriptor, "function");
   assert.equal(typeof buildTonSccpFullLightClientAuditProofRequest, "function");
   assert.equal(typeof buildTonSccpFullLightClientAuditProofRequests, "function");
+});
+
+const sampleDistTonShardStateSourceStateInput = () => ({
+  version: 1,
+  sourceDomain: SCCP_DOMAIN_TON,
+  masterchainSeqno: 19n,
+  masterchainWorkchainId: -1,
+  masterchainShard: 0x8000000000000000n,
+  masterchainBlockHash: `0x${"aa".repeat(32)}`,
+  masterchainFileHash: `0x${"a5".repeat(32)}`,
+  validatorSetHash: `0x${"b1".repeat(32)}`,
+  masterchainConfigRoot:
+    "0x5bf87008e0e76085d6db977b53a89329de49a4eed8fd1ff90d8c78f096ef05af",
+  masterchainConfigProofHash: `0x${"b2".repeat(32)}`,
+  shardWorkchainId: 0,
+  shardShard: 0x8000000000000000n,
+  shardSeqno: 7n,
+  shardBlockHash: `0x${"bb".repeat(32)}`,
+  shardFileHash: `0x${"bc".repeat(32)}`,
+  shardStateRoot:
+    "0x12a960855fea2f529c336d7325b1cca784f0f0b1a52ae149d02d046a2499e270",
+  transactionRoot:
+    "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
+  transactionLt: 7n,
+  shardStateDictionaryRoot:
+    "0x049a63ecefc78dc0cd468ebf47e0385807d790a2ca8e0dca5cbbeb0714567fd3",
+  shardStateDictionaryKeyBitLen: 256,
+  shardStateDictionaryKey: Uint8Array.from([17, ...Array(31).fill(0)]),
+  masterchainSignatureHash: `0x${"c1".repeat(32)}`,
+  shardProofHash:
+    "0x32d8b496320e6a1ce5ccf671f2bd6f0d09cb53afed8c123b86cb9327b77c88cf",
+  shardStateProofBoc: Buffer.from(
+    "b5ee9c720101060100aa00035b9023afe2ffffff110000000000000000000000000000000007000000010000000b000000000000000c000000122001020500000101c00301d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419000000000000000780400000000",
+    "hex",
+  ),
+  shardStateDictionaryProofBoc: Buffer.from(
+    "b5ee9c72010103010073000101c00101d37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff84400000000000000000000000000000000000000000000000000000000000000005a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e41900000000000000078020000",
+    "hex",
+  ),
+  configDictionaryProofBoc: Buffer.from(
+    "b5ee9c72010106010091000101c00101117fffffff80000008a002012b120000000100000002000200020000000000000003c00302087fff00000405005b14e3a049e28444444444444444444444444444444444444444444444444444444444444444400000000000000060005b14e3a049e288888888888888888888888888888888888888888888888888888888888888000000000000000a0",
+    "hex",
+  ),
+  validatorSetTransitionProofs: [],
+  sourceStateVerifierHash: `0x${"d4".repeat(32)}`,
+  sourceTrustAnchorHash: `0x${"d5".repeat(32)}`,
+  consensusVerifierHash: `0x${"d6".repeat(32)}`,
+  messageInclusionVerifierHash: `0x${"d7".repeat(32)}`,
+  finalityPolicyHash: `0x${"d8".repeat(32)}`,
+});
+
+test("package dist entrypoint enforces TON source-state proof cap", async () => {
+  const request = buildTonShardStateProofRequest(
+    sampleDistTonShardStateSourceStateInput(),
+  );
+  const distTonDebugProofFamily = "debug-proof-family";
+  const oversizedTonDistSourceStateProofBytes = new Uint8Array(
+    SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1,
+  ).fill(1);
+  assert.throws(
+    () =>
+      canonicalTonSccpSourceStateVerificationProofBytes({
+        circuitId: SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+        proofFamily: distTonDebugProofFamily,
+        proofBytes: new Uint8Array([1, 2, 3]),
+      }),
+    /TON source-state stark-fri-v1 proof/u,
+  );
+  assert.throws(
+    () =>
+      wrapTonSccpSourceStateVerificationProof(
+        oversizedTonDistSourceStateProofBytes,
+        request,
+      ),
+    /proofBytes must be at most/u,
+  );
+  const oversizedTonDistCallbackProver = new TonSccpSourceStateProver({
+    prove() {
+      return oversizedTonDistSourceStateProofBytes;
+    },
+  });
+  await assert.rejects(
+    () =>
+      oversizedTonDistCallbackProver.proveShardState(
+        sampleDistTonShardStateSourceStateInput(),
+      ),
+    /proofBytes must be at most/u,
+  );
 });
 
 test("package dist entrypoint exports Solana account data helpers", () => {
@@ -5060,8 +5891,47 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     }
     return out;
   };
-  const proofArtifactBytes = nativeArtifactPayloadBytes("sccp package proof artifact v1");
-  const provingKeyBytes = nativeArtifactPayloadBytes("sccp package proving key v1");
+  const nativeSnarkjsArtifactPayloadBytes = (
+    label,
+    magic,
+    sectionCount,
+    size = 96 * 1024,
+  ) => {
+    const out = nativeArtifactPayloadBytes(label, size);
+    const headerBytes = 12;
+    const sectionHeaderBytes = sectionCount * 12;
+    const payloadBytes = out.length - headerBytes - sectionHeaderBytes;
+    if (payloadBytes < sectionCount) {
+      throw new Error("native EVM SnarkJS fixture is too small");
+    }
+    out.set(Buffer.from(magic, "ascii"), 0);
+    out.writeUInt32LE(1, 4);
+    out.writeUInt32LE(sectionCount, 8);
+    let offset = headerBytes;
+    for (let index = 0; index < sectionCount; index += 1) {
+      const sectionSize =
+        Math.floor(payloadBytes / sectionCount) +
+        (index < payloadBytes % sectionCount ? 1 : 0);
+      out.writeUInt32LE(index + 1, offset);
+      out.writeUInt32LE(sectionSize, offset + 4);
+      out.writeUInt32LE(0, offset + 8);
+      offset += 12 + sectionSize;
+    }
+    if (offset !== out.length) {
+      throw new Error("native EVM SnarkJS fixture sections do not fill the file");
+    }
+    return out;
+  };
+  const proofArtifactBytes = nativeSnarkjsArtifactPayloadBytes(
+    "sccp package proof artifact v1",
+    "r1cs",
+    3,
+  );
+  const provingKeyBytes = nativeSnarkjsArtifactPayloadBytes(
+    "sccp package proving key v1",
+    "zkey",
+    10,
+  );
   const verifierKeyBytes = nativeArtifactPayloadBytes("sccp package verifier key v1");
   const implementationBytes = nativeArtifactPayloadBytes(
     "sccp package pure typescript prover artifact v1",
@@ -5083,9 +5953,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     domain: SCCP_DOMAIN_ETH,
     chain: "eth",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
-    proof_artifact: "artifacts/eth-mainnet/proof-artifact.bin",
+    proof_artifact: "artifacts/eth-mainnet/proof-artifact.r1cs",
     proof_artifact_hash: proofArtifactHash,
-    proving_key: "artifacts/eth-mainnet/proving-key.bin",
+    proving_key: "artifacts/eth-mainnet/proving-key.zkey",
     proving_key_hash: provingKeyHash,
     verifier_key: "artifacts/eth-mainnet/verifier-key.bin",
     verifier_key_hash: verifierKeyHash,
@@ -5181,6 +6051,63 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   const selfTestFixtureBytes = Buffer.from(JSON.stringify(selfTestFixture), "utf8");
   const selfTestFixtureHash = sha256Hex(selfTestFixtureBytes);
   nativeProverBundle.audit_hashes.native_prover_self_test = selfTestFixtureHash;
+  const hashConsistentNativeProverBundle = ({
+    proofArtifactBytes: selectedProofArtifactBytes = proofArtifactBytes,
+    provingKeyBytes: selectedProvingKeyBytes = provingKeyBytes,
+    verifierKeyBytes: selectedVerifierKeyBytes = verifierKeyBytes,
+    implementationBytes: selectedImplementationBytes = implementationBytes,
+    crossSdkFixtureParityBytes: overrideParityFixtureBytes,
+    nativeProverSelfTestBytes: overrideSelfTestFixtureBytes,
+  } = {}) => {
+    const selectedProofArtifactHash = sha256Hex(selectedProofArtifactBytes);
+    const selectedProvingKeyHash = sha256Hex(selectedProvingKeyBytes);
+    const selectedVerifierKeyHash = sha256Hex(selectedVerifierKeyBytes);
+    const selectedImplementationHash = sha256Hex(selectedImplementationBytes);
+    const selectedBundle = {
+      ...nativeProverBundle,
+      proof_artifact_hash: selectedProofArtifactHash,
+      proving_key_hash: selectedProvingKeyHash,
+      verifier_key_hash: selectedVerifierKeyHash,
+      native_sdk_artifacts: nativeProverBundle.native_sdk_artifacts.map((artifact, index) => ({
+        ...artifact,
+        prover_artifact_hash: selectedProofArtifactHash,
+        proving_key_hash: selectedProvingKeyHash,
+        implementation_hash: artifact.sdk === "javascript"
+          ? selectedImplementationHash
+          : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
+      })),
+    };
+    const selectedParityFixtureBytes =
+      overrideParityFixtureBytes ?? Buffer.from(
+        JSON.stringify({
+          ...parityFixture,
+          proof_artifact_hash: selectedProofArtifactHash,
+          proving_key_hash: selectedProvingKeyHash,
+          verifier_key_hash: selectedVerifierKeyHash,
+        }),
+        "utf8",
+      );
+    const selectedSelfTestFixtureBytes =
+      overrideSelfTestFixtureBytes ?? Buffer.from(
+        JSON.stringify({
+          ...selfTestFixture,
+          proof_artifact_hash: selectedProofArtifactHash,
+          proving_key_hash: selectedProvingKeyHash,
+          verifier_key_hash: selectedVerifierKeyHash,
+        }),
+        "utf8",
+      );
+    selectedBundle.audit_hashes = {
+      ...nativeProverBundle.audit_hashes,
+      cross_sdk_fixture_parity: sha256Hex(selectedParityFixtureBytes),
+      native_prover_self_test: sha256Hex(selectedSelfTestFixtureBytes),
+    };
+    return {
+      bundle: selectedBundle,
+      parityFixtureBytes: selectedParityFixtureBytes,
+      selfTestFixtureBytes: selectedSelfTestFixtureBytes,
+    };
+  };
   assert.equal(
     validateEthereumMainnetNativeEvmProverBundle(nativeProverBundle, {
       destinationBinding: ethereumMainnetBinding,
@@ -5192,6 +6119,14 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       destinationBinding: ethereumMainnetBinding,
     }).proofArtifactHash,
     proofArtifactHash,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle(
+        { ...nativeProverBundle, proof_artifact: "ipfs:proof-artifact.r1cs" },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /proofArtifact must not contain URI schemes or drive prefixes/u,
   );
   assert.throws(
     () =>
@@ -5211,6 +6146,22 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         { destinationBinding: ethereumMainnetBinding },
       ),
     /proofArtifact path contains forbidden prover dependency marker: wasm/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle(
+        { ...nativeProverBundle, proof_artifact: "artifacts/eth-mainnet/proof-artifact.bin" },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /proofArtifact must reference a \.r1cs artifact/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle(
+        { ...nativeProverBundle, proving_key: "artifacts/eth-mainnet/proving-key.bin" },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /provingKey must reference a \.zkey artifact/u,
   );
   assert.equal(
     validateEthereumMainnetNativeEvmProverParityFixture(
@@ -5295,6 +6246,20 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     )).implementationHash,
     implementationHash,
   );
+  await assert.rejects(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
+        {
+          nativeProverBundle,
+          sdk: " javascript ",
+          artifactResolver(path) {
+            return nativeArtifactBytes.get(path);
+          },
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /nativeProverArtifacts\.sdk must be a non-empty canonical string/u,
+  );
   let factoryRequest;
   const factorySdk = await EthereumMainnetSccp.fromNativeProverBundle({
     destinationBinding: ethereumMainnetBinding,
@@ -5366,6 +6331,111 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       ),
     /proofArtifactBytes must be at least 65536 bytes/u,
   );
+  const tinyProvingKeyBytes = Buffer.from("tiny package proving key\n", "utf8");
+  const tinyProvingKeyBundle = hashConsistentNativeProverBundle({
+    provingKeyBytes: tinyProvingKeyBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyProvingKeyBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes: tinyProvingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyProvingKeyBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinyProvingKeyBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /provingKeyBytes must be at least 65536 bytes/u,
+  );
+  const tinyVerifierKeyBytes = Buffer.from("tiny package verifier key\n", "utf8");
+  const tinyVerifierKeyBundle = hashConsistentNativeProverBundle({
+    verifierKeyBytes: tinyVerifierKeyBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyVerifierKeyBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes: tinyVerifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyVerifierKeyBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinyVerifierKeyBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /verifierKeyBytes must be at least 128 bytes/u,
+  );
+  const tinyParityFixtureBytesForFloor = Buffer.from("{}", "utf8");
+  const tinyParityBundle = hashConsistentNativeProverBundle({
+    crossSdkFixtureParityBytes: tinyParityFixtureBytesForFloor,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyParityBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyParityFixtureBytesForFloor,
+          nativeProverSelfTestBytes: tinyParityBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /crossSdkFixtureParityBytes must be at least 128 bytes/u,
+  );
+  const tinySelfTestFixtureBytesForFloor = Buffer.from("{}", "utf8");
+  const tinySelfTestBundle = hashConsistentNativeProverBundle({
+    nativeProverSelfTestBytes: tinySelfTestFixtureBytesForFloor,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinySelfTestBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinySelfTestBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinySelfTestFixtureBytesForFloor,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /nativeProverSelfTestBytes must be at least 128 bytes/u,
+  );
+  const tinyImplementationBytes = Buffer.from("tiny package implementation\n", "utf8");
+  const tinyImplementationBundle = hashConsistentNativeProverBundle({
+    implementationBytes: tinyImplementationBytes,
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyImplementationBundle.bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyImplementationBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes: tinyImplementationBundle.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes: tinyImplementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /implementationBytes must be at least 1024 bytes/u,
+  );
   assert.throws(
     () =>
       verifyEthereumMainnetNativeEvmProverArtifacts(
@@ -5429,8 +6499,8 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     bundle_id: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
     domain: SCCP_DOMAIN_BSC,
     chain: "bsc-mainnet",
-    proof_artifact: "artifacts/bsc-mainnet/proof-artifact.bin",
-    proving_key: "artifacts/bsc-mainnet/proving-key.bin",
+    proof_artifact: "artifacts/bsc-mainnet/proof-artifact.r1cs",
+    proving_key: "artifacts/bsc-mainnet/proving-key.zkey",
     verifier_key: "artifacts/bsc-mainnet/verifier-key.bin",
     destination_binding_hash: bscMainnetBinding.bindingHash,
     cross_sdk_fixture_parity_artifact:
@@ -5554,8 +6624,8 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     bundle_id: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
     domain: SCCP_DOMAIN_BSC,
     chain: "bsc-testnet",
-    proof_artifact: "artifacts/bsc-testnet/proof-artifact.bin",
-    proving_key: "artifacts/bsc-testnet/proving-key.bin",
+    proof_artifact: "artifacts/bsc-testnet/proof-artifact.r1cs",
+    proving_key: "artifacts/bsc-testnet/proving-key.zkey",
     verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
     destination_binding_hash: bscTestnetBinding.bindingHash,
     cross_sdk_fixture_parity_artifact: "artifacts/bsc-testnet/cross-sdk-fixture-parity.json",

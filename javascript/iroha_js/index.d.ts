@@ -213,6 +213,7 @@ export const ValidationErrorCode: {
   readonly INVALID_MULTIHASH: "ERR_INVALID_MULTIHASH";
   readonly INVALID_ACCOUNT_ID: "ERR_INVALID_ACCOUNT_ID";
   readonly INVALID_ASSET_ID: "ERR_INVALID_ASSET_ID";
+  readonly INVALID_ASSET_DEFINITION_ID: "ERR_INVALID_ASSET_DEFINITION_ID";
   readonly INVALID_IBAN: "ERR_INVALID_IBAN";
   readonly INVALID_OBJECT: "ERR_INVALID_OBJECT";
   readonly INVALID_METADATA: "ERR_INVALID_METADATA";
@@ -8134,6 +8135,22 @@ export interface ZkAtAuthenticatorLocalVerificationResult {
   policy_epoch: number;
 }
 
+export interface ZkAtPolicyProofVerificationResult {
+  ok: true;
+  production: true;
+  kind: "zkat-policy-private-auth-v1";
+  backend: "Stark";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: ZkAtPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  account_id: string;
+  action_class: string;
+  policy_epoch: number;
+}
+
 export interface ZkAmsAdmissionBatchInput {
   version?: NumericLike;
   issuerRoot?: BinaryLike;
@@ -8230,6 +8247,21 @@ export interface ZkAmsAdmissionLocalVerificationResult {
   production: false;
   kind: "zk-ams-dev-fixture-v0";
   backend: "stark/fri/sha256-goldilocks";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: ZkAmsPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  admission_batch_root: string;
+  batch_size: number;
+}
+
+export interface ZkAmsAdmissionProductionVerificationResult {
+  ok: true;
+  production: true;
+  kind: "zk-ams-recursive-admission-v0";
+  backend: "Stark";
   circuit_id: string;
   verifier_key_hash: string;
   public_inputs: ZkAmsPublicInputs;
@@ -8342,6 +8374,21 @@ export interface VegaCredentialLocalVerificationResult {
   production: false;
   kind: "vega-dev-fixture-v0";
   backend: "stark/fri/sha256-goldilocks";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: VegaCredentialPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  credential_schema: string;
+  expiration_epoch: number;
+}
+
+export interface VegaCredentialProductionVerificationResult {
+  ok: true;
+  production: true;
+  kind: "vega-existing-credential-zk-v0";
+  backend: "Stark";
   circuit_id: string;
   verifier_key_hash: string;
   public_inputs: VegaCredentialPublicInputs;
@@ -8478,6 +8525,20 @@ export interface SilentThresholdCredentialLocalVerificationResult {
   production: false;
   kind: "silent-threshold-dev-fixture-v0";
   backend: "stark/fri/sha256-goldilocks";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: SilentThresholdCredentialPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  showing_nullifier: string;
+}
+
+export interface SilentThresholdCredentialProductionVerificationResult {
+  ok: true;
+  production: true;
+  kind: "silent-threshold-anoncred-v0";
+  backend: "Stark";
   circuit_id: string;
   verifier_key_hash: string;
   public_inputs: SilentThresholdCredentialPublicInputs;
@@ -8637,6 +8698,20 @@ export interface ZkX509IdentityLocalVerificationResult {
   address_binding: string;
 }
 
+export interface ZkX509IdentityProductionVerificationResult {
+  ok: true;
+  production: true;
+  kind: "zk-x509-onchain-identity-v0";
+  backend: "Stark";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: ZkX509IdentityPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  address_binding: string;
+}
+
 export interface JindoLatticePublicInputsInput {
   version?: NumericLike;
   commitment?: BinaryLike;
@@ -8779,6 +8854,20 @@ export interface JindoLatticeLocalVerificationResult {
   production: false;
   kind: "jindo-lattice-dev-fixture-v0";
   backend: "unsupported";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: JindoLatticePublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  parameter_hash: string;
+}
+
+export interface JindoPolynomialCommitmentVerificationResult {
+  ok: true;
+  production: true;
+  kind: "jindo-lattice-pcs-zk-v0";
+  backend: "LatticePcsSis";
   circuit_id: string;
   verifier_key_hash: string;
   public_inputs: JindoLatticePublicInputs;
@@ -8949,6 +9038,20 @@ export interface SisHintsCredentialLocalVerificationResult {
   parameter_hash: string;
 }
 
+export interface SisHintsAnonymousCredentialVerificationResult {
+  ok: true;
+  production: true;
+  kind: "sis-hints-anoncred-pq-v0";
+  backend: "SisWithHints";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: SisHintsCredentialPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  parameter_hash: string;
+}
+
 export interface AnonymousPgcReceiverInput {
   accountCommitment?: BinaryLike;
   account_commitment?: BinaryLike;
@@ -9030,6 +9133,33 @@ export interface AnonymousPgcDevProofFixtureInput {
   max_payload_bytes?: NumericLike;
 }
 
+export interface AnonymousPgcProofV1Input extends AnonymousPgcDevProofFixtureInput {
+  proofBytes: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+}
+
+export interface AnonymousPgcAccountCommitmentInstructionInput {
+  accountCommitment?: BinaryLike;
+  account_commitment?: BinaryLike;
+  anonymitySetRoot?: BinaryLike;
+  anonymity_set_root?: BinaryLike;
+  chainId?: string;
+  chain_id?: string;
+  domainSeparator?: string;
+  domain_separator?: string;
+}
+
+export interface AnonymousPgcAccountCommitmentInstruction {
+  kind: "zk::RegisterAnonymousPgcAccountCommitment";
+  version: 1;
+  account_commitment: string;
+  anonymity_set_root: string;
+  chain_id: string;
+  domain_separator: string;
+  instruction_digest: string;
+}
+
 export interface AnonymousPgcPublicInputs {
   version: 1;
   anonymity_set_root: string;
@@ -9077,6 +9207,47 @@ export interface AnonymousPgcDevProofLocalVerificationResult {
   aux_bytes: number;
   receiver_count: number;
   receiver_threshold: number;
+}
+
+export interface AnonymousPgcProofV1VerificationInput
+  extends AnonymousPgcDevProofFixtureInput {
+  envelope?: BinaryLike;
+  proofEnvelope?: BinaryLike;
+  proof_envelope?: BinaryLike;
+  bytes?: BinaryLike;
+}
+
+export interface AnonymousPgcProofV1VerificationResult {
+  ok: true;
+  production: true;
+  kind: "anonymous-pgc-k-out-of-n-v1";
+  backend: "stark/fri/sha256-goldilocks";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: AnonymousPgcPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  receiver_count: number;
+  receiver_threshold: number;
+}
+
+export interface AnonymousPgcTransferInstructionInput
+  extends AnonymousPgcProofV1VerificationInput {}
+
+export interface AnonymousPgcTransferInstruction {
+  kind: "zk::SubmitAnonymousPgcTransfer";
+  version: 1;
+  proof_envelope: Buffer;
+  anonymity_set_root: string;
+  tx_digest: string;
+  receiver_set_commitment: string;
+  receiver_threshold: number;
+  receiver_count: number;
+  link_tag: string;
+  chain_id: string;
+  domain_separator: string;
+  instruction_digest: string;
 }
 
 export type VeRangeCommitmentScheme =
@@ -9147,6 +9318,8 @@ export interface VeRangeProofEnvelopeInput extends RangeCommitmentInput {
   max_public_input_bytes?: NumericLike;
 }
 
+export interface VeRangeProofV1Input extends VeRangeProofEnvelopeInput {}
+
 export interface VeRangeDevProofFixtureInput extends RangeCommitmentInput {
   backend?: PrivacyBackendTag;
   backendTag?: PrivacyBackendTag;
@@ -9205,6 +9378,25 @@ export interface VeRangeLocalVerificationResult {
   public_input_bytes: number;
   proof_bytes: number;
   aux_bytes: number;
+}
+
+export interface VeRangeProofV1VerificationInput
+  extends VeRangeLocalVerificationInput {}
+
+export interface VeRangeProofV1VerificationResult {
+  ok: true;
+  production: true;
+  kind: "verange-transparent-range-v1";
+  backend: "Stark";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: VeRangeDevProofFixture["public_inputs"];
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  aggregation_count: number;
+  bit_length: number;
+  commitment_scheme: string;
 }
 
 export interface PrivacyVerifierKeyBoxInput {
@@ -9285,23 +9477,50 @@ export interface RetirePrivacyVerifierKeyInstructionInput
  * Domain-suffixed literals (`<id>@domain`) and canonical-hex account literals are rejected.
  */
 export function normalizeAccountId(value: string, name?: string): string;
+export function ensureCanonicalAccountId(value: string, name?: string): string;
+export function normalizeI105AccountId(value: string, name?: string): string;
+export function tryNormalizeI105AccountId(value: unknown, name?: string): string | null;
+export function normalizeToriiAccountReference(value: unknown, name?: string): string;
+export function normalizeAccountAliasFqn(value: string, name?: string): string;
+export function tryNormalizeAccountAliasFqn(value: unknown, name?: string): string | null;
 
 /**
  * Canonicalise a public asset identifier to bare Base58 form.
  * Asset aliases (`name#dataspace` / `name#domain.dataspace`) must be resolved first.
  */
 export function normalizeAssetId(value: string, name?: string): string;
+export function normalizeAssetDefinitionId(value: string, name?: string): string;
+export function tryNormalizeAssetDefinitionId(value: unknown, name?: string): string | null;
+export function normalizeAssetAliasFqn(value: string, name?: string): string;
+export function tryNormalizeAssetAliasFqn(value: unknown, name?: string): string | null;
 
 /**
  * Canonicalise an internal asset-holding identifier in
  * `<base58-asset-definition-id>#<i105-account-id>` form.
  */
 export function normalizeAssetHoldingId(value: string, name?: string): string;
+export function composeAssetHoldingId(
+  assetId: string,
+  accountId: string,
+  dataspaceId?: string | number | null,
+  name?: string,
+): string;
+export function extractAssetDefinitionId(value: string, name?: string): string;
+export function tryExtractAssetDefinitionId(value: unknown, name?: string): string | null;
+export function assetReferencesMatch(left: unknown, right: unknown): boolean;
 
 /**
  * Canonicalise an RWA identifier in `<64-hex-hash>$<domain>` form.
  */
 export function normalizeRwaId(value: string, name?: string): string;
+
+export function blake2b256(
+  data: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
+  options?: {
+    personalization?: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView;
+    includeZeroKeyBlock?: boolean;
+  },
+): Uint8Array;
 
 export interface ConfidentialGasSchedule {
   proofBase: number;
@@ -13687,6 +13906,34 @@ export interface TransactionAssemblyInput {
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
+export interface RegisterSnsNameTransactionInput {
+  chainId: string;
+  authority: string;
+  request: object;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface RegisterSnsNameViaConsensusInput
+  extends RegisterSnsNameTransactionInput {
+  client?: ToriiClient;
+  toriiUrl?: string;
+  waitForCommit?: boolean;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+  scope?: "local" | "auto" | "global" | string | null;
+}
+
+export interface RegisterSnsNameViaConsensusResult {
+  hash: string;
+  submittedHash: string | null;
+  submission: unknown;
+  status?: unknown;
+}
+
 export type KagemushaInstructionArchiveType =
   | "KagemushaTransfer"
   | "RedeemKagemushaRecursive";
@@ -13721,7 +13968,7 @@ export interface OfflineCashConfigurationSnapshot {
   readonly assetDefinitionId: string;
   readonly offlinePaymentsEnabled: boolean;
   readonly issuerPublicKeyBase64?: string | null;
-  readonly bridgeAbiVersion?: number | null;
+  readonly nativeBridgeAbiVersion?: number | null;
   readonly artifactSetId?: string | null;
   readonly circuitId?: string | null;
   readonly createdAtMs: number;
@@ -13733,7 +13980,7 @@ export class OfflineCashConfigurationSnapshotError extends Error {
     | "offline_payments_disabled"
     | "missing_issuer_public_key"
     | "expired"
-    | "unsupported_bridge_abi"
+    | "unsupported_native_bridge_abi"
     | "malformed_snapshot";
 }
 
@@ -13741,7 +13988,7 @@ export function assertOfflineCashConfigurationSnapshotUsable(
   snapshot: OfflineCashConfigurationSnapshot,
   options?: {
     nowMs?: number;
-    requiredBridgeAbiVersion?: number | null;
+    requiredNativeBridgeAbiVersion?: number | null;
   },
 ): true;
 
@@ -15733,6 +15980,30 @@ export interface ConfidentialTransferProofResultV2 {
   proof: Buffer;
 }
 
+export interface AssetHiddenTransferProofInputV1 {
+  chainId: string;
+  poolId: string;
+  assetSetRootHex?: string;
+  assetSetRoot?: BinaryLike;
+  inputCommitments?: ReadonlyArray<BinaryLike>;
+  inputCommitmentsHex?: ReadonlyArray<string>;
+  nullifiers?: ReadonlyArray<BinaryLike>;
+  nullifiersHex?: ReadonlyArray<string>;
+  outputCommitments?: ReadonlyArray<BinaryLike>;
+  outputCommitmentsHex?: ReadonlyArray<string>;
+  rootHintHex?: string;
+  rootHint?: BinaryLike;
+  verifyingKey: Record<string, unknown>;
+}
+
+export interface AssetHiddenTransferProofResultV1 {
+  inputCommitments: ReadonlyArray<Buffer>;
+  nullifiers: ReadonlyArray<Buffer>;
+  outputCommitments: ReadonlyArray<Buffer>;
+  root: Buffer;
+  proof: Buffer;
+}
+
 export interface ConfidentialUnshieldProofOutputV3 {
   amount: NumericLike;
   rhoHex?: string;
@@ -16190,6 +16461,14 @@ export declare class ToriiBrowserClient {
     assetDefinitionId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
+  resolveAlias(
+    aliasOrRequest: string | Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  resolveAssetAlias(
+    aliasOrRequest: string | Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   listExplorerAssetDefinitions(
     options?: Record<string, unknown>,
   ): Promise<unknown>;
@@ -16238,6 +16517,48 @@ export declare class ToriiBrowserClient {
   getExplorerInstructionContractView(
     transactionHash: string,
     index: number,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getMultisigSpec(
+    selector: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  listMultisigProposals(
+    selector: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getMultisigProposal(
+    request: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getMultisigProposal(
+    accountId: string,
+    proposalId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  listMultisigApprovals(
+    request?: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getMultisigApproval(
+    request: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  listPendingMultisigApprovals(options?: Record<string, unknown>): Promise<unknown>;
+  getPendingMultisigApproval(
+    operationId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  submitMultisigPropose(
+    request: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  submitMultisigContractCallPropose(
+    request: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  submitMultisigContractCallApprove(
+    request: Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
   getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
@@ -17616,8 +17937,8 @@ export function deriveConfidentialNullifierV2(input: {
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION: 6;
-export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION: 7;
+export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 6;
+export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
 export const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT: "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch";
 export const KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT: "recursive compact Kagemusha multi-hop payment-token proving requires the append verifier batch";
@@ -18398,6 +18719,9 @@ export function buildConfidentialTransferProofV2(input: {
   rootHintHex: string;
   verifyingKey: Record<string, unknown>;
 }): ConfidentialTransferProofResultV2;
+export function buildConfidentialAssetHiddenTransferProofV1(
+  input: AssetHiddenTransferProofInputV1,
+): AssetHiddenTransferProofResultV1;
 export function buildConfidentialUnshieldProofV2(input: {
   chainId: string;
   assetDefinitionId: string;
@@ -18500,6 +18824,9 @@ export function buildSubmitBallotTransaction(
 export function buildFinalizeElectionTransaction(
   input: FinalizeElectionTransactionInput,
 ): SignedTransactionResult;
+export function buildRegisterSnsNameTransaction(
+  input: RegisterSnsNameTransactionInput,
+): SignedTransactionResult;
 
 export function submitSignedTransaction(
   client: ToriiClient,
@@ -18509,8 +18836,13 @@ export function submitSignedTransaction(
     pollIntervalMs?: number;
     timeoutMs?: number;
     privateKey?: ArrayBufferView | ArrayBuffer | Buffer;
+    scope?: "local" | "auto" | "global" | string | null;
   },
 ): Promise<{ hash: string; submission: unknown; status?: unknown }>;
+
+export function registerSnsNameViaConsensus(
+  input: RegisterSnsNameViaConsensusInput,
+): Promise<RegisterSnsNameViaConsensusResult>;
 
 export function submitTransactionEntrypoint(
   client: ToriiClient,
@@ -18981,6 +19313,10 @@ export function buildZkAtAuthenticatorEnvelope(
   input: ZkAtAuthenticatorEnvelopeInput,
 ): Buffer;
 
+export function buildZkAtPolicyProofV1(
+  input: ZkAtAuthenticatorEnvelopeInput,
+): Buffer;
+
 export function buildZkAtDevProofFixture(
   input: Omit<
     ZkAtAuthenticatorEnvelopeInput,
@@ -18992,11 +19328,19 @@ export function verifyZkAtAuthenticatorLocally(
   input: ZkAtAuthenticatorLocalVerificationInput | BinaryLike,
 ): ZkAtAuthenticatorLocalVerificationResult;
 
+export function verifyZkAtPolicyProofV1(
+  input: ZkAtAuthenticatorLocalVerificationInput | BinaryLike,
+): ZkAtPolicyProofVerificationResult;
+
 export function buildZkAmsAdmissionBatch(
   input: ZkAmsAdmissionBatchInput,
 ): ZkAmsAdmissionBatch;
 
 export function buildZkAmsAdmissionProofEnvelope(
+  input: ZkAmsAdmissionProofEnvelopeInput,
+): Buffer;
+
+export function buildZkAmsAdmissionBatchProofV0(
   input: ZkAmsAdmissionProofEnvelopeInput,
 ): Buffer;
 
@@ -19011,11 +19355,19 @@ export function verifyZkAmsAdmissionProofLocally(
   input: ZkAmsAdmissionLocalVerificationInput | BinaryLike,
 ): ZkAmsAdmissionLocalVerificationResult;
 
+export function verifyZkAmsAdmissionBatchProofV0(
+  input: ZkAmsAdmissionLocalVerificationInput | BinaryLike,
+): ZkAmsAdmissionProductionVerificationResult;
+
 export function buildVegaCredentialPredicateCommitment(
   input: VegaCredentialPredicateCommitmentInput,
 ): VegaCredentialPredicateCommitment;
 
 export function buildVegaCredentialProofEnvelope(
+  input: VegaCredentialProofEnvelopeInput,
+): Buffer;
+
+export function buildVegaCredentialPredicateProofV0(
   input: VegaCredentialProofEnvelopeInput,
 ): Buffer;
 
@@ -19030,11 +19382,19 @@ export function verifyVegaCredentialProofLocally(
   input: VegaCredentialLocalVerificationInput | BinaryLike,
 ): VegaCredentialLocalVerificationResult;
 
+export function verifyVegaCredentialPredicateProofV0(
+  input: VegaCredentialLocalVerificationInput | BinaryLike,
+): VegaCredentialProductionVerificationResult;
+
 export function buildSilentThresholdCredentialCommitments(
   input: SilentThresholdCredentialCommitmentsInput,
 ): SilentThresholdCredentialCommitments;
 
 export function buildSilentThresholdCredentialEnvelope(
+  input: SilentThresholdCredentialEnvelopeInput,
+): Buffer;
+
+export function buildSilentThresholdCredentialShowingProofV0(
   input: SilentThresholdCredentialEnvelopeInput,
 ): Buffer;
 
@@ -19049,11 +19409,19 @@ export function verifySilentThresholdCredentialProofLocally(
   input: SilentThresholdCredentialLocalVerificationInput | BinaryLike,
 ): SilentThresholdCredentialLocalVerificationResult;
 
+export function verifySilentThresholdCredentialShowingProofV0(
+  input: SilentThresholdCredentialLocalVerificationInput | BinaryLike,
+): SilentThresholdCredentialProductionVerificationResult;
+
 export function buildZkX509IdentityCommitments(
   input: ZkX509IdentityCommitmentsInput,
 ): ZkX509IdentityCommitments;
 
 export function buildZkX509IdentityEnvelope(
+  input: ZkX509IdentityEnvelopeInput,
+): Buffer;
+
+export function buildZkX509IdentityProofV0(
   input: ZkX509IdentityEnvelopeInput,
 ): Buffer;
 
@@ -19068,11 +19436,19 @@ export function verifyZkX509IdentityProofLocally(
   input: ZkX509IdentityLocalVerificationInput | BinaryLike,
 ): ZkX509IdentityLocalVerificationResult;
 
+export function verifyZkX509IdentityProofV0(
+  input: ZkX509IdentityLocalVerificationInput | BinaryLike,
+): ZkX509IdentityProductionVerificationResult;
+
 export function buildJindoLatticePublicInputs(
   input: JindoLatticePublicInputsInput,
 ): JindoLatticePublicInputsDescriptor;
 
 export function buildJindoLatticeProofEnvelope(
+  input: JindoLatticeProofEnvelopeInput,
+): Buffer;
+
+export function buildJindoLatticeProofV0(
   input: JindoLatticeProofEnvelopeInput,
 ): Buffer;
 
@@ -19087,11 +19463,19 @@ export function verifyJindoLatticeProofLocally(
   input: JindoLatticeLocalVerificationInput | BinaryLike,
 ): JindoLatticeLocalVerificationResult;
 
+export function verifyJindoPolynomialCommitmentV0(
+  input: JindoLatticeLocalVerificationInput | BinaryLike,
+): JindoPolynomialCommitmentVerificationResult;
+
 export function buildSisHintsCredentialCommitments(
   input: SisHintsCredentialCommitmentsInput,
 ): SisHintsCredentialCommitments;
 
 export function buildSisHintsCredentialEnvelope(
+  input: SisHintsCredentialEnvelopeInput,
+): Buffer;
+
+export function buildSisHintsAnonymousCredentialProofV0(
   input: SisHintsCredentialEnvelopeInput,
 ): Buffer;
 
@@ -19106,9 +19490,29 @@ export function verifySisHintsCredentialProofLocally(
   input: SisHintsCredentialLocalVerificationInput | BinaryLike,
 ): SisHintsCredentialLocalVerificationResult;
 
+export function verifySisHintsAnonymousCredentialProofV0(
+  input: SisHintsCredentialLocalVerificationInput | BinaryLike,
+): SisHintsAnonymousCredentialVerificationResult;
+
 export function buildAnonymousPgcReceiverSet(
   input: AnonymousPgcReceiverSetInput,
 ): AnonymousPgcReceiverSet;
+
+export function buildAnonymousPgcAccountCommitmentInstruction(
+  input: AnonymousPgcAccountCommitmentInstructionInput,
+): AnonymousPgcAccountCommitmentInstruction;
+
+export function buildAnonymousPgcKOutOfNProofV1(
+  input: AnonymousPgcProofV1Input,
+): Buffer;
+
+export function verifyAnonymousPgcKOutOfNProofV1(
+  input: AnonymousPgcProofV1VerificationInput | BinaryLike,
+): AnonymousPgcProofV1VerificationResult;
+
+export function buildAnonymousPgcTransferInstruction(
+  input: AnonymousPgcTransferInstructionInput,
+): AnonymousPgcTransferInstruction;
 
 export function buildAnonymousPgcDevProofFixture(
   input: AnonymousPgcDevProofFixtureInput,
@@ -19117,6 +19521,70 @@ export function buildAnonymousPgcDevProofFixture(
 export function verifyAnonymousPgcDevProofLocally(
   input: AnonymousPgcDevProofLocalVerificationInput | BinaryLike,
 ): AnonymousPgcDevProofLocalVerificationResult;
+
+export interface ResearchProtocolInstruction {
+  algorithm_id: string;
+  instruction: string;
+  proof_envelope: Buffer;
+  proof_envelope_sha256: string;
+  metadata: Record<string, unknown>;
+}
+
+export function buildOrchardActionBundleProofV1(
+  input: PrivacyProofEnvelopeInput,
+): Buffer;
+
+export function buildOrchardActionBundleInstruction(
+  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+): ResearchProtocolInstruction;
+
+export function buildPenumbraSpendProofV1(input: PrivacyProofEnvelopeInput): Buffer;
+
+export function buildPenumbraOutputProofV1(input: PrivacyProofEnvelopeInput): Buffer;
+
+export function buildPenumbraShieldedPoolTransaction(
+  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+): ResearchProtocolInstruction;
+
+export function buildFcmpPlusPlusMembershipProofV1(
+  input: PrivacyProofEnvelopeInput,
+): Buffer;
+
+export function buildFcmpPlusPlusTransferInstruction(
+  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+): ResearchProtocolInstruction;
+
+export function buildMidenStarkTransactionProofV1(
+  input: PrivacyProofEnvelopeInput,
+): Buffer;
+
+export function buildMidenNoteTransactionInstruction(
+  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+): ResearchProtocolInstruction;
+
+export function buildAztecPrivateKernelProofV1(
+  input: PrivacyProofEnvelopeInput,
+): Buffer;
+
+export function buildAztecPrivateRollupTransactionInstruction(
+  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+): ResearchProtocolInstruction;
+
+export function buildPqMaspStarkTransferProofV0(
+  input: PrivacyProofEnvelopeInput,
+): Buffer;
+
+export function buildPqMaspStarkRegisterPoolInstruction(
+  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+): ResearchProtocolInstruction;
+
+export function buildPqMaspStarkTransferInstruction(
+  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+): ResearchProtocolInstruction;
+
+export function generateMlDsaKeyPair(): never;
+
+export function encapsulateMlKem(): never;
 
 export function buildRangeCommitment(
   input: RangeCommitmentInput,
@@ -19130,9 +19598,17 @@ export function buildVeRangeProofEnvelope(
   input: VeRangeProofEnvelopeInput,
 ): Buffer;
 
+export function buildVeRangeProofV1(
+  input: VeRangeProofV1Input,
+): Buffer;
+
 export function verifyVeRangeProofLocally(
   input: VeRangeLocalVerificationInput | BinaryLike,
 ): VeRangeLocalVerificationResult;
+
+export function verifyVeRangeProofV1(
+  input: VeRangeProofV1VerificationInput | BinaryLike,
+): VeRangeProofV1VerificationResult;
 
 export function buildPrivacyProofEnvelope(
   input: PrivacyProofEnvelopeInput,

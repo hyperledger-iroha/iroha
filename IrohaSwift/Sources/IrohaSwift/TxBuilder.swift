@@ -250,6 +250,7 @@ public enum VerifyingKeyIdError: Error, LocalizedError, Equatable {
     case emptyBackend
     case emptyName
     case invalidSeparator
+    case surroundingWhitespace
 
     public var errorDescription: String? {
         switch self {
@@ -259,6 +260,8 @@ public enum VerifyingKeyIdError: Error, LocalizedError, Equatable {
             return "Verifying key name must not be empty."
         case .invalidSeparator:
             return "Verifying key backend and name must not contain ':' characters."
+        case .surroundingWhitespace:
+            return "Verifying key backend and name must not contain surrounding whitespace."
         }
     }
 }
@@ -273,6 +276,10 @@ public struct VerifyingKeyIdReference: Equatable, Sendable {
         }
         guard !name.isEmpty else {
             throw VerifyingKeyIdError.emptyName
+        }
+        guard backend.trimmingCharacters(in: .whitespacesAndNewlines) == backend,
+              name.trimmingCharacters(in: .whitespacesAndNewlines) == name else {
+            throw VerifyingKeyIdError.surroundingWhitespace
         }
         guard !backend.contains(":"), !name.contains(":") else {
             throw VerifyingKeyIdError.invalidSeparator

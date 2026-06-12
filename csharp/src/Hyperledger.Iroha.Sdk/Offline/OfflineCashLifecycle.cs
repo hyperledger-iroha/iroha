@@ -49,7 +49,7 @@ public sealed record class OfflineCashConfigurationSnapshot(
     string AssetDefinitionId,
     bool OfflinePaymentsEnabled,
     string? IssuerPublicKeyBase64,
-    uint? BridgeAbiVersion = null,
+    uint? NativeBridgeAbiVersion = null,
     string? ArtifactSetId = null,
     string? CircuitId = null,
     ulong CreatedAtMs = 0,
@@ -57,7 +57,7 @@ public sealed record class OfflineCashConfigurationSnapshot(
 {
     public void RequireUsableForOfflineExchange(
         ulong nowMs,
-        uint? requiredBridgeAbiVersion = null)
+        uint? requiredNativeBridgeAbiVersion = null)
     {
         if (!OfflinePaymentsEnabled)
         {
@@ -66,7 +66,7 @@ public sealed record class OfflineCashConfigurationSnapshot(
                 "Offline cash is disabled in the cached configuration snapshot.");
         }
 
-        if (string.IsNullOrWhiteSpace(IssuerPublicKeyBase64))
+        if (!IsCanonicalSnapshotText(IssuerPublicKeyBase64))
         {
             throw new OfflineCashConfigurationSnapshotException(
                 "missing_issuer_public_key",
@@ -80,13 +80,31 @@ public sealed record class OfflineCashConfigurationSnapshot(
                 $"Offline cash configuration snapshot expired at {expiresAtMs}.");
         }
 
-        if (requiredBridgeAbiVersion is { } required
-            && (!BridgeAbiVersion.HasValue || BridgeAbiVersion.Value < required))
+        if (requiredNativeBridgeAbiVersion is { } required
+            && (!NativeBridgeAbiVersion.HasValue || NativeBridgeAbiVersion.Value < required))
         {
             throw new OfflineCashConfigurationSnapshotException(
-                "unsupported_bridge_abi",
-                $"Offline cash requires bridge ABI {required}.");
+                "unsupported_native_bridge_abi",
+                $"Offline cash requires native bridge ABI {required}.");
         }
+    }
+
+    private static bool IsCanonicalSnapshotText(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+
+        foreach (var ch in value)
+        {
+            if (ch <= 0x20 || ch > 0x7E)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 

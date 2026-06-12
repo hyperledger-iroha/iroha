@@ -225,6 +225,45 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             ("confidential transfer", PrivacyNativeBridge.buildConfidentialTransferProofV2),
             ("confidential unshield", PrivacyNativeBridge.buildConfidentialUnshieldProofV3),
             ("ZK-ACE authorization", PrivacyNativeBridge.buildZkAceAuthorizationProofV1),
+            ("Jindo lattice proof", PrivacyNativeBridge.buildJindoLatticeProofV0),
+            (
+                "SIS-with-hints anonymous credential proof",
+                PrivacyNativeBridge.buildSisHintsAnonymousCredentialProofV0
+            ),
+            (
+                "silent-threshold credential showing proof",
+                PrivacyNativeBridge.buildSilentThresholdCredentialShowingProofV0
+            ),
+            (
+                "Vega credential predicate proof",
+                PrivacyNativeBridge.buildVegaCredentialPredicateProofV0
+            ),
+            (
+                "ZK-AMS admission batch proof",
+                PrivacyNativeBridge.buildZkAmsAdmissionBatchProofV0
+            ),
+            ("zkAt policy proof", PrivacyNativeBridge.buildZkAtPolicyProofV1),
+            (
+                "Jindo polynomial commitment verify",
+                PrivacyNativeBridge.verifyJindoPolynomialCommitmentV0
+            ),
+            (
+                "SIS-with-hints anonymous credential verify",
+                PrivacyNativeBridge.verifySisHintsAnonymousCredentialProofV0
+            ),
+            (
+                "silent-threshold credential showing verify",
+                PrivacyNativeBridge.verifySilentThresholdCredentialShowingProofV0
+            ),
+            (
+                "Vega credential predicate verify",
+                PrivacyNativeBridge.verifyVegaCredentialPredicateProofV0
+            ),
+            (
+                "ZK-AMS admission batch verify",
+                PrivacyNativeBridge.verifyZkAmsAdmissionBatchProofV0
+            ),
+            ("zkAt policy verify", PrivacyNativeBridge.verifyZkAtPolicyProofV1),
             ("verify", PrivacyNativeBridge.verifyProofV1)
         ]
 

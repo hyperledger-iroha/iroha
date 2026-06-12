@@ -52,6 +52,38 @@ def load_evidence_module():
     return module
 
 
+def test_evm_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
+    module = load_evidence_module()
+
+    def fail_scope(_args):
+        raise ValueError("secret-token /tmp/operator/private-path")
+
+    monkeypatch.setattr(module, "validate_bsc_network_scope", fail_scope)
+
+    try:
+        module.main(
+            [
+                "--domain",
+                "eth",
+                "--verifier-address",
+                "0x" + "11" * 20,
+                "--bridge-address",
+                "0x" + "22" * 20,
+                "--verifier-key-hash",
+                "0x" + "cc" * 32,
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("EVM destination CLI accepted top-level render failure")
+
+    captured = capsys.readouterr()
+    assert "SCCP EVM destination evidence rendering failed" in captured.err
+    assert "secret-token" not in captured.err
+    assert "private-path" not in captured.err
+
+
 def evm_runtime_material(module, *, domain=1, bsc_network="mainnet"):
     bridge_runtime = bytes.fromhex("6001600255")
     verifier_runtime = bytes.fromhex("6080604052")
@@ -1633,6 +1665,44 @@ def test_evm_cli_requires_code_hash_or_runtime_bytecode():
         assert exc.code == 2
     else:
         raise AssertionError("EVM destination evidence without code hash was accepted")
+
+
+def test_evm_toml_runtime_bytecode_reparse_redacts_parser_detail():
+    module = load_evidence_module()
+    cases = (
+        (
+            SimpleNamespace(
+                bridge_runtime_bytecode_hex_text="0xsecret-token-bridge-runtime",
+                bridge_code_hash=bytes.fromhex("11" * 32),
+                verifier_runtime_bytecode_bytes=b"\x60\x01",
+                verifier_code_hash=module.runtime_bytecode_hash(b"\x60\x01"),
+            ),
+            "--toml has invalid bridge runtime bytecode evidence",
+        ),
+        (
+            SimpleNamespace(
+                bridge_runtime_bytecode_bytes=b"\x60\x02",
+                bridge_code_hash=module.runtime_bytecode_hash(b"\x60\x02"),
+                verifier_runtime_bytecode_hex_text="0xsecret-token-verifier-runtime",
+                verifier_code_hash=bytes.fromhex("22" * 32),
+            ),
+            "--toml has invalid verifier runtime bytecode evidence",
+        ),
+    )
+
+    for args, expected_message in cases:
+        try:
+            module._require_runtime_bytecode_evidence(args, output="toml")
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert "must be hex" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "invalid copied EVM runtime bytecode evidence was accepted"
+            )
 
 
 def test_evm_cli_derives_bridge_code_hash_from_runtime_bytecode(capsys):

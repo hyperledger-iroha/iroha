@@ -66,7 +66,7 @@ object CanonicalRequestSigner {
         timestampMs: Long,
         nonce: String
     ): ByteArray {
-        require(nonce.isNotBlank()) { "nonce is required" }
+        requireExactNonBlank(nonce, "nonce")
         val rendered = String(canonicalRequestMessage(method, uri, body), StandardCharsets.UTF_8) +
             "\n$timestampMs\n$nonce"
         return rendered.toByteArray(StandardCharsets.UTF_8)
@@ -156,7 +156,7 @@ object CanonicalRequestSigner {
         nonce: String,
         witnessBase64: String
     ): Map<String, Any?> {
-        require(witnessBase64.isNotBlank()) { "witnessBase64 is required" }
+        requireExactNonBlank(witnessBase64, "witnessBase64")
         val body = bodyWithBodyAuthFreshness(bodyFields, accountId, timestampMs, nonce)
         body[BODY_WITNESS_BASE64] = witnessBase64
         return body
@@ -184,8 +184,8 @@ object CanonicalRequestSigner {
         timestampMs: Long,
         nonce: String
     ): Map<String, String> {
-        require(accountId.isNotBlank()) { "accountId is required" }
-        require(nonce.isNotBlank()) { "nonce is required" }
+        requireExactNonBlank(accountId, "accountId")
+        requireExactNonBlank(nonce, "nonce")
         val message = canonicalRequestSignatureMessage(method, uri, body, timestampMs, nonce)
         val signatureBytes = signEd25519(privateKey, message)
         return mapOf(
@@ -202,8 +202,8 @@ object CanonicalRequestSigner {
         timestampMs: Long,
         nonce: String
     ): LinkedHashMap<String, Any?> {
-        require(accountId.isNotBlank()) { "accountId is required" }
-        require(nonce.isNotBlank()) { "nonce is required" }
+        requireExactNonBlank(accountId, "accountId")
+        requireExactNonBlank(nonce, "nonce")
         val body = LinkedHashMap<String, Any?>(bodyFields)
         body[BODY_ACCOUNT_ID] = accountId
         body[BODY_TIMESTAMP_MS] = timestampMs
@@ -211,6 +211,13 @@ object CanonicalRequestSigner {
         body.remove(BODY_SIGNATURE_BASE64)
         body.remove(BODY_WITNESS_BASE64)
         return body
+    }
+
+    private fun requireExactNonBlank(value: String, field: String) {
+        require(value.isNotEmpty() && value.any { !it.isWhitespace() }) { "$field is required" }
+        require(!value.first().isWhitespace() && !value.last().isWhitespace()) {
+            "$field must not contain surrounding whitespace"
+        }
     }
 
     private fun signEd25519(privateKey: PrivateKey, message: ByteArray): ByteArray {

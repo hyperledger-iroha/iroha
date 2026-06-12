@@ -155,13 +155,13 @@ let snapshot = OfflineCashConfigurationSnapshot(
     assetDefinitionId: "pkr#sbp",
     offlinePaymentsEnabled: true,
     issuerPublicKeyBase64: cachedIssuerKeyBase64,
-    bridgeAbiVersion: 7,
+    nativeBridgeAbiVersion: 7,
     createdAtMs: cachedAtMs,
     expiresAtMs: expiresAtMs
 )
 try snapshot.requireUsableForOfflineExchange(
     nowMs: currentTimeMs,
-    requiredBridgeAbiVersion: 7
+    requiredNativeBridgeAbiVersion: 7
 )
 
 let controller = OfflineCashLifecycleController(

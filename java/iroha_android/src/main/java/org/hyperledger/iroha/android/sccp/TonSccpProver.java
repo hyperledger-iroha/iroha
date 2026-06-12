@@ -20,6 +20,7 @@ public final class TonSccpProver {
   public static final String MESSAGE_BODY_BOC_V1 = "ton_message_body_boc_v1";
   public static final String STARK_FRI_PROOF_FAMILY_V1 = "stark-fri-v1";
   public static final int NATIVE_RECURSIVE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
+  public static final int SOURCE_STATE_MAX_PROOF_BYTES = NATIVE_RECURSIVE_MAX_PROOF_BYTES;
   public static final int CODEC_TEXT_UTF8 = 1;
   public static final int CODEC_EVM_HEX = 2;
   public static final int CODEC_SOLANA_BASE58 = 3;
@@ -1622,9 +1623,9 @@ public final class TonSccpProver {
     if (proof.proofBytes().length == 0) {
       throw new IllegalArgumentException("source-state verification proof bytes must not be empty");
     }
-    if (proof.proofBytes().length > NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+    if (proof.proofBytes().length > SOURCE_STATE_MAX_PROOF_BYTES) {
       throw new IllegalArgumentException(
-          "proofBytes must be at most " + NATIVE_RECURSIVE_MAX_PROOF_BYTES + " bytes");
+          "proofBytes must be at most " + SOURCE_STATE_MAX_PROOF_BYTES + " bytes");
     }
     if (!containsNonZero(proof.proofBytes())) {
       throw new IllegalArgumentException("source-state verification proof bytes must not be all zero");
@@ -2081,9 +2082,9 @@ public final class TonSccpProver {
     if (normalizedProofBytes.length == 0) {
       throw new IllegalArgumentException("proofBytes must not be empty");
     }
-    if (normalizedProofBytes.length > NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+    if (normalizedProofBytes.length > SOURCE_STATE_MAX_PROOF_BYTES) {
       throw new IllegalArgumentException(
-          "proofBytes must be at most " + NATIVE_RECURSIVE_MAX_PROOF_BYTES + " bytes");
+          "proofBytes must be at most " + SOURCE_STATE_MAX_PROOF_BYTES + " bytes");
     }
     if (!containsNonZero(normalizedProofBytes)) {
       throw new IllegalArgumentException("proofBytes must not be all zero");

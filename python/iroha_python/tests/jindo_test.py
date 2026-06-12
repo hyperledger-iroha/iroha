@@ -7,11 +7,15 @@ import pytest
 from iroha_python import (
     buildJindoLatticeDevProofFixture,
     buildJindoLatticeProofEnvelope,
+    buildJindoLatticeProofV0,
     buildJindoLatticePublicInputs,
     build_jindo_lattice_dev_proof_fixture,
     build_jindo_lattice_proof_envelope,
+    build_jindo_lattice_proof_v0,
     build_jindo_lattice_public_inputs,
+    verifyJindoPolynomialCommitmentV0,
     verifyJindoLatticeProofLocally,
+    verify_jindo_polynomial_commitment_v0,
     verify_jindo_lattice_proof_locally,
 )
 from iroha_python.verange import (
@@ -111,6 +115,65 @@ def test_jindo_builders_normalize_public_inputs_and_envelopes() -> None:
     assert verified["public_inputs"] == fixture["public_inputs"]
 
 
+def test_jindo_production_builder_and_verifier_reject_dev_fixtures() -> None:
+    base = _base()
+    proof = build_jindo_lattice_proof_v0(
+        {
+            **base,
+            "vkHash": bytes([0xAA]) * 32,
+            "proofBytes": b"production-jindo-lattice-proof",
+        }
+    )
+    decoded = decode_privacy_proof_envelope(proof)
+    assert decoded["backend"] == "LatticePcsSis"
+
+    verified = verify_jindo_polynomial_commitment_v0({"envelope": proof, **base})
+    assert verified["ok"] is True
+    assert verified["production"] is True
+    assert verified["backend"] == "LatticePcsSis"
+    assert verified["kind"] == "jindo-lattice-pcs-zk-v0"
+
+    with pytest.raises(ValueError, match="must be Unsupported"):
+        verify_jindo_lattice_proof_locally({"envelope": proof, **base})
+
+    fixture = build_jindo_lattice_dev_proof_fixture(
+        {**base, "vkHash": bytes([0xAA]) * 32}
+    )
+    with pytest.raises(ValueError, match="unsupported tag|LatticePcsSis"):
+        verify_jindo_polynomial_commitment_v0({"envelope": fixture["envelope"], **base})
+    with pytest.raises(ValueError, match="dev fixture"):
+        build_jindo_lattice_proof_v0(
+            {
+                **base,
+                "vkHash": bytes([0xAA]) * 32,
+                "proofBytes": fixture["proofBytes"],
+            }
+        )
+
+    dev_encoded_as_lattice = _build_privacy_proof_envelope_internal(
+        {
+            "backend": "lattice-pcs-sis",
+            "circuitId": decoded["circuit_id"],
+            "vkHash": bytes([0xAA]) * 32,
+            "publicInputs": decoded["public_inputs"],
+            "proofBytes": fixture["proofBytes"],
+        }
+    )
+    with pytest.raises(ValueError, match="dev fixture"):
+        verify_jindo_polynomial_commitment_v0({"envelope": dev_encoded_as_lattice, **base})
+
+    for backend in ("unsupported", "stark/fri/sha256-goldilocks"):
+        with pytest.raises(ValueError, match="backend"):
+            build_jindo_lattice_proof_v0(
+                {
+                    **base,
+                    "backend": backend,
+                    "vkHash": bytes([0xAA]) * 32,
+                    "proofBytes": b"production-jindo-lattice-proof",
+                }
+            )
+
+
 def test_jindo_package_root_exports_catalog_entrypoint_aliases() -> None:
     base = _base()
     public_inputs = buildJindoLatticePublicInputs(base)
@@ -127,6 +190,17 @@ def test_jindo_package_root_exports_catalog_entrypoint_aliases() -> None:
     )["proof_bytes"] == (
         b"prepared-jindo-lattice-proof"
     )
+    production_proof = buildJindoLatticeProofV0(
+        {
+            **base,
+            "vkHash": bytes([0xAA]) * 32,
+            "proofBytes": b"production-jindo-lattice-proof",
+        }
+    )
+    production_verified = verifyJindoPolynomialCommitmentV0(
+        {"envelope": production_proof, **base}
+    )
+    assert production_verified["production"] is True
 
     fixture = buildJindoLatticeDevProofFixture(
         {**base, "vkHash": bytes([0xAA]) * 32}
@@ -136,6 +210,60 @@ def test_jindo_package_root_exports_catalog_entrypoint_aliases() -> None:
     )
     assert verified["ok"] is True
     assert verified["parameter_hash"] == public_inputs["parameter_hash"].hex()
+
+
+def test_jindo_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class JindoDict(dict):
+        pass
+
+    base = _base()
+    proof_options = {
+        **base,
+        "vkHash": bytes([0xAA]) * 32,
+        "proofBytes": b"production-jindo-lattice-proof",
+    }
+
+    for helper in (build_jindo_lattice_public_inputs, buildJindoLatticePublicInputs):
+        with pytest.raises(TypeError, match="jindoLatticePublicInputs"):
+            helper(JindoDict(base))
+
+    for helper in (build_jindo_lattice_proof_envelope, buildJindoLatticeProofEnvelope):
+        with pytest.raises(TypeError, match="jindoLatticeProofEnvelope"):
+            helper(JindoDict(proof_options))
+
+    for helper in (build_jindo_lattice_proof_v0, buildJindoLatticeProofV0):
+        with pytest.raises(TypeError, match="jindoLatticeProofV0"):
+            helper(JindoDict(proof_options))
+
+    for helper in (
+        build_jindo_lattice_dev_proof_fixture,
+        buildJindoLatticeDevProofFixture,
+    ):
+        with pytest.raises(TypeError, match="jindoLatticeDevProofFixture"):
+            helper(JindoDict({**base, "vkHash": bytes([0xAA]) * 32}))
+
+    production_proof = build_jindo_lattice_proof_v0(proof_options)
+    raw_verified = verify_jindo_polynomial_commitment_v0(production_proof)
+    assert raw_verified["ok"] is True
+
+    verify_options = {"envelope": production_proof, **base}
+    for helper in (
+        verify_jindo_polynomial_commitment_v0,
+        verifyJindoPolynomialCommitmentV0,
+    ):
+        with pytest.raises(TypeError, match="jindoPolynomialCommitmentV0"):
+            helper(JindoDict(verify_options))
+
+    fixture = build_jindo_lattice_dev_proof_fixture(
+        {**base, "vkHash": bytes([0xAA]) * 32}
+    )
+    local_verified = verify_jindo_lattice_proof_locally(fixture["envelope"])
+    assert local_verified["ok"] is True
+
+    local_options = {**verify_options, "envelope": fixture["envelope"]}
+    for helper in (verify_jindo_lattice_proof_locally, verifyJindoLatticeProofLocally):
+        with pytest.raises(TypeError, match="jindoLatticeLocalVerification"):
+            helper(JindoDict(local_options))
 
 
 @pytest.mark.parametrize(

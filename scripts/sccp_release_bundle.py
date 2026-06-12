@@ -141,31 +141,29 @@ def _path_percent_encoded_traversal(path: str) -> str | None:
 
 
 def _artifact(path: Path, root: Path) -> dict[str, Any]:
-    payload = path.read_bytes()
+    if path.is_symlink():
+        raise ValueError("release artifact path must not be a symlink")
     artifact_path = path.relative_to(root).as_posix()
     if artifact_path.strip() != artifact_path:
-        raise ValueError(
-            "release artifact path must not contain surrounding whitespace: "
-            f"{artifact_path!r}"
-        )
+        raise ValueError("release artifact path must not contain surrounding whitespace")
     control_character = _path_control_character(artifact_path)
     if control_character is not None:
         raise ValueError(
             "release artifact path contains control character "
-            f"{control_character}: {artifact_path!r}"
+            f"{control_character}"
         )
     markdown_unsafe_character = _path_markdown_unsafe_character(artifact_path)
     if markdown_unsafe_character is not None:
         raise ValueError(
             "release artifact path contains Markdown-unsafe character "
-            f"{markdown_unsafe_character}: {artifact_path!r}"
+            f"{markdown_unsafe_character}"
         )
     percent_traversal = _path_percent_encoded_traversal(artifact_path)
     if percent_traversal is not None:
         raise ValueError(
-            "release artifact path contains percent-encoded traversal segment: "
-            f"{percent_traversal}"
+            "release artifact path contains percent-encoded traversal segment"
         )
+    payload = path.read_bytes()
     return {
         "path": artifact_path,
         "bytes": len(payload),
@@ -175,7 +173,7 @@ def _artifact(path: Path, root: Path) -> dict[str, Any]:
 
 def _copy_file(source: Path, destination: Path) -> Path:
     if source.is_symlink():
-        raise ValueError(f"release bundle source path must not be a symlink: {source}")
+        raise ValueError("release bundle source path must not be a symlink")
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
     return destination
@@ -183,11 +181,19 @@ def _copy_file(source: Path, destination: Path) -> Path:
 
 def _safe_name(path: Path, index: int) -> str:
     name = path.name.replace("/", "_").replace("\\", "_")
+    if name.strip() != name:
+        raise ValueError(
+            "release bundle copied filename must not contain surrounding whitespace"
+        )
+    if _path_percent_encoded_traversal(name) is not None:
+        raise ValueError(
+            "release bundle copied filename contains percent-encoded traversal segment"
+        )
     markdown_unsafe_character = _path_markdown_unsafe_character(name)
     if markdown_unsafe_character is not None:
         raise ValueError(
             "release bundle copied filename contains Markdown-unsafe character "
-            f"{markdown_unsafe_character}: {name!r}"
+            f"{markdown_unsafe_character}"
         )
     return f"{index:02d}-{name}"
 
@@ -203,15 +209,23 @@ def _copy_evidence_inputs(paths: list[Path], output_dir: Path) -> list[Path]:
 def _parse_phase_evidence_arg(raw: str) -> tuple[str, Path]:
     if "=" not in raw:
         raise argparse.ArgumentTypeError(
-            f"phase evidence must use NAME=PATH syntax: {raw}"
+            "phase evidence must use NAME=PATH syntax"
         )
     name, path_text = raw.split("=", 1)
-    name = name.strip()
-    if not name:
-        raise argparse.ArgumentTypeError(f"phase evidence name is empty: {raw}")
+    # Source-inventory markers:
+    # - phase evidence contains phase with surrounding whitespace
+    # - phase evidence contains phase with Markdown-unsafe character
+    # - phase evidence contains malformed phase
+    phase_name_error = _corridor_phase_key_error(name, "phase evidence")
+    if phase_name_error is not None:
+        raise argparse.ArgumentTypeError(phase_name_error)
     if not path_text:
-        raise argparse.ArgumentTypeError(f"phase evidence path is empty: {raw}")
+        raise argparse.ArgumentTypeError("phase evidence path must not be empty")
     return name, Path(path_text)
+
+
+def _phase_evidence_source_label(name: str) -> str:
+    return f"--phase-evidence {name}=<path>"
 
 
 def _phase_log_from_dir(directory: Path, phase: str) -> Path:
@@ -223,9 +237,9 @@ def _phase_log_from_dir(directory: Path, phase: str) -> Path:
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    expected = ", ".join(str(candidate) for candidate in candidates)
     raise FileNotFoundError(
-        f"missing SCCP corridor evidence log for phase {phase}; checked {expected}"
+        "missing SCCP corridor evidence log for phase "
+        f"{phase}; checked standard phase log layouts"
     )
 
 
@@ -256,13 +270,13 @@ def _phase_evidence_sources(
             )
     for raw in phase_evidence:
         name, path = _parse_phase_evidence_arg(raw)
-        label = f"--phase-evidence {raw}"
+        label = _phase_evidence_source_label(name)
         if name == "all":
             for phase in phases:
                 assign(phase, path, label)
             continue
         if name not in phases:
-            raise argparse.ArgumentTypeError(f"unknown SCCP corridor phase: {name}")
+            raise argparse.ArgumentTypeError("unknown SCCP corridor phase")
         assign(name, path, label)
     return sources
 
@@ -304,21 +318,20 @@ def _native_evm_manifest_relative_path(value: Any, label: str) -> PurePosixPath:
     if control_character is not None:
         raise ValueError(
             "native EVM Groth16 prover bundle "
-            f"{label} path contains control character {control_character}: {value!r}"
+            f"{label} path contains control character {control_character}"
         )
     markdown_unsafe_character = _path_markdown_unsafe_character(value)
     if markdown_unsafe_character is not None:
         raise ValueError(
             "native EVM Groth16 prover bundle "
             f"{label} path contains Markdown-unsafe character "
-            f"{markdown_unsafe_character}: {value!r}"
+            f"{markdown_unsafe_character}"
         )
     percent_traversal = _path_percent_encoded_traversal(value)
     if percent_traversal is not None:
         raise ValueError(
             "native EVM Groth16 prover bundle "
-            f"{label} path contains percent-encoded traversal segment: "
-            f"{percent_traversal}"
+            f"{label} path contains percent-encoded traversal segment"
         )
     if ":" in value:
         raise ValueError(
@@ -370,7 +383,7 @@ def _native_evm_prover_payload_sources(
         if previous_label is not None:
             raise ValueError(
                 f"native EVM Groth16 prover bundle {label} path must not reuse "
-                f"{previous_label}: {relative_text}"
+                f"{previous_label}"
             )
         seen_roles_by_path[relative_text] = label
         artifact_path = source.parent.joinpath(*relative_path.parts)
@@ -382,8 +395,7 @@ def _native_evm_prover_payload_sources(
         if not artifact_path.is_file():
             raise FileNotFoundError(
                 "native EVM Groth16 prover bundle "
-                f"{label} file is missing or is not a regular file: "
-                f"{relative_path.as_posix()}"
+                f"{label} file is missing or is not a regular file"
             )
         paths.append((relative_path, artifact_path))
 
@@ -931,6 +943,98 @@ def _source_adapter_gate_semantic_errors(
             f"{label}.source_adapter_gate blockers must be empty "
             "when gate is required"
         )
+    return errors
+
+
+def _cryptographic_evidence_source_adapter_gate_bundle_errors(
+    label: str,
+    payload: dict[str, Any],
+    audit_hashes: Any,
+) -> list[str]:
+    domain = payload.get("domain")
+    required = payload.get("source_adapter_gate_required")
+    gate_hash = payload.get("source_adapter_gate_hash")
+    if type(required) is not bool:
+        return []
+
+    errors: list[str] = []
+    expected_audit_keys = (
+        _source_adapter_gate_audit_keys_by_domain().get(domain)
+        if type(domain) is int
+        else None
+    )
+    if required:
+        if expected_audit_keys is None:
+            errors.append(
+                f"{label} source_adapter_gate_required must be false for this domain"
+            )
+        if not _is_nonzero_bytes32_hex_text(gate_hash):
+            errors.append(
+                f"{label} source_adapter_gate_hash must be a non-zero canonical "
+                "bytes32 hex string when required"
+            )
+        semantic_audit_hashes: dict[str, Any] = {}
+        if isinstance(audit_hashes, dict):
+            audit_label = f"{label} source_adapter_gate_audit_hashes"
+            for audit_key, audit_hash in audit_hashes.items():
+                if _source_adapter_gate_audit_key_error(audit_key, audit_label) is not None:
+                    continue
+                semantic_audit_hashes[audit_key] = audit_hash
+                if not _is_nonzero_bytes32_hex_text(audit_hash):
+                    errors.append(
+                        f"{audit_label} {audit_key} must be a non-zero canonical "
+                        "bytes32 hex string"
+                    )
+            if expected_audit_keys is not None:
+                for key in sorted(set(semantic_audit_hashes) - expected_audit_keys):
+                    errors.append(
+                        f"{audit_label} contains unexpected field: {key}"
+                    )
+                for key in sorted(expected_audit_keys - set(semantic_audit_hashes)):
+                    errors.append(f"{audit_label} missing field: {key}")
+        if not semantic_audit_hashes:
+            errors.append(
+                f"{label} source_adapter_gate_audit_hashes must not be empty "
+                "when required"
+            )
+        if (
+            _is_nonzero_bytes32_hex_text(gate_hash)
+            and semantic_audit_hashes
+            and gate_hash not in set(semantic_audit_hashes.values())
+        ):
+            errors.append(
+                f"{label} source_adapter_gate_hash must match one "
+                "source_adapter_gate_audit_hashes value"
+            )
+        expected_gate_key = (
+            _source_adapter_gate_hash_key_by_domain().get(domain)
+            if type(domain) is int
+            else None
+        )
+        expected_gate_hash = semantic_audit_hashes.get(expected_gate_key)
+        if (
+            expected_gate_key is not None
+            and _is_nonzero_bytes32_hex_text(gate_hash)
+            and _is_nonzero_bytes32_hex_text(expected_gate_hash)
+            and gate_hash != expected_gate_hash
+        ):
+            errors.append(
+                f"{label} source_adapter_gate_hash must match "
+                f"source_adapter_gate_audit_hashes.{expected_gate_key}"
+            )
+    else:
+        if expected_audit_keys is not None:
+            errors.append(
+                f"{label} source_adapter_gate_required must be true for this domain"
+            )
+        if gate_hash not in (None, ""):
+            errors.append(
+                f"{label} source_adapter_gate_hash must be empty when gate is not required"
+            )
+        if audit_hashes:
+            errors.append(
+                f"{label} source_adapter_gate_audit_hashes must be empty when gate is not required"
+            )
     return errors
 
 
@@ -1581,6 +1685,151 @@ def _submission_surface_sdk_key_error(sdk: Any, label: str) -> str | None:
     return None
 
 
+def _submission_surface_lanes_key_error(lanes: Any, label: str) -> str | None:
+    if not isinstance(lanes, str) or not lanes:
+        return (
+            f"{label} lanes must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(lanes) is not None:
+        return f"{label} lanes contains control character"
+    if not lanes.isascii():
+        return f"{label} lanes contains non-ASCII character"
+    if lanes.strip() != lanes:
+        return (
+            f"{label} lanes must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if any(character.isspace() for character in lanes):
+        return f"{label} lanes contains whitespace"
+    if _path_markdown_unsafe_character(lanes) is not None:
+        return f"{label} lanes contains Markdown-unsafe character"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-,")
+    lane_parts = lanes.split(",")
+    if (
+        any(character not in allowed for character in lanes)
+        or any(
+            not part or part.startswith("-") or part.endswith("-")
+            for part in lane_parts
+        )
+    ):
+        return f"{label} lanes is malformed"
+    return None
+
+
+def _submission_surface_proof_backend_key_error(
+    proof_backend: Any,
+    label: str,
+) -> str | None:
+    if not isinstance(proof_backend, str) or not proof_backend:
+        return (
+            f"{label} proof_backend must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(proof_backend) is not None:
+        return f"{label} proof_backend contains control character"
+    if not proof_backend.isascii():
+        return f"{label} proof_backend contains non-ASCII character"
+    if proof_backend.strip() != proof_backend:
+        return (
+            f"{label} proof_backend must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if any(character.isspace() for character in proof_backend):
+        return f"{label} proof_backend contains whitespace"
+    if _path_markdown_unsafe_character(proof_backend) is not None:
+        return f"{label} proof_backend contains Markdown-unsafe character"
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    if (
+        any(character not in allowed for character in proof_backend)
+        or proof_backend.startswith("-")
+        or proof_backend.endswith("-")
+    ):
+        return f"{label} proof_backend is malformed"
+    return None
+
+
+def _submission_surface_submission_text_error(value: Any, label: str) -> str | None:
+    if not isinstance(value, str) or not value:
+        return (
+            f"{label} on_chain_submission must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(value) is not None:
+        return f"{label} on_chain_submission contains control character"
+    if not value.isascii():
+        return f"{label} on_chain_submission contains non-ASCII character"
+    if value.strip() != value:
+        return (
+            f"{label} on_chain_submission must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_markdown_unsafe_character(value) is not None:
+        return f"{label} on_chain_submission contains Markdown-unsafe character"
+    return None
+
+
+def _submission_surface_helper_symbol_error(symbol: Any, label: str) -> str | None:
+    if not isinstance(symbol, str) or not symbol:
+        return f"{label} must be a list of non-empty strings"
+    if _path_control_character(symbol) is not None:
+        return f"{label} contains helper symbol with control character"
+    if not symbol.isascii():
+        return f"{label} contains helper symbol with non-ASCII character"
+    if symbol.strip() != symbol:
+        return f"{label} contains helper symbol with surrounding whitespace"
+    if any(character.isspace() for character in symbol):
+        return f"{label} contains helper symbol with whitespace"
+    if _path_markdown_unsafe_character(symbol) is not None:
+        return f"{label} contains helper symbol with Markdown-unsafe character"
+    allowed = set(
+        "abcdefghijklmnopqrstuvwxyz"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789"
+        "._:()"
+    )
+    if (
+        any(character not in allowed for character in symbol)
+        or not symbol[0].isalpha()
+    ):
+        return f"{label} contains malformed helper symbol"
+    return None
+
+
+def _submission_surface_sdk_helpers_text_error(value: Any, label: str) -> str | None:
+    if not isinstance(value, str) or not value:
+        return (
+            f"{label} sdk_helpers must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_control_character(value) is not None:
+        return f"{label} sdk_helpers contains control character"
+    if not value.isascii():
+        return f"{label} sdk_helpers contains non-ASCII character"
+    if value.strip() != value:
+        return (
+            f"{label} sdk_helpers must be a non-empty string "
+            "with no surrounding whitespace"
+        )
+    if _path_markdown_unsafe_character(value) is not None:
+        return f"{label} sdk_helpers contains Markdown-unsafe character"
+    return None
+
+
+def _submission_surface_helper_symbol_list_errors(
+    value: Any,
+    label: str,
+) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    errors: list[str] = []
+    for symbol in value:
+        symbol_error = _submission_surface_helper_symbol_error(symbol, label)
+        if symbol_error is not None:
+            errors.append(symbol_error)
+    return errors
+
+
 def _require_report_mapping(
     value: Any,
     label: str,
@@ -1608,17 +1857,6 @@ def _require_report_fields(
     for field in fields:
         if field not in payload:
             errors.append(f"{label} missing field: {field}")
-
-
-def _unknown_report_field_errors(
-    payload: dict[str, Any],
-    label: str,
-    allowed_fields: tuple[str, ...],
-) -> list[str]:
-    return [
-        f"{label} contains unknown field: {field}"
-        for field in sorted(set(payload) - set(allowed_fields), key=str)
-    ]
 
 
 def _string_list_field_errors(
@@ -1803,7 +2041,7 @@ def _unknown_public_field_error(field: Any, label: str) -> str:
 def _unknown_public_field_errors(
     payload: dict[str, Any],
     label: str,
-    allowed_fields: set[str] | frozenset[str],
+    allowed_fields: set[str] | frozenset[str] | tuple[str, ...],
 ) -> list[str]:
     return [
         _unknown_public_field_error(field, label)
@@ -1868,6 +2106,52 @@ def _optional_integer_field_errors(
     return []
 
 
+def _optional_u32_integer_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    *,
+    positive: bool,
+) -> list[str]:
+    if field not in payload or payload.get(field) is None:
+        return []
+    value = payload.get(field)
+    if type(value) is int and value > 0xFFFF_FFFF:
+        if field == "route_canary_receipt_block_number" and positive:
+            return [
+                f"{label} route_canary_receipt_block_number must be null or a positive u32 integer"
+            ]
+        if positive:
+            return [f"{label} {field} must be null or a positive u32 integer"]
+        return [f"{label} {field} must be null or a non-negative u32 integer"]
+    return []
+
+
+def _optional_u64_integer_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    *,
+    positive: bool,
+) -> list[str]:
+    if field not in payload or payload.get(field) is None:
+        return []
+    value = payload.get(field)
+    if type(value) is int and value > 0xFFFF_FFFF_FFFF_FFFF:
+        if field == "route_canary_block_number" and positive:
+            return [
+                f"{label} route_canary_block_number must be null or a positive u64 integer"
+            ]
+        if field == "route_canary_block_timestamp" and not positive:
+            return [
+                f"{label} route_canary_block_timestamp must be null or a non-negative u64 integer"
+            ]
+        if positive:
+            return [f"{label} {field} must be null or a positive u64 integer"]
+        return [f"{label} {field} must be null or a non-negative u64 integer"]
+    return []
+
+
 def _string_field_errors(
     label: str,
     payload: dict[str, Any],
@@ -1929,35 +2213,29 @@ def _artifact_row_errors(row: Any, label: str) -> list[str]:
     if errors:
         return errors
     require_bundle_relative_path = label.startswith("bundled report.")
-    errors.extend(_unknown_report_field_errors(artifact, label, ARTIFACT_FIELDS))
+    errors.extend(_unknown_public_field_errors(artifact, label, ARTIFACT_FIELDS))
     _require_report_fields(artifact, label, ARTIFACT_FIELDS, errors)
     artifact_path = artifact.get("path")
     if not isinstance(artifact_path, str) or not artifact_path:
         errors.append(f"{label} path must be a non-empty string")
     else:
         if artifact_path.strip() != artifact_path:
-            errors.append(
-                f"{label} path must not contain surrounding whitespace: "
-                f"{artifact_path!r}"
-            )
+            errors.append(f"{label} path must not contain surrounding whitespace")
         control_character = _path_control_character(artifact_path)
         if control_character is not None:
             errors.append(
                 f"{label} path contains control character "
-                f"{control_character}: {artifact_path!r}"
+                f"{control_character}"
             )
         markdown_unsafe_character = _path_markdown_unsafe_character(artifact_path)
         if markdown_unsafe_character is not None:
             errors.append(
                 f"{label} path contains Markdown-unsafe character "
-                f"{markdown_unsafe_character}: {artifact_path!r}"
+                f"{markdown_unsafe_character}"
             )
         percent_traversal = _path_percent_encoded_traversal(artifact_path)
         if percent_traversal is not None:
-            errors.append(
-                f"{label} path contains percent-encoded traversal segment: "
-                f"{percent_traversal}"
-            )
+            errors.append(f"{label} path contains percent-encoded traversal segment")
         if require_bundle_relative_path:
             path = PurePosixPath(artifact_path)
             if (
@@ -1966,10 +2244,10 @@ def _artifact_row_errors(row: Any, label: str) -> list[str]:
                 or "\\" in artifact_path
                 or artifact_path != path.as_posix()
             ):
-                errors.append(f"{label} path is not canonical: {artifact_path}")
+                errors.append(f"{label} path is not canonical")
     bytes_value = artifact.get("bytes")
-    if type(bytes_value) is not int or bytes_value < 0:
-        errors.append(f"{label} bytes must be a non-negative integer")
+    if type(bytes_value) is not int or bytes_value <= 0:
+        errors.append(f"{label} bytes must be a positive integer")
     if not _is_canonical_sha256_text(artifact.get("sha256")):
         errors.append(f"{label} sha256 must be a canonical SHA-256 hex string")
     return errors
@@ -1988,28 +2266,22 @@ def _native_evm_artifact_summary_errors(row: Any, label: str) -> list[str]:
         errors.append(f"{label} path must be a non-empty string")
     else:
         if artifact_path.strip() != artifact_path:
-            errors.append(
-                f"{label} path must not contain surrounding whitespace: "
-                f"{artifact_path!r}"
-            )
+            errors.append(f"{label} path must not contain surrounding whitespace")
         control_character = _path_control_character(artifact_path)
         if control_character is not None:
             errors.append(
                 f"{label} path contains control character "
-                f"{control_character}: {artifact_path!r}"
+                f"{control_character}"
             )
         markdown_unsafe_character = _path_markdown_unsafe_character(artifact_path)
         if markdown_unsafe_character is not None:
             errors.append(
                 f"{label} path contains Markdown-unsafe character "
-                f"{markdown_unsafe_character}: {artifact_path!r}"
+                f"{markdown_unsafe_character}"
             )
         percent_traversal = _path_percent_encoded_traversal(artifact_path)
         if percent_traversal is not None:
-            errors.append(
-                f"{label} path contains percent-encoded traversal segment: "
-                f"{percent_traversal}"
-            )
+            errors.append(f"{label} path contains percent-encoded traversal segment")
         if require_bundle_relative_path:
             path = PurePosixPath(artifact_path)
             if (
@@ -2018,10 +2290,10 @@ def _native_evm_artifact_summary_errors(row: Any, label: str) -> list[str]:
                 or "\\" in artifact_path
                 or artifact_path != path.as_posix()
             ):
-                errors.append(f"{label} path is not canonical: {artifact_path}")
+                errors.append(f"{label} path is not canonical")
     bytes_value = artifact.get("bytes")
-    if type(bytes_value) is not int or bytes_value < 0:
-        errors.append(f"{label} bytes must be a non-negative integer")
+    if type(bytes_value) is not int or bytes_value <= 0:
+        errors.append(f"{label} bytes must be a positive integer")
     if not _is_canonical_sha256_text(artifact.get("sha256")):
         errors.append(f"{label} sha256 must be a canonical SHA-256 hex string")
     return errors
@@ -2098,10 +2370,7 @@ def _native_evm_summary_path_role_errors(
             continue
         previous_role = seen.get(artifact_path)
         if previous_role is not None:
-            errors.append(
-                f"{label} {role} path must not reuse {previous_role}: "
-                f"{artifact_path}"
-            )
+            errors.append(f"{label} {role} path must not reuse {previous_role}")
             continue
         seen[artifact_path] = role
     return errors
@@ -2111,34 +2380,28 @@ def _canonical_copied_input_path_errors(value: Any, label: str) -> list[str]:
     if not isinstance(value, str) or not value:
         return [f"{label} item must be a non-empty string"]
     if value.strip() != value:
-        return [
-            f"{label} path must not contain surrounding whitespace: {value!r}"
-        ]
+        return [f"{label} path must not contain surrounding whitespace"]
     control_character = _path_control_character(value)
     if control_character is not None:
         return [
-            f"{label} path contains control character {control_character}: "
-            f"{value!r}"
+            f"{label} path contains control character {control_character}"
         ]
     markdown_unsafe_character = _path_markdown_unsafe_character(value)
     if markdown_unsafe_character is not None:
         return [
             f"{label} path contains Markdown-unsafe character "
-            f"{markdown_unsafe_character}: {value!r}"
+            f"{markdown_unsafe_character}"
         ]
     percent_traversal = _path_percent_encoded_traversal(value)
     if percent_traversal is not None:
-        return [
-            f"{label} path contains percent-encoded traversal segment: "
-            f"{percent_traversal}"
-        ]
+        return [f"{label} path contains percent-encoded traversal segment"]
     if "\\" in value:
-        return [f"{label} path is not canonical: {value}"]
+        return [f"{label} path is not canonical"]
     path = PurePosixPath(value)
     if path.is_absolute() or ".." in path.parts:
-        return [f"{label} path escapes bundle: {value}"]
+        return [f"{label} path escapes bundle"]
     if value != path.as_posix():
-        return [f"{label} path is not canonical: {value}"]
+        return [f"{label} path is not canonical"]
     return []
 
 
@@ -2156,7 +2419,7 @@ def _copied_input_layout_errors(label: str, index: int, value: Any) -> list[str]
     ):
         return [
             f"{label} path must use copied evidence layout "
-            f"evidence/{expected_prefix}*.toml: {value}"
+            f"evidence/{expected_prefix}*.toml"
         ]
     return []
 
@@ -2181,7 +2444,7 @@ def _copied_input_provenance_bundle_errors(
             errors.extend(_copied_input_layout_errors(inputs_label, index, item))
             if isinstance(item, str):
                 if item in seen_inputs:
-                    errors.append(f"{inputs_label} contains duplicate path: {item}")
+                    errors.append(f"{inputs_label} contains duplicate path")
                 seen_inputs.add(item)
                 if not _canonical_copied_input_path_errors(item, inputs_label):
                     input_paths.append(item)
@@ -2205,9 +2468,7 @@ def _copied_input_provenance_bundle_errors(
                 _copied_input_layout_errors(artifacts_label, index, artifact_path)
             )
             if artifact_path in seen_artifacts:
-                errors.append(
-                    f"{artifacts_label} contains duplicate path: {artifact_path}"
-                )
+                errors.append(f"{artifacts_label} contains duplicate path")
             seen_artifacts.add(artifact_path)
             artifact_paths.append(artifact_path)
 
@@ -2226,7 +2487,9 @@ def _release_checklist_bundle_errors(
     payload = _require_report_mapping(checklist, label, errors)
     if errors or not payload:
         return errors
-    errors.extend(_unknown_report_field_errors(payload, label, RELEASE_CHECKLIST_FIELDS))
+    errors.extend(
+        _unknown_public_field_errors(payload, label, RELEASE_CHECKLIST_FIELDS)
+    )
     _require_report_fields(payload, label, RELEASE_CHECKLIST_FIELDS, errors)
     if require_ready:
         if payload.get("ready") is not True:
@@ -2253,7 +2516,7 @@ def _release_checklist_bundle_errors(
                 errors.append(f"{label} contains duplicate item id: {item_id}")
             seen_item_ids.add(item_id)
         errors.extend(
-            _unknown_report_field_errors(
+            _unknown_public_field_errors(
                 item_payload,
                 item_label,
                 RELEASE_CHECKLIST_ITEM_FIELDS,
@@ -2571,7 +2834,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         return errors
 
     errors.extend(
-        _unknown_report_field_errors(
+        _unknown_public_field_errors(
             payload,
             label,
             CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS,
@@ -2619,6 +2882,26 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         errors.append(
             f"{label} route_canary_receipt_block_finalized must be true, false, or null"
         )
+    has_evm_route_canary_evidence = payload.get("domain") in {1, 2} and bool(
+        payload.get("route_canary_evidence_hash")
+    )
+    if has_evm_route_canary_evidence:
+        expected_source = _route_canary_source_by_domain().get(payload.get("domain"))
+        if payload.get("route_canary_evidence_source") != expected_source:
+            errors.append(
+                f"{label} route_canary_evidence_source must be {expected_source} "
+                "for finalized EVM route canary evidence"
+            )
+        if payload.get("route_canary_evidence_bound") is not True:
+            errors.append(
+                f"{label} route_canary_evidence_bound must be true for finalized "
+                "EVM route canary evidence"
+            )
+        if payload.get("route_canary_receipt_block_finalized") is not True:
+            errors.append(
+                f"{label} route_canary_receipt_block_finalized must be true for "
+                "finalized EVM route canary evidence"
+            )
     for field in (
         "source_verifier_material_hash",
         "source_adapter_engine_deployment_hash",
@@ -2641,6 +2924,14 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         )
     )
     errors.extend(
+        _optional_u32_integer_field_errors(
+            label,
+            payload,
+            "route_canary_receipt_block_number",
+            positive=True,
+        )
+    )
+    errors.extend(
         _optional_integer_field_errors(
             label,
             payload,
@@ -2649,7 +2940,23 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         )
     )
     errors.extend(
+        _optional_u64_integer_field_errors(
+            label,
+            payload,
+            "route_canary_block_number",
+            positive=True,
+        )
+    )
+    errors.extend(
         _optional_integer_field_errors(
+            label,
+            payload,
+            "route_canary_block_timestamp",
+            positive=False,
+        )
+    )
+    errors.extend(
+        _optional_u64_integer_field_errors(
             label,
             payload,
             "route_canary_block_timestamp",
@@ -2677,6 +2984,13 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                     errors.append(
                         f"{audit_label} {audit_key} must be a canonical bytes32 hex string"
                     )
+    errors.extend(
+        _cryptographic_evidence_source_adapter_gate_bundle_errors(
+            label,
+            payload,
+            audit_hashes,
+        )
+    )
     return errors
 
 
@@ -2808,22 +3122,34 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
         return errors
 
     errors.extend(
-        _unknown_report_field_errors(
+        _unknown_public_field_errors(
             payload,
             label,
             USER_PROVER_SUBMISSION_SURFACE_FIELDS,
         )
     )
     _require_report_fields(payload, label, USER_PROVER_SUBMISSION_SURFACE_FIELDS, errors)
-    for field in ("lanes", "proof_backend", "sdk_helpers", "on_chain_submission"):
-        value = payload.get(field)
-        if field in payload and (
-            not isinstance(value, str) or not value or value.strip() != value
-        ):
-            errors.append(
-                f"{label} {field} must be a non-empty string "
-                "with no surrounding whitespace"
-            )
+    lanes_error = _submission_surface_lanes_key_error(payload.get("lanes"), label)
+    if "lanes" in payload and lanes_error is not None:
+        errors.append(lanes_error)
+    proof_backend_error = _submission_surface_proof_backend_key_error(
+        payload.get("proof_backend"),
+        label,
+    )
+    if "proof_backend" in payload and proof_backend_error is not None:
+        errors.append(proof_backend_error)
+    submission_error = _submission_surface_submission_text_error(
+        payload.get("on_chain_submission"),
+        label,
+    )
+    if "on_chain_submission" in payload and submission_error is not None:
+        errors.append(submission_error)
+    sdk_helpers_error = _submission_surface_sdk_helpers_text_error(
+        payload.get("sdk_helpers"),
+        label,
+    )
+    if "sdk_helpers" in payload and sdk_helpers_error is not None:
+        errors.append(sdk_helpers_error)
 
     errors.extend(
         _string_list_field_errors(
@@ -2833,9 +3159,20 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
             allow_empty=False,
         )
     )
+    errors.extend(
+        _submission_surface_helper_symbol_list_errors(
+            payload.get("sdk_helper_symbols"),
+            f"{label} sdk_helper_symbols",
+        )
+    )
     helper_symbols = payload.get("sdk_helper_symbols")
     if isinstance(helper_symbols, list) and all(
-        isinstance(item, str) and item for item in helper_symbols
+        _submission_surface_helper_symbol_error(
+            item,
+            f"{label} sdk_helper_symbols",
+        )
+        is None
+        for item in helper_symbols
     ):
         expected_helpers = ", ".join(helper_symbols)
         if payload.get("sdk_helpers") != expected_helpers:
@@ -2868,6 +3205,12 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
                     f"{row_label} must be a list of non-empty strings "
                     "with no surrounding whitespace"
                 )
+            helper_symbol_errors = _submission_surface_helper_symbol_list_errors(
+                helpers,
+                row_label,
+            )
+            if helper_symbol_errors:
+                errors.extend(helper_symbol_errors)
                 continue
             if len(helpers) != len(set(helpers)):
                 errors.append(f"{row_label} contains duplicate symbols")
@@ -2947,8 +3290,8 @@ def _submission_surface_binding_bundle_errors(
     errors: list[str] = []
     try:
         expected_surfaces = _verify_module()._expected_submission_surfaces(report)
-    except Exception as exc:
-        return [f"{label}.user_prover_submission_surfaces cannot be recomputed: {exc}"]
+    except Exception:
+        return [f"{label}.user_prover_submission_surfaces cannot be recomputed"]
 
     expected_by_lanes = {
         surface["lanes"]: surface
@@ -2960,7 +3303,12 @@ def _submission_surface_binding_bundle_errors(
         if not isinstance(surface, dict):
             continue
         lanes = surface.get("lanes")
-        if not isinstance(lanes, str) or not lanes:
+        lanes_error = _submission_surface_lanes_key_error(
+            lanes,
+            f"{label}.user_prover_submission_surfaces",
+        )
+        if lanes_error is not None:
+            errors.append(lanes_error)
             continue
         if lanes in seen_lanes:
             errors.append(
@@ -2976,11 +3324,44 @@ def _submission_surface_binding_bundle_errors(
                 f"lanes row: {lanes}"
             )
             continue
-        if surface.get("proof_backend") != expected.get("proof_backend"):
+        proof_backend = surface.get("proof_backend")
+        if (
+            _submission_surface_proof_backend_key_error(
+                proof_backend,
+                f"{label}.user_prover_submission_surfaces",
+            )
+            is None
+            and proof_backend != expected.get("proof_backend")
+        ):
             errors.append(
                 f"{label}.user_prover_submission_surfaces proof_backend mismatch "
                 f"for lanes {lanes}: expected {expected.get('proof_backend')}, "
-                f"got {surface.get('proof_backend')!r}"
+                f"got {proof_backend!r}"
+            )
+        submission = surface.get("on_chain_submission")
+        if (
+            _submission_surface_submission_text_error(
+                submission,
+                f"{label}.user_prover_submission_surfaces",
+            )
+            is None
+            and submission != expected.get("on_chain_submission")
+        ):
+            errors.append(
+                f"{label}.user_prover_submission_surfaces on_chain_submission "
+                f"must match expected submission text for lanes {lanes}"
+            )
+        required_phases = surface.get("required_phases")
+        expected_required_phases = expected.get("required_phases")
+        if (
+            isinstance(required_phases, list)
+            and isinstance(expected_required_phases, list)
+            and all(isinstance(phase, str) for phase in required_phases)
+            and required_phases != expected_required_phases
+        ):
+            errors.append(
+                f"{label}.user_prover_submission_surfaces "
+                f"required_phases must match expected phases for lanes {lanes}"
             )
         helper_sets = surface.get("sdk_helper_symbols_by_sdk")
         expected_helper_sets = expected.get("sdk_helper_symbols_by_sdk")
@@ -3028,7 +3409,9 @@ def _native_evm_prover_binding_bundle_errors(
     if not label.startswith("bundled report"):
         return []
     if bundle_dir is None:
-        return [f"{label}.native_evm_prover_bundle cannot be recomputed: missing bundle directory"]
+        return [
+            f"{label}.native_evm_prover_bundle cannot be recomputed without bundle directory"
+        ]
     evidence = report.get("evidence")
     if not isinstance(evidence, dict):
         evidence = {}
@@ -3038,8 +3421,8 @@ def _native_evm_prover_binding_bundle_errors(
             report,
             evidence,
         )
-    except Exception as exc:
-        return [f"{label}.native_evm_prover_bundle cannot be recomputed: {exc}"]
+    except Exception:
+        return [f"{label}.native_evm_prover_bundle cannot be recomputed"]
 
     errors = [
         f"bundled native EVM prover manifest blocker: {blocker}"
@@ -3061,7 +3444,7 @@ def _copied_evidence_binding_bundle_errors(
     if not label.startswith("bundled report"):
         return []
     if bundle_dir is None:
-        return [f"{label}.evidence cannot be recomputed: missing bundle directory"]
+        return [f"{label}.evidence cannot be recomputed without bundle directory"]
     recompute_errors: list[str] = []
     try:
         copied_summary = _verify_module()._copied_input_summary(
@@ -3069,8 +3452,8 @@ def _copied_evidence_binding_bundle_errors(
             report,
             recompute_errors,
         )
-    except Exception as exc:
-        return [f"{label}.evidence cannot be recomputed from copied inputs: {exc}"]
+    except Exception:
+        return [f"{label}.evidence cannot be recomputed from copied inputs"]
 
     errors = [
         f"{label}.evidence copied input blocker: {error}"
@@ -3090,8 +3473,8 @@ def _release_checklist_binding_bundle_errors(
         return []
     try:
         expected_checklist = _verify_module()._expected_release_checklist(report)
-    except Exception as exc:
-        return [f"{label}.release_checklist cannot be recomputed: {exc}"]
+    except Exception:
+        return [f"{label}.release_checklist cannot be recomputed"]
     if checklist != expected_checklist:
         return [f"{label}.release_checklist does not match embedded evidence"]
     return []
@@ -3105,7 +3488,9 @@ def _corridor_phase_transcript_bundle_errors(
     if not label.startswith("bundled report"):
         return []
     if bundle_dir is None:
-        return [f"{label}.corridor phase evidence cannot be checked: missing bundle directory"]
+        return [
+            f"{label}.corridor phase evidence cannot be checked: missing bundle directory"
+        ]
     phases = corridor.get("phases")
     evidence_artifacts = corridor.get("evidence_artifacts")
     if not isinstance(phases, dict) or not isinstance(evidence_artifacts, dict):
@@ -3167,9 +3552,9 @@ def _bundled_artifact_integrity_errors(
     for part in relative_path.parts:
         current = current / part
         if current.is_symlink():
-            return [f"{label} artifact path uses symlink: {artifact_path}"]
+            return [f"{label} artifact path uses symlink"]
     if not path.is_file():
-        return [f"{label} artifact file is missing: {artifact_path}"]
+        return [f"{label} artifact file is missing"]
 
     errors: list[str] = []
     expected_bytes = artifact.get("bytes")
@@ -3177,7 +3562,7 @@ def _bundled_artifact_integrity_errors(
         actual_bytes = path.stat().st_size
         if expected_bytes != actual_bytes:
             errors.append(
-                f"{label} artifact byte length mismatch for {artifact_path}: "
+                f"{label} artifact byte length mismatch: "
                 f"expected {expected_bytes}, got {actual_bytes}"
             )
     expected_hash = artifact.get("sha256")
@@ -3185,7 +3570,7 @@ def _bundled_artifact_integrity_errors(
         actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
         if expected_hash != actual_hash:
             errors.append(
-                f"{label} artifact sha256 mismatch for {artifact_path}: "
+                f"{label} artifact sha256 mismatch: "
                 f"expected {expected_hash}, got {actual_hash}"
             )
     return errors
@@ -3281,8 +3666,8 @@ def _readiness_markdown_bundle_errors(
     errors = verifier._readiness_markdown_invariant_errors(report, markdown)
     try:
         expected_markdown = verifier._expected_readiness_markdown(report)
-    except Exception as exc:
-        errors.append(f"{label}.markdown cannot be rendered canonically: {exc}")
+    except Exception:
+        errors.append(f"{label}.markdown cannot be rendered canonically")
     else:
         if markdown != expected_markdown:
             errors.append(
@@ -3721,7 +4106,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
     if errors:
         return errors
     errors.extend(
-        _unknown_report_field_errors(payload, label, ALL_LANES_SUMMARY_FIELDS)
+        _unknown_public_field_errors(payload, label, ALL_LANES_SUMMARY_FIELDS)
     )
     _require_report_fields(payload, label, ALL_LANES_SUMMARY_FIELDS, errors)
     if type(payload.get("production_ready")) is not bool:
@@ -3780,7 +4165,11 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
         if not isinstance(lane, dict):
             continue
         errors.extend(
-            _unknown_report_field_errors(lane_payload, lane_label, ALL_LANES_LANE_FIELDS)
+            _unknown_public_field_errors(
+                lane_payload,
+                lane_label,
+                ALL_LANES_LANE_FIELDS,
+            )
         )
         _require_report_fields(lane_payload, lane_label, ALL_LANES_LANE_FIELDS, errors)
         if "domain" in lane_payload and type(lane_payload.get("domain")) is not int:
@@ -3821,7 +4210,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
         )
         if records:
             errors.extend(
-                _unknown_report_field_errors(
+                _unknown_public_field_errors(
                     records,
                     f"{lane_label}.records",
                     ALL_LANES_RECORD_FIELDS,
@@ -3876,7 +4265,7 @@ def _release_report_bundle_errors(
         return errors
 
     errors.extend(
-        _unknown_report_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)
+        _unknown_public_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)
     )
     _require_report_fields(payload, label, READINESS_REPORT_BUNDLE_FIELDS, errors)
 
@@ -3905,7 +4294,7 @@ def _release_report_bundle_errors(
     corridor = _require_report_mapping(payload.get("corridor"), f"{label}.corridor", errors)
     if corridor:
         errors.extend(
-            _unknown_report_field_errors(
+            _unknown_public_field_errors(
                 corridor,
                 f"{label}.corridor",
                 CORRIDOR_FIELDS,
@@ -4093,7 +4482,7 @@ def _release_report_bundle_errors(
             if not isinstance(inventory, dict):
                 continue
             errors.extend(
-                _unknown_report_field_errors(
+                _unknown_public_field_errors(
                     inventory_payload,
                     inventory_label,
                     SOURCE_INVENTORY_FIELDS,
@@ -4196,8 +4585,8 @@ def _release_notes_attachment_bundle_errors(
     )
     try:
         expected_notes = verifier._expected_release_notes_attachment(report, artifacts)
-    except Exception as exc:
-        errors.append(f"{label}.release_notes_attachment cannot be rendered: {exc}")
+    except Exception:
+        errors.append(f"{label}.release_notes_attachment cannot be rendered")
     else:
         if notes != expected_notes:
             errors.append("release notes attachment does not match manifest and report")
@@ -4300,12 +4689,12 @@ def _release_bundle_manifest_errors(
     expected_paths = set(manifest_artifacts)
     bundle_paths, bundle_directories = verifier._bundle_entry_paths(output_dir, errors)
     for unexpected in sorted(bundle_paths - expected_paths):
-        errors.append(f"bundle contains unmanifested artifact: {unexpected}")
+        errors.append("bundle contains unmanifested artifact")
     for missing in sorted(expected_paths - bundle_paths):
-        errors.append(f"bundle is missing expected artifact file: {missing}")
+        errors.append("bundle is missing expected artifact file")
     expected_directories = verifier._expected_bundle_directories(expected_paths)
     for unexpected in sorted(bundle_directories - expected_directories):
-        errors.append(f"bundle contains unmanifested directory: {unexpected}")
+        errors.append("bundle contains unmanifested directory")
     for required_path in verifier.REQUIRED_ARTIFACT_PATHS:
         if required_path not in manifest_artifacts:
             errors.append(f"manifest missing required artifact: {required_path}")
@@ -4313,15 +4702,14 @@ def _release_bundle_manifest_errors(
     referenced_paths = verifier._referenced_report_artifact_paths(report)
     for unexpected in sorted(set(manifest_artifacts) - referenced_paths):
         errors.append(
-            "manifest contains artifact not referenced by readiness report: "
-            f"{unexpected}"
+            "manifest contains artifact not referenced by readiness report"
         )
     for missing in sorted(referenced_paths - set(manifest_artifacts)):
-        errors.append(f"manifest missing readiness report referenced artifact: {missing}")
+        errors.append("manifest missing readiness report referenced artifact")
     try:
         expected_order = verifier._expected_manifest_artifact_order(report)
     except Exception as exc:
-        errors.append(f"cannot compute canonical manifest artifact order: {exc}")
+        errors.append("cannot compute canonical manifest artifact order")
     else:
         if verifier._manifest_artifact_paths_in_order(artifacts) != expected_order:
             errors.append(
@@ -4512,7 +4900,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _prepare_output_dir(path: Path, *, force: bool) -> None:
     if path.exists():
         if not force:
-            raise FileExistsError(f"output directory already exists: {path}")
+            raise FileExistsError("output directory already exists")
         shutil.rmtree(path)
     path.mkdir(parents=True)
 
@@ -4529,10 +4917,7 @@ def _reject_path_control_characters(path: Path, label: str) -> None:
     path_text = str(path)
     control_character = _path_control_character(path_text)
     if control_character is not None:
-        raise ValueError(
-            f"{label} contains control character {control_character}: "
-            f"{path_text!r}"
-        )
+        raise ValueError(f"{label} contains control character {control_character}")
 
 
 def _reject_path_markdown_unsafe_characters(path_text: str, label: str) -> None:
@@ -4540,21 +4925,27 @@ def _reject_path_markdown_unsafe_characters(path_text: str, label: str) -> None:
     if markdown_unsafe_character is not None:
         raise ValueError(
             f"{label} contains Markdown-unsafe character "
-            f"{markdown_unsafe_character}: {path_text!r}"
+            f"{markdown_unsafe_character}"
         )
 
 
 def _reject_symlink_sources(paths: list[Path]) -> None:
     for path in paths:
         _reject_path_control_characters(path, "release bundle source path")
+        if path.name.strip() != path.name:
+            raise ValueError(
+                "release bundle source filename must not contain surrounding whitespace"
+            )
+        if _path_percent_encoded_traversal(path.name) is not None:
+            raise ValueError(
+                "release bundle source filename contains percent-encoded traversal segment"
+            )
         _reject_path_markdown_unsafe_characters(
             path.name,
             "release bundle source filename",
         )
         if path.is_symlink():
-            raise ValueError(
-                f"release bundle source path must not be a symlink: {path}"
-            )
+            raise ValueError("release bundle source path must not be a symlink")
         current = Path(path.anchor) if path.is_absolute() else Path(".")
         parts = path.parts[1:] if path.is_absolute() else path.parts
         for part in parts:
@@ -4567,8 +4958,7 @@ def _reject_symlink_sources(paths: list[Path]) -> None:
                 if path.is_absolute() and current.parent == Path(path.anchor):
                     continue
                 raise ValueError(
-                    "release bundle source path ancestor must not be a symlink: "
-                    f"{current}"
+                    "release bundle source path ancestor must not be a symlink"
                 )
 
 
@@ -4588,7 +4978,7 @@ def _reject_duplicate_evidence_inputs(paths: list[Path]) -> None:
         if previous is not None:
             raise ValueError(
                 "release bundle evidence input path is duplicated: "
-                f"{path} duplicates {previous}"
+                "<path> duplicates <path>"
             )
         seen[identity] = path
 
@@ -4606,12 +4996,9 @@ def _reject_symlinked_existing_output_path(path: Path) -> None:
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
             if current == path:
-                raise ValueError(
-                    f"release bundle output directory must not be a symlink: {current}"
-                )
+                raise ValueError("release bundle output directory must not be a symlink")
             raise ValueError(
-                "release bundle output directory ancestor must not be a symlink: "
-                f"{current}"
+                "release bundle output directory ancestor must not be a symlink"
             )
 
 
@@ -4632,11 +5019,9 @@ def _validate_output_dir(
         Path.cwd().resolve(),
     }
     if resolved_output in forbidden_outputs:
-        raise ValueError(f"refusing dangerous output directory: {output_dir}")
+        raise ValueError("refusing dangerous output directory")
     if _path_contains(resolved_output, ROOT.resolve()):
-        raise ValueError(
-            f"refusing output directory that contains the repository root: {output_dir}"
-        )
+        raise ValueError("refusing output directory that contains the repository root")
     _reject_symlinked_existing_output_path(output_dir)
     protected_paths = [*input_paths, *phase_sources.values()]
     if native_evm_prover_bundle is not None:
@@ -4657,9 +5042,44 @@ def _validate_output_dir(
         resolved_protected = protected_path.resolve()
         if _path_contains(resolved_output, resolved_protected):
             raise ValueError(
-                "refusing --force output directory that contains input evidence: "
-                f"{output_dir} contains {protected_path}"
+                "refusing --force output directory that contains input evidence"
             )
+
+
+SENSITIVE_CLI_ERROR_MARKERS = (
+    "secret-token",
+    "private-key",
+    "private_key",
+    "password",
+    "passphrase",
+    "bearer ",
+    "authorization",
+    "access-key",
+    "access_key",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "session=",
+    "token=",
+)
+
+
+def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
+    if isinstance(exc, OSError) and (
+        getattr(exc, "filename", None) is not None
+        or getattr(exc, "filename2", None) is not None
+    ):
+        return fallback
+    text = str(exc)
+    if not text:
+        return fallback
+    lowered = text.lower()
+    if any(marker in lowered for marker in SENSITIVE_CLI_ERROR_MARKERS):
+        return fallback
+    if any((ord(ch) < 0x20 and ch not in "\n\t") or ord(ch) == 0x7F for ch in text):
+        return fallback
+    return text
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -4810,7 +5230,11 @@ def main(argv: list[str] | None = None) -> int:
         ValueError,
         argparse.ArgumentTypeError,
     ) as exc:
-        parser.exit(2, f"{parser.prog}: error: {exc}\n")
+        detail = _cli_error_detail(
+            exc,
+            fallback="SCCP release bundle generation failed",
+        )
+        parser.exit(2, f"{parser.prog}: error: {detail}\n")
 
     print(f"Wrote SCCP release bundle to {args.output_dir}")
     if report["production_ready"] is True:

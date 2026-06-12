@@ -8,15 +8,14 @@ from array import array
 import pytest
 from norito.crc64 import crc64
 
+import iroha_python
 import iroha_python.verange as verange_module
 from iroha_python import (
     buildRangeCommitment,
-    buildVeRangeDevProofFixture,
     build_range_commitment,
     build_verange_dev_proof_fixture,
     build_verange_proof_envelope,
     decode_privacy_proof_envelope,
-    verifyVeRangeProofLocally,
     verify_verange_proof_locally,
 )
 from iroha_python.verange import build_privacy_proof_envelope
@@ -148,6 +147,35 @@ def test_verange_builders_normalize_commitments_and_dev_fixture() -> None:
         "version": 1,
     }
 
+    production_envelope = verange_module.build_verange_proof_v1(
+        {
+            "commitments": [commitment_a, commitment_b],
+            "bitLength": 64,
+            "commitmentScheme": "pedersen-v1",
+            "domainSeparator": "boi:amount-range:v1",
+            "payloadDigest": payload_digest,
+            "vkHash": vk_hash,
+            "proofBytes": b"production-verange-proof",
+        }
+    )
+    production_verified = verange_module.verify_verange_proof_v1(
+        {
+            "envelope": production_envelope,
+            "payload": payload,
+            "commitments": [commitment_a, commitment_b],
+            "bitLength": 64,
+            "commitmentScheme": "pedersen-v1",
+            "domainSeparator": "boi:amount-range:v1",
+        }
+    )
+    assert production_verified["ok"] is True
+    assert production_verified["production"] is True
+    assert production_verified["kind"] == "verange-transparent-range-v1"
+    assert production_verified["backend"] == "Stark"
+    assert production_verified["aggregation_count"] == 2
+    assert production_verified["bit_length"] == 64
+    assert production_verified["commitment_scheme"] == "pedersen-v1"
+
     fixture = build_verange_dev_proof_fixture(
         {
             "commitments": [commitment_a, commitment_b],
@@ -178,14 +206,218 @@ def test_verange_builders_normalize_commitments_and_dev_fixture() -> None:
     assert verified["production"] is False
     assert verified["kind"] == "verange-dev-fixture-v1"
     assert verified["public_input_bytes"] == len(fixture["public_input_bytes"])
+    with pytest.raises(ValueError, match="dev fixture"):
+        verange_module.build_verange_proof_v1(
+            {
+                "commitments": [commitment_a, commitment_b],
+                "bitLength": 64,
+                "commitmentScheme": "pedersen-v1",
+                "domainSeparator": "boi:amount-range:v1",
+                "payload": payload,
+                "vkHash": vk_hash,
+                "proofBytes": fixture["proof_bytes"],
+            }
+        )
+    with pytest.raises(ValueError, match="dev fixture"):
+        verange_module.verify_verange_proof_v1(
+            {
+                "envelope": fixture["envelope"],
+                "payload": payload,
+                "commitments": [commitment_a, commitment_b],
+                "bitLength": 64,
+                "commitmentScheme": "pedersen-v1",
+                "domainSeparator": "boi:amount-range:v1",
+            }
+        )
     assert verified["proof_bytes"] == len(fixture["proof_bytes"])
     assert verified["public_inputs"] == fixture["public_inputs"]
+
+
+def test_verange_production_helpers_reject_dev_fixtures() -> None:
+    payload = _payload()
+    commitment_a = bytes([0x44]) * 32
+    commitment_b = bytes([0x45]) * 32
+    vk_hash = bytes([0x55]) * 32
+
+    proof = verange_module.build_verange_proof_v1(
+        {
+            "commitments": [commitment_a, commitment_b],
+            "bitLength": 64,
+            "commitmentScheme": "pedersen-v1",
+            "domainSeparator": "boi:amount-range:v1",
+            "payload": payload,
+            "vkHash": vk_hash,
+            "proofBytes": b"production-verange-proof",
+        }
+    )
+    decoded = decode_privacy_proof_envelope(proof)
+
+    assert decoded["backend"] == "Stark"
+
+    verified = verange_module.verify_verange_proof_v1(
+        {
+            "envelope": proof,
+            "payload": payload,
+            "commitments": [commitment_a, commitment_b],
+            "bitLength": 64,
+            "commitmentScheme": "pedersen-v1",
+            "domainSeparator": "boi:amount-range:v1",
+        }
+    )
+    assert verified["ok"] is True
+    assert verified["production"] is True
+    assert verified["kind"] == "verange-transparent-range-v1"
+    assert verified["aggregation_count"] == 2
+
+    with pytest.raises(ValueError, match="dev fixture"):
+        verify_verange_proof_locally(
+            {
+                "envelope": proof,
+                "payload": payload,
+                "commitments": [commitment_a, commitment_b],
+                "bitLength": 64,
+                "commitmentScheme": "pedersen-v1",
+                "domainSeparator": "boi:amount-range:v1",
+            }
+        )
+
+    fixture = build_verange_dev_proof_fixture(
+        {
+            "commitments": [commitment_a, commitment_b],
+            "bitLength": 64,
+            "commitmentScheme": "pedersen-v1",
+            "domainSeparator": "boi:amount-range:v1",
+            "payload": payload,
+            "vkHash": vk_hash,
+        }
+    )
+    with pytest.raises(ValueError, match="dev fixture"):
+        verange_module.verify_verange_proof_v1(
+            {
+                "envelope": fixture["envelope"],
+                "payload": payload,
+                "commitments": [commitment_a, commitment_b],
+                "bitLength": 64,
+                "commitmentScheme": "pedersen-v1",
+                "domainSeparator": "boi:amount-range:v1",
+            }
+        )
+    with pytest.raises(ValueError, match="dev fixture"):
+        verange_module.build_verange_proof_v1(
+            {
+                "commitments": [commitment_a, commitment_b],
+                "bitLength": 64,
+                "commitmentScheme": "pedersen-v1",
+                "domainSeparator": "boi:amount-range:v1",
+                "payload": payload,
+                "vkHash": vk_hash,
+                "proofBytes": fixture["proof_bytes"],
+            }
+        )
+
+
+def test_verange_public_helpers_reject_non_plain_mapping_inputs() -> None:
+    class VeRangeDict(dict):
+        pass
+
+    payload = _payload()
+    commitment_a = bytes([0x44]) * 32
+    commitment_b = bytes([0x45]) * 32
+    vk_hash = bytes([0x55]) * 32
+    proof_options: dict[str, object] = {
+        "commitments": [commitment_a, commitment_b],
+        "bitLength": 64,
+        "commitmentScheme": "pedersen-v1",
+        "domainSeparator": "boi:amount-range:v1",
+        "payload": payload,
+        "vkHash": vk_hash,
+        "proofBytes": b"production-verange-proof",
+    }
+    commitment_options: dict[str, object] = {
+        "commitment": commitment_a,
+        "bitLength": 64,
+        "commitmentScheme": "pedersen-v1",
+        "domainSeparator": "boi:amount-range:v1",
+        "payload": payload,
+    }
+
+    with pytest.raises(TypeError, match="rangeCommitment"):
+        build_range_commitment(VeRangeDict(commitment_options))
+    with pytest.raises(TypeError, match="veRangeProofEnvelope"):
+        build_verange_proof_envelope(VeRangeDict(proof_options))
+    with pytest.raises(TypeError, match=r"veRangeProofEnvelope\.commitments\[1\]"):
+        build_verange_proof_envelope(
+            {
+                **proof_options,
+                "commitments": [
+                    commitment_a,
+                    VeRangeDict({"commitment": commitment_b}),
+                ],
+            }
+        )
+    with pytest.raises(TypeError, match="veRangeDevProofFixture"):
+        build_verange_dev_proof_fixture(VeRangeDict(proof_options))
+
+    for helper in (
+        verange_module.build_verange_proof_v1,
+        verange_module.buildVeRangeProofV1,
+        iroha_python.build_verange_proof_v1,
+        iroha_python.buildVeRangeProofV1,
+    ):
+        with pytest.raises(TypeError, match="veRangeProofV1"):
+            helper(VeRangeDict(proof_options))
+
+    production_envelope = verange_module.build_verange_proof_v1(proof_options)
+    production_verified = verange_module.verify_verange_proof_v1(production_envelope)
+    assert production_verified["ok"] is True
+    verify_options: dict[str, object] = {
+        "envelope": production_envelope,
+        "payload": payload,
+        "commitments": [commitment_a, commitment_b],
+        "bitLength": 64,
+        "commitmentScheme": "pedersen-v1",
+        "domainSeparator": "boi:amount-range:v1",
+    }
+    for helper in (
+        verange_module.verify_verange_proof_v1,
+        verange_module.verifyVeRangeProofV1,
+        iroha_python.verify_verange_proof_v1,
+        iroha_python.verifyVeRangeProofV1,
+    ):
+        with pytest.raises(TypeError, match="veRangeProofV1Verification"):
+            helper(VeRangeDict(verify_options))
+
+    fixture = build_verange_dev_proof_fixture(
+        {
+            "commitments": [commitment_a, commitment_b],
+            "bitLength": 64,
+            "commitmentScheme": "pedersen-v1",
+            "domainSeparator": "boi:amount-range:v1",
+            "payload": payload,
+            "vkHash": vk_hash,
+        }
+    )
+    local_verified = verange_module.verify_verange_proof_locally(fixture["envelope"])
+    assert local_verified["ok"] is True
+    local_options = {
+        **verify_options,
+        "envelope": fixture["envelope"],
+    }
+    for helper in (
+        verange_module.verify_verange_proof_locally,
+        verange_module.verifyVeRangeProofLocally,
+        iroha_python.verify_verange_proof_locally,
+        iroha_python.verifyVeRangeProofLocally,
+    ):
+        with pytest.raises(TypeError, match="veRangeProofLocalVerification"):
+            helper(VeRangeDict(local_options))
 
 
 def test_privacy_proof_envelope_preserves_pending_production_backend_tags() -> None:
     cases = [
         ("halo2-ipa-orchard", "Halo2IpaOrchard"),
         ("halo2/ipa/orchard", "Halo2IpaOrchard"),
+        ("halo2-pasta-action-bundle", "Halo2IpaOrchard"),
         ("orchard", "Halo2IpaOrchard"),
         ("zcash-orchard", "Halo2IpaOrchard"),
         ("groth16-bls12-377", "Groth16Bls12377"),
@@ -197,6 +429,7 @@ def test_privacy_proof_envelope_preserves_pending_production_backend_tags() -> N
         ("halo2/ipa/penumbra", "Groth16Bls12377"),
         ("halo2/ipa/masp", "Groth16Bls12377"),
         ("fcmp-plus-plus-curve-tree", "FcmpPlusPlusCurveTree"),
+        ("fcmp-plus-plus-curve-trees-bulletproofs", "FcmpPlusPlusCurveTree"),
         ("fcmp++", "FcmpPlusPlusCurveTree"),
         ("monero-fcmp++", "FcmpPlusPlusCurveTree"),
         ("halo2/ipa/monero", "FcmpPlusPlusCurveTree"),
@@ -206,8 +439,10 @@ def test_privacy_proof_envelope_preserves_pending_production_backend_tags() -> N
         ("jindo-lattice-pcs-zk-v0", "LatticePcsSis"),
         ("miden-stark", "MidenStark"),
         ("stark/fri/miden", "MidenStark"),
+        ("stark-vm-note-transaction", "MidenStark"),
         ("aztec-plonkish-private-kernel", "AztecPlonkishPrivateKernel"),
         ("aztec/private-kernel", "AztecPlonkishPrivateKernel"),
+        ("plonkish-private-kernel-rollup", "AztecPlonkishPrivateKernel"),
         ("pq-masp-stark-fri", "PqMaspStarkFri"),
         ("stark/fri/pq-masp-stark-fri", "PqMaspStarkFri"),
         ("post-quantum-masp", "PqMaspStarkFri"),
@@ -618,37 +853,111 @@ def test_privacy_proof_envelope_rejects_text_and_unclean_byte_strings(
         build_privacy_proof_envelope({**base, **patch})
 
 
-def test_verange_package_root_exports_catalog_entrypoint_aliases() -> None:
+def test_verange_package_root_exports_component_entrypoint_aliases() -> None:
     payload = _payload()
-    fixture = buildVeRangeDevProofFixture(
-        {
-            "commitments": [bytes([0x44]) * 32],
-            "bitLength": 64,
-            "commitmentScheme": "pedersen-v1",
-            "payload": payload,
-            "vkHash": bytes([0x55]) * 32,
-        }
-    )
+    vk_hash = bytes([0x55]) * 32
+    commitment_bytes = bytes([0x44]) * 32
     commitment = buildRangeCommitment(
         {
-            "commitment": bytes([0x44]) * 32,
+            "commitment": commitment_bytes,
             "bitLength": 64,
             "commitmentScheme": "pedersen-v1",
             "payload": payload,
         }
     )
-    verified = verifyVeRangeProofLocally(
+    envelope = build_verange_proof_envelope(
+        {
+            "commitments": [commitment["commitment"]],
+            "bitLength": 64,
+            "commitmentScheme": "pedersen-v1",
+            "payload": payload,
+            "vkHash": vk_hash,
+            "proofBytes": b"component-envelope-proof",
+        }
+    )
+    decoded = decode_privacy_proof_envelope(envelope)
+
+    assert buildRangeCommitment is build_range_commitment
+    assert build_verange_proof_envelope is verange_module.build_verange_proof_envelope
+    assert decoded["backend"] == "Stark"
+    assert iroha_python.buildVeRangeDevProofFixture is verange_module.buildVeRangeDevProofFixture
+    assert iroha_python.verifyVeRangeProofLocally is verange_module.verifyVeRangeProofLocally
+    assert iroha_python.buildVeRangeProofV1 is verange_module.buildVeRangeProofV1
+    assert iroha_python.verifyVeRangeProofV1 is verange_module.verifyVeRangeProofV1
+    assert iroha_python.build_verange_proof_v1 is verange_module.build_verange_proof_v1
+    assert iroha_python.verify_verange_proof_v1 is verange_module.verify_verange_proof_v1
+    production_envelope = iroha_python.buildVeRangeProofV1(
+        {
+            "commitments": [commitment["commitment"]],
+            "bitLength": 64,
+            "commitmentScheme": "pedersen-v1",
+            "payload": payload,
+            "vkHash": vk_hash,
+            "proofBytes": b"public-production-verange-proof",
+        }
+    )
+    production_verified = iroha_python.verifyVeRangeProofV1(
+        {
+            "envelope": production_envelope,
+            "payload": payload,
+            "commitments": [commitment["commitment"]],
+            "bitLength": 64,
+            "commitmentScheme": "pedersen-v1",
+        }
+    )
+    assert production_verified["production"] is True
+    assert production_verified["kind"] == "verange-transparent-range-v1"
+    assert production_verified["aggregation_count"] == 1
+    with pytest.raises(ValueError, match="payloadDigest"):
+        iroha_python.verifyVeRangeProofV1(
+            {
+                "envelope": production_envelope,
+                "payload": payload + b":tampered",
+                "commitments": [commitment["commitment"]],
+                "bitLength": 64,
+                "commitmentScheme": "pedersen-v1",
+            }
+        )
+    with pytest.raises(ValueError, match="commitments"):
+        iroha_python.verifyVeRangeProofV1(
+            {
+                "envelope": production_envelope,
+                "payload": payload,
+                "commitments": [bytes([0x99]) * 32],
+                "bitLength": 64,
+                "commitmentScheme": "pedersen-v1",
+            }
+        )
+    fixture = iroha_python.buildVeRangeDevProofFixture(
+        {
+            "commitments": [commitment["commitment"]],
+            "bitLength": 64,
+            "commitmentScheme": "pedersen-v1",
+            "payload": payload,
+            "vkHash": vk_hash,
+        }
+    )
+    verified = iroha_python.verifyVeRangeProofLocally(
         {
             "envelope": fixture["envelope"],
             "payload": payload,
-            "commitment": commitment["commitment"],
+            "commitments": [commitment["commitment"]],
             "bitLength": 64,
             "commitmentScheme": "pedersen-v1",
         }
     )
-
-    assert verified["ok"] is True
     assert verified["production"] is False
+    assert verified["kind"] == "verange-dev-fixture-v1"
+    with pytest.raises(ValueError, match="dev fixture"):
+        iroha_python.verifyVeRangeProofV1(
+            {
+                "envelope": fixture["envelope"],
+                "payload": payload,
+                "commitments": [commitment["commitment"]],
+                "bitLength": 64,
+                "commitmentScheme": "pedersen-v1",
+            }
+        )
 
 
 @pytest.mark.parametrize(

@@ -54,6 +54,8 @@ def _normalize_verifying_key_name(value: Any, context: str) -> str:
     normalized = value.strip()
     if not normalized:
         raise ValueError(f"{context} must be a non-empty string")
+    if normalized != value:
+        raise ValueError(f"{context} must not contain surrounding whitespace")
     if ":" in normalized:
         raise ValueError(f"{context} must not contain ':' characters")
     return normalized

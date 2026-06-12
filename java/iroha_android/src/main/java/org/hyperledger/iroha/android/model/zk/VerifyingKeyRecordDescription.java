@@ -221,10 +221,7 @@ public final class VerifyingKeyRecordDescription {
     }
 
     public Builder setCircuitId(final String circuitId) {
-      if (circuitId == null || circuitId.trim().isEmpty()) {
-        throw new IllegalArgumentException("circuitId must not be blank");
-      }
-      this.circuitId = circuitId.trim();
+      this.circuitId = requireExactNonBlank(circuitId, "circuitId");
       return this;
     }
 
@@ -234,8 +231,9 @@ public final class VerifyingKeyRecordDescription {
     }
 
     public Builder setCurve(final String curve) {
-      if (curve != null && !curve.trim().isEmpty()) {
-        this.curve = curve.trim();
+      final String normalized = normalizeOptionalExact(curve, "curve");
+      if (normalized != null) {
+        this.curve = normalized;
       }
       return this;
     }
@@ -276,20 +274,17 @@ public final class VerifyingKeyRecordDescription {
     }
 
     public Builder setGasScheduleId(final String gasScheduleId) {
-      if (gasScheduleId == null || gasScheduleId.trim().isEmpty()) {
-        throw new IllegalArgumentException("gasScheduleId must not be blank");
-      }
-      this.gasScheduleId = gasScheduleId.trim();
+      this.gasScheduleId = requireExactNonBlank(gasScheduleId, "gasScheduleId");
       return this;
     }
 
     public Builder setMetadataUriCid(final String metadataUriCid) {
-      this.metadataUriCid = normalizeOptional(metadataUriCid);
+      this.metadataUriCid = normalizeOptionalExact(metadataUriCid, "metadataUriCid");
       return this;
     }
 
     public Builder setVkBytesCid(final String vkBytesCid) {
-      this.vkBytesCid = normalizeOptional(vkBytesCid);
+      this.vkBytesCid = normalizeOptionalExact(vkBytesCid, "vkBytesCid");
       return this;
     }
 
@@ -365,30 +360,48 @@ public final class VerifyingKeyRecordDescription {
       if (value == null) {
         return null;
       }
-      final String normalized = value.trim();
-      if (normalized.isEmpty()) {
+      if (value.isEmpty()) {
         return null;
       }
-      if (normalized.length() != 64) {
+      if (!value.trim().equals(value)) {
+        throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+      }
+      if (value.length() != 64) {
         throw new IllegalArgumentException(field + " must contain exactly 64 hexadecimal characters");
       }
-      for (int index = 0; index < normalized.length(); index++) {
-        final char c = normalized.charAt(index);
+      for (int index = 0; index < value.length(); index++) {
+        final char c = value.charAt(index);
         if (!((c >= '0' && c <= '9')
             || (c >= 'a' && c <= 'f')
             || (c >= 'A' && c <= 'F'))) {
           throw new IllegalArgumentException(field + " must contain only hexadecimal characters");
         }
       }
-      return normalized.toLowerCase(Locale.ROOT);
+      return value.toLowerCase(Locale.ROOT);
     }
 
-    private static String normalizeOptional(final String value) {
+    private static String normalizeOptionalExact(final String value, final String field) {
       if (value == null) {
         return null;
       }
       final String trimmed = value.trim();
-      return trimmed.isEmpty() ? null : trimmed;
+      if (trimmed.isEmpty()) {
+        return null;
+      }
+      if (!trimmed.equals(value)) {
+        throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+      }
+      return value;
+    }
+
+    private static String requireExactNonBlank(final String value, final String field) {
+      if (value == null || value.trim().isEmpty()) {
+        throw new IllegalArgumentException(field + " must not be blank");
+      }
+      if (!value.trim().equals(value)) {
+        throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+      }
+      return value;
     }
 
     private static String computeCommitmentHex(final String backend, final byte[] bytes) {

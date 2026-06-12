@@ -394,6 +394,8 @@ public enum OfflineNoteTransferHandoff {
     public static let textReceiveRequestContentType = "text/vnd.iroha.offline.receive-request"
     public static let textReceiptAckContentType = "text/vnd.iroha.offline.receipt-ack"
     public static let nearbyServiceName = "iroha-pay"
+    public static let nearbyRejectedContentType = "text/plain"
+    public static let nearbyRejectedPayload = "rejected"
     public static let nfcExternalType = "org.hyperledger.iroha:offline-payment"
     public static let defaultNfcAidHex = OfflineNoteNfcApduProtocol.aidHex
     public static let qrFrameCadenceMs = 500
@@ -565,6 +567,25 @@ public enum OfflineNoteTransferHandoff {
         try OfflineNoteNearbyEnvelope.decode(envelopeBytes).receiptAck()
     }
 
+    public static func nearbyRejectedEnvelopeBytes() throws -> Data {
+        try OfflineNoteNearbyEnvelope(
+            kind: .rejected,
+            payload: Data(nearbyRejectedPayload.utf8),
+            contentType: nearbyRejectedContentType
+        ).encoded()
+    }
+
+    public static func decodeNearbyRejectedEnvelope(from envelopeBytes: Data) throws -> String {
+        let envelope = try OfflineNoteNearbyEnvelope.decode(envelopeBytes)
+        guard envelope.kind == .rejected,
+              envelope.contentType == nearbyRejectedContentType,
+              let payload = String(data: envelope.payload, encoding: .utf8),
+              payload == nearbyRejectedPayload else {
+            throw OfflineNoteNearbyError.invalidMessage
+        }
+        return payload
+    }
+
     public static func textContentType(for kind: OfflineNoteTextPayloadKind) -> String {
         switch kind {
         case .receiveRequest:
@@ -604,8 +625,9 @@ public enum OfflineNoteTransferHandoff {
         _ value: String,
         expectedKind: OfflineNoteTextPayloadKind? = nil
     ) throws -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        try OfflineNoteTransferTextPayloadCodec.validatePayloadContents(trimmed, expectedKind: expectedKind)
+        let trimmed = try OfflineNoteTextTransferContract.normalizeTextTransportEnvelope(value)
+        let kind = try expectedKind ?? textPayloadKind(forPayload: trimmed)
+        try validateTextTransportPayloadContents(trimmed, expectedKind: kind)
         return trimmed
     }
 
@@ -616,12 +638,32 @@ public enum OfflineNoteTransferHandoff {
         (try? normalizeTextTransportPayload(value, expectedKind: expectedKind)) != nil
     }
 
+    public static func normalizeDeviceToDeviceTextPayload(
+        _ value: String,
+        expectedKind: OfflineNoteTextPayloadKind
+    ) throws -> String {
+        let trimmed = try OfflineNoteTextTransferContract.normalizeTextTransportEnvelope(value)
+        let actualKind = try textPayloadKind(forPayload: trimmed)
+        guard actualKind == expectedKind else {
+            throw OfflineNoteTransferTextPayloadCodecError.kindMismatch(expected: expectedKind, actual: actualKind)
+        }
+        try validateDeviceToDeviceTextPayloadContents(trimmed, expectedKind: expectedKind)
+        return trimmed
+    }
+
+    public static func isValidDeviceToDeviceTextPayload(
+        _ value: String,
+        expectedKind: OfflineNoteTextPayloadKind
+    ) -> Bool {
+        (try? normalizeDeviceToDeviceTextPayload(value, expectedKind: expectedKind)) != nil
+    }
+
     public static func nearbyTextEnvelopeBytes(
         payload: String,
         kind: OfflineNoteTextPayloadKind,
         pairingChallenge: OfflineNoteNearbyPairingChallenge? = nil
     ) throws -> Data {
-        let normalized = try normalizeTextTransportPayload(payload, expectedKind: kind)
+        let normalized = try normalizeDeviceToDeviceTextPayload(payload, expectedKind: kind)
         return try OfflineNoteNearbyEnvelope(
             kind: kind.nearbyMessageKind,
             payload: Data(normalized.utf8),
@@ -652,7 +694,7 @@ public enum OfflineNoteTransferHandoff {
         }
         return (
             textKind,
-            try normalizeTextTransportPayload(payload, expectedKind: textKind),
+            try normalizeDeviceToDeviceTextPayload(payload, expectedKind: textKind),
             envelope.pairingChallenge
         )
     }
@@ -673,5 +715,68 @@ public enum OfflineNoteTransferHandoff {
             payloadKind: .offlinePaymentToken,
             options: options
         )
+    }
+
+    private static func textPayloadKind(forPayload value: String) throws -> OfflineNoteTextPayloadKind {
+        if value.hasPrefix(OfflineNoteTransferTextPayloadCodec.receiveRequestPrefix) {
+            return .receiveRequest
+        }
+        if value.hasPrefix(OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix) {
+            return .paymentToken
+        }
+        if value.hasPrefix(OfflineNoteTransferTextPayloadCodec.receiptAckPrefix) {
+            return .receiptAck
+        }
+        throw OfflineNoteTransferTextPayloadCodecError.unknownPrefix
+    }
+
+    private static func validateTextTransportPayloadContents(
+        _ value: String,
+        expectedKind: OfflineNoteTextPayloadKind
+    ) throws {
+        switch expectedKind {
+        case .receiveRequest:
+            _ = try OfflineNoteTransferTextPayloadCodec.decodeReceiveRequestPayload(value)
+        case .paymentToken:
+            if (try? OfflineNativePaymentTextPayloadCodec.decodePaymentToken(value)) == nil {
+                _ = try OfflineNoteTransferTextPayloadCodec.decodePaymentToken(value)
+            }
+        case .receiptAck:
+            _ = try OfflineNoteTransferTextPayloadCodec.decodeReceiptAck(value)
+        }
+    }
+
+    private static func validateDeviceToDeviceTextPayloadContents(
+        _ value: String,
+        expectedKind: OfflineNoteTextPayloadKind
+    ) throws {
+        switch expectedKind {
+        case .receiveRequest:
+            let request = try OfflineNoteTransferTextPayloadCodec.decodeReceiveRequestPayload(value)
+            guard let chainId = request.chainId,
+                  !chainId.isEmpty,
+                  chainId.trimmingCharacters(in: .whitespacesAndNewlines) == chainId,
+                  let assetId = request.assetId,
+                  isValidDeviceTransferAssetReference(assetId),
+                  let outputCommitment = request.outputCommitment,
+                  outputCommitment.trimmingCharacters(in: .whitespacesAndNewlines) == outputCommitment,
+                  let outputCommitmentBytes = Data(hexString: outputCommitment),
+                  outputCommitmentBytes.count == 32 else {
+                throw OfflineNoteTransferTextPayloadCodecError.invalidPayload
+            }
+        case .paymentToken:
+            _ = try OfflineNativePaymentTextPayloadCodec.decodePaymentToken(value)
+        case .receiptAck:
+            _ = try OfflineNoteTransferTextPayloadCodec.decodeNativeReceiptAck(value)
+        }
+    }
+
+    private static func isValidDeviceTransferAssetReference(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed == value, !trimmed.isEmpty else {
+            return false
+        }
+        return trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+            && trimmed.rangeOfCharacter(from: .controlCharacters) == nil
     }
 }

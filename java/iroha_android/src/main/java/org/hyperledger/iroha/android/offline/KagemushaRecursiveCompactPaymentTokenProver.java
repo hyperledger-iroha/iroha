@@ -8,6 +8,7 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   private static final BigInteger MAX_U64 = new BigInteger("18446744073709551615");
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 7;
+  public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = REQUIRED_BRIDGE_ABI_VERSION;
   public static final String RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
       "kagemusha-recursive-compact-v1";
   private static final String RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT =
@@ -234,7 +235,7 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
                   () -> nativeRecursiveSpendCompactPaymentTokenFromBundle(new byte[0]));
           return proverRejects && verifierRejects && projectionRejects;
         },
-        REQUIRED_BRIDGE_ABI_VERSION);
+        REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
   }
 
   private static boolean loadVerifierLibrary() {
@@ -244,7 +245,7 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
         () ->
             KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe(
                 () -> nativeVerifyRecursiveCompactPaymentToken(new byte[0], new byte[0])),
-        REQUIRED_BRIDGE_ABI_VERSION);
+        REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
   }
 
   private static boolean loadProjectionVerifierLibrary() {
@@ -264,7 +265,7 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
                           new byte[0], new byte[0], 0L));
           return noHeightRejects && heightRejects;
         },
-        REQUIRED_BRIDGE_ABI_VERSION);
+        REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
   }
 
   private static native int nativeBridgeAbiVersion();

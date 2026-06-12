@@ -607,11 +607,10 @@ private enum SwiftNexusTransferPayloadEncoder {
 }
 
 private func ensureEd25519(_ algorithm: String) throws {
-    let normalized = algorithm.lowercased()
-    guard normalized.allSatisfy({ scalar in
+    guard algorithm.allSatisfy({ scalar in
         guard let ascii = scalar.asciiValue else { return false }
         return ascii >= 0x20 && ascii <= 0x7E
-    }), normalized == NexusSignatureAlgorithmEd25519 || normalized == "0" else {
+    }), algorithm == NexusSignatureAlgorithmEd25519 || algorithm == "0" else {
         throw NexusAppError(code: "unsupported_signature_algorithm",
                             message: "Nexus App Facade V1 supports Ed25519 signatures only.")
     }

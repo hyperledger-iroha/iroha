@@ -222,7 +222,7 @@ impl SignedTicket {
         if decoded.ticket.version != Ticket::VERSION {
             return Err(Error::UnsupportedVersion(decoded.ticket.version));
         }
-        Self::validate_signature_len(&decoded.signature)?;
+        Self::validate_signature_material(&decoded.signature)?;
         Ok(decoded)
     }
 
@@ -242,7 +242,7 @@ impl SignedTicket {
         if self.ticket.version != Ticket::VERSION {
             return Err(Error::UnsupportedVersion(self.ticket.version));
         }
-        Self::validate_signature_len(&self.signature)?;
+        Self::validate_signature_material(&self.signature)?;
         MlDsaSuite::MlDsa44
             .validate_public_key(public_key)
             .map_err(|err| Error::PostQuantum(err.to_string()))?;
@@ -261,15 +261,8 @@ impl SignedTicket {
         })
     }
 
-    fn validate_signature_len(signature: &[u8]) -> Result<(), Error> {
-        let expected = MlDsaSuite::MlDsa44.signature_len();
-        if signature.len() != expected {
-            return Err(Error::Malformed(format!(
-                "signed ticket signature must be {expected} bytes, got {}",
-                signature.len()
-            )));
-        }
-        Ok(())
+    fn validate_signature_material(signature: &[u8]) -> Result<(), Error> {
+        validate_signed_ticket_signature_material(signature).map_err(Error::Malformed)
     }
 
     fn build_payload(
@@ -407,6 +400,9 @@ pub enum TicketRevocationStoreError {
     /// Ticket expiry timestamp cannot be represented by `SystemTime`.
     #[error("revocation expiry timestamp {0} overflows system time")]
     ExpiryTimestampOverflow(u64),
+    /// Raw signature material is not a valid signed-ticket signature.
+    #[error("revocation signature malformed: {0}")]
+    MalformedSignature(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -495,6 +491,8 @@ impl TicketRevocationStore {
         expires_at: SystemTime,
         now: SystemTime,
     ) -> Result<TicketRevocationInsertOutcome, TicketRevocationStoreError> {
+        validate_signed_ticket_signature_material(signature)
+            .map_err(TicketRevocationStoreError::MalformedSignature)?;
         let fingerprint = compute_revocation_fingerprint(signature);
         self.insert(fingerprint, expires_at, now)
     }
@@ -535,6 +533,9 @@ impl TicketRevocationStore {
     /// Check if a signature has been revoked and is still within its TTL.
     #[must_use]
     pub fn is_revoked_signature(&self, signature: &[u8], now: SystemTime) -> bool {
+        if validate_signed_ticket_signature_material(signature).is_err() {
+            return false;
+        }
         let fingerprint = compute_revocation_fingerprint(signature);
         self.is_revoked_fingerprint(&fingerprint, now)
     }
@@ -960,7 +961,14 @@ fn fill_random<R: TryCryptoRng>(
         .map_err(|err| MintError::RandomBytes {
             operation,
             message: err.to_string(),
-        })
+        })?;
+    if dest.iter().all(|&byte| byte == 0) {
+        return Err(MintError::RandomBytes {
+            operation,
+            message: "rng returned all-zero material".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Verify a ticket using the local `PoW` parameters.
@@ -1301,6 +1309,20 @@ fn unix_time_from_secs(secs: u64) -> Option<SystemTime> {
     UNIX_EPOCH.checked_add(Duration::from_secs(secs))
 }
 
+fn validate_signed_ticket_signature_material(signature: &[u8]) -> Result<(), String> {
+    let expected = MlDsaSuite::MlDsa44.signature_len();
+    if signature.len() != expected {
+        return Err(format!(
+            "signed ticket signature must be {expected} bytes, got {}",
+            signature.len()
+        ));
+    }
+    if signature.iter().all(|&byte| byte == 0) {
+        return Err("signed ticket signature must not be all zero".to_owned());
+    }
+    Ok(())
+}
+
 fn compute_revocation_fingerprint(signature: &[u8]) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(REVOCATION_DOMAIN);
@@ -1384,6 +1406,29 @@ mod tests {
 
     impl TryCryptoRng for FailingTryRng {}
 
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedTryRng {}
+
     fn signed_ticket_with_expiry(expires_at: u64, signature_byte: u8) -> SignedTicket {
         SignedTicket {
             ticket: Ticket {
@@ -1395,7 +1440,7 @@ mod tests {
             },
             relay_id: RELAY_A,
             transcript_hash: None,
-            signature: vec![signature_byte; 48],
+            signature: vec![signature_byte; MlDsaSuite::MlDsa44.signature_len()],
         }
     }
 
@@ -1577,6 +1622,23 @@ mod tests {
                 );
             }
             other => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fill_random_rejects_all_zero_nonce_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+        let mut nonce = [0u8; 32];
+
+        let err = fill_random(&mut rng, "minting PoW solution nonce", &mut nonce)
+            .expect_err("all-zero PoW nonce material must fail");
+
+        match err {
+            MintError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "minting PoW solution nonce");
+                assert!(message.contains("all-zero material"));
+            }
+            other => panic!("expected all-zero nonce RandomBytes error, got {other:?}"),
         }
     }
 
@@ -1970,6 +2032,30 @@ mod tests {
     }
 
     #[test]
+    fn signed_ticket_decode_rejects_all_zero_signature_material() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: 123,
+            client_nonce: [0xAA; 32],
+            solution: [0xBB; 32],
+        };
+        let signed = SignedTicket {
+            ticket,
+            relay_id: RELAY_A,
+            transcript_hash: None,
+            signature: vec![0u8; MlDsaSuite::MlDsa44.signature_len()],
+        };
+        let encoded = signed.encode();
+
+        let err = SignedTicket::decode(&encoded).expect_err("all-zero signature should fail");
+        match err {
+            Error::Malformed(message) => assert!(message.contains("all zero")),
+            other => panic!("expected malformed all-zero signature, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn signed_ticket_verify_rejects_invalid_signature_length_before_backend() {
         let ticket = Ticket {
             version: Ticket::VERSION,
@@ -1994,6 +2080,31 @@ mod tests {
                 assert!(message.contains("bytes"));
             }
             other => panic!("expected malformed signature length, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn signed_ticket_verify_rejects_all_zero_signature_before_backend() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: 123,
+            client_nonce: [0xAA; 32],
+            solution: [0xBB; 32],
+        };
+        let signed = SignedTicket {
+            ticket,
+            relay_id: RELAY_A,
+            transcript_hash: None,
+            signature: vec![0u8; MlDsaSuite::MlDsa44.signature_len()],
+        };
+
+        let err = signed
+            .verify(&[])
+            .expect_err("all-zero signature should fail before key validation");
+        match err {
+            Error::Malformed(message) => assert!(message.contains("all zero")),
+            other => panic!("expected malformed all-zero signature, got {other:?}"),
         }
     }
 
@@ -2464,6 +2575,41 @@ mod tests {
             TicketRevocationStore::load(&path, limits, later).expect("reload after purge");
         assert_eq!(reloaded.len(later), 1);
         assert!(reloaded.is_ticket_revoked(&long, later));
+    }
+
+    #[test]
+    fn revocation_store_rejects_malformed_raw_signature_material() {
+        let now = UNIX_EPOCH + Duration::from_secs(11_000);
+        let expires_at = now + Duration::from_secs(120);
+        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(600)).expect("limits");
+        let mut store = TicketRevocationStore::in_memory(limits).expect("store");
+        let short = vec![0x11; MlDsaSuite::MlDsa44.signature_len() - 1];
+        let all_zero = vec![0u8; MlDsaSuite::MlDsa44.signature_len()];
+
+        let err = store
+            .revoke_signature(&short, expires_at, now)
+            .expect_err("short raw signature should fail");
+        match err {
+            TicketRevocationStoreError::MalformedSignature(message) => {
+                assert!(message.contains("signature"));
+                assert!(message.contains("bytes"));
+            }
+            other => panic!("expected malformed raw signature length, got {other:?}"),
+        }
+
+        let err = store
+            .revoke_signature(&all_zero, expires_at, now)
+            .expect_err("all-zero raw signature should fail");
+        match err {
+            TicketRevocationStoreError::MalformedSignature(message) => {
+                assert!(message.contains("all zero"));
+            }
+            other => panic!("expected malformed all-zero raw signature, got {other:?}"),
+        }
+
+        assert_eq!(store.len(now), 0);
+        assert!(!store.is_revoked_signature(&short, now));
+        assert!(!store.is_revoked_signature(&all_zero, now));
     }
 
     #[test]

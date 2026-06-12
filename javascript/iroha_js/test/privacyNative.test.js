@@ -534,9 +534,9 @@ test("privacy native availability probes build and verify with Norito request ar
         witness,
         proof,
       ) {
-        assert.equal(algorithmId, "verange-transparent-range-v1");
-        assert.equal(entrypoint, "buildVeRangeProofV1");
-        assert.equal(vkRef, "bulletproofs:verange_transparent_range_v1");
+        assert.equal(algorithmId, "zk-ace-pq-authorization-v0");
+        assert.equal(entrypoint, "buildZkAceAuthorizationProofV1");
+        assert.equal(vkRef, "stark-fri:zk_ace_pq_authorization_v0");
         proofRequestProbe = Buffer.from(publicInputs);
         proofRequestProbeAfterReturn = publicInputs;
         proofRequestWitnessAfterReturn = witness;
@@ -786,9 +786,9 @@ test("privacy native availability probes reject unsafe raw output", () => {
 test("privacy native wrappers return opaque archive bytes", () => {
   withNativeBinding(completePrivacyBinding(), () => {
     const requestArchive = privacyProofRequestV1({
-      algorithmId: "verange-transparent-range-v1",
-      entrypoint: "buildVeRangeProofV1",
-      vkRef: "bulletproofs:verange_transparent_range_v1",
+      algorithmId: "zk-ace-pq-authorization-v0",
+      entrypoint: "buildZkAceAuthorizationProofV1",
+      vkRef: "stark-fri:zk_ace_pq_authorization_v0",
       publicInputs: Buffer.from("public-inputs"),
       witness: Uint8Array.from(Buffer.from("secret-witness")),
     });
@@ -827,9 +827,9 @@ test("privacyProofRequestV1 clears component copies after native dispatch", () =
     () => {
       assert.deepEqual(
         privacyProofRequestV1({
-          algorithmId: "verange-transparent-range-v1",
-          entrypoint: "buildVeRangeProofV1",
-          vkRef: "bulletproofs:verange_transparent_range_v1",
+          algorithmId: "zk-ace-pq-authorization-v0",
+          entrypoint: "buildZkAceAuthorizationProofV1",
+          vkRef: "stark-fri:zk_ace_pq_authorization_v0",
           publicInputs,
           witness,
           proof,
@@ -849,9 +849,9 @@ test("privacyProofRequestV1 clears component copies after native dispatch", () =
     () => {
       const error = captureThrown(() =>
         privacyProofRequestV1({
-          algorithmId: "verange-transparent-range-v1",
-          entrypoint: "buildVeRangeProofV1",
-          vkRef: "bulletproofs:verange_transparent_range_v1",
+          algorithmId: "zk-ace-pq-authorization-v0",
+          entrypoint: "buildZkAceAuthorizationProofV1",
+          vkRef: "stark-fri:zk_ace_pq_authorization_v0",
           publicInputs,
           witness,
           proof,
@@ -885,9 +885,9 @@ test("privacyProofRequestV1 validates text and byte fields before native dispatc
     }),
     () => {
       const valid = {
-        algorithmId: "verange-transparent-range-v1",
-        entrypoint: "buildVeRangeProofV1",
-        vkRef: "bulletproofs:verange_transparent_range_v1",
+        algorithmId: "zk-ace-pq-authorization-v0",
+        entrypoint: "buildZkAceAuthorizationProofV1",
+        vkRef: "stark-fri:zk_ace_pq_authorization_v0",
         publicInputs: Buffer.from("public-inputs"),
       };
       assert.throws(
@@ -922,9 +922,9 @@ test("privacyProofRequestV1 validates text and byte fields before native dispatc
 
 test("privacyProofRequestV1 validates native request archive output", () => {
   const valid = {
-    algorithmId: "verange-transparent-range-v1",
-    entrypoint: "buildVeRangeProofV1",
-    vkRef: "bulletproofs:verange_transparent_range_v1",
+    algorithmId: "zk-ace-pq-authorization-v0",
+    entrypoint: "buildZkAceAuthorizationProofV1",
+    vkRef: "stark-fri:zk_ace_pq_authorization_v0",
     publicInputs: Buffer.from("public-inputs"),
   };
   for (const [label, override, pattern] of [
