@@ -1,6 +1,23 @@
 # Status
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
+
+## 2026-06-13 - ZK Asset JVM Instruction Surface
+
+- Added Kotlin/JVM and Java Android typed builders for `RegisterZkAsset`,
+  `Shield`, and `Unshield`, including strict v1 confidential encrypted
+  payloads, proof-attachment JSON, canonical u128 amounts, fixed-width
+  commitments/nullifiers/roots, private change outputs, and defensive-copy
+  semantics.
+- Added native signer bridge wrappers that return canonical versioned signed
+  transaction bytes plus native transaction hashes, validating all public fields
+  and key material before checking JNI availability. The Rust JNI path encodes
+  `Unshield::new_with_outputs` so private change commitments are preserved.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `cargo test -p connect_norito_bridge unshield_encoder_path_preserves_private_change_outputs`
+  - `cargo check -p connect_norito_bridge`
 
 ## 2026-06-12 CLI all-zero seed fixture cleanup
 

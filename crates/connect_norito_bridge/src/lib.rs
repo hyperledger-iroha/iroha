@@ -4542,6 +4542,13 @@ fn parse_proof_attachment_from_json_bytes(
         return Err(BridgeError::ProofAttachment);
     }
     let slice = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
+    parse_proof_attachment_from_json_slice(slice)
+}
+
+fn parse_proof_attachment_from_json_slice(slice: &[u8]) -> BridgeResult<ProofAttachment> {
+    if slice.is_empty() {
+        return Err(BridgeError::ProofAttachment);
+    }
     let value =
         norito::json::from_slice::<JsonValue>(slice).map_err(|_| BridgeError::ProofAttachment)?;
     parse_proof_attachment_value(&value)
@@ -17798,7 +17805,7 @@ mod accel_tests {
         algorithm: Option<Algorithm>,
     ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
         let chain = cstring("test-chain");
-        let (authority, private) = sample_account("bank", 0);
+        let (authority, private) = sample_account("bank", 1);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let amount = cstring("7");
         let note_commitment = [0x33_u8; 32];
@@ -19081,6 +19088,54 @@ mod accel_tests {
         assert_ne!(out_hash, [0u8; 32], "hash should be populated");
         unsafe {
             free(out_signed_ptr as *mut _);
+        }
+    }
+
+    #[test]
+    fn unshield_encoder_path_preserves_private_change_outputs() {
+        let _guard = chain_guard();
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let (authority, private) = sample_account("bank", 1);
+        let authority = parse_account_id(authority.to_str().expect("account").to_owned())
+            .expect("parse authority");
+        let private_key = parse_private_key(&private).expect("parse private key");
+        let asset_definition =
+            parse_asset_definition(asset_definition_literal("bank", "usd")).expect("asset");
+        let destination = authority.clone();
+        let input = [0x11_u8; 32];
+        let output = [0x22_u8; 32];
+        let proof = parse_proof_attachment_from_json_slice(
+            br#"{"backend":"groth16","proof_b64":"AA==","vk_ref":{"backend":"groth16","name":"vk1"}}"#,
+        )
+        .expect("proof");
+
+        let (signed_bytes, hash_bytes) =
+            encode_asset_transaction(chain_id, authority, 1, None, private_key, || {
+                let instruction = zk::Unshield::new_with_outputs(
+                    asset_definition,
+                    destination,
+                    7,
+                    vec![input],
+                    vec![output],
+                    proof,
+                    Some([0x33_u8; 32]),
+                );
+                Executable::from([InstructionBox::from(instruction)])
+            });
+        let signed = decode_signed_transaction(&signed_bytes).expect("decode signed transaction");
+        assert_eq!(hash_bytes, *signed.hash().as_ref());
+        match signed.instructions() {
+            Executable::Instructions(instructions) => {
+                assert_eq!(instructions.len(), 1);
+                let unshield = instructions[0]
+                    .as_any()
+                    .downcast_ref::<zk::Unshield>()
+                    .expect("unshield instruction");
+                assert_eq!(unshield.inputs, vec![input]);
+                assert_eq!(unshield.outputs, vec![output]);
+                assert_eq!(unshield.root_hint, Some([0x33_u8; 32]));
+            }
+            other => panic!("unexpected executable: {other:?}"),
         }
     }
 
@@ -20847,6 +20902,446 @@ fn java_native_verify_detached(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_text_array(
+    env: &mut jni::JNIEnv<'_>,
+    array: &jni::objects::JByteArray<'_>,
+    context: &str,
+) -> Result<String, String> {
+    let mut bytes = read_java_byte_array(env, array, context)
+        .ok_or_else(|| format!("invalid {context} bytes"))?;
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) if !text.trim().is_empty() && text.trim() == text => text.to_owned(),
+        Ok(_) => {
+            bytes.fill(0);
+            return Err(format!(
+                "{context} must be non-empty without surrounding whitespace"
+            ));
+        }
+        Err(_) => {
+            bytes.fill(0);
+            return Err(format!("{context} must be UTF-8"));
+        }
+    };
+    bytes.fill(0);
+    Ok(text)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_optional_text_array(
+    env: &mut jni::JNIEnv<'_>,
+    array: &jni::objects::JByteArray<'_>,
+    present: jni::sys::jboolean,
+    context: &str,
+) -> Result<Option<String>, String> {
+    if present == 0 {
+        return Ok(None);
+    }
+    java_text_array(env, array, context).map(Some)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_fixed_array<const N: usize>(
+    env: &mut jni::JNIEnv<'_>,
+    array: &jni::objects::JByteArray<'_>,
+    context: &str,
+) -> Result<[u8; N], String> {
+    let bytes =
+        read_java_byte_array(env, array, context).ok_or_else(|| format!("invalid {context}"))?;
+    if bytes.len() != N {
+        return Err(format!("{context} must be exactly {N} bytes"));
+    }
+    let mut out = [0u8; N];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_fixed_32_chunks(
+    bytes: &[u8],
+    require_non_empty: bool,
+    context: &str,
+) -> Result<Vec<[u8; 32]>, String> {
+    if bytes.is_empty() {
+        if require_non_empty {
+            return Err(format!("{context} must contain at least one 32-byte entry"));
+        }
+        return Ok(Vec::new());
+    }
+    if !bytes.len().is_multiple_of(32) {
+        return Err(format!("{context} length must be a multiple of 32 bytes"));
+    }
+    Ok(bytes
+        .chunks_exact(32)
+        .map(|chunk| {
+            let mut out = [0u8; 32];
+            out.copy_from_slice(chunk);
+            out
+        })
+        .collect())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_optional_root_hint(bytes: &[u8]) -> Result<Option<[u8; 32]>, String> {
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    if bytes.len() != 32 {
+        return Err("rootHint must be exactly 32 bytes when provided".to_owned());
+    }
+    let mut root = [0u8; 32];
+    root.copy_from_slice(bytes);
+    Ok(Some(root))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_verifying_key_id(
+    value: Option<String>,
+    context: &str,
+) -> Result<Option<VerifyingKeyId>, String> {
+    value
+        .map(|text| {
+            parse_verifying_key_id_value(&text)
+                .map_err(|_| format!("{context} must use backend:name syntax"))
+        })
+        .transpose()
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_private_key(
+    algorithm_code: jni::sys::jint,
+    private_key: &jni::objects::JByteArray<'_>,
+    env: &mut jni::JNIEnv<'_>,
+) -> Result<PrivateKey, String> {
+    let algorithm = parse_algorithm_code(algorithm_code as u8)
+        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let mut private_bytes = read_java_byte_array(env, private_key, "privateKey")
+        .ok_or_else(|| "invalid private key bytes".to_owned())?;
+    let key = parse_private_key_with_algorithm(&private_bytes, algorithm)
+        .map_err(|_| "invalid private key bytes".to_owned());
+    private_bytes.fill(0);
+    key
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_signed_transaction_pair(
+    env: &mut jni::JNIEnv<'_>,
+    signed_bytes: &[u8],
+    hash_bytes: &[u8; 32],
+) -> Result<jni::sys::jobjectArray, String> {
+    let signed_array = env
+        .byte_array_from_slice(signed_bytes)
+        .map_err(|err| err.to_string())?;
+    let hash_array = env
+        .byte_array_from_slice(hash_bytes)
+        .map_err(|err| err.to_string())?;
+    let byte_array_class = env.find_class("[B").map_err(|err| err.to_string())?;
+    let array = env
+        .new_object_array(2, byte_array_class, jni::objects::JObject::null())
+        .map_err(|err| err.to_string())?;
+    env.set_object_array_element(&array, 0, &signed_array)
+        .map_err(|err| err.to_string())?;
+    env.set_object_array_element(&array, 1, &hash_array)
+        .map_err(|err| err.to_string())?;
+    Ok(array.into_raw())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::too_many_arguments)]
+fn java_native_encode_shield_signed_transaction(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    from_account: jni::objects::JByteArray<'_>,
+    amount: jni::objects::JByteArray<'_>,
+    note_commitment: jni::objects::JByteArray<'_>,
+    payload_ephemeral: jni::objects::JByteArray<'_>,
+    payload_nonce: jni::objects::JByteArray<'_>,
+    payload_ciphertext: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        if creation_time_ms < 0 || ttl_ms < 0 {
+            return Err("creationTimeMs and ttlMs must be non-negative".to_owned());
+        }
+        let chain_id: ChainId = java_text_array(env, &chain_id, "chainId")?
+            .parse()
+            .map_err(|_| "invalid chainId".to_owned())?;
+        let authority = parse_account_id(java_text_array(env, &authority, "authority")?)
+            .map_err(|_| "invalid authority".to_owned())?;
+        let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
+            .map_err(|_| "invalid asset".to_owned())?;
+        let from_account = parse_account_id(java_text_array(env, &from_account, "from")?)
+            .map_err(|_| "invalid from".to_owned())?;
+        let amount = parse_amount_u128(java_text_array(env, &amount, "amount")?)
+            .map_err(|_| "invalid amount".to_owned())?;
+        let note_commitment = java_fixed_array::<32>(env, &note_commitment, "noteCommitment")?;
+        let ephemeral =
+            java_fixed_array::<32>(env, &payload_ephemeral, "payloadEphemeralPublicKey")?;
+        let nonce = java_fixed_array::<24>(env, &payload_nonce, "payloadNonce")?;
+        let ciphertext = read_java_byte_array(env, &payload_ciphertext, "payloadCiphertext")
+            .ok_or_else(|| "invalid payload ciphertext".to_owned())?;
+        let payload = build_confidential_encrypted_payload(ephemeral, nonce, ciphertext)
+            .map_err(|_| "invalid confidential encrypted payload".to_owned())?;
+        let private_key = java_private_key(algorithm_code, &private_key, env)?;
+        let ttl =
+            parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
+        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+            chain_id,
+            authority,
+            creation_time_ms as u64,
+            ttl,
+            private_key,
+            || {
+                let instruction = zk::Shield::new(
+                    asset_definition,
+                    from_account,
+                    amount,
+                    note_commitment,
+                    payload,
+                );
+                Executable::from([InstructionBox::from(instruction)])
+            },
+        );
+        java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::too_many_arguments)]
+fn java_native_encode_unshield_signed_transaction(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    destination: jni::objects::JByteArray<'_>,
+    public_amount: jni::objects::JByteArray<'_>,
+    inputs: jni::objects::JByteArray<'_>,
+    outputs: jni::objects::JByteArray<'_>,
+    proof_json: jni::objects::JByteArray<'_>,
+    root_hint: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        if creation_time_ms < 0 || ttl_ms < 0 {
+            return Err("creationTimeMs and ttlMs must be non-negative".to_owned());
+        }
+        let chain_id: ChainId = java_text_array(env, &chain_id, "chainId")?
+            .parse()
+            .map_err(|_| "invalid chainId".to_owned())?;
+        let authority = parse_account_id(java_text_array(env, &authority, "authority")?)
+            .map_err(|_| "invalid authority".to_owned())?;
+        let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
+            .map_err(|_| "invalid asset".to_owned())?;
+        let destination = parse_account_id(java_text_array(env, &destination, "to")?)
+            .map_err(|_| "invalid to".to_owned())?;
+        let public_amount =
+            parse_amount_u128(java_text_array(env, &public_amount, "publicAmount")?)
+                .map_err(|_| "invalid publicAmount".to_owned())?;
+        let inputs_bytes = read_java_byte_array(env, &inputs, "inputs")
+            .ok_or_else(|| "invalid inputs".to_owned())?;
+        let outputs_bytes = read_java_byte_array(env, &outputs, "outputs")
+            .ok_or_else(|| "invalid outputs".to_owned())?;
+        let inputs = java_fixed_32_chunks(&inputs_bytes, true, "inputs")?;
+        let outputs = java_fixed_32_chunks(&outputs_bytes, false, "outputs")?;
+        let proof_bytes = read_java_byte_array(env, &proof_json, "proofJson")
+            .ok_or_else(|| "invalid proofJson".to_owned())?;
+        let proof = parse_proof_attachment_from_json_slice(&proof_bytes)
+            .map_err(|_| "invalid proof attachment".to_owned())?;
+        let root_hint_bytes = read_java_byte_array(env, &root_hint, "rootHint")
+            .ok_or_else(|| "invalid rootHint".to_owned())?;
+        let root_hint = java_optional_root_hint(&root_hint_bytes)?;
+        let private_key = java_private_key(algorithm_code, &private_key, env)?;
+        let ttl =
+            parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
+        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+            chain_id,
+            authority,
+            creation_time_ms as u64,
+            ttl,
+            private_key,
+            || {
+                let instruction = zk::Unshield::new_with_outputs(
+                    asset_definition,
+                    destination,
+                    public_amount,
+                    inputs,
+                    outputs,
+                    proof,
+                    root_hint,
+                );
+                Executable::from([InstructionBox::from(instruction)])
+            },
+        );
+        java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::too_many_arguments)]
+fn java_native_encode_register_zk_asset_signed_transaction(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    mode_code: jni::sys::jint,
+    allow_shield: jni::sys::jboolean,
+    allow_unshield: jni::sys::jboolean,
+    vk_transfer: jni::objects::JByteArray<'_>,
+    vk_transfer_present: jni::sys::jboolean,
+    vk_unshield: jni::objects::JByteArray<'_>,
+    vk_unshield_present: jni::sys::jboolean,
+    vk_shield: jni::objects::JByteArray<'_>,
+    vk_shield_present: jni::sys::jboolean,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        if creation_time_ms < 0 || ttl_ms < 0 {
+            return Err("creationTimeMs and ttlMs must be non-negative".to_owned());
+        }
+        let chain_id: ChainId = java_text_array(env, &chain_id, "chainId")?
+            .parse()
+            .map_err(|_| "invalid chainId".to_owned())?;
+        let authority = parse_account_id(java_text_array(env, &authority, "authority")?)
+            .map_err(|_| "invalid authority".to_owned())?;
+        let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
+            .map_err(|_| "invalid asset".to_owned())?;
+        let mode = parse_zk_asset_mode(mode_code as u8).map_err(|_| "invalid mode".to_owned())?;
+        let vk_transfer = java_verifying_key_id(
+            java_optional_text_array(
+                env,
+                &vk_transfer,
+                vk_transfer_present,
+                "transferVerifyingKey",
+            )?,
+            "transferVerifyingKey",
+        )?;
+        let vk_unshield = java_verifying_key_id(
+            java_optional_text_array(
+                env,
+                &vk_unshield,
+                vk_unshield_present,
+                "unshieldVerifyingKey",
+            )?,
+            "unshieldVerifyingKey",
+        )?;
+        let vk_shield = java_verifying_key_id(
+            java_optional_text_array(env, &vk_shield, vk_shield_present, "shieldVerifyingKey")?,
+            "shieldVerifyingKey",
+        )?;
+        let private_key = java_private_key(algorithm_code, &private_key, env)?;
+        let ttl =
+            parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
+        let register = zk::RegisterZkAsset::new(
+            asset_definition,
+            mode,
+            allow_shield != 0,
+            allow_unshield != 0,
+            vk_transfer,
+            vk_unshield,
+            vk_shield,
+        );
+        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+            chain_id,
+            authority,
+            creation_time_ms as u64,
+            ttl,
+            private_key,
+            move || Executable::from([InstructionBox::from(register)]),
+        );
+        java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_native_offline_prove_note_redeem_with_vk(
     env: &mut jni::JNIEnv<'_>,
     redeem_norito: jni::objects::JByteArray<'_>,
@@ -21761,6 +22256,147 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     target_os = "macos",
     target_os = "windows"
 ))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeShieldSignedTransaction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    from_account: jni::objects::JByteArray<'_>,
+    amount: jni::objects::JByteArray<'_>,
+    note_commitment: jni::objects::JByteArray<'_>,
+    payload_ephemeral: jni::objects::JByteArray<'_>,
+    payload_nonce: jni::objects::JByteArray<'_>,
+    payload_ciphertext: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_encode_shield_signed_transaction(
+        &mut env,
+        algorithm_code,
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        asset,
+        from_account,
+        amount,
+        note_commitment,
+        payload_ephemeral,
+        payload_nonce,
+        payload_ciphertext,
+        private_key,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeUnshieldSignedTransaction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    destination: jni::objects::JByteArray<'_>,
+    public_amount: jni::objects::JByteArray<'_>,
+    inputs: jni::objects::JByteArray<'_>,
+    outputs: jni::objects::JByteArray<'_>,
+    proof_json: jni::objects::JByteArray<'_>,
+    root_hint: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_encode_unshield_signed_transaction(
+        &mut env,
+        algorithm_code,
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        asset,
+        destination,
+        public_amount,
+        inputs,
+        outputs,
+        proof_json,
+        root_hint,
+        private_key,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeRegisterZkAssetSignedTransaction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    mode_code: jni::sys::jint,
+    allow_shield: jni::sys::jboolean,
+    allow_unshield: jni::sys::jboolean,
+    vk_transfer: jni::objects::JByteArray<'_>,
+    vk_transfer_present: jni::sys::jboolean,
+    vk_unshield: jni::objects::JByteArray<'_>,
+    vk_unshield_present: jni::sys::jboolean,
+    vk_shield: jni::objects::JByteArray<'_>,
+    vk_shield_present: jni::sys::jboolean,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_encode_register_zk_asset_signed_transaction(
+        &mut env,
+        algorithm_code,
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        asset,
+        mode_code,
+        allow_shield,
+        allow_unshield,
+        vk_transfer,
+        vk_transfer_present,
+        vk_unshield,
+        vk_unshield_present,
+        vk_shield,
+        vk_shield_present,
+        private_key,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativePublicKeyFromPrivate(
@@ -21824,6 +22460,147 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     signature: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
     java_native_verify_detached(&mut env, algorithm_code, public_key, message, signature)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeShieldSignedTransaction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    from_account: jni::objects::JByteArray<'_>,
+    amount: jni::objects::JByteArray<'_>,
+    note_commitment: jni::objects::JByteArray<'_>,
+    payload_ephemeral: jni::objects::JByteArray<'_>,
+    payload_nonce: jni::objects::JByteArray<'_>,
+    payload_ciphertext: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_encode_shield_signed_transaction(
+        &mut env,
+        algorithm_code,
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        asset,
+        from_account,
+        amount,
+        note_commitment,
+        payload_ephemeral,
+        payload_nonce,
+        payload_ciphertext,
+        private_key,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeUnshieldSignedTransaction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    destination: jni::objects::JByteArray<'_>,
+    public_amount: jni::objects::JByteArray<'_>,
+    inputs: jni::objects::JByteArray<'_>,
+    outputs: jni::objects::JByteArray<'_>,
+    proof_json: jni::objects::JByteArray<'_>,
+    root_hint: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_encode_unshield_signed_transaction(
+        &mut env,
+        algorithm_code,
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        asset,
+        destination,
+        public_amount,
+        inputs,
+        outputs,
+        proof_json,
+        root_hint,
+        private_key,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeRegisterZkAssetSignedTransaction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    mode_code: jni::sys::jint,
+    allow_shield: jni::sys::jboolean,
+    allow_unshield: jni::sys::jboolean,
+    vk_transfer: jni::objects::JByteArray<'_>,
+    vk_transfer_present: jni::sys::jboolean,
+    vk_unshield: jni::objects::JByteArray<'_>,
+    vk_unshield_present: jni::sys::jboolean,
+    vk_shield: jni::objects::JByteArray<'_>,
+    vk_shield_present: jni::sys::jboolean,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_encode_register_zk_asset_signed_transaction(
+        &mut env,
+        algorithm_code,
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        asset,
+        mode_code,
+        allow_shield,
+        allow_unshield,
+        vk_transfer,
+        vk_transfer_present,
+        vk_unshield,
+        vk_unshield_present,
+        vk_shield,
+        vk_shield_present,
+        private_key,
+    )
 }
 
 #[cfg(any(
@@ -24481,11 +25258,13 @@ mod tests {
     // These schema-plumbing tests assert the error code via these constants so they hold in
     // both build modes.
     #[cfg(not(feature = "privacy-production-enabled"))]
-    const PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PRODUCTION_DISABLED;
+    const PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE: u32 =
+        PRIVACY_FFI_ERROR_PRODUCTION_DISABLED;
     #[cfg(feature = "privacy-production-enabled")]
     const PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_INVALID_REQUEST;
     #[cfg(not(feature = "privacy-production-enabled"))]
-    const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PRODUCTION_DISABLED;
+    const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 =
+        PRIVACY_FFI_ERROR_PRODUCTION_DISABLED;
     #[cfg(feature = "privacy-production-enabled")]
     const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PROVING_FAILED;
 
@@ -27059,13 +27838,22 @@ mod tests {
                 build_result.status, PRIVACY_FFI_STATUS_OK,
                 "{algorithm_id} build status must be OK"
             );
-            assert_eq!(build_result.error_code, 0, "{algorithm_id} build error_code");
+            assert_eq!(
+                build_result.error_code, 0,
+                "{algorithm_id} build error_code"
+            );
             assert!(
                 !build_result.proof.is_empty(),
                 "{algorithm_id} build must emit a real proof envelope"
             );
-            assert!(!build_result.verified, "{algorithm_id} build does not claim verified");
-            assert!(build_result.message.is_empty(), "{algorithm_id} build message");
+            assert!(
+                !build_result.verified,
+                "{algorithm_id} build does not claim verified"
+            );
+            assert!(
+                build_result.message.is_empty(),
+                "{algorithm_id} build message"
+            );
 
             let mut verify_request = privacy_request(algorithm_id, entrypoint, build_result.proof);
             verify_request.witness.clear();
@@ -27089,8 +27877,14 @@ mod tests {
                 verify_result.status, PRIVACY_FFI_STATUS_OK,
                 "{algorithm_id} verify status must be OK"
             );
-            assert_eq!(verify_result.error_code, 0, "{algorithm_id} verify error_code");
-            assert!(verify_result.verified, "{algorithm_id} verify must confirm the proof");
+            assert_eq!(
+                verify_result.error_code, 0,
+                "{algorithm_id} verify error_code"
+            );
+            assert!(
+                verify_result.verified,
+                "{algorithm_id} verify must confirm the proof"
+            );
         }
     }
 
