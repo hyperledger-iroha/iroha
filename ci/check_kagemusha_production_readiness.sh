@@ -311,6 +311,8 @@ TEXT_REQUIREMENTS = {
         "Android freshness checks consume the",
         "scanner-validated signed-evidence timestamp",
         "readiness summary writer also rejects symlinked `--summary-out` ancestors",
+        "harness-result source path uses the shared guarded JSON",
+        "paths fail before metadata reads or parsing",
         "shared Android device-lab JSON loader",
         "aliased directories",
         "Shared Android ancestor validation",
@@ -322,12 +324,15 @@ TEXT_REQUIREMENTS = {
     ),
     "docs/source/sdk/android/readiness/android_strongbox_device_matrix.md": (
         "Android StrongBox Offline Payments Device Matrix",
-        "Last updated: 2026-06-11",
+        "Last updated: 2026-06-12",
         "ABI 6 recursive spend JNI probes pass on every required device family.",
         "ABI 7 recursive compact-token JNI probes prove and verify the packaged",
         "one-hop LEN=4 path on every required device family.",
         "Slot probe-state fields (`abi6_recursive_spend_jni_probe`,",
+        "must be exactly `passed`; `ok` is not accepted as a production alias.",
         "must be exact lowercase strings with no",
+        "reports `verification.status` as exact `ok`",
+        "aliased or secret-looking harness-result source paths",
         "ABI 7 recursive compact prover calls that require multi-hop append-batch",
         "composition produce package-backed compact tokens when the key package is",
         "supplied, while empty, malformed, or dummy-proof local archives remain",
@@ -607,8 +612,13 @@ TEXT_REQUIREMENTS = {
         "queue/pending_queue.json pending_transactions must be an array",
         "queue/pending_queue.json pending_transactions must be empty after D2D handoff",
         "TELEMETRY_FIELDS",
+        "TELEMETRY_STRING_FIELDS",
         "telemetry/telemetry.json contains unexpected field",
+        "_validate_telemetry_string",
         "_validate_required_telemetry_artifact",
+        "expected_app_package_name",
+        "expected_app_package_label",
+        "telemetry/telemetry.json app_package_name must match",
         "slot_id != slot_path.name",
         "telemetry/telemetry.json slot_id must be a non-empty string",
         "telemetry/telemetry.json slot_id must not contain surrounding whitespace",
@@ -617,19 +627,28 @@ TEXT_REQUIREMENTS = {
         "telemetry/telemetry.json suite must not contain surrounding whitespace",
         "telemetry/telemetry.json suite must not contain control characters",
         "suite != KAGEMUSHA_TELEMETRY_SUITE",
+        'label = f"telemetry/telemetry.json {key}"',
+        "f\"{label} must be a non-empty string\"",
+        "f\"{label} must not contain surrounding whitespace\"",
+        "f\"{label} must not contain control characters\"",
+        "f\"{label} must not contain secret-looking material\"",
         "slot.json {key} must be a non-empty string",
         "slot.json {key} must not contain surrounding whitespace",
         "slot.json {key} must not contain control characters",
         "slot.json {key} must be lowercase",
+        "STATUS_EVENT_FIELDS",
         "_validate_required_status_artifact",
         "_validate_required_runtime_log_artifact",
         "kagemusha device-lab run complete",
         "telemetry/status.ndjson must use LF line endings",
         "telemetry/status.ndjson must end with a trailing newline",
+        "telemetry/status.ndjson line {line_no} contains unexpected field",
         "telemetry/status.ndjson line {line_no} must not contain surrounding whitespace",
         "telemetry/status.ndjson line {line_no} status must not contain surrounding whitespace",
         "telemetry/status.ndjson line {line_no} status must not contain control characters",
         "telemetry/status.ndjson line {line_no} status must be lowercase",
+        "telemetry/status.ndjson line {line_no} status must be ok",
+        "telemetry/status.ndjson line {line_no} slot_id must be a non-empty string",
         "telemetry/status.ndjson line {line_no} slot_id must be a string",
         "telemetry/status.ndjson line {line_no} slot_id must not contain surrounding whitespace",
         "telemetry/status.ndjson line {line_no} slot_id must not contain control characters",
@@ -671,6 +690,9 @@ TEXT_REQUIREMENTS = {
         "validate_attestation_report_result_level_binding",
         "validate_attestation_report_result_level_binding(",
         'for level_key in (\n        "keymint_security_level",\n        "attestation_security_level",\n        "keymaster_security_level",\n    ):\n        value = _attestation_report_verification_string(verification, level_key, errors)',
+        'if status is not None and status != "ok":',
+        "attestation/result.json status must be ok",
+        "attestation/report.json verification.status must be ok",
         "and result_status != report_status",
         "attestation/report.json verification.status must match",
         "and result_level != report_level",
@@ -681,6 +703,7 @@ TEXT_REQUIREMENTS = {
         "security_level is not None and security_level not in STRONGBOX_LEVELS",
         "slot.json keymint_security_level must be STRONGBOX",
         "attestation/result.json keymint_security_level must match",
+        '_require_status(metadata, "abi6_recursive_spend_jni_probe", {"passed"}, errors)',
         "attestation/harness-result.json {key} must not have surrounding whitespace",
         "attestation/harness-result.json {key} must not contain control characters",
         "if level is not None and level not in STRONGBOX_LEVELS:",
@@ -781,8 +804,10 @@ TEXT_REQUIREMENTS = {
         "slot directory name must not contain backslashes",
         "slot id {index} must not contain whitespace",
         "must not duplicate slot id",
-        'if SECRET_RE.search(str(root)):\n        return False, ["device-lab root path must not contain secret-looking material"]',
-        'if _contains_control_character(str(root)):\n        return False, ["device-lab root path must not contain control characters"]',
+        'if SECRET_RE.search(root_text):\n        return False, ["device-lab root path must not contain secret-looking material"]',
+        'if _contains_control_character(root_text):\n        return False, ["device-lab root path must not contain control characters"]',
+        'if "\\\\" in root_text:\n        return False, ["device-lab root path must not contain backslashes"]',
+        'if ".." in root.parts:\n        return False, ["device-lab root path must be canonical"]',
         "DuplicateJsonKeyError",
         "NonFiniteJsonConstantError",
         "_reject_nonfinite_json_constant",
@@ -816,9 +841,13 @@ TEXT_REQUIREMENTS = {
         "attestation/report.json {key} must not contain control characters",
         "attestation/report.json verification.{key} must not contain surrounding whitespace",
         "attestation/report.json verification.{key} must not contain control characters",
-        'def _reject_secret_slot_path(slot_path: Path, errors: list[str]) -> bool:\n    """Reject direct helper calls that receive secret-looking slot paths."""\n\n    if SECRET_RE.search(str(slot_path)):\n        errors.append("slot path must not contain secret-looking material")\n        return True\n    if _contains_control_character(str(slot_path)):\n        errors.append("slot path must not contain control characters")\n        return True\n    return False\n',
+        "def _slot_path_boundary_errors(slot_path: Path) -> list[str]:",
+        "path_text = str(slot_path)",
+        "slot path must not contain secret-looking material",
         "_reject_secret_slot_path(slot_path, errors)",
         "slot path must not contain control characters",
+        "slot path must not contain backslashes",
+        "slot path must be canonical",
         '    try:\n        slot_mode = slot_path.lstat().st_mode\n    except FileNotFoundError:\n        slot_mode = None\n    except OSError:\n        return {\n            "slot": slot_label,\n            "status": "error",\n            "errors": ["slot directory metadata could not be read"],\n            "present": present,\n            "file_counts": file_counts,\n            "kagemusha": {"required": require_kagemusha_production_evidence},\n        }\n',
         "directory_present, directory_missing = _slot_expected_directory_present(",
         "count = _slot_regular_file_count(slot_path, entries, errors)",
@@ -829,7 +858,7 @@ TEXT_REQUIREMENTS = {
         '        try:\n            entry_mode = entry.lstat().st_mode\n        except OSError:\n            _append_error_once(\n                errors,\n                f"slot artifact {_display_path(relative)} file metadata could not be read",\n            )\n            continue\n        if stat.S_ISREG(entry_mode):\n            count += 1\n',
         "def _slot_regular_file_present(",
         '    try:\n        mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return False\n    except OSError:\n        _append_error_once(errors, f"{label} file metadata could not be read")\n        return False\n    return stat.S_ISREG(mode)\n',
-        'def _validate_manifest_slot_path(slot_path: Path) -> list[str]:\n    if SECRET_RE.search(str(slot_path)):\n        return ["slot path must not contain secret-looking material"]\n    if _contains_control_character(str(slot_path)):\n        return ["slot path must not contain control characters"]\n    try:\n        slot_mode = slot_path.lstat().st_mode\n    except FileNotFoundError:\n        slot_mode = None\n    except OSError:\n        return ["slot directory metadata could not be read"]\n    if slot_mode is not None and stat.S_ISLNK(slot_mode):\n        return ["slot directory must not be a symlink"]\n    return validate_no_symlink_ancestors(slot_path, "slot ancestor directory")\n',
+        'def _validate_manifest_slot_path(slot_path: Path) -> list[str]:\n    path_errors = _slot_path_boundary_errors(slot_path)\n    if path_errors:\n        return path_errors\n',
         'root_errors = _validate_manifest_slot_path(slot_path)\n    if root_errors:\n        return entries, root_errors\n',
         'root_errors = _validate_manifest_slot_path(slot_path)\n    if root_errors:\n        return root_errors\n',
         '        try:\n            candidate = Path.cwd() / path\n        except OSError:\n            return [f"{label} metadata could not be read"]\n',
@@ -858,9 +887,9 @@ TEXT_REQUIREMENTS = {
         'def _slot_root_entries(slot_path: Path, errors: list[str]) -> list[Path] | None:\n    try:\n        return sorted(slot_path.iterdir(), key=lambda entry: entry.name)\n    except OSError:\n        _append_error_once(errors, "slot directory could not be listed")\n        return None\n',
         "def _record_manifest_inventory_entry(",
         '    try:\n        mode = entry.lstat().st_mode\n    except OSError:\n        _append_error_once(\n            errors,\n            f"slot artifact {_display_path(relative)} file metadata could not be read",\n        )\n        return\n    if stat.S_ISREG(mode) or stat.S_ISLNK(mode):\n        files.add(relative)\n',
-        'def _slot_files(slot_path: Path, errors: list[str] | None = None) -> set[str]:\n    slot_errors = errors if errors is not None else []\n    try:\n        slot_mode = slot_path.lstat().st_mode\n    except FileNotFoundError:\n        return set()\n    except OSError:\n        _append_error_once(slot_errors, "slot directory metadata could not be read")\n        return set()\n    if stat.S_ISLNK(slot_mode) or not stat.S_ISDIR(slot_mode):\n        return set()\n',
+        'def _slot_files(slot_path: Path, errors: list[str] | None = None) -> set[str]:\n    slot_errors = errors if errors is not None else []\n    path_errors = _slot_path_boundary_errors(slot_path)\n    if path_errors:\n        slot_errors.extend(path_errors)\n        return set()\n    try:\n        slot_mode = slot_path.lstat().st_mode\n',
         "slot directory could not be listed",
-        'if SECRET_RE.search(str(slot_path)):\n        return set()\n',
+        "path_errors = _slot_path_boundary_errors(slot_path)",
         'if validate_no_symlink_ancestors(slot_path, "slot ancestor directory"):\n        return set()\n',
         "slot_errors = errors if errors is not None else []",
         '        try:\n            dir_mode = dir_path.lstat().st_mode\n        except FileNotFoundError:\n            continue\n        except OSError:\n            _append_error_once(slot_errors, f"{dirname}/ metadata could not be read")\n            continue\n        if stat.S_ISLNK(dir_mode) or not stat.S_ISDIR(dir_mode):\n            continue\n        entries = _slot_tree_entries(dir_path, f"{dirname}/", slot_errors)',
@@ -1096,10 +1125,16 @@ TEXT_REQUIREMENTS = {
         "if stat.S_ISLNK(output_mode):",
         "if not stat.S_ISREG(output_mode):",
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return [f"{label} hardlink metadata could not be read"]\n',
-        'if SECRET_RE.search(str(path)):\n        return [f"{label} must not contain secret-looking material"]',
+        'if SECRET_RE.search(path_text):\n        return [f"{label} must not contain secret-looking material"]',
+        'if _contains_control_character(path_text):\n        return [f"{label} must not contain control characters"]',
+        'if "\\\\" in path_text:\n        return [f"{label} must not contain backslashes"]',
+        'if ".." in path.parts:\n        return [f"{label} must be canonical"]',
         'return [f"{label} must not be a symlink"]',
         'return [f"{label} must not be hardlinked"]',
-        'def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | None:\n    if SECRET_RE.search(str(path)):\n        errors.append(f"{label} path must not contain secret-looking material")\n        return None\n',
+        'def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | None:\n    path_text = str(path)\n    if SECRET_RE.search(path_text):\n        errors.append(f"{label} path must not contain secret-looking material")\n        return None\n',
+        'if _contains_control_character(path_text):\n        errors.append(f"{label} path must not contain control characters")\n        return None',
+        'if "\\\\" in path_text:\n        errors.append(f"{label} path must not contain backslashes")\n        return None',
+        'if ".." in path.parts:\n        errors.append(f"{label} path must be canonical")\n        return None',
         "json_ancestor_errors = validate_no_symlink_ancestors(",
         'f"{label} ancestor directory"',
         '    try:\n        expected_stat = path.lstat()\n    except FileNotFoundError:\n        errors.append(f"missing {label}")\n        return None\n    except OSError:\n        errors.append(f"{label} file metadata could not be read")\n        return None\n',
@@ -1125,13 +1160,11 @@ TEXT_REQUIREMENTS = {
         "private key did not produce a signature accepted by the signer public key",
         "signed evidence payload is not strict JSON",
         "_secret_key_path_error",
-        "if device_lab.SECRET_RE.search(str(path)):",
+        "if device_lab.SECRET_RE.search(path_text):",
         "path must not contain secret-looking material",
         "path must not contain control characters",
         'return f"{label} path must not contain backslashes"',
         'return f"{label} path must be canonical"',
-        "slot path must not contain secret-looking material",
-        "slot path must not contain control characters",
         'def _sign_ed25519(private_key_path: Path, payload: bytes, errors: list[str]) -> bytes | None:\n    secret_error = _secret_key_path_error(private_key_path, "private key")\n',
         '    try:\n        private_key_mode = private_key_path.lstat().st_mode\n    except FileNotFoundError:\n        private_key_mode = None\n    except OSError:\n        errors.append("private key file metadata could not be read")\n        return None\n    if private_key_mode is not None and stat.S_ISLNK(private_key_mode):\n        errors.append("private key must not be a symlink")\n        return None\n',
         "signature payload could not be staged",
@@ -1176,7 +1209,9 @@ TEXT_REQUIREMENTS = {
         'return [f"{label} is not strict JSON"]',
         'if len(text.encode("utf-8")) > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:',
         'f"{label} must be no more than "',
-        'def _validate_json_output_path(path: Path, label: str) -> list[str]:\n    """Validate a signer-controlled output immediately before writing."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return [f"{label} must not contain secret-looking material"]\n    if device_lab._contains_control_character(str(path)):\n        return [f"{label} must not contain control characters"]\n',
+        'def _validate_json_output_path(path: Path, label: str) -> list[str]:\n    """Validate a signer-controlled output immediately before writing."""\n\n    path_text = str(path)\n    if device_lab.SECRET_RE.search(path_text):\n        return [f"{label} must not contain secret-looking material"]\n',
+        'if "\\\\" in path_text:\n        return [f"{label} must not contain backslashes"]',
+        'if ".." in path.parts:\n        return [f"{label} must be canonical"]',
         '    parent_exists, parent_errors = _validate_json_output_parent(path, label)\n    errors.extend(parent_errors)\n    if errors:\n        return errors\n',
         '    errors.extend(\n        device_lab.validate_no_symlink_ancestors(\n            path,\n            f"{label} ancestor directory",\n        )\n    )\n    if errors:\n        return errors\n    if not parent_exists:\n',
         '    if not parent_exists:\n        try:\n            parent.mkdir(parents=True, exist_ok=True)\n        except OSError:\n            errors.append(f"{label} parent directory could not be created")\n',
@@ -1187,7 +1222,7 @@ TEXT_REQUIREMENTS = {
         '    try:\n        mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return errors\n    except OSError:\n        errors.append(f"{label} file metadata could not be read")\n        return errors\n    if stat.S_ISLNK(mode):\n        errors.append(f"{label} must not be a symlink")\n',
         '        try:\n            link_count = path.stat().st_nlink\n        except OSError:\n            errors.append(f"{label} hardlink metadata could not be read")\n        else:\n            if link_count > 1:\n                errors.append(f"{label} must not be hardlinked")\n',
         "_validate_existing_json_output_path",
-        'def _validate_existing_json_output_path(path: Path, label: str) -> list[str]:\n    """Validate a signer-controlled output immediately before reading it back."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return [f"{label} must not contain secret-looking material"]\n    if device_lab._contains_control_character(str(path)):\n        return [f"{label} must not contain control characters"]\n',
+        'def _validate_existing_json_output_path(path: Path, label: str) -> list[str]:\n    """Validate a signer-controlled output immediately before reading it back."""\n\n    path_text = str(path)\n    if device_lab.SECRET_RE.search(path_text):\n        return [f"{label} must not contain secret-looking material"]\n',
         '    _, parent_errors = _validate_json_output_parent(\n        path,\n        label,\n        missing_error=f"{label} parent directory is missing",\n    )\n    if parent_errors:\n        return parent_errors\n',
         '    try:\n        mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return [f"{label} must exist before digest"]\n    except OSError:\n        return [f"{label} file metadata could not be read"]\n    if stat.S_ISLNK(mode):\n        return [f"{label} must not be a symlink"]\n',
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
@@ -1271,7 +1306,8 @@ TEXT_REQUIREMENTS = {
         "validate_no_slot_symlink_artifacts",
         "validate_slot_regular_file_artifacts",
         "validate_no_slot_hardlink_artifacts",
-        'def _validate_slot_path_boundary(slot_path: Path) -> list[str]:\n    """Validate signer slot paths before reading mutable slot artifacts."""\n\n    if device_lab.SECRET_RE.search(str(slot_path)):\n        return ["slot path must not contain secret-looking material"]\n    if device_lab._contains_control_character(str(slot_path)):\n        return ["slot path must not contain control characters"]\n    try:\n        slot_mode = slot_path.lstat().st_mode\n    except FileNotFoundError:\n        slot_mode = None\n    except OSError:\n        return ["slot directory metadata could not be read"]\n    if slot_mode is not None and stat.S_ISLNK(slot_mode):\n        return ["slot directory must not be a symlink"]\n    try:\n        parent_mode = slot_path.parent.lstat().st_mode\n    except FileNotFoundError:\n        parent_mode = None\n    except OSError:\n        return ["slot parent directory metadata could not be read"]\n    if parent_mode is not None and stat.S_ISLNK(parent_mode):\n        return ["slot parent directory must not be a symlink"]\n    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        slot_path,\n        "slot ancestor directory",\n    )\n    if ancestor_errors:\n        return ancestor_errors\n',
+        'def _validate_slot_path_boundary(slot_path: Path) -> list[str]:\n    """Validate signer slot paths before reading mutable slot artifacts."""\n\n    path_errors = device_lab._slot_path_boundary_errors(slot_path)',
+        "device_lab._slot_path_boundary_errors(slot_path)",
         "slot directory must not be a symlink",
         "validate_no_symlink_ancestors",
         '    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        slot_path,\n        "slot ancestor directory",\n    )\n    if ancestor_errors:\n        return ancestor_errors\n',
@@ -1302,6 +1338,8 @@ TEXT_REQUIREMENTS = {
         "DEVICE_FAMILY_MODEL_PREFIXES",
         "device_lab.validate_no_symlink_ancestors(",
         'f"{label} path must not contain control characters"',
+        'f"{label} path must not contain backslashes"',
+        'f"{label} path must be canonical"',
         "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "open_identity != expected_identity or path_identity != expected_identity",
@@ -1326,7 +1364,9 @@ TEXT_REQUIREMENTS = {
         "def _single_safe_slot_id(slot_id: str) -> str | None:",
         "candidate.as_posix() != slot_id",
         'or "\\\\" in slot_id',
-        'if device_lab._contains_control_character(str(root)):\n        return 1, None, ["device-lab root path must not contain control characters"]',
+        'if device_lab._contains_control_character(root_text):\n        return 1, None, ["device-lab root path must not contain control characters"]',
+        'if "\\\\" in root_text:\n        return 1, None, ["device-lab root path must not contain backslashes"]',
+        'if ".." in root.parts:\n        return 1, None, ["device-lab root path must be canonical"]',
         "device_lab.classify_device_lab_root_path(root)",
         "def _publish_stage_slot(",
         "_file_identity(root_stat) != expected_root_identity",
@@ -1387,6 +1427,10 @@ TEXT_REQUIREMENTS = {
         "and result_app_package != report_app_package",
         "attestation/report.json app_package_name must match",
         "attestation/report.json attestation_challenge_sha256 must match",
+        'if result_status is not None and result_status != "ok":',
+        'if report_status is not None and report_status != "ok":',
+        "attestation/result.json status must be ok",
+        "attestation/report.json verification.status must be ok",
         "and result_status != report_status",
         "attestation/report.json verification.status must match",
         "and result_level != report_level",
@@ -1416,6 +1460,8 @@ TEXT_REQUIREMENTS = {
         "{label} must not contain control characters",
         "{label} must not contain secret-looking material",
         "def _path_shape_errors",
+        "raw output root path must not contain backslashes",
+        "raw output root path must be canonical",
         "errors.extend(_path_shape_errors(args.out_root, \"raw output root path\"))",
         "errors.extend(_path_shape_errors(args.summary_out, \"raw pull summary output\"))",
         "KagemushaDeviceLabArtifactExportTest",
@@ -1486,7 +1532,9 @@ TEXT_REQUIREMENTS = {
         "queue/pending_queue.json pending_transactions must be an array",
         "queue/pending_queue.json pending_transactions must be empty after D2D handoff",
         "TELEMETRY_FIELDS",
+        "TELEMETRY_STRING_FIELDS",
         "telemetry/telemetry.json contains unexpected field",
+        "telemetry/telemetry.json app_package_name must match",
         "telemetry/telemetry.json suite must identify a Kagemusha device-lab run",
         "telemetry/telemetry.json suite must be a non-empty string",
         "telemetry/telemetry.json suite must not contain surrounding whitespace",
@@ -1496,14 +1544,18 @@ TEXT_REQUIREMENTS = {
         "\"rollback_rejection_passed\"",
         "_validate_raw_status_ndjson",
         "device_lab._loads_json_without_duplicate_keys",
+        "device_lab.STATUS_EVENT_FIELDS",
         "device_lab.KAGEMUSHA_STATUS_FAILURE_VALUES",
         "device_lab.KAGEMUSHA_RUNTIME_LOG_FAILURE_MARKERS",
         "telemetry/status.ndjson must use LF line endings",
         "telemetry/status.ndjson must end with a trailing newline",
+        "telemetry/status.ndjson line {line_no} contains unexpected field",
         "telemetry/status.ndjson line {line_no} must not contain surrounding whitespace",
         "telemetry/status.ndjson line {line_no} status must not contain surrounding whitespace",
         "telemetry/status.ndjson line {line_no} status must not contain control characters",
         "telemetry/status.ndjson line {line_no} status must be lowercase",
+        "telemetry/status.ndjson line {line_no} status must be ok",
+        "telemetry/status.ndjson line {line_no} slot_id must be a non-empty string",
         "telemetry/status.ndjson line {line_no} slot_id must be a string",
         "telemetry/status.ndjson line {line_no} slot_id must not contain surrounding whitespace",
         "telemetry/status.ndjson line {line_no} slot_id must not contain control characters",
@@ -1612,12 +1664,15 @@ TEXT_REQUIREMENTS = {
         '    if value != value.strip() or any(ch.isspace() for ch in value):\n        errors.append(f"{label} must be lowercase hexadecimal without whitespace")\n        return None\n',
         'if device_lab._contains_control_character(value):\n        errors.append(f"{label} must not contain control characters")\n        return None',
         'if any(ch not in "0123456789abcdef" for ch in value):',
+        'result = device_lab._load_json(path, "attestation harness result", errors)',
         "attestation certificate chain path must not contain whitespace",
         "attestation certificate chain path must not contain control characters",
         "attestation certificate chain path must not contain backslashes",
         "elif raw != raw.strip() or any(ch.isspace() for ch in raw):",
         "if device_lab._contains_control_character(raw):",
-        'if device_lab._contains_control_character(str(path)):\n        errors.append(f"{label} path must not contain control characters")\n        return None, None',
+        'if device_lab._contains_control_character(path_text):\n        errors.append(f"{label} path must not contain control characters")\n        return None, None',
+        'if "\\\\" in path_text:\n        errors.append(f"{label} path must not contain backslashes")\n        return None, None',
+        'if ".." in path.parts:\n        errors.append(f"{label} path must be canonical")\n        return None, None',
         "attestation certificate chain path must stay under attestation/",
         "attestation certificate chain path must be canonical",
         "device_lab.ATTESTATION_REPORT_SCHEMA",
@@ -1695,16 +1750,19 @@ TEXT_REQUIREMENTS = {
         'except OSError:\n        return None, [blocker(unreadable_code, f"{label} could not be read")]',
         'except UnicodeDecodeError:\n        return None, [blocker(unreadable_code, f"{label} could not be read")]',
         '_file_stat, errors = _validate_release_local_json_file_for_read(path, label)',
-        'def _validate_release_local_json_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject local release JSON files and return the read identity."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
-        'if device_lab._contains_control_character(str(path)):\n        return None, [f"{label} path must not contain control characters"]',
+        'def _validate_release_local_json_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject local release JSON files and return the read identity."""\n\n    path_text = str(path)\n    if device_lab.SECRET_RE.search(path_text):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
+        'if device_lab._contains_control_character(path_text):\n        return None, [f"{label} path must not contain control characters"]',
+        'if "\\\\" in path_text:\n        return None, [f"{label} path must not contain backslashes"]',
+        'if ".." in path.parts:\n        return None, [f"{label} path must be canonical"]',
         "release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(",
         '    release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if release_json_ancestor_errors:\n        return None, release_json_ancestor_errors\n    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        return None, [f"{label} is missing"]\n    except OSError:\n        return None, [f"{label} file metadata could not be read"]\n    if stat.S_ISLNK(file_stat.st_mode):\n        return None, [f"{label} must not be a symlink"]\n    if not stat.S_ISREG(file_stat.st_mode):\n        return None, [f"{label} must be a regular file"]\n',
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return None, [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return None, [f"{label} must not be hardlinked"]\n    return file_stat, []\n\n\ndef _validate_repo_source_marker_file_for_read(\n',
         "validate_repo_source_marker_file",
         "def _validate_repo_source_marker_file_for_read(",
-        'def _validate_repo_source_marker_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject checked-in marker files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
-        'if device_lab._contains_control_character(str(path)):\n        return None, [f"{label} path must not contain control characters"]',
-        '    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
+        'def _validate_repo_source_marker_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject checked-in marker files that could alias external bytes."""\n\n    path_text = str(path)\n    if device_lab.SECRET_RE.search(path_text):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
+        'if device_lab._contains_control_character(path_text):\n        return None, [f"{label} path must not contain control characters"]',
+        'if "\\\\" in path_text:\n        return None, [f"{label} path must not contain backslashes"]',
+        'if ".." in path.parts:\n        return None, [f"{label} path must be canonical"]',
         '    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        errors.append(f"{label} is missing")\n        return None, errors\n    except OSError:\n        errors.append(f"{label} file metadata could not be read")\n        return None, errors\n    if stat.S_ISLNK(file_stat.st_mode):\n        errors.append(f"{label} must not be a symlink")\n        return None, errors\n    if not stat.S_ISREG(file_stat.st_mode):\n        errors.append(f"{label} must be a regular file")\n        return None, errors\n',
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        errors.append(f"{label} hardlink metadata could not be read")\n        return None, errors\n    if link_count > 1:\n        errors.append(f"{label} must not be hardlinked")\n    if errors:\n        return None, errors\n    return file_stat, []\n\n\ndef validate_repo_source_marker_file(path: Path, label: str) -> list[str]:',
         "_file_stat, errors = _validate_repo_source_marker_file_for_read(path, label)",
@@ -1813,8 +1871,10 @@ TEXT_REQUIREMENTS = {
         "content_errors = validate_lineage_artifact_prefix(artifact_prefix, artifact)",
         "content_errors = validate_compact_key_artifact_prefix(artifact_prefix, artifact)",
         "def _validate_lineage_local_file_for_read(",
-        'return None, [f"{label} path must not contain secret-looking material"]',
-        'return None, [f"{label} path must not contain control characters"]',
+        '    path_text = str(path)\n    if device_lab.SECRET_RE.search(path_text):\n        return None, [f"{label} path must not contain secret-looking material"]',
+        'if device_lab._contains_control_character(path_text):\n        return None, [f"{label} path must not contain control characters"]',
+        'if "\\\\" in path_text:\n        return None, [f"{label} path must not contain backslashes"]',
+        'if ".." in path.parts:\n        return None, [f"{label} path must be canonical"]',
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return None, [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return None, [f"{label} must not be hardlinked"]\n    return file_stat, []\n\n\ndef validate_lineage_local_file(path: Path, label: str) -> list[str]:\n',
         'except OSError:\n        return None, [f"{label} could not be read"]',
         'size_error = f"production proof log must be no more than {MAX_LINEAGE_PROOF_LOG_BYTES} bytes"',
@@ -1892,7 +1952,7 @@ TEXT_REQUIREMENTS = {
         "compact_key_evidence_artifact_missing",
         "compact_key_evidence_artifact_empty",
         "validate_lineage_local_file",
-        'device_lab.SECRET_RE.search(str(path))',
+        'device_lab.SECRET_RE.search(path_text)',
         "path must not contain secret-looking material",
         "ancestor_errors = device_lab.validate_no_symlink_ancestors(",
         'def validate_lineage_local_file(path: Path, label: str) -> list[str]:\n    """Reject local lineage evidence files that could alias external bytes."""\n\n    _file_stat, errors = _validate_lineage_local_file_for_read(path, label)\n    return errors\n',
@@ -2109,7 +2169,11 @@ TEXT_REQUIREMENTS = {
         "validate_lineage_local_file",
         "_validate_generated_at_utc",
         "errors.extend(_validate_generated_at_utc(generated_at_utc))",
+        "_validate_generated_at_future_skew",
+        "_validate_generated_at_future_skew(\n            generated_at,\n            max_generated_at_future_skew_seconds,",
         "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+        "--generated-at-utc must not be ahead of the helper clock skew allowance",
+        "--max-generated-at-future-skew-seconds",
         "--artifact-dir",
         "--proof-log",
         "--elapsed-seconds",
@@ -2141,6 +2205,9 @@ TEXT_REQUIREMENTS = {
         "check_lineage_proof_evidence",
         "require_canonical_filename=False",
         "must not contain control characters",
+        "must not contain backslashes",
+        "must be canonical",
+        "Path(path).parts",
         'secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")',
         'secret_error = _secret_path_error(str(path), label)',
         "validate_artifact_dir_path",
@@ -2245,7 +2312,11 @@ TEXT_REQUIREMENTS = {
         "validate_lineage_local_file",
         "_validate_generated_at_utc",
         "errors.extend(_validate_generated_at_utc(generated_at_utc))",
+        "_validate_generated_at_future_skew",
+        "_validate_generated_at_future_skew(\n            generated_at,\n            max_generated_at_future_skew_seconds,",
         "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+        "--generated-at-utc must not be ahead of the helper clock skew allowance",
+        "--max-generated-at-future-skew-seconds",
         "--artifact-dir",
         "--generated-at-utc",
         "--out must be named",
@@ -2292,6 +2363,9 @@ TEXT_REQUIREMENTS = {
         "check_compact_key_evidence",
         "require_canonical_filename=False",
         "must not contain control characters",
+        "must not contain backslashes",
+        "must be canonical",
+        "Path(path).parts",
         'out_secret_error = _secret_path_error(str(out_path), "--out")',
         'artifact_dir_secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")',
         "pre_create_dir_errors = validate_artifact_dir_path(artifact_dir)",
@@ -3042,6 +3116,7 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_slot_assembler_rejects_noncanonical_source_policy_before_unsigned_publish",
         "test_kagemusha_slot_assembler_rejects_report_level_mismatch_before_publish",
         "test_kagemusha_slot_assembler_rejects_report_status_mismatch_before_publish",
+        "test_kagemusha_slot_assembler_rejects_passed_attestation_status_before_publish",
         "test_kagemusha_slot_assembler_rejects_padded_adb_identity",
         "test_kagemusha_slot_assembler_rejects_noncanonical_adb_identity_output",
         "test_kagemusha_slot_assembler_json_write_rejects_parent_identity_swap",
@@ -3050,8 +3125,13 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_slot_assembler_json_write_verifies_installed_bytes",
         "test_kagemusha_slot_assembler_cleanup_reports_temp_parent_failure",
         "test_kagemusha_slot_assembler_reports_temp_parent_cleanup_failure",
+        "test_kagemusha_slot_assembler_rejects_alias_root_before_classify",
+        "test_kagemusha_slot_assembler_source_path_validators_reject_aliases_before_metadata",
         "test_kagemusha_attestation_report_writer_temp_cleanup_rejects_swap",
         "test_kagemusha_attestation_report_writer_rejects_control_chain_source_path_before_ancestor_check",
+        "test_kagemusha_attestation_report_writer_rejects_alias_chain_source_path_before_metadata",
+        "test_kagemusha_attestation_report_writer_rejects_alias_harness_result_path_before_metadata",
+        "test_kagemusha_attestation_report_writer_rejects_secret_harness_result_path_without_leak",
         "test_kagemusha_attestation_report_writer_rejects_noncanonical_slot_id",
         "test_kagemusha_attestation_report_writer_rejects_backslash_slot_id",
         "test_kagemusha_attestation_report_writer_rejects_noncanonical_chain_path",
@@ -3067,8 +3147,10 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_reads_latest_and_installs_slot",
         "test_kagemusha_android_raw_puller_rejects_noncanonical_slot_id_before_adb",
         "test_kagemusha_android_raw_puller_rejects_control_out_root_before_adb",
+        "test_kagemusha_android_raw_puller_rejects_alias_cli_paths_before_adb",
         "test_kagemusha_android_raw_puller_rejects_control_summary_out_before_adb",
         "test_kagemusha_android_raw_puller_rejects_control_raw_slot_path_before_stat",
+        "test_kagemusha_android_raw_puller_rejects_alias_raw_slot_path_before_stat",
         "test_kagemusha_android_raw_puller_redacts_control_raw_artifact_path",
         "test_kagemusha_android_raw_puller_rejects_control_tar_member_path_before_normalise",
         "test_kagemusha_android_raw_puller_install_refuses_late_existing_slot",
@@ -3134,11 +3216,16 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_rejects_telemetry_slot_mismatch",
         "test_kagemusha_android_raw_puller_rejects_whitespace_normalized_telemetry_slot",
         "test_kagemusha_android_raw_puller_rejects_telemetry_extra_field",
+        "test_kagemusha_android_raw_puller_rejects_noncanonical_telemetry_identity_strings",
+        "test_kagemusha_android_raw_puller_rejects_telemetry_app_package_mismatch",
         "test_kagemusha_android_raw_puller_rejects_noncanonical_json_slot_bindings",
         "test_kagemusha_android_raw_puller_rejects_noncanonical_telemetry_suite",
         "test_kagemusha_android_raw_puller_rejects_d2d_online_handoff",
         "test_kagemusha_android_raw_puller_rejects_wallet_rollback_failure",
         "test_kagemusha_android_raw_puller_rejects_failed_status_ndjson",
+        "test_kagemusha_android_raw_puller_rejects_status_ndjson_unexpected_field",
+        "test_kagemusha_android_raw_puller_rejects_unknown_status_ndjson",
+        "test_kagemusha_android_raw_puller_requires_status_slot_id",
         "test_kagemusha_android_raw_puller_rejects_noncanonical_status_ndjson",
         "test_kagemusha_android_raw_puller_rejects_status_slot_mismatch",
         "test_kagemusha_android_raw_puller_rejects_noncanonical_status_slot_binding",
@@ -3189,6 +3276,7 @@ TEXT_REQUIREMENTS = {
         "test_slot_files_non_directory_root_returns_empty_without_traceback",
         "test_slot_files_reports_slot_metadata_failure_without_omission",
         "test_slot_files_secret_slot_path_returns_empty_without_traversal",
+        "test_slot_files_rejects_alias_slot_path_before_metadata",
         "test_slot_files_rejects_symlinked_slot_root_directly_without_traversal",
         "test_slot_files_rejects_symlinked_slot_ancestor_directly_without_traversal",
         "test_slot_files_skips_symlinked_artifact_directory_directly_without_traversal",
@@ -3204,6 +3292,7 @@ TEXT_REQUIREMENTS = {
         "test_load_json_rejects_non_utf8_bytes_without_traceback",
         "test_parse_sha256_manifest_rejects_secret_slot_path_directly_before_parse",
         "test_parse_sha256_manifest_rejects_control_slot_path_directly_before_parse",
+        "test_parse_sha256_manifest_rejects_alias_slot_path_before_metadata",
         "test_parse_sha256_manifest_rejects_symlinked_slot_root_directly_before_parse",
         "test_parse_sha256_manifest_rejects_slot_metadata_failure_before_parse",
         "test_parse_sha256_manifest_rejects_symlinked_slot_ancestor_before_parse",
@@ -3280,6 +3369,7 @@ TEXT_REQUIREMENTS = {
         "test_production_metadata_rejects_duplicate_wallet_integrity_json_key",
         "test_production_metadata_rejects_unavailable_recursive_compact_one_hop_probe",
         "test_production_metadata_rejects_generic_recursive_compact_prover_state",
+        "test_production_metadata_rejects_abi6_probe_ok_status_alias",
         "test_production_metadata_rejects_noncanonical_probe_states",
         "test_production_metadata_rejects_noncanonical_slot_keymint_level",
         "test_production_metadata_rejects_signed_evidence_digest_drift",
@@ -3311,6 +3401,7 @@ TEXT_REQUIREMENTS = {
         "test_validate_no_symlink_ancestors_uses_lstat_before_exists_preflight",
         "test_load_json_rejects_secret_path_directly_before_parse",
         "test_load_json_rejects_control_path_directly_before_parse",
+        "test_load_json_rejects_alias_path_directly_before_metadata",
         "test_load_json_rejects_file_metadata_failure_before_missing",
         "test_scan_slot_rejects_symlinked_required_artifact",
         "test_scan_slot_rejects_hardlinked_required_artifact",
@@ -3352,6 +3443,7 @@ TEXT_REQUIREMENTS = {
         "test_production_metadata_rejects_attestation_slot_alias_mismatch",
         "test_production_metadata_rejects_whitespace_normalized_attestation_slot_alias",
         "test_production_metadata_rejects_noncanonical_attestation_status",
+        "test_production_metadata_rejects_attestation_passed_status_alias",
         "test_production_metadata_rejects_attestation_result_without_strongbox",
         "test_production_metadata_rejects_whitespace_normalized_attestation_strongbox_level",
         "test_production_metadata_rejects_attestation_result_slot_keymint_mismatch",
@@ -3396,10 +3488,15 @@ TEXT_REQUIREMENTS = {
         "test_production_metadata_rejects_telemetry_slot_mismatch",
         "test_production_metadata_rejects_whitespace_normalized_telemetry_slot",
         "test_production_metadata_rejects_telemetry_extra_field",
+        "test_production_metadata_rejects_noncanonical_telemetry_identity_strings",
+        "test_production_metadata_rejects_telemetry_app_package_mismatch",
         "test_production_metadata_rejects_noncanonical_telemetry_slot_binding",
         "test_production_metadata_rejects_noncanonical_telemetry_suite",
         "test_production_metadata_rejects_pending_queue_shape",
         "test_production_metadata_rejects_failed_status_ndjson",
+        "test_production_metadata_rejects_status_ndjson_unexpected_field",
+        "test_production_metadata_rejects_unknown_status_ndjson",
+        "test_production_metadata_requires_status_ndjson_slot_id",
         "test_production_metadata_rejects_noncanonical_status_ndjson",
         "test_production_metadata_rejects_status_ndjson_slot_mismatch",
         "test_production_metadata_rejects_runtime_log_without_completion_marker",
@@ -3431,6 +3528,7 @@ TEXT_REQUIREMENTS = {
         "test_json_summary_does_not_leak_device_lab_root_or_summary_output_path",
         "test_root_validator_rejects_secret_path_directly_without_leak",
         "test_root_validator_rejects_control_path_directly_without_leak",
+        "test_root_validator_rejects_alias_path_directly_before_metadata",
         "test_root_validator_rejects_metadata_failure_directly_without_leak",
         "test_main_uses_lstat_before_missing_root_exists_preflight",
         "test_main_rejects_secret_looking_root_without_leak",
@@ -3443,6 +3541,7 @@ TEXT_REQUIREMENTS = {
         "test_write_summary_rejects_control_output_path_directly_without_leak",
         "test_validate_summary_output_path_uses_lstat_before_parent_is_dir_preflight",
         "test_validate_summary_output_path_rejects_parent_metadata_failure",
+        "test_validate_summary_output_path_rejects_aliases_before_parent_metadata",
         "test_write_summary_uses_lstat_before_parent_is_dir_preflight",
         "test_write_summary_rejects_parent_metadata_failure_before_write",
         "test_write_summary_rejects_parent_create_failure_before_write",
@@ -3505,10 +3604,12 @@ TEXT_REQUIREMENTS = {
         "test_signer_helper_rejects_key_aliases_before_metadata_read",
         "test_signer_helper_rejects_secret_looking_slot_path_before_metadata_read",
         "test_signer_helper_rejects_control_slot_path_before_metadata_read",
+        "test_signer_helper_rejects_alias_slot_path_before_metadata_read",
         "test_signer_helper_rejects_slot_directory_metadata_failure_before_read",
         "test_signer_helper_rejects_slot_parent_metadata_failure_before_read",
         "test_signer_helper_rejects_secret_looking_output_before_metadata_read",
         "test_signer_helper_rejects_control_output_before_metadata_read",
+        "test_signer_json_output_validators_reject_alias_paths_before_metadata",
         "test_signer_helper_rejects_secret_looking_signer_key_id_before_metadata_read",
         "private key path must not contain secret-looking material",
         "signer public key path must not contain secret-looking material",
@@ -3877,6 +3978,8 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_evidence_helper_rejects_secret_generator_log_before_artifact_reads",
         "test_compact_key_evidence_helper_rejects_outside_artifact_dir",
         "test_evidence_output_corridors_reject_control_paths_before_resolve",
+        "test_evidence_artifact_dir_validators_reject_aliases_before_metadata",
+        "test_evidence_output_corridors_reject_alias_paths_before_resolve",
         "test_compact_key_evidence_helper_rejects_symlinked_output_leaf",
         "test_compact_key_evidence_helper_rejects_dangling_symlinked_output_leaf",
         "test_compact_key_output_preflight_rejects_parent_create_failure_before_write",
@@ -3910,6 +4013,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_sha256_file_rejects_hardlink_directly",
         "test_compact_key_sha256_file_rejects_read_failure_without_traceback",
         "test_compact_key_generator_log_path_rejects_control_artifact_dir_before_resolve",
+        "test_compact_key_generator_log_path_rejects_alias_before_metadata",
         "test_compact_key_generator_log_path_rejects_symlink_without_resolving_final_log",
         "test_missing_lineage_proof_evidence_blocks_rollup_section",
         "test_lineage_proof_evidence_rejects_noncanonical_filename",
@@ -4333,6 +4437,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_build_evidence_rejects_secret_looking_proof_log_before_reads",
         "test_lineage_proof_input_validator_rejects_secret_proof_log_directly_before_resolve",
         "test_lineage_proof_input_validator_rejects_control_proof_log_before_artifact_dir_metadata",
+        "test_lineage_proof_input_validator_rejects_alias_proof_log_before_metadata",
         "test_lineage_proof_input_validator_rejects_parent_resolve_failure",
         "test_lineage_proof_evidence_helper_rejects_log_without_test_name",
         "test_lineage_proof_evidence_helper_rejects_marker_stuffed_proof_log",
@@ -4376,6 +4481,7 @@ TEXT_REQUIREMENTS = {
         "test_write_summary_rejects_non_regular_output_leaf_before_write",
         "test_validate_summary_output_path_uses_lstat_before_parent_is_dir_preflight",
         "test_validate_summary_output_path_rejects_parent_metadata_failure",
+        "test_validate_summary_output_path_rejects_aliases_before_parent_metadata",
         "test_write_summary_uses_lstat_before_parent_is_dir_preflight",
         "test_write_summary_rejects_parent_metadata_failure_before_write",
         "test_write_summary_rejects_file_metadata_failure_before_write",
@@ -4672,6 +4778,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-path-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-release-apk-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-minimum-os",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-abi6-probe-status-exactness",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-chain-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-chain-shape",
@@ -4704,12 +4811,14 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-post-write-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-direct-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-direct-control-paths",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-direct-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scan-slot-expected-dir-is-dir-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scan-slot-artifact-count-is-file-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scan-slot-sha-is-file-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-secret-redaction",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-direct-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-direct-control-paths",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-direct-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-main-root-exists-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-rollup-root-exists-preflight",
@@ -4727,6 +4836,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-ancestor",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-direct-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-direct-control-paths",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-direct-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-file-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-read-failure",
@@ -4746,6 +4856,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-relative-ancestor-is-symlink-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-shape-terminal",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-helper-slot-secret-paths",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-helper-slot-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-symlink-artifact-slot-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-hardlink-artifact-slot-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-regular-artifact-slot-secret-paths",
@@ -4791,6 +4902,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-pending-queue-closed-schema",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-pending-queue-empty-after-handoff",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-telemetry-closed-schema",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-telemetry-identity-exactness",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-telemetry-app-package-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-id-safety",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-name-safety",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-artifact-schema",
@@ -4872,6 +4985,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-metadata-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-artifact-digests-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-slot-secret-paths",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-slot-path-aliases",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-json-output-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-manifest-slot-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-files",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-ancestors",
@@ -4896,6 +5011,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-level-fields",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-result-level-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-result-status-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-status-exactness",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-result-slot-keymint-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-physical-device",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-parent-sync-identity",
@@ -4914,6 +5030,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-output-root-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-slot-entry-dir-fd",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-allowed-artifacts",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-json-slot-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-d2d-offline",
@@ -4927,6 +5044,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scanner-harness-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-challenge-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-chain-path-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-chain-source-path-aliases",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-harness-source-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-slot-id-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-identity-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-strongbox-level-canonical",
@@ -4949,6 +5068,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-strongbox-levels",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-signature-required",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-open-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-root-path-aliases",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-copy-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-copy-readback",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-parent-sync-identity",
@@ -4974,6 +5095,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-required-artifact-validation",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-report-level-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-report-status-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-attestation-status-exactness",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-freshness-report",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-timestamp-raw",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-rollup",
@@ -4986,10 +5108,12 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-trust-root-section-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-android-root-discovery-read-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-direct-secret-paths",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-direct-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-json-read-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-json-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-direct-secret-paths",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-direct-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-read-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-non-utf8-read",
@@ -5032,6 +5156,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-direct-hash-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-direct-hash-read-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-secret-paths",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-path-aliases",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-evidence-helper-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-ancestor-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-file-metadata-failure",
@@ -5187,6 +5313,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-verify-existing-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-verify-existing-evidence-path-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-timestamp-raw",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-future-skew",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-future-skew",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-exact",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-is-file-preflight",
@@ -5336,8 +5464,19 @@ if mode == "--negative-control-kagemusha-readiness-release-json-direct-secret-pa
         "Kagemusha readiness release JSON direct secret-path gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            'def _validate_release_local_json_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject local release JSON files and return the read identity."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
+            'def _validate_release_local_json_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject local release JSON files and return the read identity."""\n\n    path_text = str(path)\n    if device_lab.SECRET_RE.search(path_text):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
             'def _validate_release_local_json_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject local release JSON files and return the read identity."""\n\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-kagemusha-readiness-release-json-direct-path-aliases":
+    run_negative_control(
+        "Kagemusha readiness release JSON direct path-alias gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            '    if "\\\\" in path_text:\n        return None, [f"{label} path must not contain backslashes"]\n    if ".." in path.parts:\n        return None, [f"{label} path must be canonical"]\n    release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(\n',
+            '    release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(\n',
         ),
     )
     raise SystemExit(0)
@@ -5509,8 +5648,19 @@ if mode == "--negative-control-kagemusha-readiness-source-marker-direct-secret-p
         "Kagemusha readiness source marker direct secret-path gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            'def _validate_repo_source_marker_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject checked-in marker files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
+            'def _validate_repo_source_marker_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject checked-in marker files that could alias external bytes."""\n\n    path_text = str(path)\n    if device_lab.SECRET_RE.search(path_text):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
             'def _validate_repo_source_marker_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject checked-in marker files that could alias external bytes."""\n\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-kagemusha-readiness-source-marker-direct-path-aliases":
+    run_negative_control(
+        "Kagemusha readiness source marker direct path-alias gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            '    if "\\\\" in path_text:\n        return None, [f"{label} path must not contain backslashes"]\n    if ".." in path.parts:\n        return None, [f"{label} path must be canonical"]\n    errors = [\n',
+            '    errors = [\n',
         ),
     )
     raise SystemExit(0)
@@ -5826,6 +5976,17 @@ if mode == "--negative-control-android-device-lab-minimum-os":
             "scripts/check_android_device_lab_slot.py",
             "slot.json minimum_os for {family} must be",
             "slot.json unsupported_os for {family} must be",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-abi6-probe-status-exactness":
+    run_negative_control(
+        "Android device-lab ABI-6 probe exact passed status gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '_require_status(metadata, "abi6_recursive_spend_jni_probe", {"passed"}, errors)',
+            '_require_status(metadata, "abi6_recursive_spend_jni_probe", {"passed", "ok"}, errors)',
         ),
     )
     raise SystemExit(0)
@@ -6165,7 +6326,7 @@ if mode == "--negative-control-android-device-lab-json-output-direct-secret-path
         "Android device-lab direct JSON summary output secret-path gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '    if SECRET_RE.search(str(path)):\n        return [f"{label} must not contain secret-looking material"]\n',
+            '    if SECRET_RE.search(path_text):\n        return [f"{label} must not contain secret-looking material"]\n',
             "",
         ),
     )
@@ -6176,7 +6337,18 @@ if mode == "--negative-control-android-device-lab-json-output-direct-control-pat
         "Android device-lab direct JSON summary output control-path gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '    if _contains_control_character(str(path)):\n        return [f"{label} must not contain control characters"]\n',
+            '    if _contains_control_character(path_text):\n        return [f"{label} must not contain control characters"]\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-json-output-direct-path-aliases":
+    run_negative_control(
+        "Android device-lab direct JSON summary output path-alias gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '    if "\\\\" in path_text:\n        return [f"{label} must not contain backslashes"]\n',
             "",
         ),
     )
@@ -6231,7 +6403,7 @@ if mode == "--negative-control-android-device-lab-root-direct-secret-paths":
         "Android device-lab direct root secret-path gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '    if SECRET_RE.search(str(root)):\n        return False, ["device-lab root path must not contain secret-looking material"]\n',
+            '    if SECRET_RE.search(root_text):\n        return False, ["device-lab root path must not contain secret-looking material"]\n',
             "",
         ),
     )
@@ -6242,7 +6414,18 @@ if mode == "--negative-control-android-device-lab-root-direct-control-paths":
         "Android device-lab direct root control-path gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '    if _contains_control_character(str(root)):\n        return False, ["device-lab root path must not contain control characters"]\n',
+            '    if _contains_control_character(root_text):\n        return False, ["device-lab root path must not contain control characters"]\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-root-direct-path-aliases":
+    run_negative_control(
+        "Android device-lab direct root path-alias gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '    if "\\\\" in root_text:\n        return False, ["device-lab root path must not contain backslashes"]\n',
             "",
         ),
     )
@@ -6418,8 +6601,8 @@ if mode == "--negative-control-android-device-lab-json-load-direct-secret-paths"
         "Android device-lab JSON loader direct secret-path gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            'def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | None:\n    if SECRET_RE.search(str(path)):\n        errors.append(f"{label} path must not contain secret-looking material")\n        return None\n',
-            'def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | None:\n',
+            '    if SECRET_RE.search(path_text):\n        errors.append(f"{label} path must not contain secret-looking material")\n        return None\n',
+            "",
         ),
     )
     raise SystemExit(0)
@@ -6429,7 +6612,18 @@ if mode == "--negative-control-android-device-lab-json-load-direct-control-paths
         "Android device-lab JSON loader direct control-path gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '    if _contains_control_character(str(path)):\n        errors.append(f"{label} path must not contain control characters")\n        return None\n',
+            '    if _contains_control_character(path_text):\n        errors.append(f"{label} path must not contain control characters")\n        return None\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-json-load-direct-path-aliases":
+    run_negative_control(
+        "Android device-lab JSON loader direct path-alias gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '    if "\\\\" in path_text:\n        errors.append(f"{label} path must not contain backslashes")\n        return None\n',
             "",
         ),
     )
@@ -6627,8 +6821,19 @@ if mode == "--negative-control-android-device-lab-direct-helper-slot-secret-path
         "Android device-lab direct helper slot secret-path gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            'def _reject_secret_slot_path(slot_path: Path, errors: list[str]) -> bool:\n    """Reject direct helper calls that receive secret-looking slot paths."""\n\n    if SECRET_RE.search(str(slot_path)):\n        errors.append("slot path must not contain secret-looking material")\n        return True\n    return False\n',
-            'def _reject_secret_slot_path(slot_path: Path, errors: list[str]) -> bool:\n    """Reject direct helper calls that receive secret-looking slot paths."""\n\n    return False\n',
+            '    if SECRET_RE.search(path_text):\n        return ["slot path must not contain secret-looking material"]\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-direct-helper-slot-path-aliases":
+    run_negative_control(
+        "Android device-lab direct helper slot path-alias gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '    if "\\\\" in path_text:\n        return ["slot path must not contain backslashes"]\n',
+            "",
         ),
     )
     raise SystemExit(0)
@@ -7135,6 +7340,61 @@ if mode == "--negative-control-android-device-lab-telemetry-closed-schema":
             "scripts/check_android_device_lab_slot.py",
             "telemetry/telemetry.json contains unexpected field",
             "telemetry/telemetry.json ignores unexpected field",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-telemetry-identity-exactness":
+    run_negative_control(
+        "Android device-lab telemetry identity exactness gate",
+        lambda: override_text_all(
+            "scripts/check_android_device_lab_slot.py",
+            "_validate_telemetry_string",
+            "_unchecked_telemetry_string",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-telemetry-app-package-binding":
+    run_negative_control(
+        "Android device-lab telemetry app-package binding gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "telemetry/telemetry.json app_package_name must match ",
+            "telemetry/telemetry.json app_package_name may differ from ",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-status-event-closed-schema":
+    run_negative_control(
+        "Android device-lab status event closed schema gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "telemetry/status.ndjson line {line_no} contains unexpected field",
+            "telemetry/status.ndjson line {line_no} ignores unexpected field",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-status-value-closed-schema":
+    run_negative_control(
+        "Android device-lab status value closed schema gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "telemetry/status.ndjson line {line_no} status must be ok",
+            "telemetry/status.ndjson line {line_no} status may be advisory",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-status-slot-binding-required":
+    run_negative_control(
+        "Android device-lab status slot binding required gate",
+        lambda: override_text_all(
+            "scripts/check_android_device_lab_slot.py",
+            "telemetry/status.ndjson line {line_no} slot_id must be a non-empty string",
+            "telemetry/status.ndjson line {line_no} slot_id may be omitted",
         ),
     )
     raise SystemExit(0)
@@ -7808,8 +8068,19 @@ if mode == "--negative-control-android-device-lab-signing-helper-direct-output-s
         "Android device-lab signed evidence helper direct output secret-path gate",
         lambda: override_text(
             "scripts/sign_android_device_lab_evidence.py",
-            'def _validate_json_output_path(path: Path, label: str) -> list[str]:\n    """Validate a signer-controlled output immediately before writing."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return [f"{label} must not contain secret-looking material"]\n',
-            'def _validate_json_output_path(path: Path, label: str) -> list[str]:\n    """Validate a signer-controlled output immediately before writing."""\n\n',
+            '    if device_lab.SECRET_RE.search(path_text):\n        return [f"{label} must not contain secret-looking material"]\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-json-output-path-aliases":
+    run_negative_control(
+        "Android device-lab signed evidence helper JSON output path-alias gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            '    if "\\\\" in path_text:\n        return [f"{label} must not contain backslashes"]\n',
+            "",
         ),
     )
     raise SystemExit(0)
@@ -8108,8 +8379,19 @@ if mode == "--negative-control-android-device-lab-signing-helper-direct-slot-sec
         "Android device-lab signed evidence helper direct metadata slot secret-path gate",
         lambda: override_text(
             "scripts/sign_android_device_lab_evidence.py",
-            'def _validate_slot_path_boundary(slot_path: Path) -> list[str]:\n    """Validate signer slot paths before reading mutable slot artifacts."""\n\n    if device_lab.SECRET_RE.search(str(slot_path)):\n        return ["slot path must not contain secret-looking material"]\n',
-            'def _validate_slot_path_boundary(slot_path: Path) -> list[str]:\n    """Validate signer slot paths before reading mutable slot artifacts."""\n\n',
+            '    path_errors = device_lab._slot_path_boundary_errors(slot_path)  # type: ignore[attr-defined]\n    if path_errors:\n        return path_errors\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-direct-slot-path-aliases":
+    run_negative_control(
+        "Android device-lab signed evidence helper direct metadata slot path-alias gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            '    path_errors = device_lab._slot_path_boundary_errors(slot_path)  # type: ignore[attr-defined]\n    if path_errors:\n        return path_errors\n',
+            "",
         ),
     )
     raise SystemExit(0)
@@ -8374,6 +8656,17 @@ if mode == "--negative-control-android-device-lab-attestation-report-result-stat
             "scripts/check_android_device_lab_slot.py",
             "and result_status != report_status",
             "and False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-attestation-status-exactness":
+    run_negative_control(
+        "Android device-lab attestation exact ok status gate",
+        lambda: override_text_all(
+            "scripts/check_android_device_lab_slot.py",
+            'if status is not None and status != "ok":',
+            'if status is not None and status not in {"ok", "passed"}:',
         ),
     )
     raise SystemExit(0)
@@ -8708,6 +9001,44 @@ if mode == "--negative-control-android-attestation-report-chain-path-canonical":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-attestation-report-chain-source-path-aliases":
+    run_negative_control(
+        "Android attestation report chain source path alias gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_attestation_report.py",
+            '    if "\\\\" in path_text:\n'
+            '        errors.append(f"{label} path must not contain backslashes")\n'
+            '        return None, None\n'
+            '    if ".." in path.parts:\n'
+            '        errors.append(f"{label} path must be canonical")\n'
+            '        return None, None\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-attestation-report-harness-source-path-aliases":
+    run_negative_control(
+        "Android attestation report harness-result source path alias gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_attestation_report.py",
+            'result = device_lab._load_json(path, "attestation harness result", errors)',
+            'result = json.loads(path.read_text(encoding="utf-8"))',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-path-aliases":
+    run_negative_control(
+        "Android raw puller path-alias gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw output root path must not contain backslashes",
+            "raw output root path may contain backslashes",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-attestation-report-slot-id-canonical":
     run_negative_control(
         "Android attestation report slot id canonical gate",
@@ -8946,6 +9277,28 @@ if mode == "--negative-control-android-device-lab-slot-assembler-source-open-bin
             "scripts/kagemusha_android_device_lab_slot.py",
             "open_identity != expected_identity or path_identity != expected_identity",
             "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-root-path-aliases":
+    run_negative_control(
+        "Android device-lab slot assembler root path-alias gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            '    if "\\\\" in root_text:\n        return 1, None, ["device-lab root path must not contain backslashes"]\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-source-path-aliases":
+    run_negative_control(
+        "Android device-lab slot assembler source path-alias gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            '    if "\\\\" in path_text:\n        errors.append(f"{label} path must not contain backslashes")\n        return None\n',
+            "",
         ),
     )
     raise SystemExit(0)
@@ -9233,6 +9586,25 @@ if mode == "--negative-control-android-device-lab-slot-assembler-report-status-b
             "and result_status != report_status",
             "and False",
         ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-attestation-status-exactness":
+    def weaken_slot_assembler_attestation_status_exactness() -> None:
+        override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            'if result_status is not None and result_status != "ok":',
+            'if result_status is not None and result_status not in {"ok", "passed"}:',
+        )
+        override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            'if report_status is not None and report_status != "ok":',
+            'if report_status is not None and report_status not in {"ok", "passed"}:',
+        )
+
+    run_negative_control(
+        "Android device-lab slot assembler exact ok status gate",
+        weaken_slot_assembler_attestation_status_exactness,
     )
     raise SystemExit(0)
 
@@ -10088,8 +10460,19 @@ if mode == "--negative-control-lineage-proof-local-secret-paths":
         "Reserved-lineage proof evidence local secret-path gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
+            '    path_text = str(path)\n    if device_lab.SECRET_RE.search(path_text):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
             "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-local-path-aliases":
+    run_negative_control(
+        "Reserved-lineage proof evidence local path-alias gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            '    if "\\\\" in path_text:\n        return None, [f"{label} path must not contain backslashes"]\n    if ".." in path.parts:\n        return None, [f"{label} path must be canonical"]\n    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n',
+            '    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n',
         ),
     )
     raise SystemExit(0)
@@ -10703,6 +11086,30 @@ if mode == "--negative-control-compact-key-helper-generator-log-strict-read":
             "scripts/kagemusha_recursive_compact_key_evidence.py",
             'except UnicodeDecodeError:\n        return None, None, None, [f"{label} could not be read"]',
             'except UnicodeDecodeError:\n        raise',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-evidence-helper-path-aliases":
+    evidence_helper_alias_checks = (
+        '    if "\\\\" in path:\n'
+        '        return f"{label} must not contain backslashes"\n'
+        '    if ".." in Path(path).parts:\n'
+        '        return f"{label} must be canonical"\n'
+    )
+    run_negative_control(
+        "Kagemusha evidence helper path alias gate",
+        lambda: (
+            override_text_all(
+                "scripts/kagemusha_lineage_proof_evidence.py",
+                evidence_helper_alias_checks,
+                "",
+            ),
+            override_text_all(
+                "scripts/kagemusha_recursive_compact_key_evidence.py",
+                evidence_helper_alias_checks,
+                "",
+            ),
         ),
     )
     raise SystemExit(0)
@@ -11499,6 +11906,28 @@ if mode == "--negative-control-lineage-proof-helper-timestamp-raw":
             "scripts/kagemusha_lineage_proof_evidence.py",
             "errors.extend(_validate_generated_at_utc(generated_at_utc))",
             "errors.extend([])",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-helper-future-skew":
+    run_negative_control(
+        "Reserved-lineage proof evidence helper future-skew gate",
+        lambda: override_text(
+            "scripts/kagemusha_lineage_proof_evidence.py",
+            "_validate_generated_at_future_skew(\n            generated_at,\n            max_generated_at_future_skew_seconds,",
+            "_skip_generated_at_future_skew(\n            generated_at,\n            max_generated_at_future_skew_seconds,",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-helper-future-skew":
+    run_negative_control(
+        "ABI-7 recursive compact key evidence helper future-skew gate",
+        lambda: override_text(
+            "scripts/kagemusha_recursive_compact_key_evidence.py",
+            "_validate_generated_at_future_skew(\n            generated_at,\n            max_generated_at_future_skew_seconds,",
+            "_skip_generated_at_future_skew(\n            generated_at,\n            max_generated_at_future_skew_seconds,",
         ),
     )
     raise SystemExit(0)

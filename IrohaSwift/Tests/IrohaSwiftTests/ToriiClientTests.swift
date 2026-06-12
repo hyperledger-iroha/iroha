@@ -2604,6 +2604,51 @@ final class ToriiClientTests: XCTestCase {
         }
     }
 
+    func testIdentifierReceiptRejectsPaddedPayloadAccountIdDuringDecode() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let payloadJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(payload), encoding: .utf8)
+        )
+
+        for paddedAccountId in [" \(accountId)", "\(accountId) "] {
+            let paddedPayloadJSON = payloadJSON.replacingOccurrences(
+                of: "\"account_id\":\"\(accountId)\"",
+                with: "\"account_id\":\"\(paddedAccountId)\""
+            )
+            let receiptJSON = """
+            {
+              "payload":\(paddedPayloadJSON),
+              "attestation":{
+                "kind":"signed",
+                "signature":"\(signed.signatureHex)"
+              }
+            }
+            """
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiIdentifierResolutionReceipt.self,
+                    from: Data(receiptJSON.utf8)
+                )
+            ) { error in
+                guard case let DecodingError.dataCorrupted(context) = error else {
+                    XCTFail("expected dataCorrupted decode error, got \(error)")
+                    return
+                }
+                XCTAssertTrue(context.debugDescription.contains("payload.account_id"))
+                XCTAssertTrue(context.debugDescription.contains("surrounding whitespace"))
+            }
+        }
+    }
+
     func testIdentifierReceiptRejectsMalformedProofAttestationBase64DuringDecode() throws {
         let accountId = try canonicalOwnerLiteral()
         let payload = makeSignedIdentifierReceiptPayload(

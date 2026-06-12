@@ -24,6 +24,442 @@ Last updated: 2026-06-12
     (`126` passed, `2` ignored)
   - `git diff --check`
 
+## 2026-06-12 Kagemusha evidence helper future-skew guard
+
+- Hardened `scripts/kagemusha_lineage_proof_evidence.py` and
+  `scripts/kagemusha_recursive_compact_key_evidence.py` so helper-supplied
+  `generated_at_utc` values must stay within the same default 300-second
+  future-skew allowance used by the production readiness rollup before evidence
+  JSON can be emitted.
+- Added adversarial helper coverage for far-future timestamps and negative
+  future-skew configuration, plus production-readiness negative controls and
+  payload-bench workflow hooks for both helper paths.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'future_generated_at_utc or future_skew_validator'` (`4` passed)
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'lineage_proof_evidence_helper or compact_key_evidence_helper or generated_at_future_skew_validator'` (`60` passed, `6` subtests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-future-skew`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-future-skew`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1496` passed, `269` subtests passed)
+
+## 2026-06-12 Kagemusha Android attestation harness source guard
+
+- Added explicit adversarial coverage for the attestation verifier report
+  writer's `--harness-result` source path: parent-segment aliases, backslash
+  aliases, and secret-looking path material now have direct tests proving they
+  fail before ancestor checks, metadata reads, or JSON parsing.
+- Pinned the writer to the shared guarded JSON loader with a production-readiness
+  negative control and payload-bench workflow hook, and documented the
+  harness-result source path preflight in the Android readiness notes.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_attestation_report.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'attestation_report_writer_rejects_alias_harness_result_path_before_metadata or attestation_report_writer_rejects_secret_harness_result_path_without_leak or attestation_report_writer_rejects_alias_chain_source_path_before_metadata'` (`3` passed, `4` subtests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-harness-source-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1492` passed, `269` subtests passed)
+  - `git diff --check`
+
+## 2026-06-12 Kagemusha Swift offline-transfer diagnostics guard coverage
+
+- Added the Swift offline-transfer diagnostics source and tests to the
+  Kagemusha Swift SDK guard so the new mobile/offline diagnostic policy is
+  parsed with the rest of the non-C# Kagemusha Swift surface instead of relying
+  only on SwiftPM discovery.
+- Added the diagnostics source and test paths to the payload-bench workflow
+  trigger list, the SDK parity inventory, and the JavaScript parity meta-test
+  so the guard stays wired when those files change.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `swift test --filter OfflineTransferDiagnosticsTests` from `IrohaSwift`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `node --test test/kagemushaFfiContractParity.test.js` from
+    `javascript/iroha_js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-12 Kagemusha Swift identifier receipt account-id exactness
+
+- Fixed `ToriiIdentifierResolutionPayload` decoding so `payload.account_id`
+  with surrounding whitespace is rejected instead of being trimmed into a valid
+  account identifier before receipt canonicalization or attestation handling.
+- Added a Swift receipt decode regression for padded leading and trailing
+  `payload.account_id` values alongside the existing non-exact attestation
+  kind, proof base64, signed-attestation signature, and opening-signature
+  tests.
+- Validation passed:
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-12 Kagemusha Android exact status gates
+
+- Tightened Android production attestation validation so
+  `attestation/result.json` `status` and `attestation/report.json`
+  `verification.status` must be exact `ok`; the previous `passed` alias is now
+  rejected even when both artifacts agree on it.
+- Tightened slot metadata ABI-6 probe validation so
+  `abi6_recursive_spend_jni_probe` must be exact `passed`; the previous `ok`
+  alias is now rejected even when signed evidence repeats it.
+- Added matched-`passed` adversarial coverage for both the production scanner
+  and signed-slot assembler, matched-`ok` ABI-6 probe alias coverage, plus
+  production-readiness negative controls and workflow hooks for both
+  exact-status gates.
+- Revalidated the refreshed physical Pixel 6 slot under the tighter scanner.
+  It remains accepted for `Google Pixel 6 / 6a`; readiness is still blocked
+  only by missing lineage proof evidence, missing compact-key evidence, and the
+  remaining Android family matrix.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'passed_attestation_status or attestation_passed_status_alias or noncanonical_attestation_status or noncanonical_attestation_report_status or attestation_report_result_status_mismatch or kagemusha_slot_assembler_rejects_report_status_mismatch_before_publish'` (`6` passed)
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'abi6_probe_ok_status_alias or noncanonical_probe_states or signed_evidence_probe_state_mismatch'` (`3` passed, `5` subtests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-status-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-attestation-status-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-result-status-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-report-status-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-abi6-probe-status-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1490` passed, `267` subtests passed)
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh --json-out target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh-validation-abi6-probe-exactness.json`
+  - `python3 scripts/kagemusha_production_readiness.py --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --summary-out target/kagemusha-production-readiness-physical-pixel6-20260612-abi6-probe-exactness.json` (expected blocked status from missing proof evidence and remaining Android families)
+  - `git diff --check`
+
+## 2026-06-12 Kagemusha Swift recursive-spend UInt32 boundary parity
+
+- Expanded Swift recursive-spend SDK helper tests with `UInt32.max` coverage on
+  append-output preference, append-output proving, and append-output selection,
+  matching the existing redeem and witnessless-append upper-bound checks.
+- No runtime helper change was needed; the Swift `UInt32` helper predicates
+  already fail closed at the compact-token and Reserved-lineage witnessless hop
+  caps.
+- Validation passed:
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+
+## 2026-06-12 Kagemusha JVM recursive-spend signed-boundary parity
+
+- Expanded Kotlin/JVM and Android Java recursive-spend SDK helper tests with
+  `Int.MIN_VALUE` / `Integer.MIN_VALUE` lower-bound cases across witnessless
+  redeem, witnessless append, append-output proving, append-output selection,
+  and previous-proof-open-envelope predicates.
+- No runtime helper change was needed; the fixed-width integer guards already
+  fail closed on negative hop counts, and the added tests pin the signed lower
+  bound alongside the existing max-int and cap-boundary coverage.
+- Validation passed:
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+
+## 2026-06-12 Kagemusha JS recursive-spend selector adversarial parity
+
+- Expanded the JavaScript recursive-spend SDK proof-circuit helper coverage so
+  witnessless redeem, witnessless append, append-output proving, append-output
+  selection, and previous-proof-open-envelope helpers reject the same
+  non-finite number, boxed-number, bigint, boolean, and string hop-count
+  shapes already pinned in the Python SDK tests.
+- No runtime helper change was needed; the JS guards already fail closed via
+  `Number.isInteger(...)` and exact circuit-id comparisons.
+- Validation passed:
+  - `node --test test/kagemushaRecursiveSpend.test.js` from
+    `javascript/iroha_js`
+
+## 2026-06-12 Kagemusha Pixel 6 physical device-lab refresh
+
+- Confirmed the attached physical Android device is `Pixel_6` / `oriole`
+  (`19181FDF600918`) and refreshed the raw Kagemusha Android device-lab export
+  into `target/kagemusha-android-raw-physical-19181FDF600918-20260612-refresh`.
+- Reassembled and signed the refreshed Pixel 6 slot into
+  `target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh`
+  with the existing lab signer public key digest
+  `0e62b96cb07db136d410d02a2a53c679ab1be8878aa99ab695bed8963a78b93c`.
+- The refreshed slot validates and production readiness accepts it for
+  `Google Pixel 6 / 6a`; remaining Android matrix blockers are Pixel 7/7 Pro,
+  Pixel 8/8a/8 Pro, Pixel Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy
+  S24, plus the still-running lineage/compact proof evidence jobs.
+- Validation passed:
+  - `adb devices -l`
+  - `python3 scripts/kagemusha_pull_android_device_lab_raw_slot.py --serial 19181FDF600918 --out-root target/kagemusha-android-raw-physical-19181FDF600918-20260612-refresh --summary-out target/kagemusha-android-raw-physical-19181FDF600918-20260612-refresh-summary.json`
+  - `python3 scripts/kagemusha_android_device_lab_slot.py --slot-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh --slot-id google-pixel-6-6a-physical-1781077370103 --device-family "Google Pixel 6 / 6a" ... --signed-at-utc 2026-06-12T09:10:55Z`
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh --json-out target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh-validation.json`
+  - `python3 scripts/kagemusha_production_readiness.py --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --summary-out target/kagemusha-production-readiness-physical-pixel6-20260612-refresh.json` (blocked only by missing lineage proof evidence, missing compact-key evidence, and missing non-Pixel-6 Android matrix families)
+
+## 2026-06-12 Kagemusha readiness local file alias rejection
+
+- Hardened the production-readiness release JSON, repo source-marker, and
+  shared local lineage file validators so parent-segment and backslash-bearing
+  direct file paths fail before ancestor validation, metadata reads, content
+  parsing, artifact hashing, or proof-log reads.
+- Added focused unit coverage and production-readiness negative controls for
+  direct release JSON, source-marker, and lineage-local path aliases.
+- Updated the offline Kagemusha guide, roadmap, and PR workflow guard matrix.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k "release_local_json_validator_rejects_alias_path_directly_without_metadata or repo_source_marker_validator_rejects_alias_path_directly_without_metadata or lineage_readiness_sha256_file_rejects_alias_path_directly"` (`3` passed, `6` subtests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-direct-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-direct-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-direct-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-direct-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e "require 'yaml'; YAML.load_file('.github/workflows/pr_kagemusha_payload_bench.yml'); puts 'parsed .github/workflows/pr_kagemusha_payload_bench.yml'"`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1487` passed, `267` subtests passed)
+
+## 2026-06-12 Kagemusha Android signer output alias rejection
+
+- Hardened the Android signed-evidence helper's lower-level JSON output
+  write/read validators so parent-segment and backslash-bearing output aliases
+  fail before output parent metadata reads.
+- Added focused direct-validator coverage and a production-readiness negative
+  control for signer JSON output path aliases.
+- Updated the offline Kagemusha guide and roadmap Android readiness notes.
+- Validation passed:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k "signer_json_output_validators_reject_alias_paths_before_metadata or signer_helper_rejects_backslash_output_path_before_write or signer_helper_rejects_absolute_parent_segment_output_path_before_write"` (`3` passed, `4` subtests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-output-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-json-output-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1484` passed, `261` subtests passed)
+
+## 2026-06-12 Kagemusha Android direct slot-path alias rejection
+
+- Added a shared Android device-lab slot-path boundary helper that rejects
+  secret-looking, control-character, parent-segment, and backslash-bearing slot
+  path spellings before direct helper metadata reads.
+- Routed manifest parsing/verification, slot-file inventory, manifest and
+  signed-evidence digest validators, metadata artifact reads, and the Android
+  signed-evidence helper through that shared boundary.
+- Added focused before-metadata coverage for manifest parsing, slot-file
+  enumeration, and signing-helper CLI slot paths, plus production-readiness
+  guard markers and negative controls for direct slot-path aliases.
+- Updated the offline Kagemusha guide and roadmap Android readiness notes.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k "parse_sha256_manifest_rejects_alias_slot_path_before_metadata or slot_files_rejects_alias_slot_path_before_metadata or signer_helper_rejects_alias_slot_path_before_metadata_read"` (`3` passed, `6` subtests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-helper-slot-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-helper-slot-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-slot-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-slot-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-parse-direct-slot-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-verify-direct-slot-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-manifest-slot-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1483` passed, `257` subtests passed)
+
+## 2026-06-12 Kagemusha Android status slot-binding required
+
+- Hardened Android device-lab `telemetry/status.ndjson` validation so every
+  production status event must carry a non-empty `slot_id` matching the slot.
+- Updated the production slot test helper to emit explicit status slot
+  bindings, matching raw-puller artifacts.
+- Added adversarial raw-puller, assembler, and scanner coverage for omitted
+  status slot bindings.
+- Pinned the slot-binding diagnostic, tests, workflow command, and dedicated
+  production-readiness negative control.
+- Updated the offline Kagemusha guide and roadmap Android readiness notes.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'malformed_required_runtime_artifacts_before_publish or kagemusha_android_raw_puller_requires_status_slot_id or production_metadata_requires_status_ndjson_slot_id or kagemusha_android_raw_puller_rejects_noncanonical_status_slot_binding or production_metadata_rejects_status_ndjson_slot_mismatch'` (`5` passed, `14` subtests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-status-slot-binding-required`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1483` passed, `257` subtests passed)
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+
+## 2026-06-12 Kagemusha Android status-value closed schema
+
+- Hardened Android device-lab `telemetry/status.ndjson` semantics so an `ok`
+  status line can no longer mask adjacent advisory or unknown status values;
+  every accepted status event must now be exactly `ok`.
+- Applied the status-value allowlist across raw-pull validation, signed-slot
+  assembly preflight, and signed-slot scanning while preserving the explicit
+  failure-status diagnostic.
+- Added adversarial raw-puller, assembler, and scanner coverage with an
+  `ok`-plus-`skipped` status stream.
+- Pinned the status-value diagnostic, tests, workflow command, and dedicated
+  production-readiness negative control.
+- Updated the offline Kagemusha guide and roadmap Android readiness notes.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'malformed_required_runtime_artifacts_before_publish or kagemusha_android_raw_puller_rejects_unknown_status_ndjson or production_metadata_rejects_unknown_status_ndjson or kagemusha_android_raw_puller_rejects_status_ndjson_unexpected_field or production_metadata_rejects_status_ndjson_unexpected_field'` (`5` passed, `7` subtests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-status-value-closed-schema`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1478` passed, `250` subtests passed)
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+
+## 2026-06-12 Kagemusha Android shared path-alias rejection
+
+- Hardened shared Android device-lab root, JSON input, and summary-output
+  preflights so parent-segment and backslash-bearing aliases are rejected
+  before metadata reads, JSON parsing, slot discovery, or output parent
+  creation.
+- Applied the same path-alias rejection at raw-puller output-root,
+  summary-output, and raw-slot boundaries plus signed-slot assembler source
+  and device-lab root preflights.
+- Added adversarial before-ADB, before-stat, before-metadata, and
+  before-classification coverage, plus production-readiness negative controls
+  and PR workflow commands for the new alias gates.
+- Updated the offline Kagemusha guide and roadmap Android readiness notes.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/kagemusha_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k "alias_root_before_classify or source_path_validators_reject_aliases or alias_cli_paths_before_adb or alias_raw_slot_path_before_stat or load_json_rejects_alias_path_directly_before_metadata or root_validator_rejects_alias_path_directly_before_metadata or validate_summary_output_path_rejects_aliases_before_parent_metadata"` (`7` passed, `18` subtests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-direct-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-direct-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-direct-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-root-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-direct-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-direct-control-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-direct-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-direct-control-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-direct-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-direct-control-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1476` passed, `249` subtests passed)
+
+## 2026-06-12 Kagemusha Android status-event closed schema
+
+- Hardened Android device-lab `telemetry/status.ndjson` validation so each
+  status event rejects unexpected fields while preserving the existing optional
+  `slot_id` binding behavior.
+- Applied the closed status-event schema at raw-pull validation, signed-slot
+  assembly preflight, and signed-slot scanning.
+- Fixed the readiness summary `--summary-out` path validator so backslash and
+  parent-segment aliases are rejected before parent metadata reads.
+- Pinned the status-event schema and summary-output alias guards with focused
+  tests, workflow negative controls, and production-readiness inventory markers.
+- Updated the offline Kagemusha guide and roadmap Android readiness notes.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py scripts/check_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/kagemusha_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'validate_summary_output_path_rejects_aliases_before_parent_metadata or validate_summary_output_path_rejects_parent_metadata_failure or validate_summary_output_path_uses_lstat_before_parent_is_dir_preflight'` (`3` passed, `4` subtests passed)
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'malformed_required_runtime_artifacts_before_publish or kagemusha_android_raw_puller_rejects_status_ndjson_unexpected_field or production_metadata_rejects_status_ndjson_unexpected_field or kagemusha_android_raw_puller_rejects_failed_status_ndjson or production_metadata_rejects_failed_status_ndjson'` (`5` passed, `6` subtests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-status-event-closed-schema`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-direct-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1476` passed, `249` subtests passed)
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+
+## 2026-06-12 Kagemusha Android telemetry app-package binding
+
+- Hardened Android device-lab telemetry validation so
+  `telemetry/telemetry.json` `app_package_name` must match the authoritative
+  app package in `slot.json` for signed slots, `attestation/result.json` for
+  raw pulls, and the staged attestation result during signed-slot assembly.
+- Added adversarial assembler, raw-puller, and scanner coverage for telemetry
+  app-package substitution.
+- Pinned the expected app-package binding markers, scanner/raw-puller tests,
+  workflow command, and dedicated production-readiness negative control.
+- Restored the Android attestation-report chain-source control path marker
+  required by the production-readiness inventory while keeping behavior
+  unchanged.
+- Updated the offline Kagemusha guide and roadmap Android readiness notes to
+  document telemetry app-package binding.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_android_attestation_report.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'signed_evidence_artifact_revalidates_required_digest_before_read or kagemusha_slot_assembler_rejects_malformed_required_runtime_artifacts_before_publish or kagemusha_android_raw_puller_rejects_telemetry_app_package_mismatch or production_metadata_rejects_telemetry_app_package_mismatch or production_metadata_rejects_noncanonical_telemetry_identity_strings or kagemusha_android_raw_puller_rejects_noncanonical_telemetry_identity_strings'` (`6` passed, `13` subtests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-telemetry-app-package-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1466` passed, `226` subtests passed)
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `git diff --check`
+
+## 2026-06-12 Kagemusha attestation chain-source alias rejection
+
+- Hardened `kagemusha_android_attestation_report.py` so the local
+  `--attestation-certificate-chain` source path rejects parent-segment aliases
+  and backslash-bearing paths before ancestor validation or filesystem metadata
+  reads.
+- Added focused coverage for chain-source aliases before metadata reads and
+  refreshed the signed-evidence digest revalidation monkeypatch to forward the
+  validator's current keyword arguments.
+- Pinned the new attestation source-path diagnostics, regression test, PR
+  workflow command, and dedicated production-readiness negative control. Updated
+  the offline Kagemusha guide and roadmap Android readiness notes.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_attestation_report.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k "attestation_report_writer_rejects_alias_chain_source_path_before_metadata or attestation_report_writer_rejects_control_chain_source_path_before_ancestor_check or attestation_report_writer_rejects_backslash_chain_path or attestation_report_writer_rejects_noncanonical_chain_path"` (`4` passed, `5` subtests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-chain-source-path-aliases`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k "signed_evidence_artifact_revalidates_required_digest_before_read or attestation_report_writer_rejects_alias_chain_source_path_before_metadata"` (`2` passed, `2` subtests passed)
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1466` passed, `226` subtests passed)
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md roadmap.md status.md scripts/kagemusha_android_attestation_report.py scripts/tests/check_android_device_lab_slot_test.py`
+
+## 2026-06-12 Kagemusha evidence helper path alias rejection
+
+- Hardened the direct lineage-proof and ABI-7 compact-key evidence helpers so
+  `--artifact-dir`, `--proof-log`, `--generator-log`, and `--out` reject
+  parent-segment aliases and backslash-bearing paths before path resolution,
+  ancestor validation, filesystem metadata reads, or evidence artifact reads.
+- Added focused alias coverage for direct artifact-directory validators, output
+  corridor checks, lineage proof-log validation, and compact generator-log
+  validation. Added a dedicated production-readiness negative control that
+  strips the alias checks from both evidence helper modules.
+- Updated the PR payload-bench workflow, offline Kagemusha guide, and roadmap
+  evidence-helper notes for the canonical path requirement.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k "evidence_artifact_dir_validators_reject_aliases_before_metadata or evidence_output_corridors_reject_alias_paths_before_resolve or lineage_proof_input_validator_rejects_alias_proof_log_before_metadata or compact_key_generator_log_path_rejects_alias_before_metadata"` (`4` passed, `16` subtests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-evidence-helper-path-aliases`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1463` passed, `223` subtests passed)
+
+## 2026-06-12 Kagemusha Android telemetry identity exactness
+
+- Hardened the Android device-lab scanner and raw puller so
+  `telemetry/telemetry.json` now requires canonical non-empty
+  `device_model`, `device_codename`, and `app_package_name` strings with no
+  surrounding whitespace, control characters, or secret-looking material.
+- Updated the production slot test fixture helper to emit the physical
+  exporter's telemetry identity fields by default.
+- Added adversarial scanner and raw-puller coverage for padded, control,
+  blank, and secret-looking telemetry identity strings.
+- Pinned the telemetry identity field list, validator, scanner/raw-puller
+  tests, workflow command, and dedicated production-readiness negative control.
+- Updated the offline Kagemusha guide and roadmap Android readiness notes to
+  document telemetry identity exactness.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k 'production_metadata_rejects_noncanonical_telemetry_identity_strings or kagemusha_android_raw_puller_rejects_noncanonical_telemetry_identity_strings or production_metadata_rejects_telemetry_extra_field or kagemusha_android_raw_puller_rejects_telemetry_extra_field or production_metadata_rejects_noncanonical_telemetry_suite or kagemusha_android_raw_puller_rejects_noncanonical_telemetry_suite'` (`6` passed, `18` subtests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-telemetry-identity-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1459` passed, `207` subtests passed)
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `git diff --check`
+
+## 2026-06-12 Kagemusha staged path alias rejection
+
+- Hardened the lineage proof staged runner, recursive compact-key staged
+  runner, and both staged finalizers so explicit staged directory/file paths
+  reject parent-segment aliases and backslash-bearing strings before ancestor
+  validation or filesystem metadata reads.
+- Added table-driven staged validator coverage across all four helpers, and a
+  dedicated production-readiness negative control that strips the alias checks
+  from the staged helper family.
+- Updated the PR payload-bench workflow, offline Kagemusha guide, and roadmap
+  staged-run notes for the new canonical path requirement.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k "staged_path_validators_reject_alias_directory_paths_before_metadata or staged_path_validators_reject_control_directory_paths_before_metadata"` (`2` passed, `12` subtests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-staged-path-aliases`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1457` passed, `199` subtests passed)
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md roadmap.md status.md scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+
 ## 2026-06-12 SCCP artifact/Markdown release-inventory revalidation
 
 - Revalidated the manifest artifact-row source inventory and public Markdown
@@ -5741,8 +6177,8 @@ Last updated: 2026-06-12
 
 - Hardened `check_android_device_lab_slot.py` so production scanner validation
   requires `attestation/report.json` `verification.status` to match
-  `attestation/result.json` `status` exactly. Accepted `ok`/`passed` aliases
-  can no longer hide a report/result splice.
+  `attestation/result.json` `status` exactly and rejects any non-`ok`
+  attestation status alias.
 - Hardened `kagemusha_android_device_lab_slot.py` so signed-slot assembly
   performs the same status exactness check before publishing unsigned or signed
   production evidence.
@@ -19614,8 +20050,8 @@ Last updated: 2026-06-12
 - The scanner now requires this report to be a closed schema bound to
   `slot.json` by slot id, device fingerprint, OS build id, app package,
   attestation challenge, and certificate-chain path/hash. The verifier report
-  must name a non-secret verifier, report `verification.status` as `ok` or
-  `passed`, and prove StrongBox/KeyMint plus physical-device attestation.
+  must name a non-secret verifier, report `verification.status` as exact `ok`,
+  and prove StrongBox/KeyMint plus physical-device attestation.
 - The signed-evidence helper now reruns the verifier-report validation before
   calculating `artifact_digests`, so it refuses to create
   `evidence/signed-evidence.json` for missing, malformed, weakly attested, or

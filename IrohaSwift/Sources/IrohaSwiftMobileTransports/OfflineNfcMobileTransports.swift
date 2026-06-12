@@ -42,6 +42,82 @@ public final class IrohaOfflineDeviceTransferDeliveryTracker: @unchecked Sendabl
     }
 }
 
+public final class IrohaOfflineNearbyMessageExchangeState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var queuedSenderPaymentPayload: String?
+    private var isProcessingSenderReceiveRequest = false
+    private var isProcessingReceiverPayment = false
+
+    public init() {}
+
+    public func reset() {
+        lock.lock()
+        queuedSenderPaymentPayload = nil
+        isProcessingSenderReceiveRequest = false
+        isProcessingReceiverPayment = false
+        lock.unlock()
+    }
+
+    public func reserveSenderReceiveRequest(didFinish: Bool) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let shouldAccept = OfflineNoteNearbyMessageHandlingPolicy.shouldAcceptSenderReceiveRequest(
+            didFinish: didFinish,
+            isProcessingReceiveRequest: isProcessingSenderReceiveRequest,
+            hasQueuedPaymentPayload: queuedSenderPaymentPayload != nil
+        )
+        if shouldAccept {
+            isProcessingSenderReceiveRequest = true
+        }
+        return shouldAccept
+    }
+
+    public func queueSenderPaymentPayload(_ payload: String) {
+        lock.lock()
+        queuedSenderPaymentPayload = payload
+        lock.unlock()
+    }
+
+    @available(*, deprecated, message: "Use takeQueuedSenderPaymentPayloadForReceiptAck(didFinish:) so receipt ACK acceptance is single-use.")
+    public func queuedSenderPaymentPayloadForReceiptAck(didFinish: Bool) -> String? {
+        takeQueuedSenderPaymentPayloadForReceiptAck(didFinish: didFinish)
+    }
+
+    public func takeQueuedSenderPaymentPayloadForReceiptAck(didFinish: Bool) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard OfflineNoteNearbyMessageHandlingPolicy.shouldAcceptSenderReceiptAck(
+            didFinish: didFinish,
+            hasQueuedPaymentPayload: queuedSenderPaymentPayload != nil
+        ) else {
+            return nil
+        }
+        let payload = queuedSenderPaymentPayload
+        queuedSenderPaymentPayload = nil
+        isProcessingSenderReceiveRequest = false
+        return payload
+    }
+
+    public var hasQueuedSenderPaymentPayload: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return queuedSenderPaymentPayload != nil
+    }
+
+    public func reserveReceiverPayment(didFinish: Bool) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let shouldAccept = OfflineNoteNearbyMessageHandlingPolicy.shouldAcceptReceiverPayment(
+            didFinish: didFinish,
+            isProcessingPayment: isProcessingReceiverPayment
+        )
+        if shouldAccept {
+            isProcessingReceiverPayment = true
+        }
+        return shouldAccept
+    }
+}
+
 public enum IrohaOfflineNfcDeliveryProgressPolicy {
     public static func mayHaveReachedReceiver(progress: String) -> Bool {
         matches(progress, event: "write_payload_commit_begin")
@@ -119,6 +195,12 @@ public enum IrohaOfflineNfcCardSessionRuntimePolicy {
 }
 
 public enum IrohaOfflineDeviceTransferPayloadRuntime {
+    public static let currentTextPayloadKinds: [OfflineNoteTextPayloadKind] = [
+        .receiveRequest,
+        .paymentToken,
+        .receiptAck,
+    ]
+
     public static var acceptsCurrentDeviceTransferPayloads: Bool {
         acceptsCurrentDeviceTransferPayloads(environment: ProcessInfo.processInfo.environment)
     }
@@ -126,6 +208,85 @@ public enum IrohaOfflineDeviceTransferPayloadRuntime {
     public static func acceptsCurrentDeviceTransferPayloads(environment: [String: String]) -> Bool {
         _ = environment
         return true
+    }
+
+    public static func acceptsCurrentTextPayload(
+        _ payload: String,
+        expectedKind: OfflineNoteTextPayloadKind
+    ) -> Bool {
+        guard acceptsCurrentDeviceTransferPayloads else { return false }
+        return IrohaOfflineDeviceToDeviceTextPayload.isValid(payload, expectedKind: expectedKind)
+    }
+
+    public static func normalizedCurrentTextPayload(
+        _ payload: String,
+        expectedKind: OfflineNoteTextPayloadKind
+    ) throws -> String {
+        guard acceptsCurrentDeviceTransferPayloads else {
+            throw OfflineNoteTransferTextPayloadCodecError.invalidPayload
+        }
+        return try IrohaOfflineDeviceToDeviceTextPayload.normalize(payload, expectedKind: expectedKind)
+    }
+
+    public static func currentTextPayloadKind(for payload: String) -> OfflineNoteTextPayloadKind? {
+        guard acceptsCurrentDeviceTransferPayloads else { return nil }
+        for kind in currentTextPayloadKinds where acceptsCurrentTextPayload(payload, expectedKind: kind) {
+            return kind
+        }
+        return nil
+    }
+}
+
+public enum IrohaOfflineDisplayAmountPolicy {
+    public static let defaultMaxScale = 8
+
+    public static func canonicalPositiveAmount(_ rawValue: String?) -> String? {
+        let trimmed = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty,
+              let amount = try? ToriiOfflineCashCodec.canonicalAmountString(trimmed),
+              (try? ToriiOfflineCashCodec.compareAmounts(amount, "0")) == .orderedDescending else {
+            return nil
+        }
+        return amount
+    }
+
+    public static func displayPositiveAmount(
+        _ rawValue: String?,
+        maxScale: Int = defaultMaxScale
+    ) -> String? {
+        guard let amount = canonicalPositiveAmount(rawValue),
+              let displayAmount = truncateCanonicalAmountForDisplay(amount, maxScale: maxScale),
+              (try? ToriiOfflineCashCodec.compareAmounts(displayAmount, "0")) == .orderedDescending else {
+            return nil
+        }
+        return displayAmount
+    }
+
+    public static func truncateCanonicalAmountForDisplay(
+        _ canonicalAmount: String,
+        maxScale: Int = defaultMaxScale
+    ) -> String? {
+        guard maxScale >= 0,
+              let amount = try? ToriiOfflineCashCodec.canonicalAmountString(canonicalAmount) else {
+            return nil
+        }
+        let parts = amount.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let wholePart = parts.first else { return nil }
+        if maxScale == 0 || parts.count == 1 {
+            return String(wholePart)
+        }
+
+        var fraction = String(parts[1])
+        if fraction.count > maxScale {
+            fraction = String(fraction.prefix(maxScale))
+        }
+        while fraction.last == "0" {
+            fraction.removeLast()
+        }
+        if fraction.isEmpty {
+            return String(wholePart)
+        }
+        return "\(wholePart).\(fraction)"
     }
 }
 
@@ -301,6 +462,25 @@ public enum IrohaOfflineNfcReceiveCompletionPolicy {
     }
 }
 
+public enum IrohaOfflineNfcDiagnosticsPolicy {
+    public static func errorCode(_ error: Error) -> String {
+        if let exchangeError = error as? IrohaOfflineNfcExchangeError {
+            return exchangeError.technicalCode
+        }
+        let nsError = error as NSError
+#if os(iOS) && canImport(CoreNFC)
+        if nsError.domain == NFCErrorDomain {
+            return "NFCError.\(nsError.code)"
+        }
+#endif
+        let domainHash = IrohaOfflineTransferDiagnosticPolicy.redactedIdentifier(
+            nsError.domain,
+            prefixLength: 8
+        )
+        return "NSError.\(domainHash).\(nsError.code)"
+    }
+}
+
 public enum IrohaOfflineNearbyExchangeError: LocalizedError, Equatable, Sendable {
     case unavailable
     case busy
@@ -412,6 +592,29 @@ public enum IrohaOfflineNearbyExchangeError: LocalizedError, Equatable, Sendable
         return dnsError == DNSServiceErrorType(kDNSServiceErr_PolicyDenied)
     }
 #endif
+}
+
+public enum IrohaOfflineNearbyDiagnosticsPolicy {
+    public static func peerLabel(displayName: String, selectionHash: Int) -> String {
+        let key = "\(displayName)#\(selectionHash)"
+        return "peer_hash=\(IrohaOfflineTransferDiagnosticPolicy.redactedIdentifier(key))"
+    }
+
+    public static func errorCode(_ error: Error) -> String {
+        let normalizedError = IrohaOfflineNearbyExchangeError.normalized(error)
+        if let nearbyError = normalizedError as? IrohaOfflineNearbyExchangeError {
+            return nearbyError.technicalCode
+        }
+        if normalizedError is CancellationError {
+            return IrohaOfflineNearbyExchangeError.cancelled.technicalCode
+        }
+        let nsError = normalizedError as NSError
+        let domainHash = IrohaOfflineTransferDiagnosticPolicy.redactedIdentifier(
+            nsError.domain,
+            prefixLength: 8
+        )
+        return "NSError.\(domainHash).\(nsError.code)"
+    }
 }
 
 public enum IrohaOfflineNearbyPairingDecision: Equatable, Sendable {
@@ -1173,8 +1376,12 @@ private final class IrohaOfflineNfcCardSessionRuntime {
                 case .readerDeselected:
                     NSLog("iroha_offline_nfc_ios_card reader_deselected")
                 case .sessionInvalidated(let reason):
-                    NSLog("iroha_offline_nfc_ios_card session_invalidated reason=%@", String(describing: reason))
-                    notifyInvalidated(Self.exchangeError(forInvalidationReason: reason))
+                    let exchangeError = Self.exchangeError(forInvalidationReason: reason)
+                    NSLog(
+                        "iroha_offline_nfc_ios_card session_invalidated error_type=%@",
+                        exchangeError.technicalCode
+                    )
+                    notifyInvalidated(exchangeError)
                     return
                 @unknown default:
                     break
@@ -1394,10 +1601,7 @@ private final class IrohaOfflineNfcCardSessionRuntime {
     }
 
     private static func safeErrorType(_ error: Error) -> String {
-        if let exchangeError = error as? IrohaOfflineNfcExchangeError {
-            return exchangeError.technicalCode
-        }
-        return String(describing: type(of: error))
+        IrohaOfflineNfcDiagnosticsPolicy.errorCode(error)
     }
 
     private func publishPayload(kind: OfflineNoteNfcPayloadKind, payload: String) throws {
@@ -2080,14 +2284,7 @@ public final class IrohaOfflineNfcReaderService: NSObject, @unchecked Sendable, 
     }
 
     private static func safeErrorType(_ error: Error) -> String {
-        if let exchangeError = error as? IrohaOfflineNfcExchangeError {
-            return exchangeError.technicalCode
-        }
-        let nsError = error as NSError
-        if nsError.domain == NFCErrorDomain {
-            return "NFCError.\(nsError.code)"
-        }
-        return String(describing: type(of: error))
+        IrohaOfflineNfcDiagnosticsPolicy.errorCode(error)
     }
 
     private static func isRetryableSessionInvalidation(_ error: Error) -> Bool {

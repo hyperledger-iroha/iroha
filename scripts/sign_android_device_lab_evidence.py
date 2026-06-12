@@ -40,10 +40,15 @@ def _secret_key_path_error(path: Path, label: str) -> str | None:
 def _validate_json_output_path(path: Path, label: str) -> list[str]:
     """Validate a signer-controlled output immediately before writing."""
 
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         return [f"{label} must not contain secret-looking material"]
-    if device_lab._contains_control_character(str(path)):
+    if device_lab._contains_control_character(path_text):
         return [f"{label} must not contain control characters"]
+    if "\\" in path_text:
+        return [f"{label} must not contain backslashes"]
+    if ".." in path.parts:
+        return [f"{label} must be canonical"]
     errors: list[str] = []
     parent = path.parent
     parent_exists, parent_errors = _validate_json_output_parent(path, label)
@@ -170,10 +175,15 @@ def _sync_output_parent(
 def _validate_existing_json_output_path(path: Path, label: str) -> list[str]:
     """Validate a signer-controlled output immediately before reading it back."""
 
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         return [f"{label} must not contain secret-looking material"]
-    if device_lab._contains_control_character(str(path)):
+    if device_lab._contains_control_character(path_text):
         return [f"{label} must not contain control characters"]
+    if "\\" in path_text:
+        return [f"{label} must not contain backslashes"]
+    if ".." in path.parts:
+        return [f"{label} must be canonical"]
     _, parent_errors = _validate_json_output_parent(
         path,
         label,
@@ -495,10 +505,9 @@ def _preflight_slot_metadata_reads(slot_path: Path) -> list[str]:
 def _validate_slot_path_boundary(slot_path: Path) -> list[str]:
     """Validate signer slot paths before reading mutable slot artifacts."""
 
-    if device_lab.SECRET_RE.search(str(slot_path)):
-        return ["slot path must not contain secret-looking material"]
-    if device_lab._contains_control_character(str(slot_path)):
-        return ["slot path must not contain control characters"]
+    path_errors = device_lab._slot_path_boundary_errors(slot_path)  # type: ignore[attr-defined]
+    if path_errors:
+        return path_errors
     try:
         slot_mode = slot_path.lstat().st_mode
     except FileNotFoundError:
@@ -1114,10 +1123,9 @@ def _validate_slot_artifact_for_digest(
 ) -> tuple[Path | None, os.stat_result | None, list[str]]:
     """Validate one slot artifact immediately before hashing it."""
 
-    if device_lab.SECRET_RE.search(str(slot_path)):
-        return None, None, ["slot path must not contain secret-looking material"]
-    if device_lab._contains_control_character(str(slot_path)):
-        return None, None, ["slot path must not contain control characters"]
+    path_errors = device_lab._slot_path_boundary_errors(slot_path)  # type: ignore[attr-defined]
+    if path_errors:
+        return None, None, path_errors
     if device_lab.SECRET_RE.search(relative):
         return None, None, ["slot artifacts must not contain secret-looking material"]
     normalise_errors: list[str] = []
@@ -1277,16 +1285,7 @@ def sign_slot_evidence(
     runtime_arg_errors = [
         error
         for error in (
-            (
-                "slot path must not contain secret-looking material"
-                if device_lab.SECRET_RE.search(str(slot_path))
-                else None
-            ),
-            (
-                "slot path must not contain control characters"
-                if device_lab._contains_control_character(str(slot_path))
-                else None
-            ),
+            *device_lab._slot_path_boundary_errors(slot_path),  # type: ignore[attr-defined]
             _secret_key_path_error(private_key_path, "private key"),
             _secret_key_path_error(public_key_path, "signer public key"),
             (

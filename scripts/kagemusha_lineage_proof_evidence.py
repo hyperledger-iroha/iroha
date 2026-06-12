@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import math
@@ -111,10 +112,16 @@ def _sha256_file_with_size(
 
 
 def _secret_path_error(path: str | None, label: str) -> str | None:
-    if path is not None and device_lab.SECRET_RE.search(path):
+    if path is None:
+        return None
+    if device_lab.SECRET_RE.search(path):
         return f"{label} must not contain secret-looking material"
-    if path is not None and device_lab._contains_control_character(path):
+    if device_lab._contains_control_character(path):
         return f"{label} must not contain control characters"
+    if "\\" in path:
+        return f"{label} must not contain backslashes"
+    if ".." in Path(path).parts:
+        return f"{label} must be canonical"
     return None
 
 
@@ -133,6 +140,23 @@ def _validate_elapsed_seconds(value: float) -> list[str]:
 def _validate_generated_at_utc(value: str) -> list[str]:
     if device_lab.SIGNED_AT_UTC_RE.fullmatch(value) is None:
         return ["--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ"]
+    return []
+
+
+def _validate_generated_at_future_skew(
+    generated_at: dt.datetime | None,
+    max_future_skew_seconds: int,
+) -> list[str]:
+    if max_future_skew_seconds < 0:
+        return ["--max-generated-at-future-skew-seconds must be non-negative"]
+    if generated_at is None:
+        return []
+    max_generated_at = (
+        dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        + dt.timedelta(seconds=max_future_skew_seconds)
+    )
+    if generated_at > max_generated_at:
+        return ["--generated-at-utc must not be ahead of the helper clock skew allowance"]
     return []
 
 
@@ -200,6 +224,9 @@ def build_evidence(
     command: str,
     elapsed_seconds: float,
     generated_at_utc: str,
+    max_generated_at_future_skew_seconds: int = (
+        readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS
+    ),
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Build a Reserved-lineage proof evidence document from local artifacts."""
 
@@ -214,6 +241,12 @@ def build_evidence(
     )
     if timestamp_error is not None:
         errors.append(timestamp_error["message"])
+    errors.extend(
+        _validate_generated_at_future_skew(
+            generated_at,
+            max_generated_at_future_skew_seconds,
+        )
+    )
     errors.extend(_validate_command(command))
     errors.extend(_validate_elapsed_seconds(elapsed_seconds))
 
@@ -774,6 +807,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Canonical ISO-8601 UTC timestamp for the evidence document.",
     )
     parser.add_argument(
+        "--max-generated-at-future-skew-seconds",
+        type=int,
+        default=readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS,
+        help=(
+            "Maximum number of seconds generated_at_utc may be ahead of the "
+            "helper clock."
+        ),
+    )
+    parser.add_argument(
         "--out",
         default=readiness.DEFAULT_LINEAGE_PROOF_EVIDENCE_PATH,
         help="Output evidence JSON path.",
@@ -816,6 +858,7 @@ def main(argv: list[str] | None = None) -> int:
         command=args.command,
         elapsed_seconds=args.elapsed_seconds,
         generated_at_utc=args.generated_at_utc,
+        max_generated_at_future_skew_seconds=args.max_generated_at_future_skew_seconds,
     )
     if errors:
         for error in errors:
