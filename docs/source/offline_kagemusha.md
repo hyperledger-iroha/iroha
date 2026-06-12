@@ -2134,6 +2134,16 @@ language can preflight. Swift exposes the witness helpers as
 Java Android expose the same names, JavaScript/Node and Python use the native
 snake/camel-case bridge names, and C# exposes
 `LineageWitnessFromInitResult`/`LineageWitnessAppendResult` DTO wrappers.
+
+Kotlin/JVM and Java Android also expose typed ABI-6 recursive-spend request
+codecs for init, append, verify, and redeem, plus verify-result and bundle
+summary decoders. Those codecs validate nested Norito archives, canonical
+nonzero note amounts, nonnegative block heights, previous lineage-record gaps,
+and append-output transition compatibility before native dispatch. Their
+request-layout regressions decode the emitted archives and pin raw embedded
+record/bundle/proof payloads, Norito `Option` child-length framing, and Rust
+`[u8; N]` fixed-array encoding as per-element compact length-prefixed bytes
+without an extra sequence-length header.
 Python, Swift, JavaScript/Node, Kotlin/JVM, Java Android, and C# also fail
 closed when proof-producing native calls return no archive or a zero-length
 archive, so missing native proof material cannot be coerced into a successful SDK

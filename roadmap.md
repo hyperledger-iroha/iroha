@@ -157,6 +157,12 @@ and completed history lives in [`status.md`](./status.md).
   malformed cached issuer keys, padded Torii event verifier filters, padded
   signing algorithm labels, padded verifier record fields, and padded verifier
   backend/status labels stay covered by the same mobile SDK gate.
+  Kotlin/JVM and Android Java recursive-spend request codecs must keep
+  init/append/verify/redeem archive schemas, compact request payload layouts,
+  raw embedded archive payloads, Norito `Option` child-length framing, Rust
+  `[u8; N]` fixed-array byte layout, bundle/result decoders, lineage gap checks,
+  and nonnegative block-height guards pinned in the focused JVM SDK runner and
+  parity inventory.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,

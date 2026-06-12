@@ -173248,3 +173248,21 @@ Last updated: 2026-06-12
   - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
 - Hygiene checks passed with no lockfile drift. The long-running Rust
   `connect_norito_bridge` proof test was still active and was not interrupted.
+
+## 2026-06-12 - Typed Recursive Spend Request SDK Codecs
+
+- Added Kotlin/JVM and Java Android typed builders for
+  `KagemushaRecursiveSpendInitRequestV1`,
+  `KagemushaRecursiveSpendAppendRequestV1`,
+  `KagemushaRecursiveSpendVerifyRequestV1`, and
+  `KagemushaRecursiveSpendRedeemRequestV1`, plus typed verify-result and bundle
+  summary decoders.
+- The builders validate nested Norito archives, canonical nonzero note amounts,
+  nonnegative block heights, lineage verifier-record requirements, and append
+  output-circuit compatibility before native dispatch.
+- Tightened request layout coverage so encoded SDK requests pin compact Norito
+  root fields, raw embedded archive payloads, `Option` child-length framing, and
+  Rust-compatible `[u8; N]` fixed-array encoding without an extra sequence length.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
