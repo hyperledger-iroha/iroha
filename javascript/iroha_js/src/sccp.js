@@ -1549,6 +1549,25 @@ const requireNativeEvmProverAuditHashProductionShape = (auditHashes) => {
   }
 };
 
+const normalizeNativeEvmProverProductionAttestationHash = (value, label) => {
+  const normalized = normalizeNonZeroHex32(value, label);
+  const bytes = hexToBytes(normalized, label, 32);
+  const repeatedPatternLength =
+    repeatedNativeEvmProverAuditHashPatternLength(bytes);
+  if (repeatedPatternLength > 0) {
+    throw new TypeError(
+      `${label} must not look like a placeholder attestation hash: repeated ${repeatedPatternLength}-byte pattern`,
+    );
+  }
+  const arithmeticDelta = constantNativeEvmProverAuditHashDelta(bytes);
+  if (arithmeticDelta !== null) {
+    throw new TypeError(
+      `${label} must not look like a placeholder attestation hash: arithmetic byte sequence`,
+    );
+  }
+  return normalized;
+};
+
 const bytesToBigInt = (bytes) => BigInt(`0x${bytesToHex(bytes, false)}`);
 
 const bigIntToBytes32 = (value) => {
@@ -8138,6 +8157,8 @@ const nativeEvmProverParityFixtureKeys = Object.freeze(
     "calldata_hash",
     "toriiSubmitPayloadHash",
     "torii_submit_payload_hash",
+    "productionAttestationHash",
+    "production_attestation_hash",
     "sdkResults",
     "sdk_results",
   ]),
@@ -8194,6 +8215,8 @@ const nativeEvmProverSelfTestFixtureKeys = Object.freeze(
     "calldata_hash",
     "toriiSubmitPayloadHash",
     "torii_submit_payload_hash",
+    "productionAttestationHash",
+    "production_attestation_hash",
     "sdkResults",
     "sdk_results",
   ]),
@@ -9372,6 +9395,16 @@ const validateNativeEvmProverParityFixture = (
     ),
     "toriiSubmitPayloadHash",
   );
+  const productionAttestationHash =
+    normalizeNativeEvmProverProductionAttestationHash(
+      requiredNativeEvmProverBundleField(
+        fixture,
+        "productionAttestationHash",
+        "productionAttestationHash",
+        "production_attestation_hash",
+      ),
+      "productionAttestationHash",
+    );
   const sdkResultsInput = requiredNativeEvmProverBundleField(
     fixture,
     "sdkResults",
@@ -9429,6 +9462,7 @@ const validateNativeEvmProverParityFixture = (
     publicSignalWords,
     calldataHash,
     toriiSubmitPayloadHash,
+    productionAttestationHash,
     sdkResults,
   });
 };
@@ -9781,6 +9815,16 @@ const validateNativeEvmProverSelfTestFixture = (
     ),
     "toriiSubmitPayloadHash",
   );
+  const productionAttestationHash =
+    normalizeNativeEvmProverProductionAttestationHash(
+      requiredNativeEvmProverBundleField(
+        fixture,
+        "productionAttestationHash",
+        "productionAttestationHash",
+        "production_attestation_hash",
+      ),
+      "productionAttestationHash",
+    );
   const sdkResultsInput = requiredNativeEvmProverBundleField(
     fixture,
     "sdkResults",
@@ -9841,6 +9885,7 @@ const validateNativeEvmProverSelfTestFixture = (
     publicSignalWords,
     calldataHash,
     toriiSubmitPayloadHash,
+    productionAttestationHash,
     sdkResults,
   });
 };

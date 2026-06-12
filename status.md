@@ -15,6 +15,28 @@ Last updated: 2026-06-12
   - `node --check scripts/sccp_bsc_taira_xor_deploy.test.mjs`
   - `node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs` (`32 passed`)
 
+## 2026-06-12 native gas sponsor allowlist regression
+
+- Fixed direct executor fee sponsorship so the DPN sponsored-contract
+  allowlist is enforced only when Nexus fees are enabled, non-exempt, and
+  nonzero. Native ISI transactions can still use an authorized `fee_sponsor`
+  for pipeline gas settlement when Nexus fees are not active, while active
+  Nexus-sponsored native batches remain rejected.
+- Replaced the default in-memory state streaming key material's all-zero
+  deterministic Ed25519 seed with a named nonzero deterministic seed, matching
+  the crypto layer's inert-seed rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --test iroha_core_group_03 isi_gas_fees::non_vm_instructions_can_charge_gas_to_fee_sponsor -- --exact --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --test iroha_core_group_03 isi_gas_fees::non_vm_instructions_can_charge_gas_to_fee_sponsor -- --nocapture`
+    (`2` passed)
+  - `cargo test -p iroha_core --lib native_batch -- --nocapture`
+    (`4` passed)
+  - `cargo test -p iroha_core --test iroha_core_group_03`
+    (`126` passed, `2` ignored)
+  - `git diff --check`
+
 ## 2026-06-12 Rustfmt edition default
 
 - Set the repository rustfmt configuration to default to Rust edition 2024,

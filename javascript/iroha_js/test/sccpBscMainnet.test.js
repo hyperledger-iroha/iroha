@@ -322,6 +322,9 @@ const sampleBscTestnetNativeEvmProverParityFixture = (
     proving_key_hash: bundle.proving_key_hash ?? bundle.provingKeyHash,
     verifier_key_hash: bundle.verifier_key_hash ?? bundle.verifierKeyHash,
     destination_binding_hash: destinationBindingHash,
+    production_attestation_hash: fixtureHash(
+      "bsc native prover parity production attestation",
+    ),
     ...result,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
@@ -370,6 +373,9 @@ const sampleBscTestnetNativeEvmProverSelfTestFixture = (
     proving_key_hash: bundle.proving_key_hash ?? bundle.provingKeyHash,
     verifier_key_hash: bundle.verifier_key_hash ?? bundle.verifierKeyHash,
     destination_binding_hash: destinationBindingHash,
+    production_attestation_hash: fixtureHash(
+      "bsc native prover self-test production attestation",
+    ),
     ...result,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
@@ -1421,6 +1427,62 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
         { destinationBinding: fixture.destinationBinding },
       ),
     /auditHashes\.reproducible_build_attestation must not look like a placeholder audit hash: arithmetic byte sequence/u,
+  );
+});
+
+test("BscTestnetSccp requires production attestations on native prover reports", () => {
+  const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+  const parityFixture = sampleBscTestnetNativeEvmProverParityFixture(
+    fixture.bundle,
+  );
+  const selfTestFixture = sampleBscTestnetNativeEvmProverSelfTestFixture(
+    fixture.bundle,
+  );
+  const missingParityAttestation = { ...parityFixture };
+  delete missingParityAttestation.production_attestation_hash;
+  const missingSelfTestAttestation = { ...selfTestFixture };
+  delete missingSelfTestAttestation.production_attestation_hash;
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverParityFixture(
+        missingParityAttestation,
+        fixture.bundle,
+      ),
+    /productionAttestationHash/u,
+  );
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverSelfTestFixture(
+        missingSelfTestAttestation,
+        fixture.bundle,
+      ),
+    /productionAttestationHash/u,
+  );
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverParityFixture(
+        {
+          ...parityFixture,
+          production_attestation_hash: hex32("a1"),
+        },
+        fixture.bundle,
+      ),
+    /placeholder attestation hash/u,
+  );
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverSelfTestFixture(
+        {
+          ...selfTestFixture,
+          production_attestation_hash: `0x${Array.from(
+            { length: 32 },
+            (_, index) => index.toString(16).padStart(2, "0"),
+          ).join("")}`,
+        },
+        fixture.bundle,
+      ),
+    /placeholder attestation hash: arithmetic byte sequence/u,
   );
 });
 

@@ -4339,6 +4339,8 @@ export interface EthereumMainnetNativeEvmProverParityFixtureInput {
   calldata_hash?: string;
   toriiSubmitPayloadHash?: string;
   torii_submit_payload_hash?: string;
+  productionAttestationHash?: string;
+  production_attestation_hash?: string;
   sdkResults?: Partial<
     Record<
       "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
@@ -4376,6 +4378,7 @@ export interface EthereumMainnetNativeEvmProverParityFixture {
   readonly publicSignalWords: readonly string[];
   readonly calldataHash: string;
   readonly toriiSubmitPayloadHash: string;
+  readonly productionAttestationHash: string;
   readonly sdkResults: Readonly<
     Record<
       "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
@@ -4444,6 +4447,8 @@ export interface EthereumMainnetNativeEvmProverSelfTestFixtureInput {
   calldata_hash?: string;
   toriiSubmitPayloadHash?: string;
   torii_submit_payload_hash?: string;
+  productionAttestationHash?: string;
+  production_attestation_hash?: string;
   sdkResults?: Partial<
     Record<
       "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
@@ -4484,6 +4489,7 @@ export interface EthereumMainnetNativeEvmProverSelfTestFixture {
   readonly publicSignalWords: readonly string[];
   readonly calldataHash: string;
   readonly toriiSubmitPayloadHash: string;
+  readonly productionAttestationHash: string;
   readonly sdkResults: Readonly<
     Record<
       "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",

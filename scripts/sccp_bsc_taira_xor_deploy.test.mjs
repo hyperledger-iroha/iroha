@@ -442,6 +442,9 @@ const nativeProverParityFixture = ({
     proving_key_hash: provingKeyHash,
     verifier_key_hash: verifierKeyHash,
     destination_binding_hash: destinationBindingHash,
+    production_attestation_hash: fixtureHash(
+      "BSC script native prover parity production attestation",
+    ),
     ...fields,
     sdk_results: nativeProverSdkResults(fields),
   };
@@ -471,6 +474,9 @@ const nativeProverSelfTestFixture = ({
     proving_key_hash: provingKeyHash,
     verifier_key_hash: verifierKeyHash,
     destination_binding_hash: destinationBindingHash,
+    production_attestation_hash: fixtureHash(
+      "BSC script native prover self-test production attestation",
+    ),
     ...fields,
     sdk_results: nativeProverSdkResults(fields),
   };
