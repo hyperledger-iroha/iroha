@@ -254,6 +254,14 @@ const DEFAULT_TRIGGER_GAS_LIMIT: u64 = 50_000_000;
 const AUTOSCALE_META_MANAGED: &str = "autoscale.managed";
 const AUTOSCALE_META_CREATED_HEIGHT: &str = "autoscale.created_height";
 
+fn default_streaming_key_material() -> iroha_crypto::streaming::StreamingKeyMaterial {
+    iroha_crypto::streaming::StreamingKeyMaterial::new(iroha_crypto::KeyPair::from_seed(
+        b"iroha:state:default-streaming-key-material:v1".to_vec(),
+        Algorithm::Ed25519,
+    ))
+    .expect("streaming key material")
+}
+
 pub(crate) fn account_label_is_pii(label: &AccountAlias) -> bool {
     let raw = label.label.as_ref();
     if raw.is_empty() {
@@ -19725,10 +19733,7 @@ impl State {
         let settlement_engine = SettlementEngine::from_router_config(&settlement_cfg.router);
         let nexus = iroha_config::parameters::actual::Nexus::default();
         let streaming = iroha_config::parameters::actual::Streaming {
-            key_material: iroha_crypto::streaming::StreamingKeyMaterial::new(
-                iroha_crypto::KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519),
-            )
-            .expect("streaming key material"),
+            key_material: default_streaming_key_material(),
             session_store_dir: PathBuf::from(
                 iroha_config::parameters::defaults::streaming::SESSION_STORE_DIR,
             ),
@@ -36892,10 +36897,7 @@ pub(crate) mod deserialize {
         let initial_crypto = iroha_config::parameters::actual::Crypto::default();
         let nexus = iroha_config::parameters::actual::Nexus::default();
         let streaming = iroha_config::parameters::actual::Streaming {
-            key_material: iroha_crypto::streaming::StreamingKeyMaterial::new(
-                iroha_crypto::KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519),
-            )
-            .expect("streaming key material"),
+            key_material: default_streaming_key_material(),
             session_store_dir: PathBuf::from(
                 iroha_config::parameters::defaults::streaming::SESSION_STORE_DIR,
             ),
