@@ -1175,6 +1175,10 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(previousHopCount: 0),
             KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1
         )
+        XCTAssertEqual(
+            KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(previousHopCount: UInt32.max),
+            KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1
+        )
         XCTAssertTrue(
             KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
                 KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,
@@ -1200,6 +1204,12 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
                 KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,
                 previousHopCount: KagemushaRecursiveSpendProver.compactTokenMaxHops
+            )
+        )
+        XCTAssertFalse(
+            KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
+                KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,
+                previousHopCount: UInt32.max
             )
         )
         XCTAssertTrue(
@@ -1230,6 +1240,12 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
                 KagemushaRecursiveSpendProver.recursiveSpendLineageProofCircuitIdV1,
                 previousHopCount: 64
+            )
+        )
+        XCTAssertFalse(
+            KagemushaRecursiveSpendProver.canProveAppendOutputCircuitId(
+                KagemushaRecursiveSpendProver.recursiveSpendLineageProofCircuitIdV1,
+                previousHopCount: UInt32.max
             )
         )
         XCTAssertFalse(
@@ -1313,6 +1329,13 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
                 previousProofCircuitId: KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,
                 outputCircuitId: KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,
                 previousHopCount: 0
+            )
+        )
+        XCTAssertFalse(
+            KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
+                previousProofCircuitId: KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,
+                outputCircuitId: KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,
+                previousHopCount: UInt32.max
             )
         )
         XCTAssertTrue(

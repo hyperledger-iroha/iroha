@@ -6,7 +6,7 @@ use super::{
     normal::NormalConfiguration,
     small::SmallConfiguration,
 };
-use crate::KeyGenOption;
+use crate::{Error, KeyGenOption};
 
 const MESSAGE_1: &[u8; 22] = b"This is a test message";
 const MESSAGE_2: &[u8; 20] = b"Another test message";
@@ -55,6 +55,14 @@ fn test_try_keypair_generation_from_seed<C: BlsConfiguration>() {
             (pk_1.to_bytes(), sk_1.to_bytes()) == (pk_2.to_bytes(), sk_2.to_bytes()),
             "Checked keypair does not match compatibility keypair"
         );
+    }
+}
+
+fn test_try_keypair_rejects_all_zero_seed<C: BlsConfiguration>() {
+    match BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(vec![0u8; 32])) {
+        Err(Error::KeyGen(message)) => assert!(message.contains("all zero")),
+        Err(err) => panic!("expected all-zero seed KeyGen error, got {err:?}"),
+        Ok(_) => panic!("all-zero BLS seed material must fail"),
     }
 }
 
@@ -156,6 +164,11 @@ mod normal {
     #[test]
     fn checked_keypair_generation_from_seed() {
         test_try_keypair_generation_from_seed::<NormalConfiguration>();
+    }
+
+    #[test]
+    fn checked_keypair_rejects_all_zero_seed() {
+        test_try_keypair_rejects_all_zero_seed::<NormalConfiguration>();
     }
 
     #[test]
@@ -474,6 +487,11 @@ mod small {
     #[test]
     fn checked_keypair_generation_from_seed() {
         test_try_keypair_generation_from_seed::<SmallConfiguration>();
+    }
+
+    #[test]
+    fn checked_keypair_rejects_all_zero_seed() {
+        test_try_keypair_rejects_all_zero_seed::<SmallConfiguration>();
     }
 
     #[test]

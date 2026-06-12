@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  symlink,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -19,6 +26,9 @@ import {
   CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT,
   PRODUCTION_REQUIREMENTS_SCHEMA,
   ROUTE_MANIFEST_SCHEMA,
+  SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES,
+  SCCP_BSC_JSON_INPUT_MAX_BYTES,
+  SCCP_BSC_TEXT_INPUT_MAX_BYTES,
   SCCP_BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES,
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_SORA,
@@ -1102,6 +1112,40 @@ test("BSC route-manifest command rejects non-object JSON operator inputs", async
         join(dir, "array-contract.manifest.json"),
       ]),
     /TAIRA burn-record contract is not valid JSON: TAIRA burn-record contract must be a JSON object/u,
+  );
+});
+
+test("BSC route-manifest command rejects oversized JSON operator inputs before parsing", async () => {
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-manifest-oversized-"),
+  );
+  const evidencePath = join(dir, "deployment.oversized.json");
+  const contractPath = join(dir, "burn-record.contract.json");
+  await writeFile(evidencePath, "");
+  await truncate(evidencePath, SCCP_BSC_JSON_INPUT_MAX_BYTES + 1);
+  await writeFile(
+    contractPath,
+    `${JSON.stringify(tairaBurnRecordContract(), null, 2)}\n`,
+  );
+
+  await assert.rejects(
+    () =>
+      main([
+        "route-manifest",
+        "--evidence",
+        evidencePath,
+        "--taira-contract",
+        contractPath,
+        "--settlement-asset-definition-id",
+        "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+        "--proof-artifact-hash",
+        HASH_44,
+        "--proving-key-hash",
+        HASH_55,
+        "--out",
+        join(dir, "oversized.manifest.json"),
+      ]),
+    /BSC deployment evidence could not be read: path is .*maximum allowed/u,
   );
 });
 
@@ -2258,6 +2302,42 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
     /auditHashes.cross_sdk_fixture_parity must match the artifact sha256/u,
   );
 
+  const oversizedProofPath = join(
+    fixture.artifactRoot,
+    "oversized-proof.r1cs",
+  );
+  await writeFile(oversizedProofPath, "");
+  await truncate(
+    oversizedProofPath,
+    SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES + 1,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...fixture.options,
+        "proof-artifact": "oversized-proof.r1cs",
+      }),
+    /proof artifact could not be read: path is .*maximum allowed/u,
+  );
+
+  const oversizedImplementationPath = join(
+    fixture.artifactRoot,
+    "oversized-javascript-implementation.bin",
+  );
+  await writeFile(oversizedImplementationPath, "");
+  await truncate(
+    oversizedImplementationPath,
+    SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES + 1,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...fixture.options,
+        "javascript-implementation": "oversized-javascript-implementation.bin",
+      }),
+    /javascript implementation artifact could not be read: path is .*maximum allowed/u,
+  );
+
   const tinyProof = await writeNativeProverFixtureFiles({
     artifactByteOverrides: {
       proofArtifact: Buffer.alloc(256, 0xa7),
@@ -3071,6 +3151,31 @@ test("BSC route-config command rejects non-object JSON manifests", async () => {
         "true",
       ]),
     /BSC route manifest is not valid JSON: BSC route manifest must be a JSON object/u,
+  );
+});
+
+test("BSC route-config command rejects oversized base TAIRA configs before merging", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-oversized-"));
+  const manifestPath = join(dir, "manifest.json");
+  const baseConfigPath = join(dir, "base-config.toml");
+  await writeFile(manifestPath, `${JSON.stringify(routeManifest(), null, 2)}\n`);
+  await writeFile(baseConfigPath, "");
+  await truncate(baseConfigPath, SCCP_BSC_TEXT_INPUT_MAX_BYTES + 1);
+
+  await assert.rejects(
+    () =>
+      main([
+        "route-config",
+        "--manifest",
+        manifestPath,
+        "--base-config",
+        baseConfigPath,
+        "--out",
+        join(dir, "route.toml"),
+        "--allow-unready",
+        "true",
+      ]),
+    /base TAIRA config could not be read: path is .*maximum allowed/u,
   );
 });
 

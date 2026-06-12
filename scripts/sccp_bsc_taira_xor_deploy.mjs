@@ -156,6 +156,9 @@ export const CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT = "artifacts/sccp-bsc";
 export const DEFAULT_PRIVATE_KEY_ENV = "SCCP_BSC_DEPLOYER_PRIVATE_KEY";
 export const TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES = 32;
 export const TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
+export const SCCP_BSC_JSON_INPUT_MAX_BYTES = 12 * 1024 * 1024;
+export const SCCP_BSC_TEXT_INPUT_MAX_BYTES = 8 * 1024 * 1024;
+export const SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES = 512 * 1024 * 1024;
 
 const DESTINATION_BINDING_LABEL = "iroha:sccp:evm-destination-binding:v1";
 const SECRET_KEY_PATTERN =
@@ -1957,6 +1960,11 @@ async function readJson(pathName, label = "JSON file") {
     if (!info.isFile()) {
       throw new Error("path must be a regular file");
     }
+    if (info.size > SCCP_BSC_JSON_INPUT_MAX_BYTES) {
+      throw new Error(
+        `path is ${info.size} bytes; maximum allowed is ${SCCP_BSC_JSON_INPUT_MAX_BYTES} bytes`,
+      );
+    }
     text = await readFile(resolved, "utf8");
   } catch (error) {
     throw new Error(`${label} could not be read: ${error.message}`);
@@ -1981,6 +1989,11 @@ async function readText(pathName, label = "text file") {
     }
     if (!info.isFile()) {
       throw new Error("path must be a regular file");
+    }
+    if (info.size > SCCP_BSC_TEXT_INPUT_MAX_BYTES) {
+      throw new Error(
+        `path is ${info.size} bytes; maximum allowed is ${SCCP_BSC_TEXT_INPUT_MAX_BYTES} bytes`,
+      );
     }
     return await readFile(resolved, "utf8");
   } catch (error) {
@@ -2090,6 +2103,11 @@ async function readArtifactUnderRoot(root, value, label) {
     }
     if (!info.isFile()) {
       throw new Error("path must be a regular file");
+    }
+    if (info.size > SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES) {
+      throw new Error(
+        `path is ${info.size} bytes; maximum allowed is ${SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES} bytes`,
+      );
     }
     const [rootRealPath, targetRealPath] = await Promise.all([
       realpath(root),
@@ -2777,7 +2795,7 @@ async function compileBscContracts({ writeOut = null } = {}) {
   const solc = requireOptionalPackage("solc");
   const sources = {};
   for (const [key, sourcePath] of Object.entries(CONTRACT_SOURCES)) {
-    sources[key] = { content: await readFile(sourcePath, "utf8") };
+    sources[key] = { content: await readText(sourcePath, `${key} source`) };
   }
   const input = {
     language: "Solidity",

@@ -1,6 +1,6 @@
 # Android StrongBox Offline Payments Device Matrix
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
 
 This matrix gates production readiness for Android offline-offline payment
 flows. A device row is ready only after the lab attaches signed evidence for
@@ -25,7 +25,8 @@ Production release criteria:
 - Slot probe-state fields (`abi6_recursive_spend_jni_probe`,
   `abi7_recursive_compact_jni_probe`, and
   `abi7_recursive_compact_prover_state`) must be exact lowercase strings with no
-  surrounding whitespace or control characters.
+  surrounding whitespace or control characters. The ABI-6 recursive-spend probe
+  must be exactly `passed`; `ok` is not accepted as a production alias.
 - ABI 7 recursive compact prover calls that require multi-hop append-batch
   composition produce package-backed compact tokens when the key package is
   supplied, while empty, malformed, or dummy-proof local archives remain
@@ -153,7 +154,7 @@ Production release criteria:
   closed-schema artifact: it repeats the slot id, device fingerprint, OS build
   id, app package, attestation challenge, attestation certificate-chain path,
   and certificate-chain SHA-256 from `slot.json`, names the verifier, and
-  reports `verification.status` as ok or passed with StrongBox/KeyMint and
+  reports `verification.status` as exact `ok` with StrongBox/KeyMint and
   physical-device attestation set to true. The signer refuses to create
   `evidence/signed-evidence.json` when this verifier report is missing,
   malformed, weakly attested, or not bound to the slot metadata.
@@ -164,7 +165,8 @@ Production release criteria:
   challenge hex, whitespace-normalized or control-character-bearing identity
   arguments, normalized StrongBox/KeyMint level labels, challenge digest drift,
   PEM chain-length mismatches, whitespace-normalized, control-character, or unsafe
-  chain paths, and reports that do not carry an explicit physical-device assertion. It writes the
+  chain paths, aliased or secret-looking harness-result source paths, and
+  reports that do not carry an explicit physical-device assertion. It writes the
   report through a
   fsynced same-directory temporary file, atomically replaces the output,
   identity-checks failed temporary cleanup, syncs the captured output-parent
@@ -543,9 +545,12 @@ Production release criteria:
   beyond the validator clock-skew allowance is also blocked, and
 	  `generated_at_utc` must use canonical UTC
 		  `YYYY-MM-DDTHH:MM:SSZ` form without whitespace or control-character
-		  normalization. The lineage evidence helper rejects
+  normalization. The lineage evidence helper rejects
 		  noncanonical `--generated-at-utc` input, including `+00:00` offsets or
-		  surrounding whitespace, instead of normalizing it, and rejects symlinked
+		  surrounding whitespace, instead of normalizing it. The lineage and
+		  compact-key evidence helpers also reject `generated_at_utc` values more
+		  than 300 seconds ahead of the helper clock by default before writing
+		  evidence JSON. The lineage helper rejects symlinked
 			  output ancestors before creating missing `--out` parent directories or
 			  reading release artifact and proof-log inputs. It also rejects dangling
 			  symlink and unreadable-metadata output parents or leaves before following

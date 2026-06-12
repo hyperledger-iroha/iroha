@@ -33,6 +33,8 @@ use crate::SessionKey;
 pub enum Error {
     /// Failed to generate nonce for an encryption operation
     NonceGeneration(#[source] OsError),
+    /// Generated nonce material must not be an inert all-zero placeholder
+    InertNonce,
     /// Failed to encrypt data
     Encryption(aead::Error),
     /// Failed to decrypt data
@@ -44,10 +46,21 @@ pub enum Error {
 }
 
 fn random_nonce<E: AeadCore>() -> Result<aead::Nonce<E>, Error> {
+    random_nonce_from_rng::<E, _>(&mut OsRng)
+}
+
+fn random_nonce_from_rng<E, R>(rng: &mut R) -> Result<aead::Nonce<E>, Error>
+where
+    E: AeadCore,
+    R: TryRngCore<Error = OsError>,
+{
     let mut value = aead::Nonce::<E>::default();
-    OsRng
-        .try_fill_bytes(value.as_mut_slice())
+    rng.try_fill_bytes(value.as_mut_slice())
         .map_err(Error::NonceGeneration)?;
+    let value_bytes = value.as_slice();
+    if !value_bytes.is_empty() && value_bytes.iter().all(|&byte| byte == 0) {
+        return Err(Error::InertNonce);
+    }
     Ok(value)
 }
 
@@ -98,8 +111,9 @@ where
     /// This method handles safely generating a `nonce` and prepends it to the ciphertext.
     ///
     /// # Errors
-    /// Returns [`Error::NonceGeneration`] if random nonce generation fails or [`Error::Encryption`]
-    /// if the cipher rejects the payload.
+    /// Returns [`Error::NonceGeneration`] if random nonce generation fails,
+    /// [`Error::InertNonce`] if the RNG returns all-zero nonce material, or
+    /// [`Error::Encryption`] if the cipher rejects the payload.
     pub fn encrypt_easy<A: AsRef<[u8]>>(&self, aad: A, plaintext: A) -> Result<Vec<u8>, Error> {
         let nonce = random_nonce::<E>()?;
         let ciphertext = self
@@ -127,8 +141,9 @@ where
     /// such as P2P transport.
     ///
     /// # Errors
-    /// Returns [`Error::NonceGeneration`] if random nonce generation fails or [`Error::Encryption`]
-    /// if the cipher rejects the payload.
+    /// Returns [`Error::NonceGeneration`] if random nonce generation fails,
+    /// [`Error::InertNonce`] if the RNG returns all-zero nonce material, or
+    /// [`Error::Encryption`] if the cipher rejects the payload.
     pub fn encrypt_easy_into<'a, A: AsRef<[u8]>>(
         &self,
         aad: A,
@@ -269,8 +284,47 @@ where
 mod tests {
     use super::*;
 
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = OsError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
     fn encryptor() -> SymmetricEncryptor<ChaCha20Poly1305> {
         SymmetricEncryptor::new_with_key((0u8..32).collect::<Vec<_>>()).expect("valid key length")
+    }
+
+    #[test]
+    fn random_nonce_rejects_all_zero_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+
+        assert!(matches!(
+            random_nonce_from_rng::<ChaCha20Poly1305, _>(&mut rng),
+            Err(Error::InertNonce)
+        ));
+    }
+
+    #[test]
+    fn random_nonce_accepts_nonzero_material() {
+        let mut rng = FixedTryRng { byte: 0xA5 };
+        let nonce = random_nonce_from_rng::<ChaCha20Poly1305, _>(&mut rng).expect("nonzero nonce");
+
+        assert_eq!(nonce.as_slice(), &[0xA5; 12]);
     }
 
     #[test]
@@ -299,6 +353,23 @@ mod tests {
         let plaintext = encryptor
             .decrypt(nonce.as_ref(), aad.as_ref(), ciphertext.as_slice())
             .expect("decrypt");
+        assert_eq!(plaintext.as_slice(), message);
+    }
+
+    #[test]
+    fn encrypt_with_caller_supplied_all_zero_nonce_roundtrips() {
+        let encryptor = encryptor();
+        let nonce = [0u8; 12];
+        let aad = b"explicit nonce compatibility";
+        let message = b"manual nonce boundary";
+
+        let ciphertext = encryptor
+            .encrypt(nonce.as_ref(), aad.as_ref(), message.as_ref())
+            .expect("encrypt with caller supplied nonce");
+        let plaintext = encryptor
+            .decrypt(nonce.as_ref(), aad.as_ref(), ciphertext.as_slice())
+            .expect("decrypt with caller supplied nonce");
+
         assert_eq!(plaintext.as_slice(), message);
     }
 

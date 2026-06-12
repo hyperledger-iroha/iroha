@@ -929,34 +929,37 @@ fn hmac_streebog_nonce_seed(
     key: &[u8],
     parts: NonceSeedParts<'_>,
 ) -> Result<Zeroizing<Vec<u8>>, Error> {
-    if let Some(extra) = parts.extra_entropy {
-        hmac_streebog(
-            digest_len,
-            block_len,
-            key,
-            &[
-                parts.v,
-                parts.marker,
-                parts.domain_tag,
-                parts.private_octets,
-                parts.message_octets,
-                extra,
-            ],
-        )
-    } else {
-        hmac_streebog(
-            digest_len,
-            block_len,
-            key,
-            &[
-                parts.v,
-                parts.marker,
-                parts.domain_tag,
-                parts.private_octets,
-                parts.message_octets,
-            ],
-        )
-    }
+    parts.extra_entropy.map_or_else(
+        || {
+            hmac_streebog(
+                digest_len,
+                block_len,
+                key,
+                &[
+                    parts.v,
+                    parts.marker,
+                    parts.domain_tag,
+                    parts.private_octets,
+                    parts.message_octets,
+                ],
+            )
+        },
+        |extra| {
+            hmac_streebog(
+                digest_len,
+                block_len,
+                key,
+                &[
+                    parts.v,
+                    parts.marker,
+                    parts.domain_tag,
+                    parts.private_octets,
+                    parts.message_octets,
+                    extra,
+                ],
+            )
+        },
+    )
 }
 
 fn hmac_streebog(
@@ -1659,13 +1662,25 @@ fn random_scalar<R: RngCore>(params: &CurveParams, rng: &mut R) -> BigUint {
 }
 
 fn random_scalar_from_os(params: &CurveParams) -> Result<BigUint, Error> {
+    random_scalar_from_rng(params, &mut OsRng)
+}
+
+fn random_scalar_from_rng<R>(params: &CurveParams, rng: &mut R) -> Result<BigUint, Error>
+where
+    R: TryRngCore,
+    R::Error: fmt::Display,
+{
     const MAX_RANDOM_SCALAR_ATTEMPTS: usize = 1024;
 
     let mut buf = Zeroizing::new(vec![0u8; params.scalar_len]);
     for _ in 0..MAX_RANDOM_SCALAR_ATTEMPTS {
-        OsRng
-            .try_fill_bytes(buf.as_mut_slice())
+        rng.try_fill_bytes(buf.as_mut_slice())
             .map_err(|err| Error::KeyGen(format!("GOST OS RNG failed: {err}")))?;
+        if buf.iter().all(|&byte| byte == 0) {
+            return Err(Error::KeyGen(
+                "GOST OS RNG returned all-zero scalar material".to_owned(),
+            ));
+        }
         let scalar = BigUint::from_bytes_le(buf.as_slice());
         if !scalar.is_zero() && scalar < params.q {
             return Ok(scalar);
@@ -1686,6 +1701,7 @@ fn keypair_random_impl(params: &CurveParams) -> Result<(PublicKey, PrivateKey), 
 }
 
 fn keypair_seed_impl(params: &CurveParams, seed: &[u8]) -> Result<(PublicKey, PrivateKey), Error> {
+    validate_seed_material_not_all_zero(seed)?;
     let mut rng = rng_from_seed_slice(seed);
     let scalar = random_scalar(params, &mut rng);
     let private = PrivateKey {
@@ -1693,6 +1709,38 @@ fn keypair_seed_impl(params: &CurveParams, seed: &[u8]) -> Result<(PublicKey, Pr
     };
     let public = derive_public_impl(params, &private)?;
     Ok((public, private))
+}
+
+fn validate_seed_material_not_all_zero(seed: &[u8]) -> Result<(), Error> {
+    if !seed.is_empty() && seed.iter().all(|&byte| byte == 0) {
+        return Err(Error::KeyGen(
+            "GOST seed material must not be all zero".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn signing_entropy_from_os(params: &CurveParams) -> Result<Zeroizing<Vec<u8>>, Error> {
+    signing_entropy_from_rng(params, &mut OsRng)
+}
+
+fn signing_entropy_from_rng<R>(
+    params: &CurveParams,
+    rng: &mut R,
+) -> Result<Zeroizing<Vec<u8>>, Error>
+where
+    R: TryRngCore,
+    R::Error: fmt::Display,
+{
+    let mut entropy = Zeroizing::new(vec![0u8; params.scalar_len]);
+    rng.try_fill_bytes(entropy.as_mut_slice())
+        .map_err(|err| Error::KeyGen(format!("GOST OS RNG failed: {err}")))?;
+    if entropy.iter().all(|&byte| byte == 0) {
+        return Err(Error::KeyGen(
+            "GOST OS RNG returned all-zero signing entropy".to_owned(),
+        ));
+    }
+    Ok(entropy)
 }
 
 /// Parse a serialized public key for the selected GOST parameter set.
@@ -1768,10 +1816,7 @@ pub fn sign(algorithm: Algorithm, message: &[u8], private: &PrivateKey) -> Resul
     let params = params_for_algorithm(algorithm).map_err(|err| Error::KeyGen(err.to_string()))?;
     let curve = params.curve();
     let mut nonce_gen = StreebogNonceGenerator::new();
-    let mut entropy = Zeroizing::new(vec![0u8; curve.scalar_len]);
-    OsRng
-        .try_fill_bytes(entropy.as_mut_slice())
-        .map_err(|err| Error::KeyGen(format!("GOST OS RNG failed: {err}")))?;
+    let entropy = signing_entropy_from_os(curve)?;
     sign_impl(
         curve,
         message,
@@ -1809,6 +1854,27 @@ mod tests {
     fn seed_pair() -> (PublicKey, PrivateKey) {
         let seed = b"iroha-gost-test-seed";
         generate_seeded_keypair(Algorithm::Gost3410_2012_256ParamSetA, seed).unwrap()
+    }
+
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
     }
 
     fn legacy_hmac_streebog(
@@ -2085,6 +2151,50 @@ mod tests {
             generate_seeded_keypair(Algorithm::Gost3410_2012_256ParamSetB, seed).unwrap();
         assert_eq!(public1.as_bytes(), public2.as_bytes());
         assert_eq!(private1.as_bytes(), private2.as_bytes());
+    }
+
+    #[test]
+    fn seeded_keypair_rejects_all_zero_seed_material() {
+        let err = generate_seeded_keypair(Algorithm::Gost3410_2012_256ParamSetB, &[0u8; 32])
+            .expect_err("all-zero GOST seed material must fail");
+        assert!(matches!(
+            err,
+            Error::KeyGen(message) if message.contains("all zero")
+        ));
+    }
+
+    #[test]
+    fn random_scalar_rejects_all_zero_rng_material() {
+        let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
+            Params::Bits256(params) => params,
+            _ => unreachable!(),
+        };
+        let mut rng = FixedTryRng { byte: 0 };
+
+        let err = random_scalar_from_rng(params, &mut rng)
+            .expect_err("all-zero GOST scalar material must fail");
+
+        assert!(matches!(
+            err,
+            Error::KeyGen(message) if message.contains("all-zero scalar material")
+        ));
+    }
+
+    #[test]
+    fn signing_entropy_rejects_all_zero_rng_material() {
+        let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
+            Params::Bits256(params) => params,
+            _ => unreachable!(),
+        };
+        let mut rng = FixedTryRng { byte: 0 };
+
+        let err = signing_entropy_from_rng(params, &mut rng)
+            .expect_err("all-zero GOST signing entropy must fail");
+
+        assert!(matches!(
+            err,
+            Error::KeyGen(message) if message.contains("all-zero signing entropy")
+        ));
     }
 
     #[test]

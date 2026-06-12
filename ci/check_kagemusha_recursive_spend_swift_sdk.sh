@@ -46,6 +46,7 @@ cd "${ROOT_DIR}"
   IrohaSwift/Sources/IrohaSwift/OfflineQrStream.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineQrStreamScan.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift \
+  IrohaSwift/Sources/IrohaSwift/OfflineTransferDiagnostics.swift \
   IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift \
@@ -71,4 +72,5 @@ cd "${ROOT_DIR}"
   IrohaSwift/Tests/IrohaSwiftTests/OfflineQrStreamTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineRevocationBundleTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift

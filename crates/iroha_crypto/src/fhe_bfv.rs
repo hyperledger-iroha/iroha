@@ -7446,27 +7446,8 @@ pub fn validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(
     params: &BfvParameters,
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
 ) -> Result<(), BfvError> {
-    validate_bfv_full_bootstrap_sample_extraction_v1(params, key.sample_extraction)?;
-    let degree = params.degree();
-    if key.coefficient_entries.len() != degree {
-        return Err(BfvError::ShapeMismatch(format!(
-            "BFV full-bootstrap sample-extraction switch key expected {degree} coefficient entries, found {}",
-            key.coefficient_entries.len()
-        )));
-    }
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(params, key)?;
     for (index, coefficient_entry) in key.coefficient_entries.iter().enumerate() {
-        let expected_index = u16::try_from(index).map_err(|_| {
-            BfvError::InvalidParameters(
-                "BFV full-bootstrap sample-extraction switch key index exceeds u16 metadata"
-                    .to_owned(),
-            )
-        })?;
-        if coefficient_entry.secret_coefficient_index != expected_index {
-            return Err(BfvError::InvalidParameters(format!(
-                "BFV full-bootstrap sample-extraction switch key coefficient entry[{index}] has secret_coefficient_index {}, expected {expected_index}",
-                coefficient_entry.secret_coefficient_index
-            )));
-        }
         validate_key_switch_entries(
             params,
             &coefficient_entry.entries,
@@ -7492,6 +7473,35 @@ pub fn validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(
                     "BFV full-bootstrap sample-extraction switch key coefficient[{index}] entry[{digit_index}] a limb must not be all zero"
                 )));
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(
+    params: &BfvParameters,
+    key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_sample_extraction_v1(params, key.sample_extraction)?;
+    let degree = params.degree();
+    if key.coefficient_entries.len() != degree {
+        return Err(BfvError::ShapeMismatch(format!(
+            "BFV full-bootstrap sample-extraction switch key expected {degree} coefficient entries, found {}",
+            key.coefficient_entries.len()
+        )));
+    }
+    for (index, coefficient_entry) in key.coefficient_entries.iter().enumerate() {
+        let expected_index = u16::try_from(index).map_err(|_| {
+            BfvError::InvalidParameters(
+                "BFV full-bootstrap sample-extraction switch key index exceeds u16 metadata"
+                    .to_owned(),
+            )
+        })?;
+        if coefficient_entry.secret_coefficient_index != expected_index {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap sample-extraction switch key coefficient entry[{index}] has secret_coefficient_index {}, expected {expected_index}",
+                coefficient_entry.secret_coefficient_index
+            )));
         }
     }
     Ok(())
@@ -7716,7 +7726,12 @@ pub fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_regis
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
 ) -> Result<BfvCiphertext, BfvError> {
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
+        validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(params, key)?;
+        validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
+        validate_bfv_full_bootstrap_sample_switch_key_matches_sample(key, sample)?;
+        return Err(err);
+    }
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
     validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
     validate_bfv_full_bootstrap_sample_switch_key_matches_sample(key, sample)?;
@@ -7808,7 +7823,10 @@ pub fn bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_boun
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     raw_sample_noise_bound: u128,
 ) -> Result<u128, BfvError> {
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
+        validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(params, key)?;
+        return Err(err);
+    }
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
     bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_from_raw_sample_bound_v1(
         params,
@@ -7965,7 +7983,10 @@ pub fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v1(
     ciphertext: &BfvCiphertext,
     sample_extraction: BfvFullBootstrapSampleExtractionV1,
 ) -> Result<BfvFullBootstrapRawExtractedSampleV1, BfvError> {
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
+        validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
+        return Err(err);
+    }
     apply_bfv_full_bootstrap_sample_extraction_raw_lwe_v1(params, ciphertext, sample_extraction)
 }
 
@@ -8006,7 +8027,10 @@ pub fn bfv_full_bootstrap_raw_sample_extraction_bounded_noise_output_bound_v1(
     sample_extraction: BfvFullBootstrapSampleExtractionV1,
     input_noise_bound: u128,
 ) -> Result<u128, BfvError> {
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
+        validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
+        return Err(err);
+    }
     validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
     validate_bounded_noise_bound_within_decoding_capacity(
         params,
@@ -8107,6 +8131,7 @@ pub fn repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_zero_ci
     params: &BfvParameters,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
 ) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1(params, sample)
 }
@@ -8158,8 +8183,8 @@ pub fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_outpu
     sample: &BfvFullBootstrapRawExtractedSampleV1,
     raw_sample_noise_bound: u128,
 ) -> Result<u128, BfvError> {
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
     bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_bound_from_raw_sample_bound_v1(
         params,
         raw_sample_noise_bound,
@@ -15607,7 +15632,21 @@ pub fn bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
     transform: &BfvFullBootstrapLinearTransformV1,
     input_noise_bound: u128,
 ) -> Result<u128, BfvError> {
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
+        validate_bfv_full_bootstrap_linear_transform_v1(params, transform)?;
+        if transform
+            .diagonals
+            .iter()
+            .any(|diagonal| diagonal.rotation_steps != 0)
+        {
+            validate_galois_key_set_metadata(
+                params,
+                galois_keys,
+                "BFV full-bootstrap bounded-noise linear transform bound",
+            )?;
+        }
+        return Err(err);
+    }
     validate_bfv_full_bootstrap_linear_transform_v1(params, transform)?;
     validate_bounded_noise_bound_within_decoding_capacity(
         params,
@@ -16864,7 +16903,10 @@ pub fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvFullBootstrapExecutionPrefixTraceV1, BfvError> {
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
+        validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
+        return Err(err);
+    }
     validate_bfv_full_bootstrap_execution_artifacts_preflight_v1(
         params,
         bootstrap_key,
@@ -17037,7 +17079,10 @@ pub fn bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
     galois_keys: &[BfvGaloisKey],
     input_noise_bound: u128,
 ) -> Result<BfvFullBootstrapExecutionPrefixTraceBoundsV1, BfvError> {
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
+        validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
+        return Err(err);
+    }
     validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
     let material = full_bootstrap_material_from_key(bootstrap_key)?;
     validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(params, material, artifacts)?;
@@ -17104,14 +17149,21 @@ fn validate_bfv_full_bootstrap_key_execution_preflight_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
 ) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
+    validate_bootstrap_key_entries(params, bootstrap_key)
+}
+
+fn validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+) -> Result<(), BfvError> {
     params.validate()?;
     if bootstrap_key.mode != BfvBootstrapKeyMode::FullBootstrapV1 {
         return Err(BfvError::InvalidParameters(
             "full BFV bootstrap execution requires FullBootstrapV1 bootstrap key".to_owned(),
         ));
     }
-    validate_bootstrap_key_admission_shape_metadata(params, bootstrap_key)?;
-    validate_bootstrap_key_entries(params, bootstrap_key)
+    validate_bootstrap_key_admission_shape_metadata(params, bootstrap_key)
 }
 
 fn full_bootstrap_artifacts_required_error() -> BfvError {
@@ -17262,7 +17314,10 @@ pub fn full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_ex
     bootstrap_key: &BfvBootstrapKey,
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
+        validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
+        return Err(err);
+    }
     validate_bfv_full_bootstrap_execution_preflight_v1(params, bootstrap_key, ciphertext)?;
     Err(full_bootstrap_artifacts_required_error())
 }
@@ -17310,7 +17365,10 @@ pub fn bfv_full_bootstrap_bounded_noise_output_bound_v1(
     bootstrap_key: &BfvBootstrapKey,
     input_noise_bound: u128,
 ) -> Result<u128, BfvError> {
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
+        validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
+        return Err(err);
+    }
     validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
     validate_bounded_noise_bound_within_decoding_capacity(
         params,
@@ -17812,6 +17870,7 @@ pub fn decrypt_bfv_full_bootstrap_raw_extracted_sample_with_bounded_noise_profil
     secret_key: &BfvSecretKey,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
 ) -> Result<BfvBoundedNoiseProfile, BfvError> {
+    validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     let scaled =
         decrypt_bfv_full_bootstrap_raw_extracted_sample_scaled_v1(params, secret_key, sample)?;
@@ -26407,6 +26466,44 @@ mod tests {
             round_refreshes: vec![zero_refresh],
             full_bootstrap_material: None,
         };
+        assert_error_contains(
+            bfv_full_bootstrap_bounded_noise_output_bound_v1(&insufficient, &bootstrap_key, 0),
+            "FullBootstrapV1",
+            "direct bounded full-bootstrap bounds must reject key mode before rounded capacity",
+        );
+        let malformed_full_bootstrap_artifacts = BfvFullBootstrapCircuitArtifactBundleV1 {
+            coefficient_to_slot_key: Vec::new(),
+            slot_to_coefficient_key: Vec::new(),
+            blind_rotation_key: Vec::new(),
+            sample_extraction_key: Vec::new(),
+            accumulator: Vec::new(),
+            proof_public_input_schema: Vec::new(),
+            arithmetic_air_constraint_system: Vec::new(),
+            prover_key: Vec::new(),
+            verifier_key: Vec::new(),
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
+                &insufficient,
+                &bootstrap_key,
+                &malformed_full_bootstrap_artifacts,
+                &[],
+                0,
+            ),
+            "FullBootstrapV1",
+            "artifact-aware bounded full-bootstrap prefix bounds must reject key mode before rounded capacity",
+        );
+        assert_error_contains(
+            apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &insufficient,
+                &bootstrap_key,
+                &malformed_full_bootstrap_artifacts,
+                &[],
+                &malformed_ciphertext,
+            ),
+            "FullBootstrapV1",
+            "artifact-aware bounded full-bootstrap prefix execution must reject key mode before rounded capacity",
+        );
         assert_fresh_capacity_error(
             validate_rotation_key_bounded_noise_zero_refresh(
                 &insufficient,
@@ -26422,6 +26519,66 @@ mod tests {
                 &bootstrap_key,
             ),
             "bounded bootstrap zero-refresh diagnostics must reject too-narrow profiles before secret-key shapes",
+        );
+        let full_bootstrap_capacity_refresh = BfvCiphertext {
+            c0: zero_poly(&insufficient),
+            c1: zero_poly(&insufficient),
+        };
+        let full_bootstrap_material = BfvFullBootstrapCircuitMaterialV1 {
+            circuit_id: "wrong-bfv-full-bootstrap-circuit".to_owned(),
+            parameter_digest: Hash::new(b"bounded-full-bootstrap-parameter-digest"),
+            rns_modulus_chain_digest: Hash::new(b"bounded-full-bootstrap-rns-digest"),
+            key_switch_decomposition_chain_digest: Hash::new(
+                b"bounded-full-bootstrap-key-switch-digest",
+            ),
+            coefficient_to_slot_key_digest: Hash::new(
+                b"bounded-full-bootstrap-coefficient-to-slot",
+            ),
+            slot_to_coefficient_key_digest: Hash::new(
+                b"bounded-full-bootstrap-slot-to-coefficient",
+            ),
+            blind_rotation_key_digest: Hash::new(b"bounded-full-bootstrap-blind-rotation"),
+            sample_extraction_key_digest: Hash::new(b"bounded-full-bootstrap-sample-extraction"),
+            accumulator_digest: Hash::new(b"bounded-full-bootstrap-accumulator"),
+            proof_public_input_schema_digest: Hash::new(b"bounded-full-bootstrap-proof-schema"),
+            arithmetic_air_constraint_system_artifact_digest: Hash::new(
+                b"bounded-full-bootstrap-air-constraint-system",
+            ),
+            proof_key_pair_commitment: Hash::new(b"bounded-full-bootstrap-proof-key-pair"),
+            prover_key_digest: Hash::new(b"bounded-full-bootstrap-prover-key"),
+            prover_key_material_commitment: Hash::new(b"bounded-full-bootstrap-prover-material"),
+            verifier_key_digest: Hash::new(b"bounded-full-bootstrap-verifier-key"),
+            verifier_key_material_commitment: Hash::new(
+                b"bounded-full-bootstrap-verifier-material",
+            ),
+            max_bootstrap_depth: 1,
+        };
+        let wrong_circuit_full_bootstrap_key = BfvBootstrapKey {
+            mode: BfvBootstrapKeyMode::FullBootstrapV1,
+            key_id: "bounded-noise-capacity-full-bootstrap".to_string(),
+            max_refresh_rounds: 1,
+            public_key_digest: Some(Hash::new(b"bounded-full-bootstrap-public-key")),
+            zero_refresh: full_bootstrap_capacity_refresh.clone(),
+            round_refreshes: vec![full_bootstrap_capacity_refresh],
+            full_bootstrap_material: Some(full_bootstrap_material),
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_bounded_noise_output_bound_v1(
+                &insufficient,
+                &wrong_circuit_full_bootstrap_key,
+                0,
+            ),
+            "circuit id",
+            "direct bounded full-bootstrap bounds must reject governed material metadata before rounded capacity",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &insufficient,
+                &wrong_circuit_full_bootstrap_key,
+                &malformed_ciphertext,
+            ),
+            "circuit id",
+            "direct bounded full-bootstrap execution must reject governed material metadata before rounded capacity",
         );
         let affine = BfvAffineCircuit {
             weights: vec![vec![1]],
@@ -26470,6 +26627,199 @@ mod tests {
             ),
             "rounds 2",
             "key-authorized bounded bootstrap bound propagation must reject public round metadata before rounded capacity",
+        );
+        let invalid_full_bootstrap_transform = BfvFullBootstrapLinearTransformV1 {
+            input_slot_count: insufficient.polynomial_degree,
+            output_slot_count: insufficient.polynomial_degree,
+            diagonals: Vec::new(),
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
+                &insufficient,
+                &[],
+                &invalid_full_bootstrap_transform,
+                0,
+            ),
+            "requires at least one diagonal",
+            "bounded full-bootstrap linear-transform bounds must reject public transform metadata before rounded capacity",
+        );
+        let valid_full_bootstrap_transform = BfvFullBootstrapLinearTransformV1 {
+            input_slot_count: insufficient.polynomial_degree,
+            output_slot_count: insufficient.polynomial_degree,
+            diagonals: vec![BfvFullBootstrapLinearTransformDiagonalV1 {
+                rotation_steps: 0,
+                plaintext: encode_packed_plaintext_slots(
+                    &insufficient,
+                    &vec![1; insufficient.degree()],
+                )
+                .expect("encode narrow packed full-bootstrap diagonal"),
+            }],
+        };
+        assert_fresh_capacity_error(
+            bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
+                &insufficient,
+                &[],
+                &valid_full_bootstrap_transform,
+                0,
+            ),
+            "valid bounded full-bootstrap linear-transform bounds must still reject too-narrow profiles",
+        );
+        let invalid_full_bootstrap_sample = BfvFullBootstrapSampleExtractionV1 {
+            source_slot_count: insufficient.polynomial_degree,
+            source_ciphertext_component_count: BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1,
+            extracted_coefficient_index: insufficient.polynomial_degree,
+            output_ciphertext_component_count: BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1,
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_raw_sample_extraction_bounded_noise_output_bound_v1(
+                &insufficient,
+                invalid_full_bootstrap_sample,
+                0,
+            ),
+            "less than polynomial_degree",
+            "bounded full-bootstrap raw-sample bounds must reject public sample metadata before rounded capacity",
+        );
+        assert_error_contains(
+            apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v1(
+                &insufficient,
+                &malformed_ciphertext,
+                invalid_full_bootstrap_sample,
+            ),
+            "less than polynomial_degree",
+            "bounded full-bootstrap raw-sample execution must reject public sample metadata before rounded capacity",
+        );
+        let invalid_full_bootstrap_switch_key = BfvFullBootstrapSampleExtractionSwitchKeyV1 {
+            sample_extraction: invalid_full_bootstrap_sample,
+            coefficient_entries: Vec::new(),
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_v1(
+                &insufficient,
+                &invalid_full_bootstrap_switch_key,
+                0,
+            ),
+            "less than polynomial_degree",
+            "bounded full-bootstrap sample-switch bounds must reject public sample metadata before rounded capacity",
+        );
+        let valid_full_bootstrap_sample = BfvFullBootstrapSampleExtractionV1 {
+            extracted_coefficient_index: 0,
+            ..invalid_full_bootstrap_sample
+        };
+        assert_fresh_capacity_error(
+            apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v1(
+                &insufficient,
+                &malformed_ciphertext,
+                valid_full_bootstrap_sample,
+            ),
+            "valid bounded full-bootstrap raw-sample execution metadata must still reject too-narrow profiles before ciphertext shapes",
+        );
+        let metadata_only_full_bootstrap_switch_key = BfvFullBootstrapSampleExtractionSwitchKeyV1 {
+            sample_extraction: valid_full_bootstrap_sample,
+            coefficient_entries: (0..insufficient.degree())
+                .map(
+                    |index| BfvFullBootstrapSampleExtractionSwitchKeyCoefficientV1 {
+                        secret_coefficient_index: u16::try_from(index)
+                            .expect("test index fits u16"),
+                        entries: Vec::new(),
+                    },
+                )
+                .collect(),
+        };
+        assert_fresh_capacity_error(
+            bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_v1(
+                &insufficient,
+                &metadata_only_full_bootstrap_switch_key,
+                0,
+            ),
+            "valid bounded full-bootstrap sample-switch metadata must still reject too-narrow profiles before key-entry shapes",
+        );
+        let invalid_full_bootstrap_raw_sample = BfvFullBootstrapRawExtractedSampleV1 {
+            source_coefficient_index: insufficient.polynomial_degree,
+            constant_term: 1,
+            secret_coefficients: vec![1; insufficient.degree()],
+        };
+        assert_error_contains(
+            repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_zero_ciphertext_v1(
+                &insufficient,
+                &invalid_full_bootstrap_raw_sample,
+            ),
+            "less than polynomial_degree",
+            "bounded full-bootstrap raw-sample repack must reject public sample metadata before rounded capacity",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_output_bound_v1(
+                &insufficient,
+                &invalid_full_bootstrap_raw_sample,
+                0,
+            ),
+            "less than polynomial_degree",
+            "bounded full-bootstrap raw-sample repack bounds must reject public sample metadata before rounded capacity",
+        );
+        assert_error_contains(
+            decrypt_bfv_full_bootstrap_raw_extracted_sample_with_bounded_noise_profile_v1(
+                &insufficient,
+                &malformed_secret_key,
+                &invalid_full_bootstrap_raw_sample,
+            ),
+            "less than polynomial_degree",
+            "bounded full-bootstrap raw-sample diagnostics must reject public sample metadata before rounded capacity",
+        );
+        assert_error_contains(
+            apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
+                &insufficient,
+                &metadata_only_full_bootstrap_switch_key,
+                &invalid_full_bootstrap_raw_sample,
+            ),
+            "less than polynomial_degree",
+            "bounded full-bootstrap sample-switch execution must reject public raw-sample metadata before rounded capacity",
+        );
+        let valid_full_bootstrap_raw_sample = BfvFullBootstrapRawExtractedSampleV1 {
+            source_coefficient_index: 0,
+            ..invalid_full_bootstrap_raw_sample
+        };
+        let mismatched_full_bootstrap_raw_sample = BfvFullBootstrapRawExtractedSampleV1 {
+            source_coefficient_index: 1,
+            ..valid_full_bootstrap_raw_sample.clone()
+        };
+        assert_error_contains(
+            apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
+                &insufficient,
+                &metadata_only_full_bootstrap_switch_key,
+                &mismatched_full_bootstrap_raw_sample,
+            ),
+            "does not match raw sample source_coefficient_index",
+            "bounded full-bootstrap sample-switch execution must reject public key/sample metadata mismatch before rounded capacity",
+        );
+        assert_fresh_capacity_error(
+            repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_zero_ciphertext_v1(
+                &insufficient,
+                &valid_full_bootstrap_raw_sample,
+            ),
+            "valid bounded full-bootstrap raw-sample repack metadata must still reject too-narrow profiles",
+        );
+        assert_fresh_capacity_error(
+            bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_output_bound_v1(
+                &insufficient,
+                &valid_full_bootstrap_raw_sample,
+                0,
+            ),
+            "valid bounded full-bootstrap raw-sample repack bounds metadata must still reject too-narrow profiles",
+        );
+        assert_fresh_capacity_error(
+            decrypt_bfv_full_bootstrap_raw_extracted_sample_with_bounded_noise_profile_v1(
+                &insufficient,
+                &malformed_secret_key,
+                &valid_full_bootstrap_raw_sample,
+            ),
+            "valid bounded full-bootstrap raw-sample diagnostics must still reject too-narrow profiles before secret-key shapes",
+        );
+        assert_fresh_capacity_error(
+            apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
+                &insufficient,
+                &metadata_only_full_bootstrap_switch_key,
+                &valid_full_bootstrap_raw_sample,
+            ),
+            "valid bounded full-bootstrap sample-switch execution metadata must still reject too-narrow profiles before key-entry shapes",
         );
 
         assert_fresh_capacity_error(

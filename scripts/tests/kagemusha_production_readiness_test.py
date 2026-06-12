@@ -11387,6 +11387,34 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(unsafe_dir, rendered)
         self.assertNotIn("\x1b", rendered)
 
+    def test_release_local_json_validator_rejects_alias_path_directly_without_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cases = [
+                (
+                    Path(temp) / "release-json\\alias" / "manifest.json",
+                    ["ABI-6 manifest path must not contain backslashes"],
+                ),
+                (
+                    Path(temp) / "repo" / ".." / "manifest.json",
+                    ["ABI-6 manifest path must be canonical"],
+                ),
+            ]
+
+            for manifest_path, expected_errors in cases:
+                with self.subTest(path=str(manifest_path)):
+                    errors = readiness.validate_release_local_json_file(
+                        manifest_path,
+                        "ABI-6 manifest",
+                    )
+                    rendered = json.dumps(errors)
+
+                    self.assertEqual(errors, expected_errors)
+                    self.assertNotIn("is missing", rendered)
+                    self.assertNotIn("metadata", rendered)
+                    self.assertNotIn(str(manifest_path), rendered)
+
     def test_release_local_json_validator_rejects_hardlink_metadata_failure_before_parse(
         self,
     ) -> None:
@@ -11492,6 +11520,34 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn("is missing", rendered)
         self.assertNotIn(unsafe_dir, rendered)
         self.assertNotIn("\x1b", rendered)
+
+    def test_repo_source_marker_validator_rejects_alias_path_directly_without_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cases = [
+                (
+                    Path(temp) / "source-marker\\alias.rs",
+                    ["ABI-7 core marker file path must not contain backslashes"],
+                ),
+                (
+                    Path(temp) / "repo" / ".." / "zk.rs",
+                    ["ABI-7 core marker file path must be canonical"],
+                ),
+            ]
+
+            for marker_path, expected_errors in cases:
+                with self.subTest(path=str(marker_path)):
+                    errors = readiness.validate_repo_source_marker_file(
+                        marker_path,
+                        "ABI-7 core marker file",
+                    )
+                    rendered = json.dumps(errors)
+
+                    self.assertEqual(errors, expected_errors)
+                    self.assertNotIn("is missing", rendered)
+                    self.assertNotIn("metadata", rendered)
+                    self.assertNotIn(str(marker_path), rendered)
 
     def test_repo_source_marker_text_rejects_symlink_directly_before_read(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -18669,6 +18725,48 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             errors,
         )
 
+    def test_compact_key_evidence_helper_rejects_future_generated_at_utc(
+        self,
+    ) -> None:
+        future_generated_at = (
+            readiness.dt.datetime.now(readiness.dt.timezone.utc).replace(microsecond=0)
+            + readiness.dt.timedelta(days=1)
+        ).isoformat().replace("+00:00", "Z")
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            out = artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--generated-at-utc",
+                        future_generated_at,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "--generated-at-utc must not be ahead of the helper clock skew allowance",
+            stderr.getvalue(),
+        )
+
+    def test_compact_key_generated_at_future_skew_validator_rejects_negative_limit(
+        self,
+    ) -> None:
+        errors = compact_key_helper._validate_generated_at_future_skew(None, -1)
+
+        self.assertEqual(
+            errors,
+            ["--max-generated-at-future-skew-seconds must be non-negative"],
+        )
+
     def test_compact_key_evidence_helper_rejects_appended_shell_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             artifact_dir = Path(temp) / "compact"
@@ -18853,6 +18951,182 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     self.assertFalse(out.exists())
                     self.assertFalse(artifact_dir.exists())
                     self.assertNotIn("control\nartifacts", rendered)
+
+    def test_evidence_artifact_dir_validators_reject_aliases_before_metadata(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        path_cases = (
+            (
+                Path("artifacts") / ".." / "kagemusha",
+                "--artifact-dir must be canonical",
+            ),
+            (
+                Path("artifacts\\kagemusha"),
+                "--artifact-dir must not contain backslashes",
+            ),
+        )
+        for helper in (evidence_helper, compact_key_helper):
+            for artifact_dir, expected_error in path_cases:
+                with self.subTest(helper=helper.__name__, artifact_dir=artifact_dir):
+                    with mock.patch.object(
+                        path_type,
+                        "lstat",
+                        side_effect=AssertionError(
+                            "artifact-dir metadata must not be read"
+                        ),
+                    ), mock.patch.object(
+                        helper.device_lab,
+                        "validate_no_symlink_ancestors",
+                        side_effect=AssertionError(
+                            "artifact-dir ancestor validation must not run"
+                        ),
+                    ):
+                        errors = helper.validate_artifact_dir_path(artifact_dir)
+
+                    rendered = "\n".join(errors)
+                    self.assertEqual(errors, [expected_error])
+                    self.assertNotIn(str(artifact_dir), rendered)
+
+    def test_evidence_output_corridors_reject_alias_paths_before_resolve(self) -> None:
+        path_type = type(Path("."))
+        path_cases = (
+            (
+                Path("output") / ".." / "evidence.json",
+                "must be canonical",
+            ),
+            (
+                Path("output\\evidence.json"),
+                "must not contain backslashes",
+            ),
+        )
+        for helper, filename in (
+            (evidence_helper, readiness.LINEAGE_PROOF_EVIDENCE_FILENAME),
+            (compact_key_helper, readiness.COMPACT_KEY_EVIDENCE_FILENAME),
+        ):
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                artifact_dir = root / "artifacts"
+                out = root / filename
+                for path, expected_suffix in path_cases:
+                    with self.subTest(
+                        helper=helper.__name__,
+                        path="out",
+                        alias=path,
+                    ):
+                        unsafe_out = root / path
+                        with mock.patch.object(
+                            path_type,
+                            "resolve",
+                            side_effect=AssertionError("resolve must not run"),
+                        ):
+                            errors = helper.validate_output_corridor(
+                                unsafe_out,
+                                artifact_dir,
+                            )
+                        rendered = "\n".join(errors)
+                        self.assertEqual(errors, [f"--out {expected_suffix}"])
+                        self.assertFalse(unsafe_out.exists())
+                        self.assertNotIn(str(unsafe_out), rendered)
+
+                    with self.subTest(
+                        helper=helper.__name__,
+                        path="artifact_dir",
+                        alias=path,
+                    ):
+                        unsafe_artifact_dir = root / path
+                        with mock.patch.object(
+                            path_type,
+                            "resolve",
+                            side_effect=AssertionError("resolve must not run"),
+                        ):
+                            errors = helper.validate_output_corridor(
+                                out,
+                                unsafe_artifact_dir,
+                            )
+                        rendered = "\n".join(errors)
+                        self.assertEqual(
+                            errors,
+                            [f"--artifact-dir {expected_suffix}"],
+                        )
+                        self.assertFalse(out.exists())
+                        self.assertNotIn(str(unsafe_artifact_dir), rendered)
+
+    def test_lineage_proof_input_validator_rejects_alias_proof_log_before_metadata(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        cases = (
+            (
+                Path("artifacts") / ".." / "record-archive-proof.log",
+                "--proof-log must be canonical",
+            ),
+            (
+                Path("artifacts\\record-archive-proof.log"),
+                "--proof-log must not contain backslashes",
+            ),
+        )
+        artifact_dir = Path("artifacts")
+        for proof_log, expected_error in cases:
+            with self.subTest(proof_log=proof_log):
+                with mock.patch.object(
+                    path_type,
+                    "lstat",
+                    side_effect=AssertionError("artifact-dir metadata must not be read"),
+                ), mock.patch.object(
+                    evidence_helper.device_lab,
+                    "validate_no_symlink_ancestors",
+                    side_effect=AssertionError(
+                        "proof-log ancestor validation must not run"
+                    ),
+                ), mock.patch.object(
+                    path_type,
+                    "resolve",
+                    side_effect=AssertionError("resolve must not run"),
+                ):
+                    errors = evidence_helper.validate_lineage_input_paths(
+                        artifact_dir,
+                        proof_log,
+                    )
+
+                rendered = "\n".join(errors)
+                self.assertEqual(errors, [expected_error])
+                self.assertNotIn(str(proof_log), rendered)
+
+    def test_compact_key_generator_log_path_rejects_alias_before_metadata(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        cases = (
+            (
+                Path("compact") / ".." / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME,
+                "--generator-log must be canonical",
+            ),
+            (
+                Path(f"compact\\{readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}"),
+                "--generator-log must not contain backslashes",
+            ),
+        )
+        artifact_dir = Path("compact")
+        for generator_log, expected_error in cases:
+            with self.subTest(generator_log=generator_log):
+                with mock.patch.object(
+                    path_type,
+                    "lstat",
+                    side_effect=AssertionError("artifact-dir metadata must not be read"),
+                ), mock.patch.object(
+                    path_type,
+                    "resolve",
+                    side_effect=AssertionError("resolve must not run"),
+                ):
+                    errors = compact_key_helper.validate_generator_log_path(
+                        artifact_dir,
+                        generator_log,
+                    )
+
+                rendered = "\n".join(errors)
+                self.assertEqual(errors, [expected_error])
+                self.assertNotIn(str(generator_log), rendered)
 
     def test_compact_key_evidence_helper_rejects_symlinked_output_leaf(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -21095,6 +21369,35 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(unsafe_name, rendered)
         self.assertNotIn("\x1b", rendered)
 
+    def test_lineage_readiness_sha256_file_rejects_alias_path_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cases = [
+                (
+                    Path(temp) / "lineage\\artifact.norito",
+                    ["lineage rollup artifact path must not contain backslashes"],
+                ),
+                (
+                    Path(temp) / "lineage" / ".." / "artifact.norito",
+                    ["lineage rollup artifact path must be canonical"],
+                ),
+            ]
+
+            for artifact, expected_errors in cases:
+                with self.subTest(path=str(artifact)):
+                    digest, errors = readiness._sha256_file(
+                        artifact,
+                        "lineage rollup artifact",
+                    )
+                    rendered = "\n".join(errors)
+
+                    self.assertIsNone(digest)
+                    self.assertEqual(errors, expected_errors)
+                    self.assertNotIn("is missing", rendered)
+                    self.assertNotIn("metadata", rendered)
+                    self.assertNotIn(str(artifact), rendered)
+
     def test_lineage_readiness_sha256_file_rejects_symlink_directly(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -22298,6 +22601,54 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
                     stderr.getvalue(),
                 )
+
+    def test_lineage_proof_evidence_helper_rejects_future_generated_at_utc(self) -> None:
+        future_generated_at = (
+            readiness.dt.datetime.now(readiness.dt.timezone.utc).replace(microsecond=0)
+            + readiness.dt.timedelta(days=1)
+        ).isoformat().replace("+00:00", "Z")
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            create_lineage_artifact_files(artifact_dir)
+            proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                "record_archive_proof"
+            ]
+            write_passing_lineage_proof_log(proof_log)
+            out = artifact_dir / "lineage-proof-evidence.json"
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--proof-log",
+                        str(proof_log),
+                        "--elapsed-seconds",
+                        "14400.5",
+                        "--generated-at-utc",
+                        future_generated_at,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "--generated-at-utc must not be ahead of the helper clock skew allowance",
+            stderr.getvalue(),
+        )
+
+    def test_lineage_proof_generated_at_future_skew_validator_rejects_negative_limit(
+        self,
+    ) -> None:
+        errors = evidence_helper._validate_generated_at_future_skew(None, -1)
+
+        self.assertEqual(
+            errors,
+            ["--max-generated-at-future-skew-seconds must be non-negative"],
+        )
 
     def test_lineage_proof_evidence_helper_rejects_runtime_keygen_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -24574,6 +24925,53 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ],
         )
         self.assertFalse(output_exists)
+
+    def test_validate_summary_output_path_rejects_aliases_before_parent_metadata(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            (
+                lambda root: root / "token=secret" / "summary.json",
+                "--summary-out must not contain secret-looking material",
+            ),
+            (
+                lambda root: root / "summary\x1b.json",
+                "--summary-out must not contain control characters",
+            ),
+            (
+                lambda root: root / "summary\\alias.json",
+                "--summary-out must not contain backslashes",
+            ),
+            (
+                lambda root: root / ".." / "summary.json",
+                "--summary-out must be a canonical path",
+            ),
+        )
+        try:
+            for path_factory, expected_message in cases:
+                with self.subTest(expected_message=expected_message):
+                    with tempfile.TemporaryDirectory() as temp:
+                        summary_path = path_factory(Path(temp))
+
+                        def failing_lstat(path: Path, *args, **kwargs):
+                            raise OSError("summary parent metadata should not be read")
+
+                        path_type.lstat = failing_lstat
+
+                        errors = readiness.validate_summary_output_path(summary_path)
+                        self.assertEqual(
+                            errors,
+                            [
+                                {
+                                    "code": "kagemusha_summary_out_path_invalid",
+                                    "message": expected_message,
+                                }
+                            ],
+                        )
+        finally:
+            path_type.lstat = original_lstat
 
     def test_write_summary_uses_lstat_before_parent_is_dir_preflight(self) -> None:
         path_type = type(Path("."))

@@ -39,7 +39,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-use crate::{KeyPair, SessionKey};
+use crate::{KeyPair, SessionKey, kex::is_x25519_low_order_public_key};
 
 /// Domain separation tag for transcript hashing.
 const TRANSCRIPT_DOMAIN: &[u8] = b"soranet.transcript.v1";
@@ -60,7 +60,6 @@ const ED25519_SIGNATURE_LEN: usize = 64;
 const NOISE_SECRET_LEN: usize = 32;
 const NOISE_PADDING_BLOCK: usize = 1024;
 const TRANSCRIPT_BINDING_LEN: usize = 32;
-const X25519_LOW_ORDER_CHECK_SECRET: [u8; NOISE_SECRET_LEN] = [1_u8; NOISE_SECRET_LEN];
 
 const STEP_NOTE_HYBRID_INIT: &str = "Client sends NK2 hybrid init";
 const STEP_NOTE_HYBRID_RESPONSE: &str = "Relay completes NK2 hybrid handshake";
@@ -251,7 +250,14 @@ fn fill_random<R: TryCryptoRng>(
         .map_err(|err| HarnessError::RandomBytes {
             operation,
             message: err.to_string(),
-        })
+        })?;
+    if !dest.is_empty() && dest.iter().all(|&byte| byte == 0) {
+        return Err(HarnessError::RandomBytes {
+            operation,
+            message: "rng returned all-zero material".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Parse a capability vector into structured TLVs.
@@ -4922,12 +4928,7 @@ fn decode_noise_public_key(
 
 fn noise_public_key_is_low_order(public: &[u8; NOISE_SECRET_LEN]) -> bool {
     let public_key = X25519PublicKey::from(*public);
-    let probe_secret = StaticSecret::from(X25519_LOW_ORDER_CHECK_SECRET);
-    probe_secret
-        .diffie_hellman(&public_key)
-        .as_bytes()
-        .iter()
-        .all(|&byte| byte == 0)
+    is_x25519_low_order_public_key(&public_key)
 }
 
 struct MessageCursor<'a> {
@@ -5032,6 +5033,46 @@ mod tests {
     }
 
     impl TryCryptoRng for FailingTryRng {}
+
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            dst.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedTryRng {}
+
+    #[test]
+    fn fill_random_rejects_all_zero_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+        let mut dest = [0xFF; 32];
+
+        let err = fill_random(&mut rng, "building client hello nonce", &mut dest)
+            .expect_err("all-zero fill must fail");
+
+        match err {
+            HarnessError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "building client hello nonce");
+                assert_eq!(message, "rng returned all-zero material");
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
 
     #[test]
     fn encode_signature_returns_prefixed_base64() {
@@ -7375,6 +7416,25 @@ mod tests {
     }
 
     #[test]
+    fn build_client_hello_rejects_all_zero_nonce_material() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut rng = FixedTryRng { byte: 0 };
+
+        let err = match build_client_hello(&params, &mut rng) {
+            Ok(_) => panic!("expected all-zero client nonce failure"),
+            Err(err) => err,
+        };
+
+        match err {
+            HarnessError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "building client hello nonce");
+                assert_eq!(message, "rng returned all-zero material");
+            }
+            other => panic!("expected all-zero client nonce RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn process_client_hello_reports_relay_rng_failure() {
         let params = RuntimeParams::soranet_defaults();
         let mut client_rng = StdRng::seed_from_u64(22);
@@ -7397,6 +7457,29 @@ mod tests {
                 );
             }
             other => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn process_client_hello_rejects_all_zero_relay_nonce_material() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut client_rng = StdRng::seed_from_u64(23);
+        let (client_hello, _client_state) =
+            build_client_hello(&params, &mut client_rng).expect("client hello");
+        let relay_keys = KeyPair::random();
+        let mut relay_rng = FixedTryRng { byte: 0 };
+
+        let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut relay_rng) {
+            Ok(_) => panic!("expected all-zero relay nonce failure"),
+            Err(err) => err,
+        };
+
+        match err {
+            HarnessError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "building relay nonce");
+                assert_eq!(message, "rng returned all-zero material");
+            }
+            other => panic!("expected all-zero relay nonce RNG failure, got {other:?}"),
         }
     }
 

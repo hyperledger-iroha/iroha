@@ -1835,7 +1835,14 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
                 debugDescription: "payload.account_id must not be empty."
             )
         }
-        accountId = trimmedAccountId
+        guard trimmedAccountId == rawAccountId else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .accountId,
+                in: container,
+                debugDescription: "payload.account_id must not contain surrounding whitespace."
+            )
+        }
+        accountId = rawAccountId
         execution = try container.decode(
             ToriiIdentifierResolutionExecutionPayload.self,
             forKey: .execution

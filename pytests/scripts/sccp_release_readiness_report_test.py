@@ -1615,7 +1615,18 @@ def test_active_launch_evm_live_metadata_requires_canonical_decimal_chain_id() -
     }
     assert report._active_launch_evm_live_metadata_blockers(label, valid_lane) == []
 
-    for noncanonical_chain_id in ("0x1", "01", " 1", "1 ", 1):
+    noncanonical_chain_ids = (
+        "0x1",
+        "01",
+        " 1",
+        "1 ",
+        "+1",
+        "1.0",
+        "\uff11",
+        "\u0661",
+        1,
+    )
+    for noncanonical_chain_id in noncanonical_chain_ids:
         lane = {
             "evm_live_metadata": {
                 "source_rpc_chain_id": noncanonical_chain_id,
@@ -1629,6 +1640,34 @@ def test_active_launch_evm_live_metadata_requires_canonical_decimal_chain_id() -
 
         assert expected_source_blocker in blockers
         assert expected_destination_blocker in blockers
+
+    for field, expected_blocker, absent_blocker in (
+        (
+            "source_rpc_chain_id",
+            expected_source_blocker,
+            expected_destination_blocker,
+        ),
+        (
+            "destination_rpc_chain_id",
+            expected_destination_blocker,
+            expected_source_blocker,
+        ),
+    ):
+        for noncanonical_chain_id in noncanonical_chain_ids:
+            lane = {
+                "evm_live_metadata": {
+                    "source_rpc_chain_id": expected_chain_id,
+                    "source_block_tag": "finalized",
+                    "destination_rpc_chain_id": expected_chain_id,
+                    "destination_block_tag": "finalized",
+                },
+            }
+            lane["evm_live_metadata"][field] = noncanonical_chain_id
+
+            blockers = report._active_launch_evm_live_metadata_blockers(label, lane)
+
+            assert expected_blocker in blockers
+            assert absent_blocker not in blockers
 
 
 def fixed_hex32(seed: int) -> str:
@@ -2036,6 +2075,36 @@ def test_release_readiness_report_guards_public_discovery_documentation_gate_inv
             "(`EVM`, `Solana`, `TON`, or `TRON`)"
         )
         in error
+        for error in errors
+    )
+
+
+def test_release_readiness_report_guards_openapi_no_support_discovery_note(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin Torii OpenAPI no-support wording."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    required_markers = verifier.SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS[1][1]
+    removed_marker = (
+        "SCCP \\\n"
+        "             will not support Sub&#115;trate/Pol&#107;adot networks for now."
+    )
+    openapi = tmp_path / "openapi.rs"
+    openapi.write_text(
+        "\n".join(marker for marker in required_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+
+    errors = report._sccp_public_discovery_documentation_gate_inventory_errors(
+        ((openapi, required_markers),)
+    )
+
+    assert any(
+        "SCCP public discovery documentation source inventory" in error
+        and str(openapi) in error
+        and removed_marker in error
         for error in errors
     )
 
@@ -3289,9 +3358,7 @@ def test_release_readiness_report_guards_active_launch_checklist_schema_gate_inv
         for error in canary_test_errors
     )
 
-    evm_live_test_marker = (
-        'for noncanonical_chain_id in ("0x1", "01", " 1", "1 ", 1):'
-    )
+    evm_live_test_marker = "assert absent_blocker not in blockers"
     sparse_evm_live_tests = tmp_path / "sccp_release_readiness_report_evm_live_test.py"
     sparse_evm_live_tests.write_text(
         "\n".join(
@@ -3488,7 +3555,7 @@ def test_release_readiness_report_guards_release_manifest_artifact_set_order_gat
     )
     assert any(
         "SCCP release manifest artifact-set/order source inventory" in error
-        and "missing marker: manifest artifact bytes must be a non-negative integer"
+        and "missing marker: manifest artifact bytes must be a positive integer"
         in error
         for error in errors
     )
@@ -13335,15 +13402,118 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
     report = load_report_module()
     evidence, _ = write_active_launch_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
-    cases = (
+    receipt_block_number_exactness_cases = (
         (
-            "evidence_hash",
-            "0x" + "00" * 32,
-            "route canary evidence hash must be a canonical non-zero bytes32 hex string",
+            "receipt_block_number",
+            "10144",
+            "route canary receipt block number must be a positive integer",
         ),
+        (
+            "receipt_block_number",
+            "0x1",
+            "route canary receipt block number must be a positive integer",
+        ),
+        (
+            "receipt_block_number",
+            "+1",
+            "route canary receipt block number must be a positive integer",
+        ),
+        (
+            "receipt_block_number",
+            "\uff11",
+            "route canary receipt block number must be a positive integer",
+        ),
+        (
+            "receipt_block_number",
+            True,
+            "route canary receipt block number must be a positive integer",
+        ),
+        (
+            "receipt_block_number",
+            False,
+            "route canary receipt block number must be a positive integer",
+        ),
+    )
+    route_canary_evidence_bound_exactness_cases = (
+        (
+            "evidence_bound",
+            "true",
+            "route canary evidence is not bound",
+        ),
+        (
+            "evidence_bound",
+            1,
+            "route canary evidence is not bound",
+        ),
+        (
+            "evidence_bound",
+            False,
+            "route canary evidence is not bound",
+        ),
+        (
+            "evidence_bound",
+            None,
+            "route canary evidence is not bound",
+        ),
+    )
+    route_canary_receipt_finalized_exactness_cases = (
+        (
+            "receipt_block_finalized",
+            False,
+            "route canary receipt block must be finalized",
+        ),
+        (
+            "receipt_block_finalized",
+            "true",
+            "route canary receipt block must be finalized",
+        ),
+        (
+            "receipt_block_finalized",
+            1,
+            "route canary receipt block must be finalized",
+        ),
+        (
+            "receipt_block_finalized",
+            None,
+            "route canary receipt block must be finalized",
+        ),
+    )
+    route_canary_status_exactness_cases = (
+        (
+            "status",
+            None,
+            "route canary status is not passed",
+        ),
+        (
+            "status",
+            "",
+            "route canary status is not passed",
+        ),
+        (
+            "status",
+            " passed ",
+            "route canary status is not passed",
+        ),
+        (
+            "status",
+            "passed ",
+            "route canary status is not passed",
+        ),
+        (
+            "status",
+            1,
+            "route canary status is not passed",
+        ),
+    )
+    route_canary_evidence_source_exactness_cases = (
         (
             "evidence_source",
             "operator_note",
+            "route canary evidence source must be evm_message_proof_accepted_transaction",
+        ),
+        (
+            "evidence_source",
+            report.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE.upper(),
             "route canary evidence source must be evm_message_proof_accepted_transaction",
         ),
         (
@@ -13365,6 +13535,45 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "evidence_source",
             123,
             "route canary evidence source must be a non-empty canonical string",
+        ),
+    )
+    route_canary_hex32_exactness_cases = (
+        (
+            "evidence_hash",
+            None,
+            "route canary evidence hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "evidence_hash",
+            fixed_hex32(0x30).upper(),
+            "route canary evidence hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "transaction_hash",
+            "0x" + "00" * 32,
+            "route canary transaction hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "receipt_block_hash",
+            fixed_hex32(0x32).upper(),
+            "route canary receipt block hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "block_receipts_root",
+            None,
+            "route canary block receipts root must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "message_id",
+            1,
+            "route canary message id must be a canonical non-zero bytes32 hex string",
+        ),
+    )
+    cases = (
+        (
+            "evidence_hash",
+            "0x" + "00" * 32,
+            "route canary evidence hash must be a canonical non-zero bytes32 hex string",
         ),
         (
             "transaction_hash",
@@ -13396,16 +13605,12 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             0,
             "route canary receipt block number must be a positive integer",
         ),
-        (
-            "receipt_block_number",
-            "10144",
-            "route canary receipt block number must be a positive integer",
-        ),
-        (
-            "receipt_block_finalized",
-            False,
-            "route canary receipt block must be finalized",
-        ),
+        *receipt_block_number_exactness_cases,
+        *route_canary_evidence_bound_exactness_cases,
+        *route_canary_status_exactness_cases,
+        *route_canary_evidence_source_exactness_cases,
+        *route_canary_hex32_exactness_cases,
+        *route_canary_receipt_finalized_exactness_cases,
     )
 
     for field, value, expected_blocker in cases:
@@ -13445,6 +13650,23 @@ def test_release_readiness_report_blocks_malformed_active_route_allowlist_bindin
     report = load_report_module()
     evidence, _ = write_active_launch_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    expected_match_flag_exactness_cases = (
+        (
+            "route_allowlist.expected_route_allowlist_hash_matches",
+            "true",
+            "route allowlist expected hash match flag must be true",
+        ),
+        (
+            "route_allowlist.expected_route_allowlist_hash_matches",
+            1,
+            "route allowlist expected hash match flag must be true",
+        ),
+        (
+            "route_allowlist.expected_route_allowlist_hash_matches",
+            None,
+            "route allowlist expected hash match flag must be true",
+        ),
+    )
     cases = (
         (
             "route_allowlist.route_allowlist_hash",
@@ -13466,6 +13688,7 @@ def test_release_readiness_report_blocks_malformed_active_route_allowlist_bindin
             False,
             "route allowlist expected hash match flag must be true",
         ),
+        *expected_match_flag_exactness_cases,
         (
             "route_allowlist.hash_mismatch",
             fixed_hex32(0x42),
@@ -13538,6 +13761,23 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
     report = load_report_module()
     evidence, _ = write_active_launch_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    expected_destination_match_flag_exactness_cases = (
+        (
+            "destination_binding.expected_destination_binding_hash_matches",
+            "true",
+            "governed deployment destination binding expected hash match flag must be true",
+        ),
+        (
+            "destination_binding.expected_destination_binding_hash_matches",
+            1,
+            "governed deployment destination binding expected hash match flag must be true",
+        ),
+        (
+            "destination_binding.expected_destination_binding_hash_matches",
+            None,
+            "governed deployment destination binding expected hash match flag must be true",
+        ),
+    )
     cases = (
         (
             "source_record_hashes.source_verifier_material_hash",
@@ -13569,6 +13809,7 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             False,
             "governed deployment destination binding expected hash match flag must be true",
         ),
+        *expected_destination_match_flag_exactness_cases,
         (
             "destination_binding.hash_mismatch",
             fixed_hex32(0x52),
@@ -13654,6 +13895,28 @@ def test_release_readiness_report_blocks_malformed_active_required_record_metada
     report = load_report_module()
     evidence, _ = write_active_launch_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    required_record_flag_exactness_cases = (
+        (
+            "records.source_verifier_material",
+            "yes",
+            "missing source verifier material",
+        ),
+        (
+            "records.source_adapter_deployment",
+            1,
+            "missing source adapter deployment",
+        ),
+        (
+            "records.destination_rollout",
+            False,
+            "missing destination rollout",
+        ),
+        (
+            "records.route_allowlist",
+            None,
+            "missing route allowlist",
+        ),
+    )
     cases = (
         (
             "domain.string",
@@ -13685,26 +13948,7 @@ def test_release_readiness_report_blocks_malformed_active_required_record_metada
             None,
             "required record summary is missing",
         ),
-        (
-            "records.source_verifier_material",
-            "yes",
-            "missing source verifier material",
-        ),
-        (
-            "records.source_adapter_deployment",
-            1,
-            "missing source adapter deployment",
-        ),
-        (
-            "records.destination_rollout",
-            False,
-            "missing destination rollout",
-        ),
-        (
-            "records.route_allowlist",
-            None,
-            "missing route allowlist",
-        ),
+        *required_record_flag_exactness_cases,
         (
             "records.operator_override",
             True,
@@ -14094,43 +14338,105 @@ def test_release_readiness_report_blocks_wasm_or_remote_native_evm_prover_bundle
 ) -> None:
     """Metadata-only callbacks must not satisfy the native no-WASM prover gate."""
 
+    missing = object()
     evidence, _ = write_active_launch_evidence(tmp_path)
-    native_bundle = write_native_evm_prover_bundle(
-        tmp_path,
-        evidence,
-        overrides={
-            "no_wasm": False,
-            "remote_prover_required": True,
-        },
+    native_bundle_boolean_exactness_cases = (
+        (
+            "no_wasm",
+            False,
+            "native EVM Groth16 prover bundle no_wasm must be true",
+        ),
+        (
+            "no_wasm",
+            "true",
+            "native EVM Groth16 prover bundle no_wasm must be true",
+        ),
+        (
+            "no_wasm",
+            1,
+            "native EVM Groth16 prover bundle no_wasm must be true",
+        ),
+        (
+            "no_wasm",
+            None,
+            "native EVM Groth16 prover bundle no_wasm must be true",
+        ),
+        (
+            "no_wasm",
+            missing,
+            "native EVM Groth16 prover bundle no_wasm must be true",
+        ),
+        (
+            "remote_prover_required",
+            True,
+            "native EVM Groth16 prover bundle remote_prover_required must be false",
+        ),
+        (
+            "remote_prover_required",
+            "false",
+            "native EVM Groth16 prover bundle remote_prover_required must be false",
+        ),
+        (
+            "remote_prover_required",
+            0,
+            "native EVM Groth16 prover bundle remote_prover_required must be false",
+        ),
+        (
+            "remote_prover_required",
+            None,
+            "native EVM Groth16 prover bundle remote_prover_required must be false",
+        ),
+        (
+            "remote_prover_required",
+            missing,
+            "native EVM Groth16 prover bundle remote_prover_required must be false",
+        ),
     )
 
-    completed = subprocess.run(
-        [
-            "python3",
-            str(SCRIPT),
-            "--format",
-            "json",
-            "--phase-result",
-            "all=passed",
-            "--native-evm-prover-bundle",
-            str(native_bundle),
-            str(evidence),
-        ],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    for index, (field, value, expected_blocker) in enumerate(
+        native_bundle_boolean_exactness_cases
+    ):
+        case_dir = tmp_path / f"native-bundle-boolean-{index}"
+        case_dir.mkdir()
+        native_bundle = write_native_evm_prover_bundle(case_dir, evidence)
+        if value is missing:
+            payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+            payload.pop(field, None)
+            native_bundle.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        else:
+            payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+            payload[field] = value
+            native_bundle.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
 
-    assert completed.returncode == 1
-    payload = json.loads(completed.stdout)
-    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
-    assert "native EVM Groth16 prover bundle no_wasm must be true" in blockers
-    assert (
-        "native EVM Groth16 prover bundle remote_prover_required must be false"
-        in blockers
-    )
-    assert payload["release_checklist"]["ready"] is False
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--format",
+                "json",
+                "--phase-result",
+                "all=passed",
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 1, field
+        payload = json.loads(completed.stdout)
+        blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+        assert expected_blocker in blockers, field
+        assert payload["release_checklist"]["ready"] is False, field
 
 
 def test_release_readiness_report_blocks_duplicate_native_evm_prover_json_keys(

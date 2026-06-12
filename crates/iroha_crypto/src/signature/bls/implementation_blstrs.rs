@@ -31,7 +31,23 @@ fn checked_os_seed(context: &str) -> Result<Zeroizing<Vec<u8>>, Error> {
     OsRng
         .try_fill_bytes(seed.as_mut_slice())
         .map_err(|err| Error::KeyGen(format!("BLS OS RNG failed during {context}: {err}")))?;
+    ensure_bls_seed_material_not_all_zero(context, seed.as_slice())?;
     Ok(seed)
+}
+
+fn bls_seed_material_is_all_zero(seed: &[u8]) -> bool {
+    !seed.is_empty() && seed.iter().all(|&byte| byte == 0)
+}
+
+fn bls_seed_material_all_zero_error(context: &str) -> Error {
+    Error::KeyGen(format!("BLS {context} seed material must not be all zero"))
+}
+
+fn ensure_bls_seed_material_not_all_zero(context: &str, seed: &[u8]) -> Result<(), Error> {
+    if bls_seed_material_is_all_zero(seed) {
+        return Err(bls_seed_material_all_zero_error(context));
+    }
+    Ok(())
 }
 
 pub trait BlsConfiguration {
@@ -118,6 +134,12 @@ impl<C: BlsConfiguration> BlsImpl<C> {
                 Self::secret_key_from_generated_bytes(bytes.as_slice())?
             }
             KeyGenOption::UseSeed(ref mut seed) => {
+                if bls_seed_material_is_all_zero(seed) {
+                    seed.zeroize();
+                    return Err(bls_seed_material_all_zero_error(
+                        "deterministic key generation",
+                    ));
+                }
                 let bytes = Zeroizing::new(if C::NORMAL {
                     w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_seed(seed).to_bytes()
                 } else {

@@ -694,10 +694,15 @@ def _validate_release_local_json_file_for_read(
 ) -> tuple[os.stat_result | None, list[str]]:
     """Reject local release JSON files and return the read identity."""
 
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         return None, [f"{label} path must not contain secret-looking material"]
-    if device_lab._contains_control_character(str(path)):
+    if device_lab._contains_control_character(path_text):
         return None, [f"{label} path must not contain control characters"]
+    if "\\" in path_text:
+        return None, [f"{label} path must not contain backslashes"]
+    if ".." in path.parts:
+        return None, [f"{label} path must be canonical"]
     release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(
         path,
         f"{label} ancestor directory",
@@ -729,10 +734,15 @@ def _validate_repo_source_marker_file_for_read(
 ) -> tuple[os.stat_result | None, list[str]]:
     """Reject checked-in marker files that could alias external bytes."""
 
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         return None, [f"{label} path must not contain secret-looking material"]
-    if device_lab._contains_control_character(str(path)):
+    if device_lab._contains_control_character(path_text):
         return None, [f"{label} path must not contain control characters"]
+    if "\\" in path_text:
+        return None, [f"{label} path must not contain backslashes"]
+    if ".." in path.parts:
+        return None, [f"{label} path must be canonical"]
     errors = [
         *device_lab.validate_no_symlink_ancestors(
             path,
@@ -1074,10 +1084,15 @@ def _validate_lineage_local_file_for_read(
 ) -> tuple[os.stat_result | None, list[str]]:
     """Reject local lineage evidence files that could alias external bytes."""
 
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         return None, [f"{label} path must not contain secret-looking material"]
-    if device_lab._contains_control_character(str(path)):
+    if device_lab._contains_control_character(path_text):
         return None, [f"{label} path must not contain control characters"]
+    if "\\" in path_text:
+        return None, [f"{label} path must not contain backslashes"]
+    if ".." in path.parts:
+        return None, [f"{label} path must be canonical"]
     ancestor_errors = device_lab.validate_no_symlink_ancestors(
         path,
         f"{label} ancestor directory",
@@ -3732,6 +3747,13 @@ def validate_summary_output_path(path: Path) -> list[dict[str, Any]]:
     )
     if secret_blocker is not None:
         return [secret_blocker]
+    shape_blocker = _cli_path_shape_blocker(
+        str(path),
+        label="--summary-out",
+        code=SUMMARY_OUT_PATH_INVALID_CODE,
+    )
+    if shape_blocker is not None:
+        return [shape_blocker]
     parent = path.parent
     parent_exists, parent_blockers = _validate_summary_output_parent(path)
     if parent_blockers:
