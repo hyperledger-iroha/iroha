@@ -290,6 +290,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/OfflineQrStream.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineQrStreamScan.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineTransferDiagnostics.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift",
@@ -315,6 +316,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineQrStreamTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineRevocationBundleTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountIdLiteral.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/CanonicalRequestSigner.java",
@@ -5577,6 +5579,7 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Sources/IrohaSwift/OfflineQrStream.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineQrStreamScan.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift",
+        "IrohaSwift/Sources/IrohaSwift/OfflineTransferDiagnostics.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
@@ -5602,6 +5605,7 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineQrStreamTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineRevocationBundleTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift",
     ):
         require(

@@ -184,6 +184,14 @@ def _path_shape_errors(path: Path, label: str) -> list[str]:
         return [f"{label} must not contain secret-looking material"]
     if device_lab._contains_control_character(text):
         return [f"{label} must not contain control characters"]
+    if "\\" in text:
+        if label == "raw output root path":
+            return ["raw output root path must not contain backslashes"]
+        return [f"{label} must not contain backslashes"]
+    if ".." in path.parts:
+        if label == "raw output root path":
+            return ["raw output root path must be canonical"]
+        return [f"{label} must be canonical"]
     return []
 
 
@@ -264,7 +272,12 @@ def _validate_raw_json_true(
         errors.append(f"{label} {field} must be true")
 
 
-def _validate_raw_json_artifacts(slot_path: Path, slot_id: str, errors: list[str]) -> None:
+def _validate_raw_json_artifacts(
+    slot_path: Path,
+    slot_id: str,
+    errors: list[str],
+    expected_app_package_name: str | None = None,
+) -> None:
     queue = device_lab._load_json(
         slot_path / "queue" / "pending_queue.json",
         "queue/pending_queue.json",
@@ -314,6 +327,19 @@ def _validate_raw_json_artifacts(slot_path: Path, slot_id: str, errors: list[str
                     telemetry.get(field),
                     f"telemetry/telemetry.json {field}",
                 )
+            )
+        telemetry_app_package_name = telemetry.get("app_package_name")
+        if (
+            expected_app_package_name is not None
+            and isinstance(telemetry_app_package_name, str)
+            and telemetry_app_package_name == telemetry_app_package_name.strip()
+            and not device_lab._contains_control_character(telemetry_app_package_name)
+            and not device_lab.SECRET_RE.search(telemetry_app_package_name)
+            and telemetry_app_package_name != expected_app_package_name
+        ):
+            errors.append(
+                "telemetry/telemetry.json app_package_name must match "
+                "attestation/result.json app_package_name"
             )
 
     d2d = device_lab._load_json(
@@ -408,6 +434,11 @@ def _validate_raw_status_ndjson(status_text: str, slot_id: str, errors: list[str
         if not isinstance(status_event, dict):
             errors.append(f"telemetry/status.ndjson line {line_no} must be a JSON object")
             continue
+        for field in sorted(set(status_event) - device_lab.STATUS_EVENT_FIELDS):
+            errors.append(
+                f"telemetry/status.ndjson line {line_no} contains unexpected field "
+                f"{device_lab._display_path(field)}"
+            )
         status = status_event.get("status")
         if not isinstance(status, str) or not status:
             errors.append(f"telemetry/status.ndjson line {line_no} status must be a non-empty string")
@@ -422,18 +453,24 @@ def _validate_raw_status_ndjson(status_text: str, slot_id: str, errors: list[str
             errors.append(f"telemetry/status.ndjson line {line_no} status must be lowercase")
             continue
         slot_value = status_event.get("slot_id")
-        if slot_value is not None and not isinstance(slot_value, str):
+        if slot_value is None:
+            errors.append(f"telemetry/status.ndjson line {line_no} slot_id must be a non-empty string")
+        elif not isinstance(slot_value, str):
             errors.append(f"telemetry/status.ndjson line {line_no} slot_id must be a string")
+        elif not slot_value:
+            errors.append(f"telemetry/status.ndjson line {line_no} slot_id must be a non-empty string")
         elif isinstance(slot_value, str) and slot_value != slot_value.strip():
             errors.append(f"telemetry/status.ndjson line {line_no} slot_id must not contain surrounding whitespace")
         elif isinstance(slot_value, str) and device_lab._contains_control_character(slot_value):
             errors.append(f"telemetry/status.ndjson line {line_no} slot_id must not contain control characters")
-        if slot_value is not None and slot_value != slot_id:
+        elif slot_value != slot_id:
             errors.append(f"telemetry/status.ndjson line {line_no} slot_id must match slot id")
         if status == "ok":
             saw_ok = True
         elif status in device_lab.KAGEMUSHA_STATUS_FAILURE_VALUES:
             errors.append(f"telemetry/status.ndjson line {line_no} status must not be {status!r}")
+        else:
+            errors.append(f"telemetry/status.ndjson line {line_no} status must be ok")
     if not saw_record:
         errors.append("telemetry/status.ndjson must contain at least one JSON status record")
     elif not saw_ok:
@@ -978,7 +1015,15 @@ def _validate_raw_slot_files(slot_path: Path, slot_id: str, root_latest: Path) -
                 if hashlib.sha256(challenge_bytes).hexdigest() != challenge_digest:
                     errors.append("attestation/result.json attestation challenge SHA-256 mismatch")
 
-    _validate_raw_json_artifacts(slot_path, slot_id, errors)
+    expected_app_package_name = None
+    if isinstance(result, dict) and isinstance(result.get("app_package_name"), str):
+        expected_app_package_name = result["app_package_name"]
+    _validate_raw_json_artifacts(
+        slot_path,
+        slot_id,
+        errors,
+        expected_app_package_name=expected_app_package_name,
+    )
 
     status_text = _read_text_file(
         slot_path / "telemetry" / "status.ndjson",

@@ -42,6 +42,7 @@ public enum OfflineNoteNfcApduError: Error, LocalizedError, Equatable {
     case invalidChunkLength
     case incompletePayload
     case checksumMismatch
+    case completedSession
 
     public var errorDescription: String? {
         switch self {
@@ -55,6 +56,8 @@ public enum OfflineNoteNfcApduError: Error, LocalizedError, Equatable {
             return "Offline Note NFC payload is incomplete."
         case .checksumMismatch:
             return "Offline Note NFC payload checksum did not match."
+        case .completedSession:
+            return "Offline Note NFC session is already complete."
         }
     }
 }
@@ -844,13 +847,16 @@ public final class OfflineNoteNfcCardSessionStateMachine {
 
     @discardableResult
     public func markReceiptAckBytesRead(_ range: Range<Int>) -> Bool {
-        guard currentKind == .receiptAck,
+        guard !didComplete,
+              currentKind == .receiptAck,
               let tracker = currentPayloadReadTracker,
               tracker.markRead(offset: range.lowerBound, length: range.upperBound - range.lowerBound) else {
             return false
         }
         if tracker.isComplete {
             didComplete = true
+            readable = false
+            pendingWrite = nil
         }
         return tracker.isComplete
     }
@@ -859,6 +865,9 @@ public final class OfflineNoteNfcCardSessionStateMachine {
         kind: OfflineNoteNfcPayloadKind,
         payloadBytes: Data
     ) throws {
+        guard !didComplete else {
+            throw OfflineNoteNfcApduError.completedSession
+        }
         let payloadInfo = try OfflineNoteNfcApduProtocol.encodeInfo(kind: kind, payloadBytes: payloadBytes)
         let payloadReadTracker = kind == .receiptAck
             ? try OfflineNoteNfcPayloadReadTracker(expectedLength: payloadBytes.count)

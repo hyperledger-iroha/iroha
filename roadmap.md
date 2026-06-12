@@ -282,8 +282,9 @@ and completed history lives in [`status.md`](./status.md).
   noncanonical tar member spellings such as `./` or repeated separators before
   they can normalize into accepted evidence paths. It also rejects
   control-character output-root, summary-output, raw-slot, and raw artifact
-  path strings before ADB access, metadata reads, directory creation, or
-  raw-byte error reporting; rejects unreviewed extra files or directories under
+  path strings, plus parent-segment and backslash-bearing output-root,
+  summary-output, and raw-slot aliases, before ADB access, metadata reads,
+  directory creation, or raw-byte error reporting; rejects unreviewed extra files or directories under
   the raw slot; redacts control-character or secret-looking unexpected
   top-level install-source names before reporting install failures; requires both `slot` and
   `slot_id` in raw `attestation/result.json` to match the selected slot id, and
@@ -305,10 +306,11 @@ and completed history lives in [`status.md`](./status.md).
   string bindings matched without whitespace or control-character
   normalization. Raw status NDJSON
   must use LF line endings with a trailing newline, reject nonblank lines with
-  surrounding whitespace, use exact lowercase status strings without surrounding
-  whitespace or control characters, must not contain failure statuses, and must
-  reject non-string, whitespace-normalized, control-character, or mismatched
-  slot bindings. Slot metadata ABI probe states must also be exact lowercase strings
+  surrounding whitespace, accept only exact `ok` status strings without
+  surrounding whitespace or control characters, and must require exact
+  non-empty slot bindings while rejecting non-string, whitespace-normalized,
+  control-character, or mismatched slot bindings. Slot metadata ABI probe states
+  must also be exact lowercase strings
   without surrounding whitespace or control characters, while runtime logs must
   contain the completion marker
   without build/test/panic/traceback/fatal failure markers. Raw puller ADB
@@ -345,6 +347,8 @@ and completed history lives in [`status.md`](./status.md).
   levels, and challenge hex to be exact canonical strings during both assembly
   and scan. Signed slot metadata `keymint_security_level` must also remain an
   exact accepted StrongBox label instead of passing through case normalization.
+  Signed slot metadata `abi6_recursive_spend_jni_probe` must now be exact
+  `passed`; an `ok` alias is rejected even when signed evidence repeats it.
   The verifier `attestation/report.json` must include all three StrongBox level
   bindings (`keymint_security_level`, `attestation_security_level`, and
   `keymaster_security_level`) during both scan and signing-helper validation, so
@@ -353,7 +357,7 @@ and completed history lives in [`status.md`](./status.md).
   app-package, status, and level bindings to match `attestation/result.json`
   exactly before acceptance, and scanner validation binds `attestation/result.json`
   `keymint_security_level` back to `slot.json` exactly, preventing accepted
-  app-package substitutions, `ok`/`passed` status aliases, or StrongBox alias
+  app-package substitutions, non-`ok` status aliases, or StrongBox alias
   spellings from hiding a cross-artifact splice. The signed-slot assembler also
   rejects unexpected attestation result, report, verifier, D2D transcript, or
   wallet-integrity transcript fields, report schema/verifier drift, plus D2D
@@ -364,12 +368,14 @@ and completed history lives in [`status.md`](./status.md).
   production slots. Required telemetry, status NDJSON, queue, attestation, and
   runtime-log artifact shape checks now also run on staged assembler output
   before publish, so failed status records, missing runtime completion markers,
-  malformed telemetry, unexpected telemetry or pending queue fields, non-empty
-  post-handoff pending transactions, or malformed pending queue JSON cannot be
-  installed as unsigned production slots. The raw Android puller applies the
-  same telemetry and pending queue field allowlists plus the queue
-  empty-after-handoff check before raw artifacts can be promoted into a signed
-  slot.
+  malformed telemetry, noncanonical telemetry identity strings, unexpected
+  telemetry, status-event, or pending queue fields, non-`ok` status events,
+  non-empty post-handoff pending transactions, or malformed pending queue JSON
+  cannot be installed as unsigned production slots. The raw Android puller
+  applies the same telemetry field allowlist, status-event field and value
+  allowlists, telemetry identity exactness, telemetry app-package binding,
+  pending queue field allowlist, and queue empty-after-handoff check before raw
+  artifacts can be promoted into a signed slot.
   The slot assembler also requires attached-device ADB `getprop`
   identity reads to be exact one-LF values whose contents do not need trimming
   before metadata binding. The standalone Android scanner also rejects copied
@@ -384,8 +390,9 @@ and completed history lives in [`status.md`](./status.md).
   aliases, levels, challenges, expected challenge hex, slot id, device
   fingerprint, OS build, app package, verifier, and
   `--attestation-certificate-chain-path` values, rejects control-character
-  local certificate-chain source paths before ancestor validation or metadata
-  reads, plus whitespace-normalized identity fields, StrongBox/KeyMint level
+  local certificate-chain source paths plus parent-segment and backslash source
+  aliases before ancestor validation or metadata reads, plus
+  whitespace-normalized identity fields, StrongBox/KeyMint level
   labels, PEM chain-length mismatches, and unsafe chain paths before writing
   `attestation/report.json`. The report writer and signed-evidence helper also
   identity-bind their
@@ -448,7 +455,10 @@ and completed history lives in [`status.md`](./status.md).
   before timestamp parsing or freshness-window checks, and rejects canonical
   evidence command strings that contain surrounding whitespace, control
   characters, or secret-looking material before accepting proof or keygen
-  evidence. The readiness CLI and local trust-root/evidence file validators now
+  evidence. The direct lineage and compact-key evidence helpers also reject
+  helper-supplied `generated_at_utc` values more than 300 seconds ahead of the
+  helper clock by default before emitting evidence JSON. The readiness CLI and
+  local trust-root/evidence file validators now
   reject control-character paths before repo-root resolution, summary-output
   parent creation, signer/evidence loading, JSON parsing, or artifact hashing,
   and reject parent-segment or backslash-bearing `--repo-root` aliases before
@@ -458,7 +468,13 @@ and completed history lives in [`status.md`](./status.md).
   `--compact-key-evidence` before Android root classification, readiness rollup
   construction, or evidence JSON reads. Trusted signer public-key paths reject
   those aliases before key loading, OpenSSL lookup, Android slot metadata reads,
-  or summary rendering.
+  or summary rendering. Lower-level ABI-6 release JSON, ABI/source marker, and
+  shared local lineage file validators reject those aliases before metadata
+  reads, content parsing, artifact hashing, or proof-log reads. The direct
+  lineage-proof and compact-key evidence helpers also reject parent-segment and
+  backslash aliases in
+  `--artifact-dir`, `--proof-log`, `--generator-log`, and `--out` before
+  path resolution or metadata reads.
   Existing Kagemusha readiness summaries and release-bundle manifests must keep
   top-level timestamps, lineage/compact evidence-section `generated_at_utc`
   values, and Android readiness timestamp bounds canonical and within the
@@ -515,8 +531,10 @@ and completed history lives in [`status.md`](./status.md).
   bytes.
   Direct Android device-lab scanner path preflights now reject
   control-character roots, slot paths, JSON artifact paths, trusted signer
-  public keys, and JSON summary outputs before metadata reads, JSON parsing,
-  signer loading, slot discovery, or output parent creation. Explicit scanner
+  public keys, and JSON summary outputs, plus parent-segment and
+  backslash-bearing root, slot, JSON artifact, and JSON summary output aliases,
+  before metadata reads, JSON parsing, signer loading, slot discovery, or
+  output parent creation. Explicit scanner
   slot ids are now validated and deduplicated before root classification.
   The direct discovery helper repeats that validation before joining explicit
   ids to the root. Direct trusted-signer maps now reject unsafe public-key path
@@ -638,11 +656,15 @@ and completed history lives in [`status.md`](./status.md).
   repeated-separator, and trailing-slash aliases before `sha256sum.txt`,
   `slot.json`, signed-evidence, or release-bundle paths can normalize into
   digest-bound evidence.
-  Signed-slot assembler source-copy preflights now reject control-character
-  artifact source paths before ancestor validation, metadata reads, or
-  destination directory creation, and signed-slot assembler root preflights
-  reject control-character device-lab roots before root classification or
-  directory creation. Signed-slot assembler source metadata strings also reject
+  Android signed-evidence helper JSON output validators now reject
+  parent-segment and backslash-bearing output aliases before output parent
+  metadata reads, matching the CLI output normalizer.
+  Signed-slot assembler source-copy preflights now reject control-character,
+  parent-segment, and backslash-bearing artifact source paths before ancestor
+  validation, metadata reads, or destination directory creation, and signed-slot
+  assembler root preflights reject control-character, parent-segment, and
+  backslash-bearing device-lab roots before root classification or directory
+  creation. Signed-slot assembler source metadata strings also reject
   control characters before metadata binding. Signed-slot assembler source digest preflights now reject blank or noncanonical attestation challenge, app-signing, and offline-policy SHA-256 fields before unsigned staging output or signed evidence can be published.
   It also emits per-phase closed-schema execution reports for init, append, and
   proof attempts so signal-style failures are diagnosable without becoming
@@ -2333,8 +2355,11 @@ and completed history lives in [`status.md`](./status.md).
   `attestation/report.json` verifier report that repeats the slot identity,
   device fingerprint, OS build, app package, attestation challenge, and
   certificate-chain path/hash from `slot.json`, names the verifier, and reports
-  ok/passed StrongBox/KeyMint plus physical-device attestation before the signer
-  can emit `evidence/signed-evidence.json`. The attestation summary is now a
+  exact `ok` StrongBox/KeyMint plus physical-device attestation before the signer
+  can emit `evidence/signed-evidence.json`. The report writer also rejects
+  parent-segment, backslash, control-character, and secret-looking
+  harness-result source paths before metadata reads or JSON parsing. The
+  attestation summary is now a
   closed schema with canonical lowercase SHA-256 hash fields, and it has to
   repeat the slot id, device, OS build, app, challenge, policy,
   attestation-chain path/hash, and StrongBox/KeyMint bindings plus
@@ -2662,8 +2687,9 @@ and completed history lives in [`status.md`](./status.md).
 	  creating output parents, or writing evidence JSON, and classify `--out`
 	  parents with `lstat()` before any `Path.is_dir()` preflight, with
 	  final output write failures reported as structured blockers; the shared local lineage file validator rejects
-	  secret-looking evidence, artifact, or proof-log paths and symlinked
-	  local-file ancestors before JSON parsing, digest calculation, or proof-log
+	  secret-looking, parent-segment, or backslash-bearing evidence, artifact,
+	  or proof-log paths and symlinked local-file ancestors before JSON parsing,
+	  digest calculation, or proof-log
 	  reads, and both the readiness rollup's direct SHA-256 reader and the
 	  lineage helper's direct SHA-256 reader repeat that validation before
 	  returning artifact digests, with the readiness, lineage-helper, and
@@ -2687,9 +2713,10 @@ and completed history lives in [`status.md`](./status.md).
 			  relative evidence paths are expanded, and make shared Android ancestor
 			  validation fail closed on cwd metadata failures for relative helper
 			  inputs,
-				  reject secret-looking direct ABI-6 release JSON and ABI/source marker file
-			  paths plus unreadable ABI-6 release JSON and source-marker leaf metadata
-			  before content parsing, bind ABI/source marker reads to the preflight
+				  reject secret-looking, parent-segment, or backslash-bearing direct
+			  ABI-6 release JSON and ABI/source marker file paths plus unreadable
+			  ABI-6 release JSON and source-marker leaf metadata before content parsing,
+			  bind ABI/source marker reads to the preflight
 			  `lstat()` identity so post-preflight source swaps fail closed, cap
 			  source-marker text at 8 MiB,
 			  redact and block any secret-looking string that reaches an Android scanner

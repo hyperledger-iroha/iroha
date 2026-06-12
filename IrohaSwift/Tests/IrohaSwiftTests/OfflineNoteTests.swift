@@ -1506,6 +1506,100 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertTrue(mismatchedCommitMachine.isReadable)
     }
 
+    func testOfflineNoteNfcCardSessionStateMachineSelectCancelsInterruptedWriteWithoutResettingPayload() throws {
+        let receiveRequest = Data("receive-request".utf8)
+        let paymentToken = Data("payment-token".utf8)
+        let machine = try OfflineNoteNfcCardSessionStateMachine(initialPayloadBytes: receiveRequest)
+        let originalInfoResponse = machine.handle(OfflineNoteNfcApduProtocol.getInfoAPDUData()).response
+        let paymentAPDUs = try OfflineNoteNfcApduProtocol.writePayloadAPDUs(
+            kind: .paymentToken,
+            payloadBytes: paymentToken,
+            maxChunkLength: 4
+        )
+
+        XCTAssertEqual(machine.handle(paymentAPDUs[0]).response, OfflineNoteNfcApduProtocol.response())
+        XCTAssertEqual(machine.handle(paymentAPDUs[1]).response, OfflineNoteNfcApduProtocol.response())
+        XCTAssertTrue(machine.hasPendingWrite)
+
+        XCTAssertEqual(
+            machine.handle(OfflineNoteNfcApduProtocol.selectAidAPDUData()).response,
+            OfflineNoteNfcApduProtocol.response()
+        )
+        XCTAssertFalse(machine.hasPendingWrite)
+        XCTAssertTrue(machine.isReadable)
+        XCTAssertEqual(machine.currentPayloadKind, .receiveRequest)
+        XCTAssertEqual(machine.currentPayloadLength, receiveRequest.count)
+        XCTAssertEqual(machine.handle(OfflineNoteNfcApduProtocol.getInfoAPDUData()).response, originalInfoResponse)
+        XCTAssertEqual(
+            machine.handle(paymentAPDUs[1]).response,
+            OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied
+        )
+        XCTAssertEqual(
+            machine.handle(OfflineNoteNfcApduProtocol.commitAPDUData()).response,
+            OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied
+        )
+
+        for apdu in paymentAPDUs {
+            let result = machine.handle(apdu)
+            if apdu == OfflineNoteNfcApduProtocol.commitAPDUData() {
+                XCTAssertEqual(result.response, OfflineNoteNfcApduProtocol.response())
+                XCTAssertEqual(result.committedPayload?.kind, .paymentToken)
+                XCTAssertEqual(result.committedPayload?.payloadBytes, paymentToken)
+            } else {
+                XCTAssertEqual(result.response, OfflineNoteNfcApduProtocol.response())
+            }
+        }
+    }
+
+    func testOfflineNoteNfcCardSessionStateMachineCompletionClosesAckReadsAndPublishes() throws {
+        let receiveRequest = Data("receive-request".utf8)
+        let receiptAck = Data("receipt-ack".utf8)
+        let machine = try OfflineNoteNfcCardSessionStateMachine(initialPayloadBytes: receiveRequest)
+        try machine.publishPayload(kind: .receiptAck, payloadBytes: receiptAck)
+
+        let fullAckRead = machine.handle(
+            try OfflineNoteNfcApduProtocol.readChunkAPDUData(offset: 0, length: receiptAck.count)
+        )
+        XCTAssertEqual(OfflineNoteNfcApduProtocol.responseData(fullAckRead.response), receiptAck)
+        XCTAssertEqual(fullAckRead.receiptAckReadRange, 0..<receiptAck.count)
+        XCTAssertTrue(machine.markReceiptAckBytesRead(try XCTUnwrap(fullAckRead.receiptAckReadRange)))
+        XCTAssertTrue(machine.hasCompleted)
+        XCTAssertFalse(machine.isReadable)
+        XCTAssertEqual(machine.receiptAckReadProgress?.readByteCount, receiptAck.count)
+        XCTAssertTrue(machine.receiptAckReadProgress?.isComplete == true)
+
+        XCTAssertEqual(
+            machine.handle(OfflineNoteNfcApduProtocol.getInfoAPDUData()).response,
+            OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied
+        )
+        XCTAssertEqual(
+            machine.handle(try OfflineNoteNfcApduProtocol.readChunkAPDUData(offset: 0, length: 1)).response,
+            OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied
+        )
+        XCTAssertFalse(machine.markReceiptAckBytesRead(0..<receiptAck.count))
+        XCTAssertThrowsError(try machine.publishPayload(kind: .receiptAck, payloadBytes: Data("second-ack".utf8))) { error in
+            XCTAssertEqual(error as? OfflineNoteNfcApduError, .completedSession)
+        }
+
+        XCTAssertEqual(
+            machine.handle(OfflineNoteNfcApduProtocol.selectAidAPDUData()).response,
+            OfflineNoteNfcApduProtocol.response()
+        )
+        XCTAssertTrue(machine.hasCompleted)
+        XCTAssertFalse(machine.isReadable)
+        XCTAssertEqual(
+            machine.handle(OfflineNoteNfcApduProtocol.getInfoAPDUData()).response,
+            OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied
+        )
+        XCTAssertEqual(
+            machine.handle(try OfflineNoteNfcApduProtocol.writeMetaAPDUData(
+                kind: .paymentToken,
+                payloadBytes: Data("late-payment".utf8)
+            )).response,
+            OfflineNoteNfcApduProtocol.statusConditionsNotSatisfied
+        )
+    }
+
     func testOfflineNoteNfcCardSessionWritePolicyAcceptsOnlyFirstPaymentWrite() {
         XCTAssertEqual(
             OfflineNoteNfcCardSessionWritePolicy.decision(

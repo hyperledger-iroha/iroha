@@ -16528,8 +16528,20 @@ export declare class ToriiBrowserClient {
     options?: Record<string, unknown>,
   ): Promise<unknown>;
   getMultisigProposal(
+    request: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getMultisigProposal(
     accountId: string,
     proposalId: string,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  listMultisigApprovals(
+    request?: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  getMultisigApproval(
+    request: Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
   listPendingMultisigApprovals(options?: Record<string, unknown>): Promise<unknown>;

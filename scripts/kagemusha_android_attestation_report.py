@@ -196,11 +196,21 @@ def _slot_relative_chain_path(
 
 def _read_validated_chain(path: Path, errors: list[str]) -> tuple[bytes | None, str | None]:
     label = "attestation certificate chain"
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         errors.append(f"{label} path must not contain secret-looking material")
         return None, None
     if device_lab._contains_control_character(str(path)):
         errors.append(f"{label} path must not contain control characters")
+        return None, None
+    if device_lab._contains_control_character(path_text):
+        errors.append(f"{label} path must not contain control characters")
+        return None, None
+    if "\\" in path_text:
+        errors.append(f"{label} path must not contain backslashes")
+        return None, None
+    if ".." in path.parts:
+        errors.append(f"{label} path must be canonical")
         return None, None
     ancestor_errors = device_lab.validate_no_symlink_ancestors(
         path,
