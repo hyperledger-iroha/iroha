@@ -3,6 +3,13 @@
 Last updated: 2026-06-13
 
 
+## 2026-06-13 Confidential encrypted payload Rust low-order vector coverage
+
+- Extended the Rust `ConfidentialEncryptedPayload` validation regression test to cover a non-zero low-order X25519 ephemeral public key in addition to the all-zero key, matching the Kotlin/JVM and Android Java adversarial coverage.
+- Validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_data_model encrypted_payload --lib`
+
 ## 2026-06-13 Confidential encrypted payload Rust canonical length hardening
 
 - Hardened the Rust `ConfidentialEncryptedPayload` decoder to reject non-canonical ciphertext-length varints, matching the Kotlin/JVM and Android Java SDK wire decoders and keeping malformed Shield payloads fail-closed at the data-model boundary.

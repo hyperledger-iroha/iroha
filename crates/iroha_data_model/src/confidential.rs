@@ -669,14 +669,20 @@ mod tests {
 
     #[test]
     fn encrypted_payload_validation_rejects_low_order_ephemeral_key() {
-        let payload = ConfidentialEncryptedPayload::new([0u8; 32], [2u8; 24], vec![3, 4, 5]);
-        let err = payload
-            .validate()
-            .expect_err("low-order X25519 ephemeral key must fail");
-        assert!(
-            err.to_string().contains("low-order"),
-            "unexpected error: {err}"
-        );
+        for ephemeral in [[0u8; 32], {
+            let mut key = [0u8; 32];
+            key[0] = 1;
+            key
+        }] {
+            let payload = ConfidentialEncryptedPayload::new(ephemeral, [2u8; 24], vec![3, 4, 5]);
+            let err = payload
+                .validate()
+                .expect_err("low-order X25519 ephemeral key must fail");
+            assert!(
+                err.to_string().contains("low-order"),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]
