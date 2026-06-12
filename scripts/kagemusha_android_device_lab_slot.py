@@ -369,11 +369,18 @@ def _normalise_source_path(
     label: str,
     errors: list[str],
 ) -> tuple[Path, os.stat_result] | None:
-    if device_lab.SECRET_RE.search(str(path)):
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
         errors.append(f"{label} path must not contain secret-looking material")
         return None
-    if device_lab._contains_control_character(str(path)):
+    if device_lab._contains_control_character(path_text):
         errors.append(f"{label} path must not contain control characters")
+        return None
+    if "\\" in path_text:
+        errors.append(f"{label} path must not contain backslashes")
+        return None
+    if ".." in path.parts:
+        errors.append(f"{label} path must be canonical")
         return None
     ancestor_errors = device_lab.validate_no_symlink_ancestors(
         path,
@@ -996,16 +1003,16 @@ def validate_slot_source_claims(
             "attestation/result.json",
             errors,
         )
-        if result_status is not None and result_status not in {"ok", "passed"}:
-            errors.append("attestation/result.json status must be ok or passed")
+        if result_status is not None and result_status != "ok":
+            errors.append("attestation/result.json status must be ok")
         report_status = _require_source_string(
             verification,
             "status",
             "attestation/report.json verification",
             errors,
         )
-        if report_status is not None and report_status not in {"ok", "passed"}:
-            errors.append("attestation/report.json verification.status must be ok or passed")
+        if report_status is not None and report_status != "ok":
+            errors.append("attestation/report.json verification.status must be ok")
         if (
             result_status is not None
             and report_status is not None
@@ -1082,10 +1089,15 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         return 1, None, ["slot id must be a single safe directory name"]
 
     root = args.slot_root
-    if device_lab.SECRET_RE.search(str(root)):
+    root_text = str(root)
+    if device_lab.SECRET_RE.search(root_text):
         return 1, None, ["device-lab root path must not contain secret-looking material"]
-    if device_lab._contains_control_character(str(root)):
+    if device_lab._contains_control_character(root_text):
         return 1, None, ["device-lab root path must not contain control characters"]
+    if "\\" in root_text:
+        return 1, None, ["device-lab root path must not contain backslashes"]
+    if ".." in root.parts:
+        return 1, None, ["device-lab root path must be canonical"]
     root_exists, root_errors = device_lab.classify_device_lab_root_path(root)
     if root_errors:
         return 1, None, root_errors
@@ -1279,7 +1291,17 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
                 "attestation verifier report",
             )
         )
-        device_lab.validate_required_kagemusha_slot_artifact_shapes(stage_slot, errors)
+        result_app_package_name = result.get("app_package_name")
+        device_lab.validate_required_kagemusha_slot_artifact_shapes(
+            stage_slot,
+            errors,
+            expected_app_package_name=(
+                result_app_package_name
+                if isinstance(result_app_package_name, str)
+                else None
+            ),
+            expected_app_package_label="attestation/result.json app_package_name",
+        )
         if errors:
             return 1, None, errors
 

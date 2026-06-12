@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import os
@@ -25,10 +26,16 @@ PLACEHOLDER_ARTIFACT_MESSAGE_FRAGMENT = "not a placeholder fixture"
 
 
 def _secret_path_error(path: str | None, label: str) -> str | None:
-    if path is not None and device_lab.SECRET_RE.search(path):
+    if path is None:
+        return None
+    if device_lab.SECRET_RE.search(path):
         return f"{label} must not contain secret-looking material"
-    if path is not None and device_lab._contains_control_character(path):
+    if device_lab._contains_control_character(path):
         return f"{label} must not contain control characters"
+    if "\\" in path:
+        return f"{label} must not contain backslashes"
+    if ".." in Path(path).parts:
+        return f"{label} must be canonical"
     return None
 
 
@@ -177,6 +184,23 @@ def _validate_generated_at_utc(value: str) -> list[str]:
     return []
 
 
+def _validate_generated_at_future_skew(
+    generated_at: dt.datetime | None,
+    max_future_skew_seconds: int,
+) -> list[str]:
+    if max_future_skew_seconds < 0:
+        return ["--max-generated-at-future-skew-seconds must be non-negative"]
+    if generated_at is None:
+        return []
+    max_generated_at = (
+        dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        + dt.timedelta(seconds=max_future_skew_seconds)
+    )
+    if generated_at > max_generated_at:
+        return ["--generated-at-utc must not be ahead of the helper clock skew allowance"]
+    return []
+
+
 def validate_artifact_dir_path(artifact_dir: Path) -> list[str]:
     """Reject artifact directories that could alias external release bytes."""
 
@@ -301,6 +325,9 @@ def build_evidence(
     command: str,
     generated_at_utc: str,
     generator_log_path: Path | None = None,
+    max_generated_at_future_skew_seconds: int = (
+        readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS
+    ),
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Build an ABI-7 recursive compact key evidence document from local artifacts."""
 
@@ -324,6 +351,12 @@ def build_evidence(
     )
     if timestamp_error is not None:
         errors.append(timestamp_error["message"])
+    errors.extend(
+        _validate_generated_at_future_skew(
+            generated_at,
+            max_generated_at_future_skew_seconds,
+        )
+    )
     errors.extend(readiness.validate_compact_key_command(command))
     if generator_log_secret_error is None:
         errors.extend(validate_generator_log_path(artifact_dir, generator_log_path))
@@ -838,6 +871,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Canonical ISO-8601 UTC timestamp for the evidence document.",
     )
     parser.add_argument(
+        "--max-generated-at-future-skew-seconds",
+        type=int,
+        default=readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS,
+        help=(
+            "Maximum number of seconds generated_at_utc may be ahead of the "
+            "helper clock."
+        ),
+    )
+    parser.add_argument(
         "--out",
         default=readiness.DEFAULT_COMPACT_KEY_EVIDENCE_PATH,
         help="Output evidence JSON path.",
@@ -877,6 +919,7 @@ def main(argv: list[str] | None = None) -> int:
         command=args.command,
         generated_at_utc=args.generated_at_utc,
         generator_log_path=Path(args.generator_log) if args.generator_log else None,
+        max_generated_at_future_skew_seconds=args.max_generated_at_future_skew_seconds,
     )
     if errors:
         for error in errors:

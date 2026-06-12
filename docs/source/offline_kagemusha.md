@@ -392,9 +392,10 @@ corridor, and output-preflight helper calls reject control-character or
 secret-looking artifact, proof-log, and output paths before resolving
 corridors, creating output parents, creating temporary evidence files, or
 writing evidence JSON. The shared local lineage file validator
-also rejects control-character or secret-looking evidence, artifact, or
-proof-log paths and symlinked local-file ancestors before JSON parsing, digest
-calculation, or proof-log reads; both the readiness rollup's direct SHA-256 reader and the lineage
+also rejects control-character, secret-looking, parent-segment, or
+backslash-bearing evidence, artifact, or proof-log paths and symlinked
+local-file ancestors before JSON parsing, digest calculation, or proof-log
+reads; both the readiness rollup's direct SHA-256 reader and the lineage
 helper's direct SHA-256 reader repeat that file-shape validation before
 returning artifact digests, and the readiness, lineage-helper, and compact-key
 helper readers bind each digest/text read to the first validated `lstat()`
@@ -419,8 +420,9 @@ summary rendering.
 The ABI-6 manifest, ABI-7 marker, and Reserved-lineage release-tooling section
 checks repeat that repo-root preflight before reading their checked-in
 trust-root files, and the lower-level release JSON/source marker file validators
-reject control-character or secret-looking direct file paths and unreadable
-ABI-6 release JSON leaf metadata before content parsing.
+reject control-character, secret-looking, parent-segment, or backslash-bearing
+direct file paths plus unreadable ABI-6 release JSON/source-marker leaf metadata
+before content parsing.
 ABI-7 and Reserved-lineage
 source marker text reads also rerun the source-marker file validator immediately
 before loading marker text and bind the opened read to that preflight `lstat()`
@@ -463,7 +465,7 @@ slot can be signed or accepted by the scanner. Scanner validation and
 signed-slot assembly also require verifier report app-package, status, and
 level fields to match `attestation/result.json` exactly, and scanner validation binds
 `attestation/result.json` `keymint_security_level` back to `slot.json` exactly,
-so app-package substitutions, alternate accepted `ok`/`passed` status labels,
+so app-package substitutions, non-`ok` status aliases,
 or StrongBox spellings cannot mask a source-artifact splice. The signed-slot
 assembler also rejects unexpected attestation result, report, verifier, D2D
 transcript, or wallet-integrity transcript fields, report schema/verifier drift,
@@ -474,12 +476,14 @@ non-rotation, and other scanner-only transcript failures cannot be staged into
 unsigned production slots. Required telemetry, status NDJSON, queue,
 attestation, and runtime-log artifact shape checks now also run on staged
 assembler output before publish, so failed status records, missing runtime
-completion markers, malformed telemetry, unexpected telemetry or pending queue
-fields, non-empty post-handoff pending transactions, or malformed pending
-queue JSON cannot be installed as unsigned production slots. The raw Android
-puller applies the same telemetry and pending queue field allowlists plus the
-queue empty-after-handoff check before raw artifacts can be promoted into a
-signed slot. When the slot assembler reads attached device identity
+completion markers, malformed telemetry, noncanonical telemetry identity
+strings, unexpected telemetry, status-event, or pending queue fields, non-`ok`
+status events, non-empty post-handoff pending transactions, or malformed
+pending queue JSON cannot be installed as unsigned production slots. The raw
+Android puller applies the same telemetry field allowlist, status-event field
+and value allowlists, telemetry identity exactness, pending queue field
+allowlist, telemetry app-package binding, and queue empty-after-handoff check
+before raw artifacts can be promoted into a signed slot. When the slot assembler reads attached device identity
 through ADB `getprop`, each response must be exactly one LF-terminated value
 and the value itself must not require trimming before it can be bound into
 signed slot metadata. The shared Android device-lab
@@ -587,14 +591,16 @@ transcript, report, log, and certificate-chain artifacts keep the 16 MiB cap;
 the offline wallet APK path is capped separately at 64 MiB so arm64 JNI proof
 bridge builds fit without relaxing the smaller evidence artifacts.
 Post-preflight regular-file swaps still fail closed. The Android device-lab root validator
-also rejects secret-looking paths and unreadable root metadata before slot
-discovery, and scan_slot(...) rejects unreadable slot directory or parent metadata
-before slot traversal. Scanner and rollup missing-root decisions also consume
-the same `lstat()`-classified root presence instead of calling `Path.exists()`.
+also rejects secret-looking, control-character, parent-segment, and
+backslash-bearing root paths before root metadata reads or slot discovery, and
+scan_slot(...) rejects unreadable slot directory or parent metadata before slot
+traversal. Scanner and rollup missing-root decisions also consume the same
+`lstat()`-classified root presence instead of calling `Path.exists()`.
 The direct device-lab summary writer rejects
-secret-looking output paths plus unreadable output parent or leaf metadata,
-classifies summary output parents with `lstat()` before any `Path.is_dir()`
-preflight, rechecks created output parents before writing JSON, writes
+secret-looking, control-character, parent-segment, and backslash-bearing output
+paths before parent metadata reads, plus unreadable output parent or leaf
+metadata, classifies summary output parents with `lstat()` before any
+`Path.is_dir()` preflight, rechecks created output parents before writing JSON, writes
 `--json-out` through a fsynced same-directory temporary file, atomically replaces
 the final summary, reads it back through opened-file identity binding before
 success, caps the serialized summary before temporary-file creation and the
@@ -633,24 +639,33 @@ also requires `--slot-id` to be an exact canonical single directory name and
 rejects noncanonical certificate-chain path spellings such as
 `attestation/./...`, repeated separators, or trailing slash forms before
 writing `attestation/report.json`; backslash-bearing chain paths are rejected
-through the same pre-report gate. D2D handoff and
+through the same pre-report gate. Local certificate-chain source paths also
+reject parent-segment and backslash aliases before ancestor validation or
+metadata reads, and the harness-result source path uses the shared guarded JSON
+loader so parent-segment, backslash, control-character, and secret-looking
+paths fail before metadata reads or parsing. D2D handoff and
 wallet-integrity transcript bindings, including `queue/pending_queue.json`, use
 the same digest-time revalidation before comparing SHA-256 values. Signed-slot
 assembly, raw Android pulls, and explicit scanner slot selection also require
 `--slot-id`/`--slot` values to be exact canonical single directory names before
 any slot path is joined or created; backslash-bearing slot IDs fail the same
 safe-name gate. Filesystem-discovered slot directory names are held to the same
-policy before metadata is read. Slot-relative manifest and metadata paths must
+policy before metadata is read. Direct manifest parsing, slot-file inventory,
+digest validation, and signing-helper slot path calls also reject
+parent-segment and backslash-bearing slot path aliases before slot metadata
+reads, manifest rewrites, artifact hashing, or signed-evidence metadata loads.
+Slot-relative manifest and metadata paths must
 also use exact canonical spellings; dot segments, repeated separators, and
 trailing slash aliases fail before digest binding. Required
 status NDJSON and runtime log marker checks also revalidate their slot-relative
 files for symlinks, hardlinks, symlinked artifact directories, non-regular
 files, and secret-looking names immediately before text decoding, with the same
 opened-file identity binding. Status NDJSON must use LF line endings with a
-trailing newline, and nonblank status lines must not rely on surrounding
-whitespace being stripped before JSON parsing. The shared Android device-lab JSON loader
-also rejects secret-looking
-direct file paths and symlinked ancestor directories before parsing JSON, then
+trailing newline, only exact `ok` status values are accepted, each status line
+must carry the matching slot id, and nonblank status lines must not rely on
+surrounding whitespace being stripped before JSON parsing. The shared Android device-lab JSON loader
+also rejects secret-looking, control-character, parent-segment, and
+backslash-bearing direct file paths and symlinked ancestor directories before parsing JSON, then
 decodes JSON bytes from one opened regular file after preflight path-identity
 revalidation, so direct metadata, attestation, handoff, wallet-integrity, or
 signed-evidence validation cannot read through secret-bearing directories,
@@ -982,6 +997,9 @@ The helper rejects a symlinked or unreadable-metadata `--artifact-dir` and
 refuses to write `lineage-proof-evidence.json` through symlinked, hardlinked,
 non-regular, dangling-symlink, unreadable-metadata, or symlink-ancestor output aliases
 and rejects all-zero Reserved-lineage artifacts before emitting evidence JSON.
+It also rejects parent-segment and backslash aliases in `--artifact-dir`,
+`--proof-log`, `--generator-log`, and `--out` before resolving paths or reading
+filesystem metadata.
 Its evidence writer also syncs through an identity-bound output parent before
 readback, so parent directory swaps after atomic replacement fail closed;
 the compact key evidence helper applies the same output checks for
@@ -1135,14 +1153,18 @@ control-character or surrounding-whitespace relative paths before stripping,
 manifest, metadata, signed-evidence, or signer digest reads.
 The signed-evidence helper also rejects control-character slot, private-key,
 public-key, and signed-evidence output paths before metadata reads, OpenSSL
-lookup, JSON parsing, or output parent creation.
+lookup, JSON parsing, or output parent creation. Its lower-level JSON output
+write/read validators also reject parent-segment and backslash-bearing output
+aliases before output parent metadata reads, so direct helper calls cannot
+normalize those paths after review.
 The Android attestation-report writer rejects control-character local
 certificate-chain source paths before ancestor validation or metadata reads,
 matching the slot-relative certificate-chain path preflight.
-The signed-slot assembler source-copy preflight rejects control-character
-artifact source paths before ancestor validation, metadata reads, or destination
-directory creation, and its device-lab root path preflight rejects
-control-character roots before root classification or directory creation. Slot
+The signed-slot assembler source-copy preflight rejects control-character,
+parent-segment, and backslash-bearing artifact source paths before ancestor
+validation, metadata reads, or destination directory creation, and its
+device-lab root path preflight rejects control-character, parent-segment, and
+backslash-bearing roots before root classification or directory creation. Slot
 assembler source metadata strings also reject control characters before they
 can be copied into signed slot metadata. The signed-slot assembler source digest preflights reject blank or noncanonical attestation challenge, app-signing, and offline-policy SHA-256 fields before unsigned staging output or signed evidence can be published.
 The Android raw puller and signed-slot assembler now also report temporary
@@ -1154,8 +1176,9 @@ cannot hide an unremoved partially-created slot directory.
 The raw puller also redacts control-character or secret-looking unexpected
 top-level install-source names before reporting raw slot install failures.
 It now rejects control-character output-root, summary-output, raw-slot, and
-raw artifact path strings before ADB access, metadata reads, directory
-creation, or error reporting can expose the raw bytes; raw
+raw artifact path strings, plus parent-segment and backslash-bearing
+output-root, summary-output, and raw-slot aliases, before ADB access, metadata
+reads, directory creation, or error reporting can expose the raw bytes; raw
 `attestation/result.json` identity strings and raw tar-member paths also reject
 control characters before evidence assembly or tar path normalization, and
 noncanonical tar member spellings such as `./` or repeated separators fail

@@ -69,6 +69,121 @@ final class OfflineTransferWidgetTests: XCTestCase {
         )
     }
 
+    func testDeviceTransferPayloadRuntimePolicyAcceptsOnlyCurrentStrictTextPayloads() throws {
+        let receiveRequest = try Self.validReceiveRequestTextPayload()
+
+        XCTAssertEqual(
+            IrohaOfflineDeviceTransferPayloadRuntime.currentTextPayloadKinds,
+            [.receiveRequest, .paymentToken, .receiptAck]
+        )
+        XCTAssertTrue(
+            IrohaOfflineDeviceTransferPayloadRuntime.acceptsCurrentTextPayload(
+                receiveRequest,
+                expectedKind: .receiveRequest
+            )
+        )
+        XCTAssertEqual(
+            IrohaOfflineDeviceTransferPayloadRuntime.currentTextPayloadKind(for: receiveRequest),
+            .receiveRequest
+        )
+        XCTAssertEqual(
+            try IrohaOfflineDeviceTransferPayloadRuntime.normalizedCurrentTextPayload(
+                " \t\(receiveRequest)\n",
+                expectedKind: .receiveRequest
+            ),
+            receiveRequest
+        )
+        XCTAssertFalse(
+            IrohaOfflineDeviceTransferPayloadRuntime.acceptsCurrentTextPayload(
+                receiveRequest,
+                expectedKind: .paymentToken
+            )
+        )
+
+        let adversarialPayloads = [
+            "",
+            "wallet-offline-challenge-legacy:payload",
+            "wallet-offline-payment-legacy:payload",
+            "wallet-offline-payment-json-legacy:payload",
+            "https://example.test/\(receiveRequest)",
+            "{\"payload\":\"\(receiveRequest)\"}",
+            "\(receiveRequest)\u{0000}",
+            "\(receiveRequest)\u{2028}",
+            "\(receiveRequest)é",
+            " \(receiveRequest)",
+            "\(receiveRequest)\n",
+        ]
+        for payload in adversarialPayloads {
+            XCTAssertNil(
+                IrohaOfflineDeviceTransferPayloadRuntime.currentTextPayloadKind(for: payload),
+                payload
+            )
+            XCTAssertFalse(
+                IrohaOfflineDeviceTransferPayloadRuntime.acceptsCurrentTextPayload(
+                    payload,
+                    expectedKind: .receiveRequest
+                ),
+                payload
+            )
+        }
+    }
+
+    func testOfflineDisplayAmountPolicyCanonicalizesPositiveAmountsForUi() {
+        let validCases: [(String, String, String)] = [
+            ("integer", "00125", "125"),
+            ("trailingZeros", "00125.5000", "125.5"),
+            ("smallestDisplayable", "0.00000001", "0.00000001"),
+            ("truncatedFraction", "1.234567899", "1.23456789"),
+            ("maxScaleZero", "9.99", "9"),
+        ]
+
+        for (label, amount, expectedDisplay) in validCases {
+            let maxScale = label == "maxScaleZero" ? 0 : IrohaOfflineDisplayAmountPolicy.defaultMaxScale
+            XCTAssertNotNil(
+                IrohaOfflineDisplayAmountPolicy.canonicalPositiveAmount(amount),
+                label
+            )
+            XCTAssertEqual(
+                IrohaOfflineDisplayAmountPolicy.displayPositiveAmount(amount, maxScale: maxScale),
+                expectedDisplay,
+                label
+            )
+        }
+    }
+
+    func testOfflineDisplayAmountPolicyRejectsNonPositiveAmbiguousAndSubDisplayAmounts() {
+        let invalidAmounts = [
+            "",
+            " ",
+            "0",
+            "0.0",
+            "-1",
+            "1e3",
+            "1,000",
+            "SBD 125",
+            "0x10",
+            "1_000",
+            "1/2",
+            "125;drop",
+            "12\u{00A0}5",
+            "\u{06F1}\u{06F2}\u{06F5}",
+            "0.000000001",
+            "0.000000009",
+            String(repeating: "9", count: 160),
+        ]
+
+        for amount in invalidAmounts {
+            XCTAssertNil(
+                IrohaOfflineDisplayAmountPolicy.displayPositiveAmount(amount),
+                amount
+            )
+        }
+
+        XCTAssertNil(IrohaOfflineDisplayAmountPolicy.displayPositiveAmount("0.1", maxScale: 0))
+        XCTAssertNil(IrohaOfflineDisplayAmountPolicy.displayPositiveAmount("1", maxScale: -1))
+        XCTAssertNil(IrohaOfflineDisplayAmountPolicy.truncateCanonicalAmountForDisplay("not-a-number"))
+    }
+
     func testNfcCardSessionRuntimePolicyAcceptsOnlyExplicitInfoPlistOptInValues() {
         for value in [true, "1", " true ", "YES", "yes", "TrUe"] as [Any] {
             XCTAssertTrue(
@@ -278,6 +393,75 @@ final class OfflineTransferWidgetTests: XCTestCase {
         }
     }
 
+    func testNearbyMessageExchangeStateRejectsDuplicateAndReorderedApplicationMessages() {
+        let senderState = IrohaOfflineNearbyMessageExchangeState()
+
+        XCTAssertNil(senderState.takeQueuedSenderPaymentPayloadForReceiptAck(didFinish: false))
+        XCTAssertTrue(senderState.reserveSenderReceiveRequest(didFinish: false))
+        XCTAssertFalse(senderState.reserveSenderReceiveRequest(didFinish: false))
+        XCTAssertFalse(senderState.reserveSenderReceiveRequest(didFinish: true))
+        XCTAssertFalse(senderState.hasQueuedSenderPaymentPayload)
+
+        senderState.queueSenderPaymentPayload("iroha:offline:payment:v1:normalized")
+        XCTAssertTrue(senderState.hasQueuedSenderPaymentPayload)
+        XCTAssertFalse(senderState.reserveSenderReceiveRequest(didFinish: false))
+        XCTAssertEqual(
+            senderState.takeQueuedSenderPaymentPayloadForReceiptAck(didFinish: false),
+            "iroha:offline:payment:v1:normalized"
+        )
+        XCTAssertFalse(senderState.hasQueuedSenderPaymentPayload)
+        XCTAssertNil(senderState.takeQueuedSenderPaymentPayloadForReceiptAck(didFinish: false))
+        XCTAssertNil(senderState.takeQueuedSenderPaymentPayloadForReceiptAck(didFinish: true))
+
+        senderState.reset()
+        XCTAssertFalse(senderState.hasQueuedSenderPaymentPayload)
+        XCTAssertTrue(senderState.reserveSenderReceiveRequest(didFinish: false))
+
+        let receiverState = IrohaOfflineNearbyMessageExchangeState()
+        XCTAssertTrue(receiverState.reserveReceiverPayment(didFinish: false))
+        XCTAssertFalse(receiverState.reserveReceiverPayment(didFinish: false))
+        receiverState.reset()
+        XCTAssertFalse(receiverState.reserveReceiverPayment(didFinish: true))
+        XCTAssertTrue(receiverState.reserveReceiverPayment(didFinish: false))
+    }
+
+    func testNearbyMessageExchangeStateAllowsOnlyOneConcurrentReservationPerPhase() {
+        let senderState = IrohaOfflineNearbyMessageExchangeState()
+        let receiverState = IrohaOfflineNearbyMessageExchangeState()
+        let senderLock = NSLock()
+        let receiverLock = NSLock()
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "iroha.nearby-message-state-test", attributes: .concurrent)
+        var senderAccepts = 0
+        var receiverAccepts = 0
+
+        for _ in 0..<128 {
+            group.enter()
+            queue.async {
+                if senderState.reserveSenderReceiveRequest(didFinish: false) {
+                    senderLock.lock()
+                    senderAccepts += 1
+                    senderLock.unlock()
+                }
+                group.leave()
+            }
+
+            group.enter()
+            queue.async {
+                if receiverState.reserveReceiverPayment(didFinish: false) {
+                    receiverLock.lock()
+                    receiverAccepts += 1
+                    receiverLock.unlock()
+                }
+                group.leave()
+            }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(senderAccepts, 1)
+        XCTAssertEqual(receiverAccepts, 1)
+    }
+
     func testNfcErrorTechnicalCodesDoNotExposePayloads() {
         XCTAssertEqual(
             IrohaOfflineNfcExchangeError.peerRejected(statusWord: 0x6985).technicalCode,
@@ -326,6 +510,28 @@ final class OfflineTransferWidgetTests: XCTestCase {
         }
     }
 
+    func testNfcDiagnosticsRedactGenericNSErrorDomainsAndDescriptions() {
+        XCTAssertEqual(
+            IrohaOfflineNfcDiagnosticsPolicy.errorCode(IrohaOfflineNfcExchangeError.checksumMismatch),
+            IrohaOfflineNfcExchangeError.checksumMismatch.technicalCode
+        )
+
+        let sensitiveError = NSError(
+            domain: "NfcSensitiveDomain.account@example.test",
+            code: 42,
+            userInfo: [
+                NSLocalizedDescriptionKey: "payment-token iroha:offline:payment:v1:secret failed"
+            ]
+        )
+        let code = IrohaOfflineNfcDiagnosticsPolicy.errorCode(sensitiveError)
+        XCTAssertTrue(code.hasPrefix("NSError."))
+        XCTAssertTrue(code.hasSuffix(".42"))
+        XCTAssertFalse(code.contains("NfcSensitiveDomain"))
+        XCTAssertFalse(code.contains("account@example.test"))
+        XCTAssertFalse(code.contains("payment-token"))
+        XCTAssertFalse(code.contains("iroha:offline:"))
+    }
+
     func testNearbyErrorsExposeOnlyStableTechnicalCodes() {
         let sensitiveNeedles = [
             "iroha:offline:",
@@ -352,6 +558,41 @@ final class OfflineTransferWidgetTests: XCTestCase {
                 XCTAssertFalse(error.technicalCode.contains(needle), "\(technicalCode) contains \(needle)")
             }
         }
+    }
+
+    func testNearbyDiagnosticsRedactPeerLabelsAndNSErrorDescriptions() {
+        let peerName = "bokolo-sensitive-peer-name"
+        let peerLabel = IrohaOfflineNearbyDiagnosticsPolicy.peerLabel(
+            displayName: peerName,
+            selectionHash: 12345
+        )
+
+        XCTAssertTrue(peerLabel.hasPrefix("peer_hash="))
+        XCTAssertFalse(peerLabel.contains(peerName))
+        XCTAssertFalse(peerLabel.contains("12345"))
+
+        let rawError = NSError(
+            domain: "NearbySensitiveDomain",
+            code: 77,
+            userInfo: [
+                NSLocalizedDescriptionKey: "raw peer \(peerName) failed with token iroha:offline:payment:v1:secret"
+            ]
+        )
+        let rawErrorCode = IrohaOfflineNearbyDiagnosticsPolicy.errorCode(rawError)
+        XCTAssertTrue(rawErrorCode.hasPrefix("NSError."))
+        XCTAssertTrue(rawErrorCode.hasSuffix(".77"))
+        XCTAssertFalse(rawErrorCode.contains("NearbySensitiveDomain"))
+        XCTAssertFalse(rawErrorCode.contains(peerName))
+        XCTAssertFalse(rawErrorCode.contains("iroha:offline:"))
+
+        XCTAssertEqual(
+            IrohaOfflineNearbyDiagnosticsPolicy.errorCode(IrohaOfflineNearbyExchangeError.invalidMessage),
+            IrohaOfflineNearbyExchangeError.invalidMessage.technicalCode
+        )
+        XCTAssertEqual(
+            IrohaOfflineNearbyDiagnosticsPolicy.errorCode(CancellationError()),
+            IrohaOfflineNearbyExchangeError.cancelled.technicalCode
+        )
     }
 
     func testNearbyPairingDecisionContractCoversAllOutcomes() {
