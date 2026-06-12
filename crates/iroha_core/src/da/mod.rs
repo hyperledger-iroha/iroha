@@ -96,6 +96,9 @@ pub enum DaCommitmentValidationError {
     /// Underlying proof policy validation failed.
     #[error(transparent)]
     ProofPolicy(#[from] DaProofPolicyError),
+    /// Confidential-compute policy validation failed.
+    #[error(transparent)]
+    ConfidentialCompute(#[from] ConfidentialComputeError),
     /// Duplicate `(lane, epoch, sequence)` commitment found.
     #[error(
         "duplicate DA commitment detected for lane {key_lane}, epoch {epoch}, sequence {sequence}"
@@ -114,9 +117,67 @@ pub enum DaCommitmentValidationError {
         /// Lane identifier that failed validation.
         lane: LaneId,
     },
+    /// Manifest hash already exists in a previously committed DA record.
+    #[error(
+        "DA manifest hash for lane {lane}, epoch {epoch}, sequence {sequence} was already committed at lane {existing_lane}, epoch {existing_epoch}, sequence {existing_sequence}"
+    )]
+    CommittedManifest {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+        /// Lane identifier of the already committed record.
+        existing_lane: LaneId,
+        /// Epoch of the already committed record.
+        existing_epoch: u64,
+        /// Sequence number of the already committed record.
+        existing_sequence: u64,
+    },
+    /// Duplicate storage ticket detected within the bundle.
+    #[error(
+        "duplicate DA storage ticket detected for lane {lane}, epoch {epoch}, sequence {sequence}"
+    )]
+    DuplicateStorageTicket {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+    },
+    /// Storage ticket already exists in a previously committed DA record.
+    #[error(
+        "DA storage ticket for lane {lane}, epoch {epoch}, sequence {sequence} was already committed at lane {existing_lane}, epoch {existing_epoch}, sequence {existing_sequence}"
+    )]
+    CommittedStorageTicket {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+        /// Lane identifier of the already committed record.
+        existing_lane: LaneId,
+        /// Epoch of the already committed record.
+        existing_epoch: u64,
+        /// Sequence number of the already committed record.
+        existing_sequence: u64,
+    },
     /// Manifest hash must be non-zero.
     #[error("lane {lane} carries a zeroed manifest hash at epoch {epoch}, sequence {sequence}")]
     ZeroManifestHash {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence that failed validation.
+        sequence: u64,
+    },
+    /// Storage ticket must be non-zero.
+    #[error("lane {lane} carries a zeroed storage ticket at epoch {epoch}, sequence {sequence}")]
+    ZeroStorageTicket {
         /// Lane identifier that failed validation.
         lane: LaneId,
         /// Epoch that failed validation.
@@ -447,9 +508,9 @@ pub fn validate_pin_intent_bundle(
 
 /// Validate commitment bundle invariants before embedding into a block.
 ///
-/// Enforces unique `(lane, epoch, sequence)` tuples, unique manifest
-/// hashes within the bundle, non-zero manifest hashes, and lane proof policy
-/// compatibility.
+/// Enforces unique `(lane, epoch, sequence)` tuples, unique manifest hashes and
+/// storage tickets within the bundle, non-zero manifest hashes and storage
+/// tickets, and lane proof policy compatibility.
 ///
 /// # Errors
 ///
@@ -460,6 +521,7 @@ pub fn validate_commitment_bundle(
 ) -> Result<(), DaCommitmentValidationError> {
     let mut seen_keys = BTreeSet::new();
     let mut seen_manifests = BTreeSet::new();
+    let mut seen_tickets = BTreeSet::new();
 
     for record in &bundle.commitments {
         if record
@@ -469,6 +531,14 @@ pub fn validate_commitment_bundle(
             .all(|byte| *byte == 0)
         {
             return Err(DaCommitmentValidationError::ZeroManifestHash {
+                lane: record.lane_id,
+                epoch: record.epoch,
+                sequence: record.sequence,
+            });
+        }
+
+        if record.storage_ticket.as_ref().iter().all(|byte| *byte == 0) {
+            return Err(DaCommitmentValidationError::ZeroStorageTicket {
                 lane: record.lane_id,
                 epoch: record.epoch,
                 sequence: record.sequence,
@@ -490,7 +560,16 @@ pub fn validate_commitment_bundle(
             });
         }
 
+        if !seen_tickets.insert(record.storage_ticket) {
+            return Err(DaCommitmentValidationError::DuplicateStorageTicket {
+                lane: record.lane_id,
+                epoch: record.epoch,
+                sequence: record.sequence,
+            });
+        }
+
         enforce_lane_proof_policy(record, lane_config)?;
+        validate_confidential_compute_record(lane_config, record)?;
     }
 
     Ok(())
@@ -751,7 +830,7 @@ pub fn proof_policy_bundle_hash(lane_config: &LaneConfig) -> HashOf<DaProofPolic
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{collections::BTreeMap, num::NonZeroU32};
 
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
@@ -759,7 +838,7 @@ mod tests {
             commitment::RetentionClass,
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig},
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneStorageProfile},
     };
     use norito::to_bytes;
 
@@ -991,6 +1070,24 @@ mod tests {
     }
 
     #[test]
+    fn validate_commitment_bundle_rejects_duplicate_storage_ticket() {
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
+        let first = merkle_record(0);
+        let mut second = merkle_record(0);
+        second.sequence = 9;
+        second.manifest_hash =
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x77; 32]);
+        let bundle = DaCommitmentBundle::new(vec![first.clone(), second.clone()]);
+
+        let err =
+            validate_commitment_bundle(&bundle, &lane_config).expect_err("duplicate must fail");
+        assert!(matches!(
+            err,
+            DaCommitmentValidationError::DuplicateStorageTicket { .. }
+        ));
+    }
+
+    #[test]
     fn validate_commitment_bundle_rejects_zero_manifest_hash() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let mut record = merkle_record(0);
@@ -1002,6 +1099,46 @@ mod tests {
         assert!(matches!(
             err,
             DaCommitmentValidationError::ZeroManifestHash { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_commitment_bundle_rejects_zero_storage_ticket() {
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
+        let mut record = merkle_record(0);
+        record.storage_ticket = StorageTicketId::new([0; 32]);
+        let bundle = DaCommitmentBundle::new(vec![record]);
+
+        let err =
+            validate_commitment_bundle(&bundle, &lane_config).expect_err("zero ticket must fail");
+        assert!(matches!(
+            err,
+            DaCommitmentValidationError::ZeroStorageTicket { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_commitment_bundle_rejects_confidential_lane_without_policy() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("confidential_compute".to_string(), "true".to_string());
+        metadata.insert(
+            "confidential_mechanism".to_string(),
+            "encryption".to_string(),
+        );
+        let lane_config = lane_config_with(vec![ModelLaneConfig {
+            storage: LaneStorageProfile::SplitReplica,
+            metadata,
+            ..ModelLaneConfig::default()
+        }]);
+        let bundle = DaCommitmentBundle::new(vec![merkle_record(0)]);
+
+        let err = validate_commitment_bundle(&bundle, &lane_config)
+            .expect_err("confidential lane without key policy must fail");
+        assert!(matches!(
+            err,
+            DaCommitmentValidationError::ConfidentialCompute(
+                ConfidentialComputeError::MissingPolicy
+            )
         ));
     }
 

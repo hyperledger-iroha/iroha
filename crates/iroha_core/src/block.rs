@@ -5780,6 +5780,47 @@ pub(crate) mod valid {
             crate::da::validate_pin_intent_bundle(bundle, &state.nexus().lane_config, |account| {
                 world.accounts().get(account).is_some()
             })?;
+            for intent in &bundle.intents {
+                if world
+                    .da_pin_intents_by_lane_epoch()
+                    .get(&(intent.lane_id, intent.epoch, intent.sequence))
+                    .is_some()
+                {
+                    return Err(BlockValidationError::DaPinIntentBundle(
+                        DaPinIntentValidationError::DuplicateIntent {
+                            lane: intent.lane_id,
+                            epoch: intent.epoch,
+                            sequence: intent.sequence,
+                        },
+                    ));
+                }
+                if world
+                    .da_pin_intents_by_manifest()
+                    .get(&intent.manifest_hash)
+                    .is_some()
+                {
+                    return Err(BlockValidationError::DaPinIntentBundle(
+                        DaPinIntentValidationError::DuplicateManifest {
+                            lane: intent.lane_id,
+                            epoch: intent.epoch,
+                            sequence: intent.sequence,
+                        },
+                    ));
+                }
+                if world
+                    .da_pin_intents_by_ticket()
+                    .get(&intent.storage_ticket)
+                    .is_some()
+                {
+                    return Err(BlockValidationError::DaPinIntentBundle(
+                        DaPinIntentValidationError::DuplicateStorageTicket {
+                            lane: intent.lane_id,
+                            epoch: intent.epoch,
+                            sequence: intent.sequence,
+                        },
+                    ));
+                }
+            }
 
             Ok(())
         }
@@ -14222,6 +14263,79 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_keep_voting_block_rejects_duplicate_da_storage_ticket() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let mut params = Parameters::default();
+            params.sumeragi.da_enabled = true;
+            world.parameters = Cell::new(params);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+
+            let make_record = |sequence: u64, tag: u8| {
+                DaCommitmentRecord::new(
+                    LaneId::new(0),
+                    1,
+                    sequence,
+                    BlobDigest::new([tag; 32]),
+                    ManifestDigest::new([tag; 32]),
+                    DaProofScheme::MerkleSha256,
+                    Hash::prehashed([tag; 32]),
+                    None,
+                    None,
+                    RetentionClass::default(),
+                    StorageTicketId::new([0xDD; 32]),
+                    Signature::from_bytes(&[tag; 64]),
+                )
+            };
+            let bundle = DaCommitmentBundle::new(vec![make_record(1, 0xC1), make_record(2, 0xC2)]);
+            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_commitments(Some(bundle))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected DA commitment duplicate-storage-ticket rejection");
+            };
+            assert!(matches!(
+                err.as_ref(),
+                BlockValidationError::DaCommitmentBundle(
+                    DaCommitmentValidationError::DuplicateStorageTicket { lane, epoch, sequence }
+                ) if *lane == LaneId::new(0) && *epoch == 1 && *sequence == 2
+            ));
+        }
+
+        #[test]
         fn validate_keep_voting_block_rejects_da_commitment_hash_mismatch() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -14440,16 +14554,147 @@ pub(crate) mod valid {
             let Err((_, err)) = result else {
                 panic!("expected DA pin-intent duplicate-ticket rejection");
             };
-            assert!(matches!(
-                err.as_ref(),
-                BlockValidationError::DaPinIntentBundle(
-                    DaPinIntentValidationError::DuplicateStorageTicket {
-                        lane,
-                        epoch: 1,
-                        sequence: 2
-                    }
-                ) if *lane == LaneId::new(0)
-            ));
+            assert!(
+                matches!(
+                    err.as_ref(),
+                    BlockValidationError::DaPinIntentBundle(
+                        DaPinIntentValidationError::DuplicateStorageTicket {
+                            lane,
+                            epoch: 1,
+                            sequence: 2
+                        }
+                    ) if *lane == LaneId::new(0)
+                ),
+                "unexpected duplicate-ticket error: {err:?}"
+            );
+        }
+
+        #[test]
+        fn validate_keep_voting_block_rejects_committed_da_pin_intent_identity_reuse() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let mut params = Parameters::default();
+            params.sumeragi.da_enabled = true;
+            world.parameters = Cell::new(params);
+            let committed_intent = DaPinIntent::new(
+                LaneId::new(0),
+                1,
+                1,
+                StorageTicketId::new([0xA1; 32]),
+                ManifestDigest::new([0xB1; 32]),
+            );
+            let committed_with_location =
+                iroha_data_model::da::pin_intent::DaPinIntentWithLocation {
+                    intent: committed_intent.clone(),
+                    location: iroha_data_model::da::commitment::DaCommitmentLocation {
+                        block_height: 1,
+                        index_in_bundle: 0,
+                    },
+                };
+            world
+                .da_pin_intents_by_ticket
+                .insert(committed_intent.storage_ticket, committed_with_location);
+            world.da_pin_intents_by_manifest.insert(
+                committed_intent.manifest_hash,
+                committed_intent.storage_ticket,
+            );
+            world.da_pin_intents_by_lane_epoch.insert(
+                (
+                    committed_intent.lane_id,
+                    committed_intent.epoch,
+                    committed_intent.sequence,
+                ),
+                committed_intent.storage_ticket,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+
+            let validate_candidate = |intent: DaPinIntent,
+                                      now: Duration|
+             -> Box<BlockValidationError> {
+                let (_handle, time_source) = TimeSource::new_mock(now);
+                let signed: SignedBlock =
+                    BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                        .chain(0, state.view().latest_block().as_deref())
+                        .with_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])))
+                        .sign(leader.private_key())
+                        .unpack(|_| {})
+                        .into();
+                let mut voting_block = None;
+                let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+                let result = ValidBlock::validate_keep_voting_block(
+                    signed,
+                    &topology,
+                    &state.chain_id.clone(),
+                    &ALICE_ID,
+                    &time_source,
+                    &state,
+                    &mut voting_block,
+                    false,
+                )
+                .unpack(|_| {});
+                let Err((_, err)) = result else {
+                    panic!("expected DA pin-intent committed identity rejection");
+                };
+                err
+            };
+
+            let duplicate_ticket = DaPinIntent::new(
+                LaneId::new(0),
+                1,
+                2,
+                committed_intent.storage_ticket,
+                ManifestDigest::new([0xB2; 32]),
+            );
+            let err = validate_candidate(duplicate_ticket, Duration::from_millis(2));
+            assert!(
+                matches!(
+                    err.as_ref(),
+                    BlockValidationError::DaPinIntentBundle(
+                        DaPinIntentValidationError::DuplicateStorageTicket {
+                            lane,
+                            epoch: 1,
+                            sequence: 2
+                        }
+                    ) if *lane == LaneId::new(0)
+                ),
+                "unexpected committed ticket reuse error: {err:?}"
+            );
+
+            let duplicate_manifest = DaPinIntent::new(
+                LaneId::new(0),
+                1,
+                3,
+                StorageTicketId::new([0xA3; 32]),
+                committed_intent.manifest_hash,
+            );
+            let err = validate_candidate(duplicate_manifest, Duration::from_millis(3));
+            assert!(
+                matches!(
+                    err.as_ref(),
+                    BlockValidationError::DaPinIntentBundle(
+                        DaPinIntentValidationError::DuplicateManifest {
+                            lane,
+                            epoch: 1,
+                            sequence: 3
+                        }
+                    ) if *lane == LaneId::new(0)
+                ),
+                "unexpected committed manifest reuse error: {err:?}"
+            );
         }
 
         #[test]

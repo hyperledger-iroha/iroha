@@ -83,6 +83,36 @@ pub enum DaReceiptSpoolError {
         /// Unsupported version encountered.
         version: u16,
     },
+    /// Receipt filename does not contain the expected lane/epoch/sequence/ticket/fingerprint tuple.
+    #[error("malformed DA receipt filename at {path}")]
+    MalformedFilename {
+        /// Path that failed.
+        path: PathBuf,
+    },
+    /// Receipt filename tuple does not match the decoded receipt body.
+    #[error(
+        "DA receipt filename tuple {filename_lane:?}/{filename_epoch}/{filename_sequence}/{filename_ticket:?} mismatches body {receipt_lane:?}/{receipt_epoch}/{receipt_sequence}/{receipt_ticket:?} at {path}"
+    )]
+    FilenameMismatch {
+        /// Path that failed.
+        path: PathBuf,
+        /// Lane identifier parsed from the filename.
+        filename_lane: LaneId,
+        /// Epoch parsed from the filename.
+        filename_epoch: u64,
+        /// Sequence parsed from the filename.
+        filename_sequence: u64,
+        /// Storage ticket parsed from the filename.
+        filename_ticket: StorageTicketId,
+        /// Lane identifier decoded from the receipt.
+        receipt_lane: LaneId,
+        /// Epoch decoded from the receipt.
+        receipt_epoch: u64,
+        /// Sequence decoded from the receipt wrapper.
+        receipt_sequence: u64,
+        /// Storage ticket decoded from the receipt.
+        receipt_ticket: StorageTicketId,
+    },
 }
 
 /// Errors returned when the receipt queue violates ordering or bundle mapping.
@@ -149,6 +179,16 @@ pub enum DaReceiptQueueError {
         expected: u64,
         /// First sequence observed after the gap.
         observed: u64,
+    },
+    /// Commitment bundle contained more than one record for the same lane/epoch/sequence.
+    #[error("duplicate DA commitment for lane {lane:?} epoch {epoch} sequence {sequence}")]
+    DuplicateCommitment {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
     },
     /// Receipt was present but no matching commitment record was found in the bundle.
     #[error(
@@ -289,12 +329,14 @@ impl DaReceiptCursorIndex {
         block_height: u64,
         records: &[DaCommitmentRecord],
     ) -> Result<Vec<(LaneEpoch, u64)>, DaReceiptCursorError> {
+        let mut candidate = self.clone();
         let mut advanced = Vec::new();
         for record in records {
             let lane_epoch = LaneEpoch::new(record.lane_id, record.epoch);
-            self.record(lane_epoch, record.sequence, block_height)?;
+            candidate.record(lane_epoch, record.sequence, block_height)?;
             advanced.push((lane_epoch, record.sequence));
         }
+        *self = candidate;
         Ok(advanced)
     }
 
@@ -394,7 +436,90 @@ fn is_da_receipt_file(path: &Path) -> bool {
         .is_some_and(|name| name.starts_with("da-receipt-") && name.ends_with(".norito"))
 }
 
+#[derive(Clone, Copy)]
+struct ReceiptFileKey {
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: StorageTicketId,
+}
+
+fn parse_receipt_file_key(path: &Path) -> Result<ReceiptFileKey, DaReceiptSpoolError> {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Err(malformed_receipt_filename(path));
+    };
+    let Some(rest) = name
+        .strip_prefix("da-receipt-")
+        .and_then(|name| name.strip_suffix(".norito"))
+    else {
+        return Err(malformed_receipt_filename(path));
+    };
+
+    let mut fields = rest.split('-');
+    let Some(lane_hex) = fields.next() else {
+        return Err(malformed_receipt_filename(path));
+    };
+    let Some(epoch_hex) = fields.next() else {
+        return Err(malformed_receipt_filename(path));
+    };
+    let Some(sequence_hex) = fields.next() else {
+        return Err(malformed_receipt_filename(path));
+    };
+    let Some(ticket_hex) = fields.next() else {
+        return Err(malformed_receipt_filename(path));
+    };
+    let Some(fingerprint_hex) = fields.next() else {
+        return Err(malformed_receipt_filename(path));
+    };
+    if fields.next().is_some() {
+        return Err(malformed_receipt_filename(path));
+    }
+
+    let lane_id = parse_fixed_hex_u32(lane_hex, 8, path).map(LaneId::new)?;
+    let epoch = parse_fixed_hex_u64(epoch_hex, 16, path)?;
+    let sequence = parse_fixed_hex_u64(sequence_hex, 16, path)?;
+    let storage_ticket = StorageTicketId::new(parse_fixed_hex_32(ticket_hex, path)?);
+    let _ = parse_fixed_hex_32(fingerprint_hex, path)?;
+
+    Ok(ReceiptFileKey {
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+    })
+}
+
+fn malformed_receipt_filename(path: &Path) -> DaReceiptSpoolError {
+    DaReceiptSpoolError::MalformedFilename {
+        path: path.to_path_buf(),
+    }
+}
+
+fn parse_fixed_hex_u32(value: &str, width: usize, path: &Path) -> Result<u32, DaReceiptSpoolError> {
+    if value.len() != width || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(malformed_receipt_filename(path));
+    }
+    u32::from_str_radix(value, 16).map_err(|_| malformed_receipt_filename(path))
+}
+
+fn parse_fixed_hex_u64(value: &str, width: usize, path: &Path) -> Result<u64, DaReceiptSpoolError> {
+    if value.len() != width || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(malformed_receipt_filename(path));
+    }
+    u64::from_str_radix(value, 16).map_err(|_| malformed_receipt_filename(path))
+}
+
+fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaReceiptSpoolError> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(malformed_receipt_filename(path));
+    }
+    let mut bytes = [0_u8; 32];
+    hex::decode_to_slice(value, &mut bytes).map_err(|_| malformed_receipt_filename(path))?;
+    Ok(bytes)
+}
+
 fn decode_receipt(data: &[u8], path: &Path) -> Result<DaReceiptEntry, DaReceiptSpoolError> {
+    let filename_key = parse_receipt_file_key(path)?;
     let stored = norito::decode_from_bytes::<StoredDaReceipt>(data).map_err(|source| {
         DaReceiptSpoolError::Decode {
             path: path.to_path_buf(),
@@ -410,6 +535,23 @@ fn decode_receipt(data: &[u8], path: &Path) -> Result<DaReceiptEntry, DaReceiptS
     let StoredDaReceipt {
         sequence, receipt, ..
     } = stored;
+    if filename_key.lane_id != receipt.lane_id
+        || filename_key.epoch != receipt.epoch
+        || filename_key.sequence != sequence
+        || filename_key.storage_ticket != receipt.storage_ticket
+    {
+        return Err(DaReceiptSpoolError::FilenameMismatch {
+            path: path.to_path_buf(),
+            filename_lane: filename_key.lane_id,
+            filename_epoch: filename_key.epoch,
+            filename_sequence: filename_key.sequence,
+            filename_ticket: filename_key.storage_ticket,
+            receipt_lane: receipt.lane_id,
+            receipt_epoch: receipt.epoch,
+            receipt_sequence: sequence,
+            receipt_ticket: receipt.storage_ticket,
+        });
+    }
     let lane_epoch = LaneEpoch::new(receipt.lane_id, receipt.epoch);
     Ok(DaReceiptEntry {
         lane_epoch,
@@ -447,7 +589,9 @@ pub fn plan_committable_receipts(
     let mut grouped: BTreeMap<LaneEpoch, BTreeMap<u64, DaReceiptEntry>> = BTreeMap::new();
     for entry in receipts {
         if lane_config.entry(entry.lane_epoch.lane_id).is_none() {
-            continue;
+            return Err(DaReceiptQueueError::UnknownLane {
+                lane: entry.lane_epoch.lane_id,
+            });
         }
 
         let key = iroha_data_model::da::commitment::DaCommitmentKey {
@@ -551,7 +695,13 @@ pub fn align_commitments_for_receipts(
     for record in commitments {
         let lane_epoch = LaneEpoch::new(record.lane_id, record.epoch);
         let key = (lane_epoch, record.sequence);
-        by_key.entry(key).or_insert(record);
+        if by_key.insert(key, record).is_some() {
+            return Err(DaReceiptQueueError::DuplicateCommitment {
+                lane: record.lane_id,
+                epoch: record.epoch,
+                sequence: record.sequence,
+            });
+        }
     }
 
     let mut aligned = Vec::with_capacity(receipts.len());
@@ -608,21 +758,11 @@ pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) {
         let Ok(data) = std::fs::read(&path) else {
             continue;
         };
-        let Ok(stored) = norito::decode_from_bytes::<StoredDaReceipt>(&data) else {
+        let Ok(entry) = decode_receipt(&data, &path) else {
             continue;
         };
-        if stored.version != STORED_RECEIPT_VERSION {
-            iroha_logger::debug!(
-                path = %path.display(),
-                version = stored.version,
-                expected = STORED_RECEIPT_VERSION,
-                "skipping DA receipt with unsupported version during prune"
-            );
-            continue;
-        }
-        let lane_epoch = LaneEpoch::new(stored.receipt.lane_id, stored.receipt.epoch);
-        if let Some(highest) = cursors.get(&lane_epoch) {
-            if stored.sequence <= *highest {
+        if let Some(highest) = cursors.get(&entry.lane_epoch) {
+            if entry.sequence <= *highest {
                 if let Err(err) = std::fs::remove_file(&path) {
                     iroha_logger::debug!(
                         ?err,
@@ -703,6 +843,20 @@ mod tests {
         )
     }
 
+    fn receipt_file_name(
+        receipt: &DaIngestReceipt,
+        sequence: u64,
+        fingerprint: [u8; 32],
+    ) -> String {
+        format!(
+            "da-receipt-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
+            lane = receipt.lane_id.as_u32(),
+            epoch = receipt.epoch,
+            ticket = hex::encode(receipt.storage_ticket.as_ref()),
+            fingerprint = hex::encode(fingerprint)
+        )
+    }
+
     fn cursor_snapshot(lane: LaneId, epoch: u64, sequence: u64) -> BTreeMap<LaneEpoch, u64> {
         let mut map = BTreeMap::new();
         map.insert(LaneEpoch::new(lane, epoch), sequence);
@@ -722,6 +876,43 @@ mod tests {
     }
 
     #[test]
+    fn receipt_cursor_record_bundle_rolls_back_when_later_record_regresses() {
+        let lane0_epoch = LaneEpoch::new(LaneId::new(0), 1);
+        let lane1_epoch = LaneEpoch::new(LaneId::new(1), 1);
+        let mut index = DaReceiptCursorIndex::default();
+        let initial_lane0 = sample_record(&sample_receipt(0, 1, 1), 1);
+        let initial_lane1 = sample_record(&sample_receipt(1, 1, 3), 3);
+        index
+            .record_bundle(1, &[initial_lane0, initial_lane1])
+            .expect("initial receipt cursor records");
+
+        let advancing_lane0 = sample_record(&sample_receipt(0, 1, 2), 2);
+        let regressing_lane1 = sample_record(&sample_receipt(1, 1, 2), 2);
+        let err = index
+            .record_bundle(2, &[advancing_lane0, regressing_lane1])
+            .expect_err("later receipt cursor regression must fail");
+        assert!(matches!(
+            err,
+            DaReceiptCursorError::Regression {
+                lane,
+                observed: 2,
+                recorded: 3,
+                ..
+            } if lane == LaneId::new(1)
+        ));
+        assert_eq!(index.highest(lane0_epoch), Some(1));
+        assert_eq!(index.highest(lane1_epoch), Some(3));
+        assert_eq!(
+            index
+                .by_lane_epoch
+                .get(&lane0_epoch)
+                .expect("lane0 cursor")
+                .last_block_height,
+            1
+        );
+    }
+
+    #[test]
     fn load_receipt_entries_reads_spool() {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
@@ -731,9 +922,7 @@ mod tests {
             receipt: receipt.clone(),
         };
         let bytes = to_bytes(&stored).expect("encode");
-        let path = dir
-            .path()
-            .join("da-receipt-00000001-0000000000000002-0000000000000003-test.norito");
+        let path = dir.path().join(receipt_file_name(&receipt, 3, [0x99; 32]));
         std::fs::write(&path, bytes).expect("write");
 
         let entries = load_receipt_entries(dir.path()).expect("load entries");
@@ -754,12 +943,11 @@ mod tests {
             receipt: receipt.clone(),
         };
         let bytes = to_bytes(&stored).expect("encode");
-        let ok_path = dir
-            .path()
-            .join("da-receipt-00000001-0000000000000002-0000000000000003-ok.norito");
+        let ok_path = dir.path().join(receipt_file_name(&receipt, 3, [0x99; 32]));
+        let corrupt_receipt = sample_receipt(1, 2, 4);
         let bad_path = dir
             .path()
-            .join("da-receipt-00000001-0000000000000002-0000000000000004-bad.norito");
+            .join(receipt_file_name(&corrupt_receipt, 4, [0x88; 32]));
         std::fs::write(&ok_path, bytes).expect("write ok");
         std::fs::write(&bad_path, b"corrupt").expect("write corrupt");
 
@@ -775,16 +963,109 @@ mod tests {
         let stored = StoredDaReceipt {
             version: STORED_RECEIPT_VERSION + 1,
             sequence: 3,
-            receipt,
+            receipt: receipt.clone(),
         };
         let bytes = to_bytes(&stored).expect("encode");
-        let path = dir
-            .path()
-            .join("da-receipt-00000001-0000000000000002-0000000000000003-bad.norito");
+        let path = dir.path().join(receipt_file_name(&receipt, 3, [0x99; 32]));
         std::fs::write(&path, bytes).expect("write");
 
         let entries = load_receipt_entries(dir.path()).expect("load entries");
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn load_receipt_entries_skips_malformed_filenames() {
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let stored = StoredDaReceipt {
+            version: STORED_RECEIPT_VERSION,
+            sequence: 3,
+            receipt: receipt.clone(),
+        };
+        let bytes = to_bytes(&stored).expect("encode");
+        let path = dir.path().join("da-receipt-malformed.norito");
+        std::fs::write(&path, bytes).expect("write malformed filename");
+
+        let entries = load_receipt_entries(dir.path()).expect("load entries");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn load_receipt_entries_skips_filename_body_tuple_mismatch() {
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let stored = StoredDaReceipt {
+            version: STORED_RECEIPT_VERSION,
+            sequence: 3,
+            receipt: receipt.clone(),
+        };
+        let bytes = to_bytes(&stored).expect("encode");
+        let path = dir.path().join(receipt_file_name(&receipt, 4, [0x99; 32]));
+        std::fs::write(&path, bytes).expect("write mismatched receipt");
+
+        let entries = load_receipt_entries(dir.path()).expect("load entries");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn load_receipt_entries_skips_filename_ticket_mismatch() {
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let stored = StoredDaReceipt {
+            version: STORED_RECEIPT_VERSION,
+            sequence: 3,
+            receipt: receipt.clone(),
+        };
+        let bytes = to_bytes(&stored).expect("encode");
+        let mut filename_receipt = receipt;
+        filename_receipt.storage_ticket = StorageTicketId::new([0x99; 32]);
+        let path = dir
+            .path()
+            .join(receipt_file_name(&filename_receipt, 3, [0x88; 32]));
+        std::fs::write(&path, bytes).expect("write mismatched receipt");
+
+        let entries = load_receipt_entries(dir.path()).expect("load entries");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn prune_spool_removes_valid_stale_receipts() {
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let stored = StoredDaReceipt {
+            version: STORED_RECEIPT_VERSION,
+            sequence: 3,
+            receipt: receipt.clone(),
+        };
+        let path = dir.path().join(receipt_file_name(&receipt, 3, [0x99; 32]));
+        std::fs::write(&path, to_bytes(&stored).expect("encode receipt")).expect("write receipt");
+        let cursors = cursor_snapshot(LaneId::new(1), 2, 3);
+
+        prune_spool(dir.path(), &cursors);
+
+        assert!(!path.exists(), "valid stale receipt should be removed");
+    }
+
+    #[test]
+    fn prune_spool_skips_filename_body_mismatch() {
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let stored = StoredDaReceipt {
+            version: STORED_RECEIPT_VERSION,
+            sequence: 3,
+            receipt: receipt.clone(),
+        };
+        let path = dir.path().join(receipt_file_name(&receipt, 4, [0x99; 32]));
+        std::fs::write(&path, to_bytes(&stored).expect("encode receipt"))
+            .expect("write mismatched receipt");
+        let cursors = cursor_snapshot(LaneId::new(1), 2, 3);
+
+        prune_spool(dir.path(), &cursors);
+
+        assert!(
+            path.exists(),
+            "mismatched receipt filename/body must not be trusted during prune"
+        );
     }
 
     #[test]
@@ -804,6 +1085,31 @@ mod tests {
         assert!(matches!(
             result,
             Err(DaReceiptQueueError::MissingSequence { expected: 2, .. })
+        ));
+    }
+
+    #[test]
+    fn plan_committable_receipts_rejects_unknown_lane() {
+        let known_lane = LaneId::new(0);
+        let unknown_lane = LaneId::new(7);
+        let receipt = sample_receipt(unknown_lane.as_u32(), 1, 1);
+        let entry = DaReceiptEntry {
+            lane_epoch: LaneEpoch::new(unknown_lane, 1),
+            sequence: 1,
+            manifest_hash: ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
+            receipt,
+        };
+        let lane_config = lane_config_for(known_lane);
+
+        let result = plan_committable_receipts(
+            &lane_config,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            vec![entry],
+        );
+        assert!(matches!(
+            result,
+            Err(DaReceiptQueueError::UnknownLane { lane }) if lane == unknown_lane
         ));
     }
 
@@ -904,6 +1210,27 @@ mod tests {
         assert!(matches!(
             result,
             Err(DaReceiptQueueError::CommitmentTicketMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn align_commitments_rejects_duplicate_commitment_key() {
+        let lane = LaneId::new(4);
+        let receipt = sample_receipt(lane.as_u32(), 2, 1);
+        let record = sample_record(&receipt, 1);
+        let entries = vec![DaReceiptEntry {
+            lane_epoch: LaneEpoch::new(lane, 2),
+            sequence: 1,
+            manifest_hash: ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
+            receipt,
+        }];
+
+        let result = align_commitments_for_receipts(&entries, &[record.clone(), record]);
+
+        assert!(matches!(
+            result,
+            Err(DaReceiptQueueError::DuplicateCommitment { lane: dup_lane, sequence: 1, .. })
+                if dup_lane == lane
         ));
     }
 

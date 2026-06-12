@@ -226,7 +226,7 @@ const sampleNativeEvmProverBundle = (destinationBindingHash, overrides = {}) => 
     no_wasm: true,
     remote_prover_required: false,
     browser_implementation: "pure-typescript",
-    cross_sdk_fixture_parity_artifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+    cross_sdk_fixture_parity_artifact: "artifacts/eth-mainnet/cross-sdk-parity.json",
     native_prover_self_test_artifact: "artifacts/eth-mainnet/native-prover-self-test.json",
     native_sdk_artifacts: Object.entries(
       SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,

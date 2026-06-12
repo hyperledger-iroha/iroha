@@ -135,6 +135,31 @@ fn parse_storage_ticket_hex_validates_variants() {
     assert!(parse_storage_ticket_hex("ab").is_err(), "too short");
 }
 
+fn spool_artifact_file_name(
+    prefix: &str,
+    ticket: &StorageTicketId,
+    sequence: u64,
+    fingerprint: [u8; 32],
+) -> String {
+    spool_artifact_file_name_for_key(prefix, LaneId::new(1), 1, sequence, ticket, fingerprint)
+}
+
+fn spool_artifact_file_name_for_key(
+    prefix: &str,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    ticket: &StorageTicketId,
+    fingerprint: [u8; 32],
+) -> String {
+    format!(
+        "{prefix}{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito",
+        lane = lane_id.as_u32(),
+        ticket_hex = hex::encode(ticket.as_bytes()),
+        fingerprint_hex = hex::encode(fingerprint)
+    )
+}
+
 #[tokio::test]
 async fn da_spooler_executes_batch_before_ack() {
     let marker = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -161,15 +186,20 @@ async fn da_spooler_executes_batch_before_ack() {
 #[test]
 fn load_manifest_from_spool_locates_ticket() {
     let dir = tempdir().expect("dir");
-    let ticket = StorageTicketId::new([0x77; 32]);
-    let ticket_hex = hex::encode(ticket.as_bytes());
-    let file =
-        format!("manifest-00000001-0000000000000001-0000000000000002-{ticket_hex}-deadbeef.norito");
-    let path = dir.path().join(file);
-    fs::write(&path, b"manifest-bytes").expect("manifest file");
+    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let ticket = context.artifacts.storage_ticket;
+    let path = dir.path().join(spool_artifact_file_name_for_key(
+        "manifest-",
+        context.request.lane_id,
+        context.request.epoch,
+        context.request.sequence,
+        &ticket,
+        *context.artifacts.fingerprint.as_bytes(),
+    ));
+    fs::write(&path, &context.artifacts.encoded).expect("manifest file");
 
     let bytes = persistence::load_manifest_from_spool(dir.path(), &ticket).expect("manifest bytes");
-    assert_eq!(bytes, b"manifest-bytes");
+    assert_eq!(bytes, context.artifacts.encoded);
 
     let missing = StorageTicketId::new([0x55; 32]);
     let err =
@@ -181,11 +211,12 @@ fn load_manifest_from_spool_locates_ticket() {
 fn load_pdp_commitment_from_spool_locates_ticket() {
     let dir = tempdir().expect("dir");
     let ticket = StorageTicketId::new([0x99; 32]);
-    let ticket_hex = hex::encode(ticket.as_bytes());
-    let file = format!(
-        "pdp-commitment-00000001-0000000000000001-0000000000000002-{ticket_hex}-feedface.norito"
-    );
-    let path = dir.path().join(file);
+    let path = dir.path().join(spool_artifact_file_name(
+        "pdp-commitment-",
+        &ticket,
+        2,
+        [0x55; 32],
+    ));
     let commitment = sample_pdp_commitment_for_tests();
     let bytes = encode_pdp_commitment_bytes(&commitment).expect("encode commitment");
     fs::write(&path, &bytes).expect("commitment file");
@@ -198,6 +229,119 @@ fn load_pdp_commitment_from_spool_locates_ticket() {
     let err = persistence::load_pdp_commitment_from_spool(dir.path(), &missing)
         .expect_err("missing commitment");
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+}
+
+#[test]
+fn load_manifest_from_spool_ignores_malformed_ticket_match() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x77; 32]);
+    let ticket_hex = hex::encode(ticket.as_bytes());
+    let path = dir.path().join(format!(
+        "manifest-00000001-0000000000000001-0000000000000002-{ticket_hex}-deadbeef.norito"
+    ));
+    fs::write(&path, b"manifest-bytes").expect("manifest file");
+
+    let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
+        .expect_err("malformed filename should not match");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+}
+
+#[test]
+fn load_manifest_from_spool_rejects_duplicate_ticket_matches() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x77; 32]);
+    let first = dir.path().join(spool_artifact_file_name(
+        "manifest-",
+        &ticket,
+        2,
+        [0x44; 32],
+    ));
+    let second = dir.path().join(spool_artifact_file_name(
+        "manifest-",
+        &ticket,
+        3,
+        [0x45; 32],
+    ));
+    fs::write(first, b"manifest-a").expect("manifest a");
+    fs::write(second, b"manifest-b").expect("manifest b");
+
+    let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
+        .expect_err("duplicate strict matches should fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn load_manifest_from_spool_rejects_body_ticket_mismatch() {
+    let dir = tempdir().expect("dir");
+    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let ticket = context.artifacts.storage_ticket;
+    let path = dir.path().join(spool_artifact_file_name_for_key(
+        "manifest-",
+        context.request.lane_id,
+        context.request.epoch,
+        context.request.sequence,
+        &ticket,
+        *context.artifacts.fingerprint.as_bytes(),
+    ));
+    let mut manifest = context.artifacts.manifest.clone();
+    manifest.storage_ticket = StorageTicketId::new([0x99; 32]);
+    let bytes = to_bytes(&manifest).expect("encode mismatched manifest");
+    fs::write(&path, bytes).expect("manifest file");
+
+    let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
+        .expect_err("body ticket mismatch must fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn load_manifest_from_spool_rejects_fingerprint_mismatch() {
+    let dir = tempdir().expect("dir");
+    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let ticket = context.artifacts.storage_ticket;
+    let mut wrong_fingerprint = *context.artifacts.fingerprint.as_bytes();
+    wrong_fingerprint[0] ^= 0xFF;
+    let path = dir.path().join(spool_artifact_file_name_for_key(
+        "manifest-",
+        context.request.lane_id,
+        context.request.epoch,
+        context.request.sequence,
+        &ticket,
+        wrong_fingerprint,
+    ));
+    fs::write(&path, &context.artifacts.encoded).expect("manifest file");
+
+    let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
+        .expect_err("filename fingerprint mismatch must fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn load_pdp_commitment_from_spool_rejects_duplicate_ticket_matches() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x99; 32]);
+    let first = dir.path().join(spool_artifact_file_name(
+        "pdp-commitment-",
+        &ticket,
+        2,
+        [0x55; 32],
+    ));
+    let second = dir.path().join(spool_artifact_file_name(
+        "pdp-commitment-",
+        &ticket,
+        3,
+        [0x56; 32],
+    ));
+    fs::write(first, b"commitment-a").expect("commitment a");
+    fs::write(second, b"commitment-b").expect("commitment b");
+
+    let err = persistence::load_pdp_commitment_from_spool(dir.path(), &ticket)
+        .expect_err("duplicate strict matches should fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 
 #[test]
@@ -1041,6 +1185,19 @@ fn taikai_artifacts_persist_idempotent() {
     .expect("path");
     assert!(trm_path.exists());
 
+    let ssm_path = taikai_ingest::persist_ssm(
+        dir.path(),
+        lane_id,
+        epoch,
+        sequence,
+        &storage_ticket,
+        &fingerprint,
+        b"ssm",
+    )
+    .expect("persist ssm")
+    .expect("path");
+    assert!(ssm_path.exists());
+
     let envelope_second = taikai_ingest::persist_envelope(
         dir.path(),
         lane_id,
@@ -1048,11 +1205,37 @@ fn taikai_artifacts_persist_idempotent() {
         sequence,
         &storage_ticket,
         &fingerprint,
-        b"other",
+        b"envelope",
     )
     .expect("persist envelope second")
     .expect("path");
     assert_eq!(envelope_path, envelope_second);
+
+    let index_second = taikai_ingest::persist_indexes(
+        dir.path(),
+        lane_id,
+        epoch,
+        sequence,
+        &storage_ticket,
+        &fingerprint,
+        b"indexes",
+    )
+    .expect("persist indexes second")
+    .expect("path");
+    assert_eq!(index_path, index_second);
+
+    let ssm_second = taikai_ingest::persist_ssm(
+        dir.path(),
+        lane_id,
+        epoch,
+        sequence,
+        &storage_ticket,
+        &fingerprint,
+        b"ssm",
+    )
+    .expect("persist ssm second")
+    .expect("path");
+    assert_eq!(ssm_path, ssm_second);
 
     let trm_second = taikai_ingest::persist_trm(
         dir.path(),
@@ -1061,11 +1244,23 @@ fn taikai_artifacts_persist_idempotent() {
         sequence,
         &storage_ticket,
         &fingerprint,
-        b"other-trm",
+        b"trm",
     )
     .expect("persist trm second")
     .expect("path");
     assert_eq!(trm_path, trm_second);
+
+    let err = taikai_ingest::persist_envelope(
+        dir.path(),
+        lane_id,
+        epoch,
+        sequence,
+        &storage_ticket,
+        &fingerprint,
+        b"other",
+    )
+    .expect_err("mismatched envelope bytes must fail");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 
 #[derive(Default)]
@@ -1207,6 +1402,44 @@ async fn taikai_anchor_processing_generates_payload_and_sentinel() {
         .await
         .expect("collect after upload");
     assert!(pending_after.is_empty());
+}
+
+#[tokio::test]
+async fn taikai_anchor_collection_skips_malformed_base_id() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    async_fs::create_dir_all(&spool_dir)
+        .await
+        .expect("create spool");
+
+    let base_id = "not-a-production-base-id";
+    async_fs::write(
+        spool_dir.join(format!("taikai-envelope-{base_id}.norito")),
+        b"envelope-bytes",
+    )
+    .await
+    .expect("write envelope");
+    async_fs::write(
+        spool_dir.join(format!("taikai-indexes-{base_id}.json")),
+        b"{}",
+    )
+    .await
+    .expect("write indexes");
+    async_fs::write(
+        spool_dir.join(format!("taikai-ssm-{base_id}.norito")),
+        b"ssm-bytes",
+    )
+    .await
+    .expect("write ssm");
+
+    let pending = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("collect pending");
+
+    assert!(
+        pending.is_empty(),
+        "malformed base id must not produce an anchor upload"
+    );
 }
 
 #[test]
@@ -1708,13 +1941,22 @@ fn build_receipt_signs_with_operator_key() {
         DaStripeLayout::default(),
     )
     .expect("build receipt");
-    let mut unsigned = receipt.clone();
-    unsigned.operator_signature = Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER);
-    let unsigned_bytes = to_bytes(&unsigned).expect("encode unsigned receipt");
+    let unsigned_bytes =
+        persistence::unsigned_receipt_bytes(&receipt, request.sequence).expect("unsigned receipt");
     receipt
         .operator_signature
         .verify(signer.public_key(), &unsigned_bytes)
         .expect("signature verifies");
+
+    let wrong_sequence_bytes = persistence::unsigned_receipt_bytes(&receipt, request.sequence + 1)
+        .expect("wrong-sequence unsigned receipt");
+    assert!(
+        receipt
+            .operator_signature
+            .verify(signer.public_key(), &wrong_sequence_bytes)
+            .is_err(),
+        "operator signature must bind the request sequence"
+    );
 }
 
 #[test]
@@ -2307,7 +2549,191 @@ fn persist_da_pin_intent_writes_file() {
     assert_eq!(decoded.owner, Some(ALICE_ID.clone()));
 }
 
-fn test_receipt(signer: &KeyPair, lane_id: LaneId, epoch: u64, seed: u8) -> DaIngestReceipt {
+#[test]
+fn persist_spool_artifacts_reject_existing_mismatched_targets() {
+    let temp_dir = tempdir().expect("temp dir");
+    let manifest_dir = temp_dir.path();
+    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let request = context.request;
+    let manifest = context.artifacts;
+    let pdp_commitment = sample_pdp_commitment_for_tests();
+    let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
+    let signer = KeyPair::random();
+    let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
+    let receipt = build_receipt(
+        &signer,
+        &request,
+        1_701_000_999,
+        manifest.blob_hash,
+        manifest.chunk_root,
+        manifest.manifest_hash,
+        manifest.storage_ticket,
+        pdp_bytes.clone(),
+        manifest.manifest.rent_quote,
+        stripe_layout,
+    )
+    .expect("build receipt");
+    let record = build_da_commitment_record(
+        &request,
+        &manifest,
+        &request.retention_policy,
+        &receipt.operator_signature,
+        &pdp_bytes,
+        DaProofScheme::MerkleSha256,
+    );
+    let intent = DaPinIntent::new(
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        manifest.storage_ticket,
+        ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
+    );
+    let fingerprint = *manifest.fingerprint.as_bytes();
+    let assert_invalid_data =
+        |result: std::io::Result<Option<PathBuf>>, artifact: &str| match result {
+            Ok(path) => panic!("{artifact} unexpectedly accepted existing target {path:?}"),
+            Err(err) => assert_eq!(
+                err.kind(),
+                std::io::ErrorKind::InvalidData,
+                "{artifact} should reject mismatched existing bytes"
+            ),
+        };
+
+    let manifest_path = manifest_dir.join(spool_artifact_file_name_for_key(
+        "manifest-",
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        fingerprint,
+    ));
+    fs::write(&manifest_path, b"poison-manifest").expect("poison manifest");
+    assert_invalid_data(
+        persistence::persist_manifest_for_sorafs(
+            manifest_dir,
+            &manifest.encoded,
+            request.lane_id,
+            request.epoch,
+            request.sequence,
+            &manifest.storage_ticket,
+            &manifest.fingerprint,
+        ),
+        "manifest",
+    );
+
+    let pdp_path = manifest_dir.join(spool_artifact_file_name_for_key(
+        "pdp-commitment-",
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        fingerprint,
+    ));
+    fs::write(&pdp_path, b"poison-pdp").expect("poison pdp");
+    assert_invalid_data(
+        persistence::persist_pdp_commitment(
+            manifest_dir,
+            &pdp_commitment,
+            request.lane_id,
+            request.epoch,
+            request.sequence,
+            &manifest.storage_ticket,
+            &manifest.fingerprint,
+        ),
+        "pdp",
+    );
+
+    let commitment_path = manifest_dir.join(spool_artifact_file_name_for_key(
+        "da-commitment-",
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        fingerprint,
+    ));
+    fs::write(&commitment_path, b"poison-commitment").expect("poison commitment");
+    assert_invalid_data(
+        persistence::persist_da_commitment_record(
+            manifest_dir,
+            &record,
+            request.lane_id,
+            request.epoch,
+            request.sequence,
+            &manifest.storage_ticket,
+            &manifest.fingerprint,
+        ),
+        "commitment",
+    );
+
+    let schedule_path = manifest_dir.join(spool_artifact_file_name_for_key(
+        "da-commitment-schedule-",
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        fingerprint,
+    ));
+    fs::write(&schedule_path, b"poison-schedule").expect("poison schedule");
+    assert_invalid_data(
+        persistence::persist_da_commitment_schedule_entry(
+            manifest_dir,
+            &record,
+            &pdp_bytes,
+            request.lane_id,
+            request.epoch,
+            request.sequence,
+            &manifest.storage_ticket,
+            &manifest.fingerprint,
+        ),
+        "schedule",
+    );
+
+    let pin_path = manifest_dir.join(spool_artifact_file_name_for_key(
+        "da-pin-intent-",
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        fingerprint,
+    ));
+    fs::write(&pin_path, b"poison-pin").expect("poison pin");
+    assert_invalid_data(
+        persistence::persist_da_pin_intent(
+            manifest_dir,
+            &intent,
+            request.lane_id,
+            request.epoch,
+            request.sequence,
+            &manifest.storage_ticket,
+            &manifest.fingerprint,
+        ),
+        "pin",
+    );
+
+    let receipt_path = manifest_dir.join(receipt_spool_file_name(
+        &receipt,
+        request.sequence,
+        fingerprint,
+    ));
+    fs::write(&receipt_path, b"poison-receipt").expect("poison receipt");
+    assert_invalid_data(
+        persistence::persist_da_receipt(
+            manifest_dir,
+            &receipt,
+            request.sequence,
+            &manifest.fingerprint,
+        ),
+        "receipt",
+    );
+}
+
+fn test_receipt(
+    signer: &KeyPair,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    seed: u8,
+) -> DaIngestReceipt {
     let mut receipt = DaIngestReceipt {
         client_blob_id: BlobDigest::new([seed; 32]),
         lane_id,
@@ -2322,7 +2748,8 @@ fn test_receipt(signer: &KeyPair, lane_id: LaneId, epoch: u64, seed: u8) -> DaIn
         rent_quote: DaRentQuote::default(),
         operator_signature: Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER),
     };
-    let unsigned = persistence::unsigned_receipt_bytes(&receipt).expect("test receipt encodes");
+    let unsigned =
+        persistence::unsigned_receipt_bytes(&receipt, sequence).expect("test receipt encodes");
     receipt.operator_signature = Signature::new(signer.private_key(), &unsigned);
     receipt
 }
@@ -2331,13 +2758,40 @@ fn test_fingerprint(seed: u8) -> ReplayFingerprint {
     ReplayFingerprint::from_hash_bytes(&[seed; blake3::OUT_LEN])
 }
 
+fn receipt_spool_file_name(
+    receipt: &DaIngestReceipt,
+    sequence: u64,
+    fingerprint: [u8; 32],
+) -> String {
+    format!(
+        "da-receipt-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito",
+        lane = receipt.lane_id.as_u32(),
+        epoch = receipt.epoch,
+        ticket_hex = hex::encode(receipt.storage_ticket.as_bytes()),
+        fingerprint_hex = hex::encode(fingerprint)
+    )
+}
+
+fn receipt_file_count(dir: &Path) -> usize {
+    fs::read_dir(dir)
+        .expect("read receipt directory")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("da-receipt-") && name.ends_with(".norito"))
+        })
+        .count()
+}
+
 #[test]
 fn persist_da_receipt_writes_and_is_idempotent() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
     let signer = KeyPair::random();
     let lane_id = LaneId::new(3);
-    let receipt = test_receipt(&signer, lane_id, 5, 0xAA);
+    let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAA);
     let fingerprint = test_fingerprint(0xCC);
 
     let first_path = persistence::persist_da_receipt(manifest_dir, &receipt, 7, &fingerprint)
@@ -2366,15 +2820,56 @@ fn load_da_receipts_skips_unsupported_versions() {
     let manifest_dir = temp_dir.path();
     let signer = KeyPair::random();
     let lane_id = LaneId::new(3);
-    let receipt = test_receipt(&signer, lane_id, 5, 0xAB);
+    let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAB);
     let stored = persistence::StoredDaReceipt {
         version: persistence::STORED_RECEIPT_VERSION + 1,
         sequence: 7,
-        receipt,
+        receipt: receipt.clone(),
     };
     let bytes = to_bytes(&stored).expect("encode receipt");
-    let path =
-        manifest_dir.join("da-receipt-00000003-0000000000000005-0000000000000007-bad.norito");
+    let path = manifest_dir.join(receipt_spool_file_name(&receipt, 7, [0xBB; 32]));
+    fs::write(&path, bytes).expect("write receipt");
+
+    let loaded = persistence::load_da_receipts(manifest_dir).expect("load receipts");
+    assert!(loaded.is_empty());
+}
+
+#[test]
+fn load_da_receipts_skips_filename_body_mismatch() {
+    let temp_dir = tempdir().expect("temp dir");
+    let manifest_dir = temp_dir.path();
+    let signer = KeyPair::random();
+    let lane_id = LaneId::new(3);
+    let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAC);
+    let stored = persistence::StoredDaReceipt {
+        version: persistence::STORED_RECEIPT_VERSION,
+        sequence: 7,
+        receipt: receipt.clone(),
+    };
+    let bytes = to_bytes(&stored).expect("encode receipt");
+    let path = manifest_dir.join(receipt_spool_file_name(&receipt, 8, [0xBC; 32]));
+    fs::write(&path, bytes).expect("write receipt");
+
+    let loaded = persistence::load_da_receipts(manifest_dir).expect("load receipts");
+    assert!(loaded.is_empty());
+}
+
+#[test]
+fn load_da_receipts_skips_filename_ticket_mismatch() {
+    let temp_dir = tempdir().expect("temp dir");
+    let manifest_dir = temp_dir.path();
+    let signer = KeyPair::random();
+    let lane_id = LaneId::new(3);
+    let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAD);
+    let stored = persistence::StoredDaReceipt {
+        version: persistence::STORED_RECEIPT_VERSION,
+        sequence: 7,
+        receipt: receipt.clone(),
+    };
+    let bytes = to_bytes(&stored).expect("encode receipt");
+    let mut filename_receipt = receipt;
+    filename_receipt.storage_ticket = StorageTicketId::new([0x99; 32]);
+    let path = manifest_dir.join(receipt_spool_file_name(&filename_receipt, 7, [0xBD; 32]));
     fs::write(&path, bytes).expect("write receipt");
 
     let loaded = persistence::load_da_receipts(manifest_dir).expect("load receipts");
@@ -2394,32 +2889,52 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     )
     .unwrap();
 
-    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1);
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 1);
     assert!(matches!(
         log.append(lane_epoch, 1, receipt.clone(), test_fingerprint(1))
             .unwrap(),
         ReceiptInsertOutcome::Stored { .. }
     ));
+    assert_eq!(
+        receipt_file_count(temp_dir.path()),
+        1,
+        "stored receipt should create one durable receipt file"
+    );
 
     assert!(matches!(
         log.append(lane_epoch, 1, receipt.clone(), test_fingerprint(1))
             .unwrap(),
         ReceiptInsertOutcome::Duplicate { .. }
     ));
+    assert_eq!(
+        receipt_file_count(temp_dir.path()),
+        1,
+        "duplicate receipt must not create another durable receipt file"
+    );
 
-    let conflict = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 2);
+    let conflict = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 2);
     assert!(matches!(
         log.append(lane_epoch, 1, conflict, test_fingerprint(2))
             .unwrap(),
         ReceiptInsertOutcome::ManifestConflict { .. }
     ));
+    assert_eq!(
+        receipt_file_count(temp_dir.path()),
+        1,
+        "conflicting receipt must not be written before validation"
+    );
 
-    let stale = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 3);
+    let stale = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 0, 3);
     assert!(matches!(
         log.append(lane_epoch, 0, stale, test_fingerprint(3))
             .unwrap(),
         ReceiptInsertOutcome::StaleSequence { highest: 1 }
     ));
+    assert_eq!(
+        receipt_file_count(temp_dir.path()),
+        1,
+        "stale receipt must not be written before validation"
+    );
 }
 
 #[test]
@@ -2435,8 +2950,8 @@ fn da_receipt_log_rejects_invalid_signature() {
     )
     .expect("open log");
 
-    let mut receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 4);
-    let unsigned = persistence::unsigned_receipt_bytes(&receipt).expect("unsigned bytes");
+    let mut receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 4);
+    let unsigned = persistence::unsigned_receipt_bytes(&receipt, 1).expect("unsigned bytes");
     let wrong_signer = KeyPair::random();
     receipt.operator_signature = Signature::new(wrong_signer.private_key(), &unsigned);
 
@@ -2444,6 +2959,33 @@ fn da_receipt_log_rejects_invalid_signature() {
     assert!(
         outcome.is_err(),
         "receipt with mismatched signature must be rejected"
+    );
+}
+
+#[test]
+fn da_receipt_log_rejects_sequence_rebound_signature() {
+    let temp_dir = tempdir().expect("temp dir");
+    let lane_epoch = LaneEpoch::new(LaneId::new(5), 8);
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let signer = KeyPair::random();
+    let log = DaReceiptLog::open(
+        temp_dir.path().to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    )
+    .expect("open log");
+
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 5);
+    let outcome = log.append(lane_epoch, 2, receipt, test_fingerprint(5));
+
+    assert!(
+        outcome.is_err(),
+        "receipt signature must bind the append sequence"
+    );
+    assert_eq!(
+        receipt_file_count(temp_dir.path()),
+        0,
+        "sequence-rebound receipt must not be persisted"
     );
 }
 
@@ -2460,8 +3002,8 @@ fn da_receipt_log_reloads_from_disk() {
             signer.public_key().clone(),
         )
         .unwrap();
-        let first = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 9);
-        let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 10);
+        let first = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 9);
+        let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 2, 10);
         log.append(lane_epoch, 1, first.clone(), test_fingerprint(9))
             .unwrap();
         log.append(lane_epoch, 2, second.clone(), test_fingerprint(10))
@@ -2493,15 +3035,48 @@ fn da_receipt_log_reloads_from_disk() {
 }
 
 #[test]
+fn da_receipt_log_skips_sequence_rebound_signature_on_open() {
+    let temp_dir = tempdir().expect("temp dir");
+    let lane_epoch = LaneEpoch::new(LaneId::new(6), 13);
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 9);
+    let stored = persistence::StoredDaReceipt {
+        version: persistence::STORED_RECEIPT_VERSION,
+        sequence: 2,
+        receipt: receipt.clone(),
+    };
+    let bytes = to_bytes(&stored).expect("encode receipt");
+    let path = temp_dir
+        .path()
+        .join(receipt_spool_file_name(&receipt, 2, [0xCC; 32]));
+    fs::write(&path, bytes).expect("write rebound receipt");
+
+    let log = DaReceiptLog::open(
+        temp_dir.path().to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    )
+    .expect("open log");
+
+    assert!(log.receipts_for(lane_epoch).is_empty());
+    assert!(
+        cursor_store.highest_sequences().is_empty(),
+        "sequence-rebound receipt must not seed replay cursors"
+    );
+}
+
+#[test]
 fn da_receipt_log_skips_invalid_entries_on_open() {
     let temp_dir = tempdir().expect("temp dir");
+    let signer = KeyPair::random();
+    let corrupt_receipt = test_receipt(&signer, LaneId::new(1), 1, 1, 0xAA);
     let bad_path = temp_dir
         .path()
-        .join("da-receipt-00000001-0000000000000001-0000000000000001-bad.norito");
+        .join(receipt_spool_file_name(&corrupt_receipt, 1, [0xDD; 32]));
     fs::write(&bad_path, b"corrupt").expect("write corrupt receipt");
 
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
     let log = DaReceiptLog::open(
         temp_dir.path().to_path_buf(),
         Arc::clone(&cursor_store),
@@ -2511,6 +3086,67 @@ fn da_receipt_log_skips_invalid_entries_on_open() {
 
     let lane_epoch = LaneEpoch::new(LaneId::new(1), 1);
     assert!(log.receipts_for(lane_epoch).is_empty());
+}
+
+#[test]
+fn da_receipt_log_skips_filename_body_mismatch_on_open() {
+    let temp_dir = tempdir().expect("temp dir");
+    let lane_epoch = LaneEpoch::new(LaneId::new(6), 12);
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 8);
+    let stored = persistence::StoredDaReceipt {
+        version: persistence::STORED_RECEIPT_VERSION,
+        sequence: 1,
+        receipt: receipt.clone(),
+    };
+    let bytes = to_bytes(&stored).expect("encode receipt");
+    let mismatched_path = temp_dir
+        .path()
+        .join(receipt_spool_file_name(&receipt, 2, [0xDE; 32]));
+    fs::write(&mismatched_path, bytes).expect("write mismatched receipt");
+
+    let log = DaReceiptLog::open(
+        temp_dir.path().to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    )
+    .expect("open log");
+
+    assert!(log.receipts_for(lane_epoch).is_empty());
+    assert!(cursor_store.highest_sequences().is_empty());
+}
+
+#[test]
+fn da_receipt_log_skips_filename_ticket_mismatch_on_open() {
+    let temp_dir = tempdir().expect("temp dir");
+    let lane_epoch = LaneEpoch::new(LaneId::new(6), 14);
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x8A);
+    let stored = persistence::StoredDaReceipt {
+        version: persistence::STORED_RECEIPT_VERSION,
+        sequence: 1,
+        receipt: receipt.clone(),
+    };
+    let bytes = to_bytes(&stored).expect("encode receipt");
+    let mut filename_receipt = receipt;
+    filename_receipt.storage_ticket = StorageTicketId::new([0x99; 32]);
+    let mismatched_path =
+        temp_dir
+            .path()
+            .join(receipt_spool_file_name(&filename_receipt, 1, [0xDF; 32]));
+    fs::write(&mismatched_path, bytes).expect("write mismatched receipt");
+
+    let log = DaReceiptLog::open(
+        temp_dir.path().to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    )
+    .expect("open log");
+
+    assert!(log.receipts_for(lane_epoch).is_empty());
+    assert!(cursor_store.highest_sequences().is_empty());
 }
 
 #[test]
@@ -3420,6 +4056,88 @@ fn record_da_receipt_metrics_tracks_outcomes_and_cursor() {
         .with_label_values(&["7", "3"])
         .get();
     assert_eq!(cursor, 5, "cursor gauge should reflect stored sequence");
+}
+
+#[test]
+fn da_spool_rejection_response_allows_committed_receipt_outcomes() {
+    for receipt_outcome in [
+        ReceiptInsertOutcome::Stored {
+            cursor_advanced: true,
+        },
+        ReceiptInsertOutcome::Duplicate {
+            path: PathBuf::from("receipt.norito"),
+        },
+    ] {
+        let mut batch = DaSpoolBatch::new();
+        batch.push(DaSpoolAction::new("receipt_log", move || {
+            Ok(DaSpoolActionOutput::ReceiptOutcome(receipt_outcome))
+        }));
+        let report = batch.execute_sync();
+
+        assert!(
+            da_spool_rejection_response(&report, ResponseFormat::Json).is_none(),
+            "accepted receipt outcomes must not be converted into errors"
+        );
+    }
+}
+
+#[test]
+fn da_spool_rejection_response_rejects_stale_receipt_outcome() {
+    let mut batch = DaSpoolBatch::new();
+    batch.push(DaSpoolAction::new("receipt_log", || {
+        Ok(DaSpoolActionOutput::ReceiptOutcome(
+            ReceiptInsertOutcome::StaleSequence { highest: 9 },
+        ))
+    }));
+    let report = batch.execute_sync();
+    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
+        .expect("stale receipt must produce a conflict response");
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[test]
+fn da_spool_rejection_response_rejects_manifest_conflict_outcome() {
+    let mut batch = DaSpoolBatch::new();
+    batch.push(DaSpoolAction::new("receipt_log", || {
+        Ok(DaSpoolActionOutput::ReceiptOutcome(
+            ReceiptInsertOutcome::ManifestConflict {
+                expected: BlobDigest::new([1; 32]),
+                observed: BlobDigest::new([2; 32]),
+            },
+        ))
+    }));
+    let report = batch.execute_sync();
+    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
+        .expect("manifest conflict must produce a conflict response");
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[test]
+fn da_spool_rejection_response_rejects_missing_receipt_log_outcome() {
+    let mut batch = DaSpoolBatch::new();
+    batch.push(DaSpoolAction::new("manifest", || {
+        Ok(DaSpoolActionOutput::None)
+    }));
+    let report = batch.execute_sync();
+    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
+        .expect("missing receipt log outcome must fail closed");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[test]
+fn da_spool_rejection_response_rejects_spool_action_errors() {
+    let mut batch = DaSpoolBatch::new();
+    batch.push(DaSpoolAction::new("manifest", || {
+        Err("disk full".to_owned())
+    }));
+    let report = batch.execute_sync();
+    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
+        .expect("spool action errors must fail closed");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 fn telemetry_handle_for_tests_with_profile(

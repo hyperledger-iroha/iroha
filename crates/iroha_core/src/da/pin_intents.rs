@@ -9,9 +9,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use iroha_data_model::da::{
-    pin_intent::{DaPinIntent, DaPinIntentBundle},
-    types::StorageTicketId,
+use iroha_data_model::{
+    da::{
+        pin_intent::{DaPinIntent, DaPinIntentBundle},
+        types::StorageTicketId,
+    },
+    nexus::LaneId,
 };
 use iroha_logger::warn;
 use norito::decode_from_bytes;
@@ -47,13 +50,44 @@ pub enum DaPinIntentSpoolError {
         #[source]
         source: norito::core::Error,
     },
+    /// Pin intent filename does not contain the expected lane/epoch/sequence/ticket/fingerprint tuple.
+    #[error("malformed DA pin intent filename at {path}")]
+    MalformedFilename {
+        /// Path that failed.
+        path: PathBuf,
+    },
+    /// Pin intent filename tuple does not match the decoded pin intent body.
+    #[error(
+        "DA pin intent filename tuple {filename_lane:?}/{filename_epoch}/{filename_sequence}/{filename_ticket:?} mismatches body {intent_lane:?}/{intent_epoch}/{intent_sequence}/{intent_ticket:?} at {path}"
+    )]
+    FilenameMismatch {
+        /// Path that failed.
+        path: PathBuf,
+        /// Lane identifier parsed from the filename.
+        filename_lane: LaneId,
+        /// Epoch parsed from the filename.
+        filename_epoch: u64,
+        /// Sequence parsed from the filename.
+        filename_sequence: u64,
+        /// Storage ticket parsed from the filename.
+        filename_ticket: StorageTicketId,
+        /// Lane identifier decoded from the intent body.
+        intent_lane: LaneId,
+        /// Epoch decoded from the intent body.
+        intent_epoch: u64,
+        /// Sequence decoded from the intent body.
+        intent_sequence: u64,
+        /// Storage ticket decoded from the intent body.
+        intent_ticket: StorageTicketId,
+    },
 }
 
 /// Load all DA pin intents from the spool directory.
 ///
-/// Files are filtered by filename (`da-pin-intent-*.norito`), decoded using
-/// Norito, sorted deterministically, and returned as a vector. When the
-/// directory is missing or no intents are present, this returns `Ok(None)`.
+/// Files are filtered by filename (`da-pin-intent-*.norito`), checked against
+/// their advertised lane/epoch/sequence/ticket tuple, decoded using Norito,
+/// sorted deterministically, and returned as a vector. When the directory is
+/// missing or no intents are present, this returns `Ok(None)`.
 ///
 /// # Errors
 ///
@@ -98,11 +132,11 @@ pub fn load_pin_intents(
             }
         };
 
-        match decode_from_bytes::<DaPinIntent>(&bytes) {
+        match decode_pin_intent(&bytes, &path) {
             Ok(intent) => intents.push(intent),
-            Err(source) => {
+            Err(err) => {
                 warn!(
-                    ?source,
+                    ?err,
                     path = %path.display(),
                     "failed to decode DA pin intent file; skipping"
                 );
@@ -137,6 +171,124 @@ fn is_da_pin_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.starts_with("da-pin-intent-") && name.ends_with(".norito"))
+}
+
+#[derive(Clone, Copy)]
+struct PinIntentFileKey {
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: StorageTicketId,
+}
+
+fn parse_pin_intent_file_key(path: &Path) -> Result<PinIntentFileKey, DaPinIntentSpoolError> {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Err(malformed_filename(path));
+    };
+    let Some(rest) = name
+        .strip_prefix("da-pin-intent-")
+        .and_then(|name| name.strip_suffix(".norito"))
+    else {
+        return Err(malformed_filename(path));
+    };
+
+    let mut fields = rest.split('-');
+    let Some(lane_hex) = fields.next() else {
+        return Err(malformed_filename(path));
+    };
+    let Some(epoch_hex) = fields.next() else {
+        return Err(malformed_filename(path));
+    };
+    let Some(sequence_hex) = fields.next() else {
+        return Err(malformed_filename(path));
+    };
+    let Some(ticket_hex) = fields.next() else {
+        return Err(malformed_filename(path));
+    };
+    let Some(fingerprint_hex) = fields.next() else {
+        return Err(malformed_filename(path));
+    };
+    if fields.next().is_some() {
+        return Err(malformed_filename(path));
+    }
+
+    let lane_id = parse_fixed_hex_u32(lane_hex, 8, path).map(LaneId::new)?;
+    let epoch = parse_fixed_hex_u64(epoch_hex, 16, path)?;
+    let sequence = parse_fixed_hex_u64(sequence_hex, 16, path)?;
+    let storage_ticket = StorageTicketId::new(parse_fixed_hex_32(ticket_hex, path)?);
+    let _ = parse_fixed_hex_32(fingerprint_hex, path)?;
+
+    Ok(PinIntentFileKey {
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+    })
+}
+
+fn parse_fixed_hex_u32(
+    value: &str,
+    width: usize,
+    path: &Path,
+) -> Result<u32, DaPinIntentSpoolError> {
+    if value.len() != width || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(malformed_filename(path));
+    }
+    u32::from_str_radix(value, 16).map_err(|_| malformed_filename(path))
+}
+
+fn parse_fixed_hex_u64(
+    value: &str,
+    width: usize,
+    path: &Path,
+) -> Result<u64, DaPinIntentSpoolError> {
+    if value.len() != width || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(malformed_filename(path));
+    }
+    u64::from_str_radix(value, 16).map_err(|_| malformed_filename(path))
+}
+
+fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaPinIntentSpoolError> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(malformed_filename(path));
+    }
+    let mut bytes = [0; 32];
+    hex::decode_to_slice(value, &mut bytes).map_err(|_| malformed_filename(path))?;
+    Ok(bytes)
+}
+
+fn malformed_filename(path: &Path) -> DaPinIntentSpoolError {
+    DaPinIntentSpoolError::MalformedFilename {
+        path: path.to_path_buf(),
+    }
+}
+
+fn decode_pin_intent(data: &[u8], path: &Path) -> Result<DaPinIntent, DaPinIntentSpoolError> {
+    let filename_key = parse_pin_intent_file_key(path)?;
+    let intent =
+        decode_from_bytes::<DaPinIntent>(data).map_err(|source| DaPinIntentSpoolError::Decode {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if filename_key.lane_id != intent.lane_id
+        || filename_key.epoch != intent.epoch
+        || filename_key.sequence != intent.sequence
+        || filename_key.storage_ticket != intent.storage_ticket
+    {
+        return Err(DaPinIntentSpoolError::FilenameMismatch {
+            path: path.to_path_buf(),
+            filename_lane: filename_key.lane_id,
+            filename_epoch: filename_key.epoch,
+            filename_sequence: filename_key.sequence,
+            filename_ticket: filename_key.storage_ticket,
+            intent_lane: intent.lane_id,
+            intent_epoch: intent.epoch,
+            intent_sequence: intent.sequence,
+            intent_ticket: intent.storage_ticket,
+        });
+    }
+
+    Ok(intent)
 }
 
 /// Drop duplicate/invalid pin intents deterministically and surface the reasons.
@@ -347,6 +499,17 @@ mod tests {
         }
     }
 
+    fn pin_intent_file_name(intent: &DaPinIntent, fingerprint: [u8; 32]) -> String {
+        format!(
+            "da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
+            lane = intent.lane_id.as_u32(),
+            epoch = intent.epoch,
+            sequence = intent.sequence,
+            ticket = hex::encode(intent.storage_ticket.as_ref()),
+            fingerprint = hex::encode(fingerprint)
+        )
+    }
+
     #[test]
     fn returns_none_for_missing_dir() {
         let missing = PathBuf::from("this-path-should-not-exist-da-pin-spool");
@@ -362,12 +525,8 @@ mod tests {
         let bytes_a = to_bytes(&intent_a).expect("encode intent a");
         let bytes_b = to_bytes(&intent_b).expect("encode intent b");
 
-        let file_a = dir
-            .path()
-            .join("da-pin-intent-00000002-0000000000000001-0000000000000005-a.norito");
-        let file_b = dir
-            .path()
-            .join("da-pin-intent-00000001-0000000000000001-0000000000000001-b.norito");
+        let file_a = dir.path().join(pin_intent_file_name(&intent_a, [0xaa; 32]));
+        let file_b = dir.path().join(pin_intent_file_name(&intent_b, [0xbb; 32]));
 
         std::fs::write(file_a, bytes_a).expect("write a");
         std::fs::write(file_b, bytes_b).expect("write b");
@@ -388,12 +547,12 @@ mod tests {
         let intent = sample_intent(1, 1);
         let bytes = to_bytes(&intent).expect("encode intent");
 
-        let valid_path = dir
-            .path()
-            .join("da-pin-intent-00000001-0000000000000001-0000000000000001-ok.norito");
+        let valid_path = dir.path().join(pin_intent_file_name(&intent, [0xcc; 32]));
+        let mut corrupt_key = sample_intent(1, 2);
+        corrupt_key.storage_ticket = intent.storage_ticket;
         let corrupt_path = dir
             .path()
-            .join("da-pin-intent-00000001-0000000000000001-0000000000000002-bad.norito");
+            .join(pin_intent_file_name(&corrupt_key, [0xdd; 32]));
 
         std::fs::write(valid_path, bytes).expect("write valid");
         std::fs::write(corrupt_path, b"corrupt").expect("write corrupt");
@@ -404,6 +563,60 @@ mod tests {
 
         assert_eq!(intents.len(), 1);
         assert_eq!(intents[0], intent);
+    }
+
+    #[test]
+    fn load_pin_intents_skips_malformed_filenames() {
+        let dir = tempdir().expect("tempdir");
+        let intent = sample_intent(1, 1);
+        let bytes = to_bytes(&intent).expect("encode intent");
+        let malformed_path = dir
+            .path()
+            .join("da-pin-intent-00000001-0000000000000001-0000000000000001.norito");
+
+        std::fs::write(malformed_path, bytes).expect("write malformed filename intent");
+
+        assert!(
+            load_pin_intents(dir.path())
+                .expect("load intents")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn load_pin_intents_skips_filename_tuple_mismatches() {
+        let dir = tempdir().expect("tempdir");
+        let intent = sample_intent(1, 1);
+        let bytes = to_bytes(&intent).expect("encode intent");
+        let mut file_key = intent.clone();
+        file_key.sequence = 2;
+        let mismatch_path = dir.path().join(pin_intent_file_name(&file_key, [0x99; 32]));
+
+        std::fs::write(mismatch_path, bytes).expect("write mismatch intent");
+
+        assert!(
+            load_pin_intents(dir.path())
+                .expect("load intents")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn load_pin_intents_skips_filename_ticket_mismatches() {
+        let dir = tempdir().expect("tempdir");
+        let intent = sample_intent(1, 1);
+        let bytes = to_bytes(&intent).expect("encode intent");
+        let mut file_key = intent.clone();
+        file_key.storage_ticket = StorageTicketId::new([0x99; 32]);
+        let mismatch_path = dir.path().join(pin_intent_file_name(&file_key, [0x88; 32]));
+
+        std::fs::write(mismatch_path, bytes).expect("write ticket mismatch intent");
+
+        assert!(
+            load_pin_intents(dir.path())
+                .expect("load intents")
+                .is_none()
+        );
     }
 
     #[test]

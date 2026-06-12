@@ -263,7 +263,7 @@ const sampleBscTestnetNativeEvmProverBundle = (
     remote_prover_required: false,
     browser_implementation: "pure-typescript",
     cross_sdk_fixture_parity_artifact:
-      "artifacts/bsc-testnet/cross-sdk-fixture-parity.json",
+      "artifacts/bsc-testnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-testnet/native-prover-self-test.json",
     native_sdk_artifacts: Object.entries(
@@ -602,7 +602,7 @@ const sampleVerifiedBscMainnetNativeEvmProverFixture = () => {
     verifier_key: "artifacts/bsc-mainnet/verifier-key.bin",
     verifier_key_hash: verifierKeyHash,
     cross_sdk_fixture_parity_artifact:
-      "artifacts/bsc-mainnet/cross-sdk-fixture-parity.json",
+      "artifacts/bsc-mainnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-mainnet/native-prover-self-test.json",
     native_sdk_artifacts: Object.entries(
@@ -1603,6 +1603,32 @@ test("BscTestnetSccp rejects native prover bundles that label executable artifac
         { destinationBinding: fixture.destinationBinding },
       ),
     /verifierKey must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+  );
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(
+        {
+          ...fixture.bundle,
+          cross_sdk_fixture_parity_artifact:
+            "artifacts/bsc-testnet/cross-sdk-fixture-parity.json",
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /crossSdkFixtureParityArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+  );
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(
+        {
+          ...fixture.bundle,
+          native_prover_self_test_artifact:
+            "artifacts/bsc-testnet/sample/native-prover-self-test.json",
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /nativeProverSelfTestArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
   );
 
   assert.throws(
