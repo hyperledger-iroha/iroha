@@ -1141,47 +1141,75 @@ const isNormalizedSmokeFixtureGroth16VerifierMaterial = (material) =>
   sameVector(material.delta2, SMOKE_FIXTURE_G2) &&
   sameVector(material.ic, SMOKE_FIXTURE_IC);
 
+function normalizeVerifierCoordinates(material) {
+  return {
+    alpha1: normalizeUint256Array(
+      pickField(
+        material,
+        ["alpha1", "configuredAlpha1", "vk_alpha_1"],
+        "alpha1",
+      ),
+      "alpha1",
+      2,
+    ),
+    beta2: normalizeUint256Array(
+      pickField(material, ["beta2", "configuredBeta2", "vk_beta_2"], "beta2"),
+      "beta2",
+      4,
+    ),
+    gamma2: normalizeUint256Array(
+      pickField(
+        material,
+        ["gamma2", "configuredGamma2", "vk_gamma_2"],
+        "gamma2",
+      ),
+      "gamma2",
+      4,
+    ),
+    delta2: normalizeUint256Array(
+      pickField(
+        material,
+        ["delta2", "configuredDelta2", "vk_delta_2"],
+        "delta2",
+      ),
+      "delta2",
+      4,
+    ),
+    ic: normalizeUint256Array(
+      pickField(material, ["ic", "configuredIc", "vk_ic", "IC"], "ic"),
+      "ic",
+      20,
+    ),
+  };
+}
+
+function bscGroth16VerifierKeyHashFromCoordinates(material) {
+  return bytesToHex(
+    keccak_256(
+      concatBytes(
+        [
+          ...material.alpha1,
+          ...material.beta2,
+          ...material.gamma2,
+          ...material.delta2,
+          ...material.ic,
+        ].map((value) => abiWordUint(value)),
+      ),
+    ),
+  );
+}
+
+export function bscGroth16VerifierKeyHash(material) {
+  return bscGroth16VerifierKeyHashFromCoordinates(
+    normalizeVerifierCoordinates(material),
+  );
+}
+
 export function isSmokeFixtureGroth16VerifierMaterial(material) {
   try {
-    return isNormalizedSmokeFixtureGroth16VerifierMaterial({
-      alpha1: normalizeUint256Array(
-        pickField(
-          material,
-          ["alpha1", "configuredAlpha1", "vk_alpha_1"],
-          "alpha1",
-        ),
-        "alpha1",
-        2,
-      ),
-      beta2: normalizeUint256Array(
-        pickField(material, ["beta2", "configuredBeta2", "vk_beta_2"], "beta2"),
-        "beta2",
-        4,
-      ),
-      gamma2: normalizeUint256Array(
-        pickField(
-          material,
-          ["gamma2", "configuredGamma2", "vk_gamma_2"],
-          "gamma2",
-        ),
-        "gamma2",
-        4,
-      ),
-      delta2: normalizeUint256Array(
-        pickField(
-          material,
-          ["delta2", "configuredDelta2", "vk_delta_2"],
-          "delta2",
-        ),
-        "delta2",
-        4,
-      ),
-      ic: normalizeUint256Array(
-        pickField(material, ["ic", "configuredIc", "vk_ic", "IC"], "ic"),
-        "ic",
-        20,
-      ),
-    });
+    return isNormalizedSmokeFixtureGroth16VerifierMaterial(
+      normalizeVerifierCoordinates(material),
+    );
   } catch (_error) {
     return false;
   }
@@ -1227,45 +1255,7 @@ export function normalizeVerifierMaterial(
     ),
     "expectedVerifierKeyHash",
   );
-  const normalizedMaterial = {
-    alpha1: normalizeUint256Array(
-      pickField(
-        material,
-        ["alpha1", "configuredAlpha1", "vk_alpha_1"],
-        "alpha1",
-      ),
-      "alpha1",
-      2,
-    ),
-    beta2: normalizeUint256Array(
-      pickField(material, ["beta2", "configuredBeta2", "vk_beta_2"], "beta2"),
-      "beta2",
-      4,
-    ),
-    gamma2: normalizeUint256Array(
-      pickField(
-        material,
-        ["gamma2", "configuredGamma2", "vk_gamma_2"],
-        "gamma2",
-      ),
-      "gamma2",
-      4,
-    ),
-    delta2: normalizeUint256Array(
-      pickField(
-        material,
-        ["delta2", "configuredDelta2", "vk_delta_2"],
-        "delta2",
-      ),
-      "delta2",
-      4,
-    ),
-    ic: normalizeUint256Array(
-      pickField(material, ["ic", "configuredIc", "vk_ic", "IC"], "ic"),
-      "ic",
-      20,
-    ),
-  };
+  const normalizedMaterial = normalizeVerifierCoordinates(material);
   const fixtureShaped =
     isNormalizedSmokeFixtureGroth16VerifierMaterial(normalizedMaterial);
   assertBn254G1Point(normalizedMaterial.alpha1, "alpha1");
@@ -1273,6 +1263,13 @@ export function normalizeVerifierMaterial(
   assertBn254G2Point(normalizedMaterial.gamma2, "gamma2");
   assertBn254G2Point(normalizedMaterial.delta2, "delta2");
   assertBn254G1VectorPairs(normalizedMaterial.ic, "ic");
+  const computedVerifierKeyHash =
+    bscGroth16VerifierKeyHashFromCoordinates(normalizedMaterial);
+  if (expectedVerifierKeyHash !== computedVerifierKeyHash) {
+    throw new Error(
+      `expectedVerifierKeyHash must match Solidity verifyingKeyHash() ${computedVerifierKeyHash}.`,
+    );
+  }
   const diagnosticVerifierReasons = [
     diagnosticFlagReason(material, "verifier material"),
     fixtureShaped
@@ -1520,6 +1517,7 @@ export function canonicalBscNativeEvmProverBundleHash(bundle) {
           provingKeyHash: bundle.provingKeyHash,
           verifierKey: bundle.verifierKey,
           verifierKeyHash: bundle.verifierKeyHash,
+          verifierKeyArtifactHash: bundle.verifierKeyArtifactHash,
           destinationBindingHash: bundle.destinationBindingHash,
           noWasm: bundle.noWasm,
           remoteProverRequired: bundle.remoteProverRequired,
@@ -2324,6 +2322,39 @@ function assertProductionProofMaterialShape(artifact, label, kind = null) {
   );
 }
 
+function parseBscVerifierKeyArtifact(artifact, profile) {
+  if (extname(artifact.path).toLowerCase() !== ".json") {
+    throw new Error(
+      `verifier key must be a production Groth16 verifier JSON artifact; received ${artifact.path}.`,
+    );
+  }
+  let material;
+  try {
+    material = parseJsonWithoutDuplicateKeys(
+      artifact.bytes.toString("utf8"),
+      "verifier key",
+    );
+  } catch (error) {
+    throw new Error(
+      `verifier key must be valid duplicate-free JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const normalized = normalizeVerifierMaterial(material, profile);
+  if (normalized.fixtureShaped) {
+    throw new Error(
+      "verifier key uses deterministic smoke-test Groth16 fixture material.",
+    );
+  }
+  if (normalized.diagnosticVerifierReasons.length > 0) {
+    throw new Error(
+      `verifier key uses diagnostic BSC verifier material: ${normalized.diagnosticVerifierReasons.join("; ")}.`,
+    );
+  }
+  return normalized;
+}
+
 function assertProductionAuditHashLiteral(value, label) {
   const normalized = normalizeHex32(value, label);
   const bytes = Buffer.from(normalized.slice(2), "hex");
@@ -2581,7 +2612,8 @@ function buildNativeEvmProverBundleObject({
     proving_key: provingKey.path,
     proving_key_hash: provingKey.sha256,
     verifier_key: verifierKey.path,
-    verifier_key_hash: verifierKey.sha256,
+    verifier_key_hash: routeBinding.verifierKeyHash,
+    verifier_key_artifact_hash: verifierKey.sha256,
     destination_binding_hash: routeBinding.destinationBindingHash,
     no_wasm: true,
     remote_prover_required: false,
@@ -2702,6 +2734,7 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
   });
   const binding = routeSource.binding;
   const profile = BSC_NETWORK_PROFILES[binding.bscNetwork];
+  const verifierMaterial = parseBscVerifierKeyArtifact(verifierKey, profile);
   if (
     binding.proofArtifactHash &&
     binding.proofArtifactHash !== proofArtifact.sha256
@@ -2715,9 +2748,9 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
       "proving key hash does not match route/deployment evidence.",
     );
   }
-  if (binding.verifierKeyHash !== verifierKey.sha256) {
+  if (binding.verifierKeyHash !== verifierMaterial.expectedVerifierKeyHash) {
     throw new Error(
-      "verifier key hash does not match route/deployment evidence.",
+      "verifier key material hash does not match route/deployment evidence.",
     );
   }
   const bundle = buildNativeEvmProverBundleObject({

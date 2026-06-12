@@ -276,6 +276,9 @@ const sampleNativeEvmProverParityFixture = (bundle, overrides = {}) => {
     proving_key_hash: bundle.proving_key_hash ?? bundle.provingKeyHash,
     verifier_key_hash: bundle.verifier_key_hash ?? bundle.verifierKeyHash,
     destination_binding_hash: destinationBindingHash,
+    production_attestation_hash: fixtureHash(
+      "eth native prover parity production attestation",
+    ),
     ...result,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
@@ -313,6 +316,9 @@ const sampleNativeEvmProverSelfTestFixture = (bundle, overrides = {}) => {
     proving_key_hash: bundle.proving_key_hash ?? bundle.provingKeyHash,
     verifier_key_hash: bundle.verifier_key_hash ?? bundle.verifierKeyHash,
     destination_binding_hash: destinationBindingHash,
+    production_attestation_hash: fixtureHash(
+      "eth native prover self-test production attestation",
+    ),
     ...result,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [

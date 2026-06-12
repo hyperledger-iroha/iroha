@@ -8072,6 +8072,8 @@ const nativeEvmProverBundleManifestKeys = Object.freeze(
     "verifier_key",
     "verifierKeyHash",
     "verifier_key_hash",
+    "verifierKeyArtifactHash",
+    "verifier_key_artifact_hash",
     "destinationBindingHash",
     "destination_binding_hash",
     "noWasm",
@@ -8702,6 +8704,7 @@ const requireEthereumMainnetNativeEvmProverBundleHashRoleSeparation = ({
   proofArtifactHash,
   provingKeyHash,
   verifierKeyHash,
+  verifierKeyArtifactHash,
   destinationBindingHash,
   nativeSdkArtifacts,
   auditHashes,
@@ -8719,6 +8722,12 @@ const requireEthereumMainnetNativeEvmProverBundleHashRoleSeparation = ({
   add("proofArtifactHash", proofArtifactHash);
   add("provingKeyHash", provingKeyHash);
   add("verifierKeyHash", verifierKeyHash);
+  if (
+    typeof verifierKeyArtifactHash === "string" &&
+    verifierKeyArtifactHash !== verifierKeyHash
+  ) {
+    add("verifierKeyArtifactHash", verifierKeyArtifactHash);
+  }
   add("destinationBindingHash", destinationBindingHash);
   for (const artifact of nativeSdkArtifacts) {
     add(
@@ -8905,6 +8914,19 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     ),
     "verifierKeyHash",
   );
+  const verifierKeyArtifactHashInput = strictOptionalResultField(
+    manifest,
+    "verifierKeyArtifactHash",
+    "verifierKeyArtifactHash",
+    "verifier_key_artifact_hash",
+  );
+  const verifierKeyArtifactHash =
+    verifierKeyArtifactHashInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? verifierKeyHash
+      : normalizeCanonicalNativeEvmProverBundleHex32(
+          verifierKeyArtifactHashInput,
+          "verifierKeyArtifactHash",
+        );
   const verifierKey = normalizeNativeEvmProverArtifactPath(
     requiredNativeEvmProverBundleField(
       manifest,
@@ -9040,6 +9062,7 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     proofArtifactHash,
     provingKeyHash,
     verifierKeyHash,
+    verifierKeyArtifactHash,
     destinationBindingHash,
     nativeSdkArtifacts,
     auditHashes,
@@ -9057,6 +9080,7 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     provingKeyHash,
     verifierKey,
     verifierKeyHash,
+    verifierKeyArtifactHash,
     destinationBindingHash,
     noWasm,
     remoteProverRequired,
@@ -10343,7 +10367,10 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     "proofArtifactBytes",
   );
   const provingKeyHash = sha256Hex32(provingKeyBytes, "provingKeyBytes");
-  const verifierKeyHash = sha256Hex32(verifierKeyBytes, "verifierKeyBytes");
+  const verifierKeyArtifactHash = sha256Hex32(
+    verifierKeyBytes,
+    "verifierKeyBytes",
+  );
   const crossSdkFixtureParityHash = sha256Hex32(
     crossSdkFixtureParityBytes,
     "crossSdkFixtureParityBytes",
@@ -10362,9 +10389,9 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
       "provingKeyBytes sha256 must match nativeProverBundle.provingKeyHash",
     );
   }
-  if (verifierKeyHash !== nativeProverBundle.verifierKeyHash) {
+  if (verifierKeyArtifactHash !== nativeProverBundle.verifierKeyArtifactHash) {
     throw new TypeError(
-      "verifierKeyBytes sha256 must match nativeProverBundle.verifierKeyHash",
+      "verifierKeyBytes sha256 must match nativeProverBundle.verifierKeyArtifactHash",
     );
   }
   if (
@@ -10495,7 +10522,8 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     nativeProverBundle,
     proofArtifactHash,
     provingKeyHash,
-    verifierKeyHash,
+    verifierKeyHash: nativeProverBundle.verifierKeyHash,
+    verifierKeyArtifactHash,
     crossSdkFixtureParityHash,
     crossSdkFixtureParity,
     nativeProverSelfTestHash,
@@ -10826,6 +10854,19 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
     ),
     "nativeProverArtifacts.verifierKeyHash",
   );
+  const verifierKeyArtifactHashInput = strictOptionalResultField(
+    input,
+    "nativeProverArtifacts.verifierKeyArtifactHash",
+    "verifierKeyArtifactHash",
+    "verifier_key_artifact_hash",
+  );
+  const verifierKeyArtifactHash =
+    verifierKeyArtifactHashInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? verifierKeyHash
+      : normalizeNonZeroHex32(
+          verifierKeyArtifactHashInput,
+          "nativeProverArtifacts.verifierKeyArtifactHash",
+        );
   if (proofArtifactHash !== nativeProverBundle.proofArtifactHash) {
     throw new TypeError(
       "nativeProverArtifacts proofArtifactHash must match nativeProverBundle",
@@ -10839,6 +10880,11 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
   if (verifierKeyHash !== nativeProverBundle.verifierKeyHash) {
     throw new TypeError(
       "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+    );
+  }
+  if (verifierKeyArtifactHash !== nativeProverBundle.verifierKeyArtifactHash) {
+    throw new TypeError(
+      "nativeProverArtifacts verifierKeyArtifactHash must match nativeProverBundle",
     );
   }
   const crossSdkFixtureParityHash = normalizeNonZeroHex32(
@@ -10961,6 +11007,7 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
     proofArtifactHash,
     provingKeyHash,
     verifierKeyHash,
+    verifierKeyArtifactHash,
     crossSdkFixtureParityHash,
     crossSdkFixtureParity,
     nativeProverSelfTestHash,
@@ -11034,6 +11081,14 @@ const requireVerifiedNativeEvmProverArtifactsForRequest = (
   ) {
     throw new TypeError(
       "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+    );
+  }
+  if (
+    artifacts.verifierKeyArtifactHash !==
+    artifacts.nativeProverBundle.verifierKeyArtifactHash
+  ) {
+    throw new TypeError(
+      "nativeProverArtifacts verifierKeyArtifactHash must match nativeProverBundle",
     );
   }
   if (
@@ -11169,6 +11224,14 @@ const requireVerifiedNativeEvmProverArtifactsForProofResult = (
   ) {
     throw new TypeError(
       "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+    );
+  }
+  if (
+    artifacts.verifierKeyArtifactHash !==
+    artifacts.nativeProverBundle.verifierKeyArtifactHash
+  ) {
+    throw new TypeError(
+      "nativeProverArtifacts verifierKeyArtifactHash must match nativeProverBundle",
     );
   }
   if (
@@ -16398,6 +16461,9 @@ export class EthereumMainnetSccp {
             this.nativeProverArtifacts.nativeProverBundle.provingKeyHash ||
           this.nativeProverBundle.verifierKeyHash !==
             this.nativeProverArtifacts.nativeProverBundle.verifierKeyHash ||
+          this.nativeProverBundle.verifierKeyArtifactHash !==
+            this.nativeProverArtifacts.nativeProverBundle
+              .verifierKeyArtifactHash ||
           this.nativeProverBundle.destinationBindingHash !==
             this.nativeProverArtifacts.nativeProverBundle
               .destinationBindingHash)
@@ -17205,6 +17271,9 @@ export class BscMainnetSccp {
             this.nativeProverArtifacts.nativeProverBundle.provingKeyHash ||
           this.nativeProverBundle.verifierKeyHash !==
             this.nativeProverArtifacts.nativeProverBundle.verifierKeyHash ||
+          this.nativeProverBundle.verifierKeyArtifactHash !==
+            this.nativeProverArtifacts.nativeProverBundle
+              .verifierKeyArtifactHash ||
           this.nativeProverBundle.destinationBindingHash !==
             this.nativeProverArtifacts.nativeProverBundle
               .destinationBindingHash)
@@ -17849,6 +17918,9 @@ export class BscTestnetSccp {
             this.nativeProverArtifacts.nativeProverBundle.provingKeyHash ||
           this.nativeProverBundle.verifierKeyHash !==
             this.nativeProverArtifacts.nativeProverBundle.verifierKeyHash ||
+          this.nativeProverBundle.verifierKeyArtifactHash !==
+            this.nativeProverArtifacts.nativeProverBundle
+              .verifierKeyArtifactHash ||
           this.nativeProverBundle.destinationBindingHash !==
             this.nativeProverArtifacts.nativeProverBundle
               .destinationBindingHash)

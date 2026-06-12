@@ -34,6 +34,7 @@ import {
   SCCP_DOMAIN_SORA,
   bscCanonicalProductionOutputProblems,
   buildBscTairaXorRouteManifestDraft,
+  bscGroth16VerifierKeyHash,
   canonicalBscNativeEvmProverBundleHash,
   bscDestinationBindingHash,
   bscDestinationBindingKey,
@@ -257,19 +258,30 @@ const readyReadback = (overrides = {}) => ({
   ...overrides,
 });
 
-const verifierMaterial = (overrides = {}) => ({
-  alpha1: VALID_G1_POINTS[0],
-  beta2: SMOKE_FIXTURE_G2,
-  gamma2: SMOKE_FIXTURE_G2,
-  delta2: SMOKE_FIXTURE_G2,
-  ic: VALID_IC,
-  verifierKeyHash: HASH_22,
-  proofFamily: "stark-fri-v1",
-  networkId: BSC_TESTNET_NETWORK_ID_HEX,
-  sourceDomain: 0,
-  targetDomain: 2,
-  ...overrides,
-});
+const verifierMaterial = (overrides = {}) => {
+  const material = {
+    alpha1: VALID_G1_POINTS[0],
+    beta2: SMOKE_FIXTURE_G2,
+    gamma2: SMOKE_FIXTURE_G2,
+    delta2: SMOKE_FIXTURE_G2,
+    ic: VALID_IC,
+    proofFamily: "stark-fri-v1",
+    networkId: BSC_TESTNET_NETWORK_ID_HEX,
+    sourceDomain: 0,
+    targetDomain: 2,
+    ...overrides,
+  };
+  const expectedVerifierKeyHash =
+    overrides.expectedVerifierKeyHash ??
+    overrides.verifierKeyHash ??
+    overrides.verifyingKeyHash ??
+    bscGroth16VerifierKeyHash(material);
+  return {
+    ...material,
+    expectedVerifierKeyHash,
+    verifierKeyHash: expectedVerifierKeyHash,
+  };
+};
 
 const routeManifest = (overrides = {}) => {
   const {
@@ -536,11 +548,16 @@ async function writeNativeProverFixtureFiles({
   const provingKeyBytes =
     artifactByteOverrides.provingKey ??
     snarkjsBytes("zkey", 10, bytesFor("proving-key", 96 * 1024));
+  const verifierKeyMaterial = verifierMaterial(
+    artifactByteOverrides.verifierMaterial ?? {},
+  );
   const verifierKeyBytes =
-    artifactByteOverrides.verifierKey ?? bytesFor("verifier-key", 2048);
+    artifactByteOverrides.verifierKey ??
+    Buffer.from(`${JSON.stringify(verifierKeyMaterial, null, 2)}\n`, "utf8");
   const proofArtifactHash = sha256Hex(proofBytes);
   const provingKeyHash = sha256Hex(provingKeyBytes);
-  const verifierKeyHash = sha256Hex(verifierKeyBytes);
+  const verifierKeyHash = bscGroth16VerifierKeyHash(verifierKeyMaterial);
+  const verifierKeyArtifactHash = sha256Hex(verifierKeyBytes);
   const destinationBindingHash = bscDestinationBindingHash({
     verifierAddress: BSC_VERIFIER_ADDRESS,
     bridgeAddress: BSC_BRIDGE_ADDRESS,
@@ -557,6 +574,7 @@ async function writeNativeProverFixtureFiles({
     proofArtifactHash,
     provingKeyHash,
     verifierKeyHash,
+    verifierKeyArtifactHash,
     destinationBindingHash,
   };
   const parityBytes = Buffer.from(
@@ -621,6 +639,7 @@ async function writeNativeProverFixtureFiles({
     proofArtifactHash,
     provingKeyHash,
     verifierKeyHash,
+    verifierKeyArtifactHash,
     destinationBindingHash,
     sdkImplementationPaths,
     options: {
@@ -1282,10 +1301,20 @@ test("BSC RPC endpoint normalization is fail-closed", () => {
 
 test("BSC verifier material normalization rejects foreign or malformed inputs", () => {
   const normalized = normalizeVerifierMaterial(verifierMaterial());
-  assert.equal(normalized.expectedVerifierKeyHash, HASH_22);
-  assert.equal(isKnownDiagnosticBscVerifierKeyHash(HASH_22), false);
+  assert.equal(
+    normalized.expectedVerifierKeyHash,
+    bscGroth16VerifierKeyHash(verifierMaterial()),
+  );
+  assert.equal(
+    isKnownDiagnosticBscVerifierKeyHash(normalized.expectedVerifierKeyHash),
+    false,
+  );
   assert.equal(normalized.ic.length, 20);
 
+  assert.throws(
+    () => normalizeVerifierMaterial(verifierMaterial({ verifierKeyHash: HASH_22 })),
+    /expectedVerifierKeyHash must match Solidity verifyingKeyHash\(\)/u,
+  );
   assert.throws(
     () =>
       normalizeVerifierMaterial(
@@ -1411,6 +1440,11 @@ test("BSC verifier material reports diagnostic key material before deployment", 
     verifierMaterial({
       schema: "iroha-sccp-bsc-testnet-diagnostic-verifier-key/v1",
       warning: "Generated diagnostic BSC testnet verifier material.",
+      alpha1: SMOKE_FIXTURE_G1,
+      beta2: SMOKE_FIXTURE_G2,
+      gamma2: SMOKE_FIXTURE_G2,
+      delta2: SMOKE_FIXTURE_G2,
+      ic: SMOKE_FIXTURE_IC,
       verifierKeyHash: DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
     }),
   );
@@ -2054,6 +2088,10 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
   assert.equal(result.descriptor.provingKeyHash, fixture.provingKeyHash);
   assert.equal(result.descriptor.verifierKeyHash, fixture.verifierKeyHash);
   assert.equal(
+    result.descriptor.verifierKeyArtifactHash,
+    fixture.verifierKeyArtifactHash,
+  );
+  assert.equal(
     result.descriptor.destinationBindingHash,
     fixture.destinationBindingHash,
   );
@@ -2508,6 +2546,30 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
     () =>
       buildBscNativeEvmProverBundleFromArtifacts(tinyImplementation.options),
     /implementationBytes must be at least 1024 bytes/u,
+  );
+
+  const nonJsonVerifierKey = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      verifierKey: Buffer.from("not a verifier json artifact", "utf8"),
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(nonJsonVerifierKey.options),
+    /verifier key must be valid duplicate-free JSON/u,
+  );
+
+  const mismatchedVerifierKey = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      verifierMaterial: { verifierKeyHash: HASH_22 },
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(
+        mismatchedVerifierKey.options,
+      ),
+    /expectedVerifierKeyHash must match Solidity verifyingKeyHash\(\)/u,
   );
 
   const proofDrift = await writeNativeProverFixtureFiles({

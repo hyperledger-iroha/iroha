@@ -4209,6 +4209,8 @@ export interface EthereumMainnetNativeEvmProverBundleInput {
   proving_key?: string;
   verifierKeyHash?: string;
   verifier_key_hash?: string;
+  verifierKeyArtifactHash?: string;
+  verifier_key_artifact_hash?: string;
   verifierKey?: string;
   verifier_key?: string;
   destinationBindingHash?: string;
@@ -4260,6 +4262,7 @@ export interface EthereumMainnetNativeEvmProverBundle {
   readonly provingKeyHash: string;
   readonly provingKey: string;
   readonly verifierKeyHash: string;
+  readonly verifierKeyArtifactHash: string;
   readonly verifierKey: string;
   readonly destinationBindingHash: string;
   readonly noWasm: true;
@@ -4582,6 +4585,7 @@ export interface EthereumMainnetNativeEvmProverArtifacts {
   readonly proofArtifactHash: string;
   readonly provingKeyHash: string;
   readonly verifierKeyHash: string;
+  readonly verifierKeyArtifactHash: string;
   readonly crossSdkFixtureParityHash: string;
   readonly crossSdkFixtureParity: Readonly<EthereumMainnetNativeEvmProverParityFixture>;
   readonly nativeProverSelfTestHash: string;
