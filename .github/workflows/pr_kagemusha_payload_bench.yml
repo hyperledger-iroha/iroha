@@ -1177,6 +1177,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-scalar-types
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-timestamp-raw
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-future-skew
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-future-skew
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-exact
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-is-file-preflight

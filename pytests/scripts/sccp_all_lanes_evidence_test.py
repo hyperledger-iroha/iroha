@@ -2105,6 +2105,58 @@ version = 1
         module.tomllib = original_tomllib
 
 
+def test_all_lanes_loader_redacts_toml_parser_failures():
+    module = load_evidence_module()
+
+    class FakeTomllib:
+        class TOMLDecodeError(ValueError):
+            pass
+
+        @staticmethod
+        def loads(_text):
+            raise FakeTomllib.TOMLDecodeError("secret-token parser detail")
+
+    original_tomllib = module.tomllib
+    module.tomllib = FakeTomllib
+    try:
+        try:
+            module._load_toml("not = valid", label="operator evidence")
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "operator evidence: invalid TOML"
+            assert "secret-token" not in rendered
+            assert "parser detail" not in rendered
+        else:
+            raise AssertionError("all-lanes TOML loader accepted parser failure")
+    finally:
+        module.tomllib = original_tomllib
+
+
+def test_all_lanes_cli_redacts_top_level_exception_details(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    module = load_evidence_module()
+
+    def fail_load(_paths):
+        raise RuntimeError("secret-token /tmp/operator/private-path")
+
+    monkeypatch.setattr(module, "load_evidence_bundle", fail_load)
+
+    try:
+        module.main([str(tmp_path / "evidence.toml")])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("all-lanes CLI accepted top-level load failure")
+
+    captured = capsys.readouterr()
+    assert "SCCP all-lanes evidence validation failed" in captured.err
+    assert "secret-token" not in captured.err
+    assert "private-path" not in captured.err
+
+
 def test_all_lanes_loader_rejects_duplicate_metadata_comments(tmp_path):
     module = load_evidence_module()
     toml_path = tmp_path / "duplicate-comments.toml"
@@ -2522,6 +2574,64 @@ def test_all_lanes_evidence_requires_source_record_hash_comments():
     ) in blockers
 
 
+def test_all_lanes_evidence_redacts_source_record_hash_comment_failures(
+    monkeypatch,
+) -> None:
+    """Source-record metadata blockers must not echo exception payloads."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
+    material = records["sccp_source_verifier_materials"][0]
+    deployment = records["sccp_source_adapter_engine_deployments"][0]
+
+    def fail_hashes(_profile, _material, _deployment):
+        raise ValueError("secret-token source record material")
+
+    monkeypatch.setattr(module, "_canonical_source_record_hashes", fail_hashes)
+
+    errors = module._check_source_record_hash_comments(profile, material, deployment)
+    rendered = "\n".join(errors)
+
+    assert errors == ["eth source record hash metadata cannot be recomputed"]
+    assert "source record hash metadata cannot be recomputed:" not in rendered
+    assert "secret-token" not in rendered
+    assert "ValueError" not in rendered
+
+
+def test_all_lanes_evidence_redacts_source_record_hash_summary_failures(
+    monkeypatch,
+) -> None:
+    """Source-record summary blockers must not echo exception payloads."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    original_hashes = module._canonical_source_record_hashes
+    call_count = 0
+
+    def fail_summary_hashes(profile, material, deployment):
+        nonlocal call_count
+        call_count += 1
+        if call_count % 2 == 0:
+            raise ValueError("secret-token source record material")
+        return original_hashes(profile, material, deployment)
+
+    monkeypatch.setattr(
+        module,
+        "_canonical_source_record_hashes",
+        fail_summary_hashes,
+    )
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    blockers = "\n".join(summary["blockers"])
+    assert "source record hashes cannot be recomputed" in blockers
+    assert "source record hashes cannot be recomputed:" not in blockers
+    assert "secret-token" not in blockers
+    assert "ValueError" not in blockers
+
+
 def test_all_lanes_loads_source_record_hash_comments_from_toml(tmp_path):
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -2578,7 +2688,7 @@ def test_all_lanes_evidence_rejects_ton_audit_hash_reusing_template_material():
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
     assert "domain 4 (ton): TON full light-client gate cannot be recomputed" in blockers
-    assert "built-in template material" in blockers
+    assert "built-in template material" not in blockers
 
 
 def test_all_lanes_evidence_rejects_unknown_sections(tmp_path, capsys):
@@ -2974,8 +3084,48 @@ def test_all_lanes_rejects_evm_destination_noncanonical_runtime_bytecode_metadat
     blockers = "\n".join(summary["blockers"])
     assert summary["production_ready"] is False
     assert "EVM bridge runtime bytecode metadata is invalid" in blockers
-    assert "must use lowercase 0x prefix" in blockers
+    assert "must use lowercase 0x prefix" not in blockers
     assert "EVM verifier runtime bytecode metadata is invalid" in blockers
+
+
+def test_all_lanes_redacts_evm_runtime_bytecode_parser_failures(
+    monkeypatch,
+) -> None:
+    """EVM runtime bytecode metadata blockers must not echo parser payloads."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
+    material = records["sccp_source_verifier_materials"][0]
+    destination = records["sccp_destination_rollouts"][0]
+    original_loader = module._load_sibling_module
+
+    def fail_runtime(_value, *, label):
+        raise ValueError(f"secret-token {label} runtime parser")
+
+    def load_sibling(name):
+        if name in (
+            "sccp_eth_source_bridge_evidence.py",
+            "sccp_evm_destination_evidence.py",
+        ):
+            real_module = original_loader(name)
+            module_attrs = dict(real_module.__dict__)
+            module_attrs["parse_runtime_bytecode_hex"] = fail_runtime
+            return SimpleNamespace(**module_attrs)
+        return original_loader(name)
+
+    monkeypatch.setattr(module, "_load_sibling_module", load_sibling)
+
+    source_errors = module._check_evm_live_source_bridge_evidence(profile, material)
+    destination_errors = module._check_evm_live_bridge_evidence(profile, destination)
+    rendered = "\n".join([*source_errors, *destination_errors])
+
+    assert "EVM source bridge runtime bytecode metadata is invalid" in source_errors
+    assert "EVM bridge runtime bytecode metadata is invalid" in destination_errors
+    assert "EVM verifier runtime bytecode metadata is invalid" in destination_errors
+    assert "metadata is invalid:" not in rendered
+    assert "secret-token" not in rendered
+    assert "ValueError" not in rendered
 
 
 def test_all_lanes_rejects_evm_destination_when_runtime_bytecode_hash_drifts():
@@ -3138,7 +3288,7 @@ def test_all_lanes_rejects_evm_source_noncanonical_runtime_bytecode_metadata():
     blockers = "\n".join(summary["blockers"])
     assert summary["production_ready"] is False
     assert "EVM source bridge runtime bytecode metadata is invalid" in blockers
-    assert "must use lowercase 0x prefix" in blockers
+    assert "must use lowercase 0x prefix" not in blockers
 
 
 def test_all_lanes_rejects_evm_source_when_runtime_bytecode_hash_drifts():
@@ -3583,6 +3733,52 @@ def test_all_lanes_rejects_tron_route_canary_transaction_metadata_drift():
         "TRON route canary evidence hash must match "
         "MessageProofAccepted transaction metadata"
     ) in "\n".join(summary["blockers"])
+
+
+def test_all_lanes_redacts_tron_route_canary_address_parser_failures(
+    monkeypatch,
+) -> None:
+    """TRON route-canary address blockers must not echo exception payloads."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    tron_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_TRON)
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_TRON]
+    material = records["sccp_source_verifier_materials"][tron_index]
+    deployment = records["sccp_source_adapter_engine_deployments"][tron_index]
+    destination = records["sccp_destination_rollouts"][tron_index]
+    route = records["sccp_route_allowlists"][tron_index]
+    source_hashes = module._canonical_source_record_hashes(
+        profile,
+        material,
+        deployment,
+    )
+
+    def fail_address(_value, *, label):
+        raise ValueError(f"secret-token {label} route canary parser")
+
+    monkeypatch.setattr(
+        module,
+        "_load_sibling_module",
+        lambda _name: SimpleNamespace(parse_tron_address=fail_address),
+    )
+
+    canary: dict[str, object] = {}
+    errors = module._check_tron_route_canary_transaction_evidence(
+        route,
+        destination_record=destination,
+        source_record_hashes=source_hashes,
+        evidence_hash=raw_hex(route["_comment_route_canary_evidence_hash"]),
+        route_allowlist_hash=raw_hex(route["route_allowlist_hash"]),
+        destination_binding_hash=raw_hex(destination["destination_binding_hash"]),
+        canary=canary,
+    )
+    rendered = "\n".join(errors)
+
+    assert "TRON route canary verifier address metadata is invalid" in errors
+    assert "metadata is invalid:" not in rendered
+    assert "secret-token" not in rendered
+    assert "ValueError" not in rendered
 
 
 def test_all_lanes_rejects_tron_route_canary_call_transcript_metadata_drift():
@@ -4515,6 +4711,60 @@ def test_all_lanes_rejects_tron_invalid_runtime_bytecode_metadata():
     assert "TRON destination verifier runtime bytecode metadata is invalid" in blockers
 
 
+def test_all_lanes_redacts_tron_live_metadata_parser_failures(
+    monkeypatch,
+) -> None:
+    """TRON live metadata parser blockers must not echo exception payloads."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    tron_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_TRON)
+    material = records["sccp_source_verifier_materials"][tron_index]
+    destination = records["sccp_destination_rollouts"][tron_index]
+    real_tron_module = module._load_sibling_module(
+        "sccp_tron_source_bridge_evidence.py"
+    )
+
+    def fail_address(_value, *, label):
+        raise ValueError(f"secret-token {label} address parser")
+
+    def fail_runtime(_value, *, label):
+        raise ValueError(f"secret-token {label} runtime parser")
+
+    module_attrs = dict(real_tron_module.__dict__)
+    module_attrs["parse_tron_address"] = fail_address
+    module_attrs["parse_runtime_bytecode_hex"] = fail_runtime
+
+    monkeypatch.setattr(
+        module,
+        "_load_sibling_module",
+        lambda _name: SimpleNamespace(**module_attrs),
+    )
+
+    source_errors = module._check_tron_live_source_bridge_evidence(material)
+    destination_errors = module._check_tron_live_destination_verifier_evidence(
+        destination
+    )
+    rendered = "\n".join([*source_errors, *destination_errors])
+
+    assert "TRON source bridge address metadata is invalid" in source_errors
+    assert (
+        "TRON source bridge runtime bytecode metadata is invalid"
+        in source_errors
+    )
+    assert (
+        "TRON destination verifier address metadata is invalid"
+        in destination_errors
+    )
+    assert (
+        "TRON destination verifier runtime bytecode metadata is invalid"
+        in destination_errors
+    )
+    assert "metadata is invalid:" not in rendered
+    assert "secret-token" not in rendered
+    assert "ValueError" not in rendered
+
+
 def test_all_lanes_rejects_padded_tron_live_metadata():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -4555,7 +4805,7 @@ def test_all_lanes_rejects_padded_tron_structured_hashes():
 
     blockers = "\n".join(summary["blockers"])
     assert summary["production_ready"] is False
-    assert "source_bridge_network_id must be an exact 32-byte hex value" in blockers
+    assert "source_bridge_network_id must be a non-zero 32-byte hex value" in blockers
 
     records = complete_bundle(module)
     destination = records["sccp_destination_rollouts"][tron_index]
@@ -4565,7 +4815,7 @@ def test_all_lanes_rejects_padded_tron_structured_hashes():
 
     blockers = "\n".join(summary["blockers"])
     assert summary["production_ready"] is False
-    assert "verifier_code_hash must be an exact 32-byte hex value" in blockers
+    assert "verifier_code_hash must be a non-zero 32-byte hex value" in blockers
 
 
 def test_all_lanes_rejects_tron_runtime_bytecode_hash_drift():
@@ -4967,6 +5217,26 @@ def test_all_lanes_rejects_solana_account_preimage_drift():
     assert "Solana ProgramData metadata must encode no upgrade authority" in blockers
 
 
+def test_all_lanes_redacts_solana_live_base64_comment_failures():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    solana_destination = records["sccp_destination_rollouts"][2]
+    solana_destination["_comment_solana_program_account_data_base64"] = "not@@base64"
+    solana_destination["_comment_solana_programdata_metadata_base64"] = (
+        noncanonical_base64_alias(b"secret-token-metadata!")
+    )
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    blockers = "\n".join(summary["blockers"])
+    assert "Solana Program account data base64 metadata is invalid" in blockers
+    assert "Solana ProgramData metadata base64 metadata is invalid" in blockers
+    assert "secret-token" not in blockers
+    assert "must be base64" not in blockers
+    assert "canonical base64" not in blockers
+
+
 def test_all_lanes_rejects_solana_programdata_invalid_executable_base64():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -4991,7 +5261,7 @@ def test_all_lanes_rejects_solana_programdata_invalid_executable_base64():
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
     assert "Solana ProgramData executable base64 metadata is invalid" in blockers
-    assert "canonical base64" in blockers
+    assert "canonical base64" not in blockers
 
     records = complete_bundle(module)
     solana_destination = records["sccp_destination_rollouts"][2]
@@ -5004,7 +5274,106 @@ def test_all_lanes_rejects_solana_programdata_invalid_executable_base64():
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
     assert "Solana ProgramData executable base64 metadata is invalid" in blockers
-    assert "BPF ELF" in blockers
+    assert "BPF ELF" not in blockers
+
+
+def test_all_lanes_redacts_solana_route_canary_base64_comment_failures():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    sol_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_SOL)
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_SOL]
+    material = records["sccp_source_verifier_materials"][sol_index]
+    deployment = records["sccp_source_adapter_engine_deployments"][sol_index]
+    destination = records["sccp_destination_rollouts"][sol_index]
+    route = records["sccp_route_allowlists"][sol_index]
+    destination["_comment_solana_program_account_data_base64"] = "not@@base64"
+    destination["_comment_solana_programdata_metadata_base64"] = noncanonical_base64_alias(
+        b"secret-token-route-metadata!"
+    )
+    source_hashes = module._canonical_source_record_hashes(
+        profile,
+        material,
+        deployment,
+    )
+
+    errors = module._check_solana_route_canary_live_program_evidence(
+        route,
+        destination_record=destination,
+        source_record_hashes=source_hashes,
+        evidence_hash=raw_hex(route["_comment_route_canary_evidence_hash"]),
+        route_allowlist_hash=raw_hex(route["route_allowlist_hash"]),
+        destination_binding_hash=raw_hex(destination["destination_binding_hash"]),
+        canary={},
+    )
+    rendered = "\n".join(errors)
+
+    assert "Solana route canary Program account data is invalid" in errors
+    assert "Solana route canary ProgramData metadata is invalid" in errors
+    assert "secret-token" not in rendered
+    assert "must be base64" not in rendered
+    assert "canonical base64" not in rendered
+
+
+def test_all_lanes_redacts_solana_programdata_parser_failures(
+    monkeypatch,
+) -> None:
+    """Solana ProgramData parser blockers must not echo exception payloads."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    sol_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_SOL)
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_SOL]
+    material = records["sccp_source_verifier_materials"][sol_index]
+    deployment = records["sccp_source_adapter_engine_deployments"][sol_index]
+    destination = records["sccp_destination_rollouts"][sol_index]
+    route = records["sccp_route_allowlists"][sol_index]
+    source_hashes = module._canonical_source_record_hashes(
+        profile,
+        material,
+        deployment,
+    )
+
+    def fail_program_id(_value, *, label):
+        raise ValueError(f"secret-token {label} program id")
+
+    def fail_program_bytes(_value, *, label):
+        raise ValueError(f"secret-token {label} program bytes")
+
+    monkeypatch.setattr(
+        module,
+        "_load_sibling_module",
+        lambda _name: SimpleNamespace(
+            _require_solana_program_id=fail_program_id,
+            decode_solana_base58=fail_program_id,
+            parse_program_bytes_base64=fail_program_bytes,
+            solana_verifier_program_code_hash=lambda _program: bytes(32),
+            solana_route_canary_evidence_hash=lambda **_kwargs: bytes(32),
+        ),
+    )
+
+    destination_errors = module._check_solana_live_programdata_evidence(destination)
+    canary: dict[str, object] = {}
+    route_errors = module._check_solana_route_canary_live_program_evidence(
+        route,
+        destination_record=destination,
+        source_record_hashes=source_hashes,
+        evidence_hash=raw_hex(route["_comment_route_canary_evidence_hash"]),
+        route_allowlist_hash=raw_hex(route["route_allowlist_hash"]),
+        destination_binding_hash=raw_hex(destination["destination_binding_hash"]),
+        canary=canary,
+    )
+    rendered = "\n".join([*destination_errors, *route_errors])
+
+    assert "Solana ProgramData account is not canonical" in destination_errors
+    assert (
+        "Solana ProgramData executable base64 metadata is invalid"
+        in destination_errors
+    )
+    assert "Solana route canary ProgramData executable is invalid" in route_errors
+    assert "metadata is invalid:" not in rendered
+    assert "is not canonical:" not in rendered
+    assert "secret-token" not in rendered
+    assert "ValueError" not in rendered
 
 
 def test_all_lanes_rejects_solana_programdata_executable_hash_drift():
@@ -5481,7 +5850,82 @@ def test_all_lanes_rejects_ton_destination_with_invalid_code_boc_base64():
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
     assert "TON code BoC base64 metadata is invalid" in blockers
-    assert "canonical base64" in blockers
+    assert "canonical base64" not in blockers
+
+
+def test_all_lanes_redacts_ton_live_account_parser_failures(
+    monkeypatch,
+) -> None:
+    """TON live account parser blockers must not echo exception payloads."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    ton_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_TON)
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_TON]
+    material = records["sccp_source_verifier_materials"][ton_index]
+    deployment = records["sccp_source_adapter_engine_deployments"][ton_index]
+    destination = records["sccp_destination_rollouts"][ton_index]
+    route = records["sccp_route_allowlists"][ton_index]
+    source_hashes = module._canonical_source_record_hashes(
+        profile,
+        material,
+        deployment,
+    )
+    real_ton_module = module._load_sibling_module("sccp_ton_destination_evidence.py")
+
+    def fail_code_boc_hex(_value, *, label):
+        raise ValueError(f"secret-token {label} code BoC parser")
+
+    def fail_code_boc_base64(_value, *, label):
+        raise ValueError(f"secret-token {label} code BoC base64 parser")
+
+    def fail_raw_address(_value, *, label):
+        raise ValueError(f"secret-token {label} raw address parser")
+
+    module_attrs = dict(real_ton_module.__dict__)
+    module_attrs["parse_code_boc_hex"] = fail_code_boc_hex
+    monkeypatch.setattr(
+        module,
+        "_load_sibling_module",
+        lambda _name: SimpleNamespace(**module_attrs),
+    )
+    hex_errors = module._check_ton_live_account_evidence(destination)
+
+    module_attrs = dict(real_ton_module.__dict__)
+    module_attrs["parse_code_boc_base64"] = fail_code_boc_base64
+    monkeypatch.setattr(
+        module,
+        "_load_sibling_module",
+        lambda _name: SimpleNamespace(**module_attrs),
+    )
+    base64_errors = module._check_ton_live_account_evidence(destination)
+
+    module_attrs = dict(real_ton_module.__dict__)
+    module_attrs["normalize_ton_raw_address"] = fail_raw_address
+    monkeypatch.setattr(
+        module,
+        "_load_sibling_module",
+        lambda _name: SimpleNamespace(**module_attrs),
+    )
+    canary: dict[str, object] = {}
+    route_errors = module._check_ton_route_canary_live_account_evidence(
+        route,
+        destination_record=destination,
+        source_record_hashes=source_hashes,
+        evidence_hash=raw_hex(route["_comment_route_canary_evidence_hash"]),
+        route_allowlist_hash=raw_hex(route["route_allowlist_hash"]),
+        destination_binding_hash=raw_hex(destination["destination_binding_hash"]),
+        canary=canary,
+    )
+    rendered = "\n".join([*hex_errors, *base64_errors, *route_errors])
+
+    assert "TON verifier code BoC metadata is invalid" in hex_errors
+    assert "TON code BoC base64 metadata is invalid" in base64_errors
+    assert "TON route canary verifier identity is invalid" in route_errors
+    assert "metadata is invalid:" not in rendered
+    assert "identity is invalid:" not in rendered
+    assert "secret-token" not in rendered
+    assert "ValueError" not in rendered
 
 
 def test_all_lanes_rejects_ton_destination_when_code_boc_replay_hash_drifts():
@@ -5782,6 +6226,84 @@ def test_all_lanes_evidence_recomputes_audit_and_tron_config_hashes():
     )
 
 
+def test_all_lanes_evidence_redacts_source_gate_recompute_failures(
+    monkeypatch,
+) -> None:
+    """Source gate recomputation blockers must not echo exception payloads."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+
+    def fail_recompute(*_args, **_kwargs):
+        raise ValueError("secret-token source gate material")
+
+    fake_modules = {
+        "sccp_solana_source_state_evidence.py": SimpleNamespace(
+            solana_full_light_client_gate_hash=fail_recompute,
+        ),
+        "sccp_ton_source_state_evidence.py": SimpleNamespace(
+            ton_full_light_client_gate_hash=fail_recompute,
+        ),
+        "sccp_tron_source_bridge_evidence.py": SimpleNamespace(
+            tron_dpos_source_gate_hash=fail_recompute,
+            tron_source_bridge_config_hash=fail_recompute,
+        ),
+        "sccp_eth_source_bridge_evidence.py": SimpleNamespace(
+            eth_source_bridge_config_hash=fail_recompute,
+        ),
+    }
+
+    monkeypatch.setattr(
+        module,
+        "_load_sibling_module",
+        lambda name: fake_modules[name],
+    )
+
+    cases = (
+        (
+            module._check_solana_full_light_client_gate,
+            (
+                records["sccp_source_verifier_materials"][2],
+                records["sccp_source_adapter_engine_deployments"][2],
+            ),
+            "Solana full light-client gate cannot be recomputed",
+        ),
+        (
+            module._check_ton_full_light_client_gate,
+            (
+                records["sccp_source_verifier_materials"][3],
+                records["sccp_source_adapter_engine_deployments"][3],
+            ),
+            "TON full light-client gate cannot be recomputed",
+        ),
+        (
+            module._check_tron_dpos_source_gate,
+            (
+                records["sccp_source_verifier_materials"][4],
+                records["sccp_source_adapter_engine_deployments"][4],
+            ),
+            "TRON DPoS source gate cannot be recomputed",
+        ),
+        (
+            module._check_tron_source_bridge_config_hash,
+            (records["sccp_source_verifier_materials"][4],),
+            "TRON source bridge config hash cannot be recomputed",
+        ),
+        (
+            module._check_eth_source_bridge_config_hash,
+            (records["sccp_source_verifier_materials"][0],),
+            "ETH source bridge config hash cannot be recomputed",
+        ),
+    )
+
+    for check, args, expected in cases:
+        errors = check(*args)
+        rendered = "\n".join(errors)
+        assert errors == [expected]
+        assert f"{expected}:" not in rendered
+        assert "secret-token" not in rendered
+        assert "ValueError" not in rendered
+
 
 def test_all_lanes_evidence_rejects_tron_dpos_source_gate_hash_drift():
     module = load_evidence_module()
@@ -5877,6 +6399,33 @@ def test_all_lanes_evidence_rejects_destination_binding_drift():
     assert "domain 4 (ton): destination_binding_key does not match" in blockers
     assert "domain 5 (tron): destination_network_id does not match" in blockers
     assert "domain 5 (tron): destination_binding_key does not match" in blockers
+
+
+def test_all_lanes_evidence_redacts_destination_binding_recompute_failures(
+    monkeypatch,
+) -> None:
+    """Destination binding recomputation blockers must not echo exceptions."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+
+    def fail_destination_binding(_profile, _material, _destination):
+        raise ValueError("secret-token destination binding material")
+
+    monkeypatch.setattr(
+        module,
+        "_expected_destination_binding",
+        fail_destination_binding,
+    )
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    blockers = "\n".join(summary["blockers"])
+    assert "destination binding cannot be recomputed" in blockers
+    assert "destination binding cannot be recomputed:" not in blockers
+    assert "secret-token" not in blockers
+    assert "ValueError" not in blockers
 
 
 def test_all_lanes_evidence_rejects_destination_comment_drift():
@@ -6510,36 +7059,46 @@ def test_all_lanes_release_checklist_rejects_malformed_source_gate_blockers():
     }
     cases = (
         (
+            "source_gate.checklist_scalar",
             "operator hold",
             "domain 3 (sol): source adapter gate blockers must be a list of "
             "non-empty canonical strings",
         ),
         (
+            "source_gate.checklist_numeric",
             [123],
             "domain 3 (sol): source adapter gate blockers[0] must be a "
             "non-empty canonical string",
         ),
         (
+            "source_gate.checklist_empty",
+            [""],
+            "domain 3 (sol): source adapter gate blockers[0] must be a "
+            "non-empty canonical string",
+        ),
+        (
+            "source_gate.checklist_padded",
             [" padded "],
             "domain 3 (sol): source adapter gate blockers[0] must be a "
             "non-empty canonical string",
         ),
         (
+            "source_gate.checklist_valid",
             ["operator hold"],
             "domain 3 (sol): operator hold",
         ),
     )
 
-    for blockers, expected in cases:
+    for case_id, blockers, expected in cases:
         lane = copy.deepcopy(base_lane)
         lane["source_adapter_gate"]["blockers"] = blockers
 
         checklist = module._release_checklist([lane], [])
         items = {item["id"]: item for item in checklist["items"]}
 
-        assert checklist["ready"] is False, repr(blockers)
-        assert items["governed_deployment_evidence"]["ready"] is False
-        assert expected in items["governed_deployment_evidence"]["blockers"]
+        assert checklist["ready"] is False, case_id
+        assert items["governed_deployment_evidence"]["ready"] is False, case_id
+        assert expected in items["governed_deployment_evidence"]["blockers"], case_id
 
 
 def test_all_lanes_summary_rejects_malformed_source_gate_blockers():
@@ -6547,27 +7106,37 @@ def test_all_lanes_summary_rejects_malformed_source_gate_blockers():
     original_gate_summary = module._source_adapter_gate_summary
     cases = (
         (
+            "source_gate.summary_scalar",
             "operator hold",
             "domain 3 (sol): source adapter gate blockers must be a list of "
             "non-empty canonical strings",
         ),
         (
+            "source_gate.summary_numeric",
             [123],
             "domain 3 (sol): source adapter gate blockers[0] must be a "
             "non-empty canonical string",
         ),
         (
+            "source_gate.summary_empty",
+            [""],
+            "domain 3 (sol): source adapter gate blockers[0] must be a "
+            "non-empty canonical string",
+        ),
+        (
+            "source_gate.summary_padded",
             [" padded "],
             "domain 3 (sol): source adapter gate blockers[0] must be a "
             "non-empty canonical string",
         ),
         (
+            "source_gate.summary_valid",
             ["operator hold"],
             "domain 3 (sol): operator hold",
         ),
     )
 
-    for blocker_value, expected in cases:
+    for case_id, blocker_value, expected in cases:
         def patched_gate_summary(profile, *args, blocker_value=blocker_value):
             summary = original_gate_summary(profile, *args)
             if profile.domain == module.SCCP_DOMAIN_SOL:
@@ -6585,8 +7154,8 @@ def test_all_lanes_summary_rejects_malformed_source_gate_blockers():
         finally:
             module._source_adapter_gate_summary = original_gate_summary
 
-        assert summary["production_ready"] is False, repr(blocker_value)
-        assert expected in summary["blockers"]
+        assert summary["production_ready"] is False, case_id
+        assert expected in summary["blockers"], case_id
 
 
 def test_all_lanes_release_checklist_rejects_malformed_route_canary_summary():
@@ -6922,11 +7491,31 @@ def test_all_lanes_evidence_requires_route_component_hashes():
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
     assert "domain 5 (tron): source_bridge_owner_address must match" in blockers
-    assert (
-        "domain 5 (tron): route_allowlist_hash cannot be recomputed: "
-        "source_verifier_material_hash must be a non-zero 32-byte hex value"
-        in blockers
-    )
+    assert "domain 5 (tron): route_allowlist_hash cannot be recomputed" in blockers
+    assert "source_verifier_material_hash must be a non-zero" not in blockers
+
+
+def test_all_lanes_evidence_redacts_route_allowlist_recompute_failures(
+    monkeypatch,
+) -> None:
+    """Route allowlist recomputation blockers must not echo exception payloads."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+
+    def fail_recompute(_profile, _source_hashes, _destination_binding):
+        raise ValueError("secret-token operator route material")
+
+    monkeypatch.setattr(module, "_expected_route_allowlist_hash", fail_recompute)
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    blockers = "\n".join(summary["blockers"])
+    assert "route_allowlist_hash cannot be recomputed" in blockers
+    assert "route_allowlist_hash cannot be recomputed:" not in blockers
+    assert "secret-token" not in blockers
+    assert "ValueError" not in blockers
 
 
 def test_all_lanes_evidence_rejects_canonical_source_validator_drift():
@@ -6942,6 +7531,38 @@ def test_all_lanes_evidence_rejects_canonical_source_validator_drift():
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
     assert "domain 1 (eth): eth source evidence rejected by canonical validator" in blockers
+
+
+def test_all_lanes_evidence_redacts_source_validator_failures(
+    monkeypatch,
+) -> None:
+    """Canonical source validator blockers must not echo exception payloads."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    original_loader = module._load_sibling_module
+
+    def fail_validator(_args):
+        raise ValueError("secret-token source validator material")
+
+    def load_sibling(name):
+        if name == "sccp_eth_source_bridge_evidence.py":
+            real_module = original_loader(name)
+            module_attrs = dict(real_module.__dict__)
+            module_attrs["_validate_eth_source_evidence_args"] = fail_validator
+            return SimpleNamespace(**module_attrs)
+        return original_loader(name)
+
+    monkeypatch.setattr(module, "_load_sibling_module", load_sibling)
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    blockers = "\n".join(summary["blockers"])
+    assert "eth source evidence rejected by canonical validator" in blockers
+    assert "eth source evidence rejected by canonical validator:" not in blockers
+    assert "secret-token" not in blockers
+    assert "ValueError" not in blockers
 
 
 def test_all_lanes_evidence_rejects_malformed_destination_identities():
@@ -6969,6 +7590,34 @@ def test_all_lanes_evidence_rejects_malformed_destination_identities():
     assert (
         "domain 5 (tron): verifier_identity is not canonical for tron" in blockers
     )
+
+
+def test_all_lanes_evidence_redacts_destination_identity_failures(
+    monkeypatch,
+) -> None:
+    """Destination verifier identity blockers must not echo parser payloads."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
+    destination = records["sccp_destination_rollouts"][0]
+
+    def fail_parse(_identity, *, label):
+        raise ValueError(f"secret-token {label} parser detail")
+
+    monkeypatch.setattr(
+        module,
+        "_load_sibling_module",
+        lambda _name: SimpleNamespace(parse_evm_address=fail_parse),
+    )
+
+    errors = module._check_destination_verifier_identity(profile, destination)
+    rendered = "\n".join(errors)
+
+    assert errors == ["verifier_identity is not canonical for eth"]
+    assert "verifier_identity is not canonical for eth:" not in rendered
+    assert "secret-token" not in rendered
+    assert "ValueError" not in rendered
 
 
 def test_all_lanes_cli_merges_toml_snippets(tmp_path, capsys):

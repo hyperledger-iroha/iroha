@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -722,7 +722,8 @@ redistributable schemas, and official trust/revocation bundles.
 	  package digests before package comparison; Core material and execution
 	  proof wrappers pin those rejections before native proof generation. The
 	  trusted-reviewer package gates preflight caller-supplied reviewer id/key
-	  inputs before package or artifact validation can mask malformed trust
+	  inputs, including malformed or all-zero reviewer public-key payloads,
+	  before package or artifact validation can mask malformed trust
 	  configuration, and the standalone signoff, record, and manifest
 	  trusted-reviewer validators use the same preflight before stale signed
 	  objects can mask malformed trust anchors. Signoff payload construction now
@@ -737,11 +738,22 @@ redistributable schemas, and official trust/revocation bundles.
 	  Standalone release audit evidence validation rejects reused
 	  artifact/profile/native-payload commitments plus empty/all-zero and short,
 	  long, padded, binary-decorated, case-decorated, or whitespace-prefixed
-	  placeholder native-payload digest sentinels, standalone record construction
+	  placeholder native-payload digest sentinels, including draft,
+	  `not for production`, `not production ready`, and
+	  `replace before production` dash/underscore variants,
+	  governed full-bootstrap material digest admission rejects the same
+	  draft/not-for-production/replacement marker family before circuit material,
+	  proof-key material envelope/profile metadata, blind-rotation accumulator
+	  material, caller-expected material proof-profile digests, material/execution
+	  proof-input statement hashes, public-padding AIR rows, release-audit evidence,
+	  signoff, manifest, or caller-pinned package digest slots can pass,
+	  standalone record construction
 	  plus signoff/manifest validation rejects known header-only, nested-header,
 	  whitespace-prefixed nested-header, padded zero/blank-body, and
 	  short/long/padded/binary-decorated/case-decorated/whitespace-prefixed
-	  placeholder report/archive digests,
+	  placeholder report/archive digests, including draft, `not for production`,
+	  `not production ready`, and `replace before production` dash/underscore
+	  audit-artifact marker variants,
 	  public schemas advertise package-level header-only,
 	  nested-header, whitespace-prefixed nested-header, zero-body, blank-body,
 	  padded zero/blank-body, and
@@ -749,7 +761,9 @@ redistributable schemas, and official trust/revocation bundles.
 	  rejection,
 	  shared body extraction enforces
 	  nested, whitespace-prefixed nested, and full-body delayed-placeholder
-	  audit-artifact body rejection, and the internal typed prover-input path still requires the
+	  audit-artifact body rejection, the material-native AIR builder replays generated
+	  envelope bytes against the governed material AIR context before wrapping, and
+	  the internal typed prover-input path still requires the
 	  caller-supplied verifier key to match the verifier proof key embedded in the
 	  release prover package.
 	  Core typed material proof helpers now derive and validate typed input
@@ -836,7 +850,8 @@ redistributable schemas, and official trust/revocation bundles.
 	  coefficient-zero and sample-switch bounds from the raw extracted sample
 	  before accepting typed witness material.
 		  BFV-shaped native AIR envelopes now also preflight the canonical
-		  transcript label, nonzero statement hash, statement-bound domain tag,
+		  transcript label, including rejection of padded retry-label aliases,
+		  nonzero statement hash, statement-bound domain tag,
 		  STARK/FRI parameters, public digest binding, proof/commitment version tags,
 			  commitment/root shape, exact duplicate-free canonical opening/query count,
 				  opened row/path shape, Merkle path-to-root binding, FRI query-chain
@@ -844,7 +859,34 @@ redistributable schemas, and official trust/revocation bundles.
 				  rejection, AIR-to-FRI base value binding, opened public padding-row
 			  semantics, and the
 				  no-unmasked-private-row plus duplicate-free opening policies before Core
-				  accepts governed execution proof attachments; non-generic full-bootstrap native envelopes with
+				  accepts governed execution proof attachments; a structurally valid
+				  generic-AIR proof under an allowed BFV transcript label but with
+				  private-row openings now stays rejected at that BFV-native boundary.
+				  Native AIR proof synthesis now also rejects nonzero final FRI folds
+				  before BFV-native or public explicit-AIR proof bytes are returned.
+				  Generic STARK `OpenVerifyEnvelope` construction and verification now
+				  reserve the BFV full-bootstrap circuit id for that BFV-native path,
+				  so native full-bootstrap proof attachments cannot be admitted through
+				  the generic binding AIR fallback without the public-padding opening
+				  checks.
+				  Soracloud BFV input-admission, bootstrap-key, full-bootstrap
+				  material, and execution proof attachments now pin the canonical
+				  BFV STARK/FRI backend
+				  (`stark/fri/sha256-goldilocks`) in validation and in the advertised
+				  public-input schema descriptors, so alternate production STARK
+				  profiles cannot replay governed BFV attachments.
+				  BFV full-bootstrap proof-key profile validation now also rejects
+				  known placeholder/draft/not-production sentinel hashes in the
+				  registered parameter/RNS/decomposition profile, pair, and material
+				  commitment slots before commitment recomputation or governed
+				  material matching, and generated proof-key construction no longer
+				  uses a known pending material-commitment sentinel while deriving
+				  canonical pair and per-key commitments.
+				  Artifact-aware BFV execution witness validation now reports the first
+				  mismatched governed trace/bound field, and regressions pin diagnostic
+				  slot-to-coefficient plus sample-switch output drift as artifact-only
+				  replay failures rather than shape-only witness-material failures.
+				  Non-generic full-bootstrap native envelopes with
 				  missing or foreign AIR sections now fail before governed native-AIR
 				  acceptance. Core's BFV-native AIR fixtures now use a deterministic
 			  STARK/FRI envelope builder that commits caller-validated trace rows and
@@ -880,13 +922,15 @@ redistributable schemas, and official trust/revocation bundles.
 				  native verifier-key payloads to the runtime STARK verifier-key
 				  commitment.
 				  The BFV AIR
-			  composition evaluator derives its per-row/column challenges from both
-			  the public statement hash and canonical row-major trace-material
-			  digest, so residuals are bound to the evaluated witness package. The
-			  typed AIR contract material and Soracloud execution proof public-input
-			  schema now advertise that trace-material challenge binding explicitly
-			  with AIR material field count 27, so stale schema bytes fail stable
-			  hash and validator checks before release tooling can present them. The
+			  composition evaluator derives its per-row/column challenges from the
+			  public statement hash, canonical row-major trace-material digest, row
+			  index, and column index, remapping zero challenges to one so residuals
+			  are bound to the evaluated witness package. The typed AIR contract
+			  material and Soracloud execution proof public-input schema now
+			  advertise that challenge domain and binding policy explicitly with AIR
+			  material field count 32 and refreshed stable schema hashes, so stale
+			  schema bytes fail stable hash and validator checks before release
+			  tooling can present them. The
 			  release artifact layer also emits deterministic audit evidence that
 			  binds the generated artifact-bundle digest, evaluator artifact-set
 			  digest, prover/verifier pair commitment, native payload digests, native
@@ -990,26 +1034,84 @@ redistributable schemas, and official trust/revocation bundles.
 						  STARK/FRI proof-key material, verifier payloads, and release-audit
 						  proof profiles also reject blowup/domain parameter pairs where
 						  `blowup_log2` exceeds `n_log2` before key material or evidence can be
-						  admitted. Governed full-bootstrap material admission rejects
-						  known nonzero pending/placeholder digest literals before artifact,
-						  proof-key pair, key-material, or release-audit evidence commitments
+						  admitted. Shared STARK/FRI verification keeps auxiliary generic
+						  composition payloads (`comp_root`/`comp_values`) scoped to the
+						  generic binding AIR context and rejects them for caller-owned
+							  explicit AIR and ZK-ACE AIR before statement replay, and generic
+							  sidecars must rederive the AIR public digest from strictly ordered
+							  auxiliary terms before their composition leaf is accepted.
+							  Caller-owned explicit AIR trace roots also reject non-canonical
+							  Goldilocks row elements before hashing, so malformed row material
+							  cannot be bound under an otherwise valid explicit AIR verifier
+							  context. STARK
+						  `OpenVerifyEnvelope` wrapper verification rejects inner auxiliary
+						  sidecars for both generic binding and ZK-ACE wrappers, keeping
+						  generated wrapper proofs canonical. Generic STARK
+						  `OpenVerifyEnvelope` construction and verification also require
+						  verifier-key payloads to meet the ledger-grade production FRI
+						  floor and verifier-key backend labels to exactly match the
+						  requested proof backend before wrapper proofs can be emitted or
+						  accepted. Governed
+						  full-bootstrap material admission rejects
+						  known nonzero pending, placeholder, native proof-key payload,
+						  draft, not-for-production, and replacement digest literals before artifact,
+						  proof-key pair, key-material envelope/profile metadata, blind-rotation
+						  accumulator material, coefficient/slot linear-transform diagonals,
+						  sample-extraction switch-key digit limbs, all-zero/malformed/stale
+						  evaluator artifact-set envelopes, opaque evaluator artifact payloads,
+						  placeholder or duplicate evaluator/bundle digest-material fields,
+						  extra or missing full-bootstrap execution Galois keys, inert all-zero
+						  Galois/relinearization key-switch entries,
+						  BFV public-key digest, seeded-encryption, identifier
+						  public-parameter/ciphertext slots, all-zero BFV public-key
+						  components, bootstrap statement,
+						  full-bootstrap material statement, refresh-transcript,
+						  public/secret consistency public-key material, all-zero secret-key material, and
+						  full-bootstrap execution claim/trace ciphertext and raw-sample
+						  material,
+						  bootstrap public-key digest metadata,
+						  evaluation-key bundle digest refresh masks, bootstrap
+						  zero-refresh proof-statement refresh ciphertexts,
+						  aliased execution witness digest commitments,
+						  caller-expected material proof-profile digests,
+						  material/execution proof-input statement hashes, public-padding AIR rows,
+						  or release-audit evidence commitments
 						  can be accepted, including standalone release-audit signoff and
-						  manifest commitments, and execution proof statement hashing rejects
-						  the known pending execution witness digest literal.
+						  manifest commitments, release-audit key evidence and native proof-key
+						  material admission reject placeholder key digest/material commitments
+						  plus inert native-payload digest sentinels including generic proof-key
+						  placeholder payloads, and execution proof
+						  statement hashing rejects the known pending execution witness digest literal. Generated
+						  execution claims now use a non-sentinel transient witness digest
+						  before deriving the governed digest. The BFV native
+						  STARK/AIR prover/verifier wrapper now derives the domain tag from
+						  the execution statement hash, requires the canonical circuit id and
+						  FRI profile, and rejects sampled openings unless they are the
+						  statement-bound public-padding rows.
+					  BFV full-bootstrap proof-key profile validation also rejects
+					  known placeholder/draft/not-production sentinel hashes in the
+					  registered parameter/RNS/decomposition profile, pair, and
+					  material commitment slots before commitment recomputation or
+					  governed material matching.
 					  The remaining native-AIR gap is arithmetic
 				  proof-producing soundness rather than hand-built root/opening fixtures,
-			  unbound composition vectors, or statement-only composition challenges.
+			  unbound composition vectors, statement-only composition challenges,
+			  coordinate-agnostic composition challenge streams, or BFV wrapper-level
+			  public-opening binding.
 		  Remaining production work is the audited full-bootstrap arithmetic
 		  proof-producing backend plus release-grade
 		  prover/verifier artifacts and independent audit report/archive production
 			  with canonical v1 headers, nonzero bodies, and leading-whitespace-tolerant
 			  full-body delayed-placeholder rejection for the generated circuit,
 			  not the already-shipped Core verifier, proof-key, public-schema/release-prover
-		  input, arithmetic-trace, release-prover AIR contract/artifact digest binding,
+		  input, release-prover arithmetic digest sentinel rejection,
+		  canonical trace/AIR digest sentinel rejection, arithmetic-trace,
+		  release-prover AIR contract/artifact digest binding,
 		  AIR contract material/digest/artifact binding,
 		  proof-key evaluator artifact-set binding,
-		  typed-witness, typed AIR evaluation material, audited release-package
-		  wrapper, native AIR envelope
+		  typed-witness, typed AIR evaluation material trace-digest sentinel rejection,
+		  audited release-package wrapper, release-audit transcript-inventory
+		  preflight, native AIR envelope
 		  construction, attachment-finalization, or statement-recomputation validation
 		  corridors documented above.
   Direct crypto
@@ -1240,8 +1342,9 @@ redistributable schemas, and official trust/revocation bundles.
   data-model layer, and execution-policy admission now rejects unsupported
   deterministic rounding modes, so first-release BFV manifests cannot carry
   ignored scheme, backend, or rounding metadata. Exact and bounded Galois
-  keygen now rejects invalid public automorphism powers and deterministic seed
-  metadata before malformed secret-key shapes, and exact/bounded public-key
+  keygen now rejects invalid public automorphism powers and non-empty
+  non-all-zero deterministic seed metadata before malformed secret-key shapes,
+  and exact/bounded public-key
   consistency diagnostics reject malformed public keys before malformed secret
   keys. Bounded relinearization/Galois consistency diagnostics now also reject
   malformed public evaluation keys before malformed owner secrets, and bounded
@@ -1324,8 +1427,9 @@ redistributable schemas, and official trust/revocation bundles.
   scalar/plaintext-polynomial execution helpers now validate scalar ranges and
   plaintext coefficient metadata before parsing malformed ciphertext shapes.
   Exact and bounded-noise seeded encryption, plus identifier envelope
-  encryption, now validate public plaintext/input, deterministic seed, and
-  identifier envelope metadata before malformed public-key shapes.
+  encryption, now validate public plaintext/input, non-empty non-all-zero
+  deterministic seed, and identifier envelope metadata before malformed
+  public-key shapes.
   Exact/bounded plaintext-scalar bound propagation now rejects oversized public
   input bounds before validating the public scalar range. Bootstrap
   refresh execution now also validates public key metadata plus requested round
@@ -1334,8 +1438,9 @@ redistributable schemas, and official trust/revocation bundles.
   `round_refreshes` vectors cannot mask out-of-capacity refresh requests.
   Owner-side decrypt/profile/residual and bounded-noise diagnostics now validate
   ciphertext shape before secret-key shape, and exact/bounded rotation and
-  bootstrap refresh-key generators validate public metadata, deterministic
-  seeds, and public-key shape before deriving encrypted-zero refresh masks.
+  bootstrap refresh-key generators validate public metadata, non-empty
+  non-all-zero deterministic seeds, and public-key shape before deriving
+  encrypted-zero refresh masks.
   Soracloud BFV
   refresh-transcript admission now also
   derives its deterministic seed, bootstrap key-id, rotation-transcript, and
@@ -1808,16 +1913,29 @@ redistributable schemas, and official trust/revocation bundles.
   returns a deterministic invalid-key marker instead of unwrapping checked
   multihash encoding, SM2 private-key byte export now exposes
   `PrivateKey::try_to_bytes` and routes exposed private-key multihash formatting
-  through checked payload extraction, secp256k1 message signing now exposes
-  `try_sign` and routes `Signature::try_new` through the fallible helper, and
+  through checked payload extraction, the compatibility `PrivateKey::to_bytes`
+  wrapper no longer falls back to an empty private-key payload if checked export
+  fails, secp256k1 message signing now exposes
+  `try_sign` and routes `Signature::try_new` through the fallible helper,
+  direct secp256k1 verification maps malformed and all-zero compact signatures
+  to `Error::BadSignature`, the compatibility `sign` helper no longer falls
+  back to an empty signature if checked signing fails, and
   secp256k1 recoverable prehash signing now checks the low-S recovery-id parity
   flip before emitting EVM-compatible signatures; SM2 embedded-distid payload
   decoding now returns `ParseError` for short length prefixes instead of relying
   on a panic-only fixed-slice assertion, SM2 PEM export now wraps the already
   encoded base64 `String` without a panic-only UTF-8 reconversion, SM2
   DER signature export now exposes `try_as_der` with checked short-form length
-  encoding and routes the OpenSSL bridge through that fallible exporter before
-  DER parsing, SM4-CCM now checks tag, nonce, AAD, payload, and counter-block
+  encoding, the compatibility `as_der` helper no longer falls back to an empty
+  payload if that invariant is broken, and routes the OpenSSL bridge through
+  that fallible exporter before DER parsing, SM2 signature decoding now rejects
+  all-zero and zero-scalar encodings before backend parsing, and SM2 verifier
+  boundaries map malformed signature material to `Error::BadSignature`,
+  generic ML-DSA public/private key import and direct batch verification now
+  reject all-zero public-key, private-key, and detached-signature material before
+  backend parsing,
+  SM4-CCM now checks tag, nonce,
+  AAD, payload, and counter-block
   length narrowing through its existing encrypt/decrypt `Result` paths, the SM
   signature shim's SM4 self-test block now uses the infallible fixed-key
   constructor instead of
@@ -1829,8 +1947,9 @@ redistributable schemas, and official trust/revocation bundles.
   separator, and context components through `expand_multi_info`, preserving the
   previous contiguous info layout without manual capacity arithmetic;
   SoraNet PQ ML-DSA helpers now apply the same secret-key consistency check to
-  direct validation and direct/OS-backed signing, and expose fallible public-key
-  reconstruction from secret material;
+  direct validation and direct/OS-backed signing, reject all-zero standalone
+  public-key, secret-key, and detached-signature material before backend use,
+  and expose fallible public-key reconstruction from secret material;
   BLS same-message aggregate and preaggregated verification now reject
   duplicate public keys and public-key aggregates that cancel to the identity
   before verification, and the public PoP-gated same-message wrappers reject
@@ -1888,7 +2007,9 @@ redistributable schemas, and official trust/revocation bundles.
   panic-only cache-index assumptions while preserving the configured
   power-of-two masks, and `Signature::verify` now routes compact public-key
   expansion through checked parsing so malformed in-memory public keys return
-  `Error::Parse` instead of reaching Ed25519 invariant panics; `KeyPair::new`
+  `Error::Parse` instead of reaching Ed25519 invariant panics, and rejects
+  non-empty all-zero signature payloads before backend verifier dispatch;
+  `KeyPair::new`
   now validates compact public-key payloads through the same checked parser
   before algorithm comparison or GOST pair validation, so malformed in-memory
   public keys return `Error::Parse` instead of panic-compatible full-key
@@ -2060,7 +2181,13 @@ redistributable schemas, and official trust/revocation bundles.
 							  vector and compliance-vector fixture public keys now also use checked
 							  Ed25519 seed expansion while preserving their fixed seed bytes; Norito
 							  fixture-export and trigger-print scripts now also derive their fixed
-							  Ed25519 fixture authorities through checked seed expansion; `iroha_test_samples`
+							  Ed25519 fixture authorities through checked seed expansion; generic
+							  Ed25519 deterministic key generation and private-key parsing now reject
+							  all-zero 32-byte seed material before accepting caller-supplied signing
+							  keys; X25519 deterministic key generation, imported static-secret
+							  admission, and OS-backed private-key generation now reject all-zero
+							  32-byte seed/private-key material before public-key derivation;
+							  `iroha_test_samples`
 							  sample-account generation now exposes a fallible helper and routes seeded/random
 							  test key material through checked key-generation APIs; `iroha_core` tx-size
 							  and memory examples now also use checked random key generation, with `tx_size`
@@ -2068,7 +2195,9 @@ redistributable schemas, and official trust/revocation bundles.
 							  data-model sample fault-injection smoke test now also uses checked random
 							  key generation for its transaction signer; confidential keyset generation now
 							  accepts fallible `rand_core` 0.9 crypto RNGs and maps spend-key entropy
-							  failures to `ConfidentialKeyError::RandomBytes`; SoraNet client and relay
+							  failures to `ConfidentialKeyError::RandomBytes`, and confidential keyset
+							  derivation now rejects all-zero 32-byte spend keys before HKDF expansion;
+							  SoraNet client and relay
 							  handshake construction now also uses fallible `TryCryptoRng` draws for nonce,
 							  Noise secret, and client ML-KEM seed material, returning labelled
 							  `HarnessError::RandomBytes` failures; SoraNet PoW and Argon2 puzzle
@@ -2193,11 +2322,15 @@ redistributable schemas, and official trust/revocation bundles.
   with Swift fallback serialization enforcing matching empty-ciphertext and
   X25519 low-order admission;
   standalone ML-KEM public-key validation, secret-key validation,
-  encapsulation, and decapsulation now reject noncanonical 12-bit public-key
-  coefficients plus noncanonical secret-key private coefficients, and
-  secret-key validation plus decapsulation reject corrupted embedded `H(ek)`
+  encapsulation, and decapsulation now reject all-zero public keys, all-zero
+  secret keys, all-zero embedded secret-key public keys, noncanonical 12-bit
+  public-key coefficients, and noncanonical secret-key private coefficients,
+  and secret-key validation plus decapsulation reject corrupted embedded `H(ek)`
   public-key hashes before implicit rejection can derive divergent transport
-  keys;
+  keys; hybrid envelope constructors and Norito streaming Kyber key-material,
+  fingerprint, session, snapshot, encapsulation, and decapsulation admission now
+  also reject all-zero ML-KEM public or secret key material before accepting
+  fingerprints, transport state, or envelope keys;
   changing the streaming ML-KEM profile on key material or live sessions now
   clears configured Kyber public keys, fingerprints, and local decapsulation
   secrets before any later HPKE use, and direct local ephemeral-payload
@@ -2259,16 +2392,18 @@ redistributable schemas, and official trust/revocation bundles.
   parity, or snapshot-visible fields change;
   SoraNet NK2/NK3 handshake parsers now reject low-order Noise static and
   ephemeral public keys in decoded client and relay frames, reject malformed
-  Dilithium3/Ed25519 handshake signature field lengths, require 1024-byte
-  zero-padded frames, and reject selected KEM/signature ids that are absent
-  from either peer's advertised capability TLVs, including the relay capability
-  vector echoed in `RelayHello`; unsupported KEM ids fail at the KEM profile
+  Dilithium3/Ed25519 handshake signature field lengths and all-zero signature
+  payloads, require 1024-byte zero-padded frames, and reject selected
+  KEM/signature ids that are absent from either peer's advertised capability
+  TLVs, including the relay capability vector echoed in `RelayHello`;
+  unsupported KEM ids fail at the KEM profile
   gate before downgrade telemetry is built;
   SoraNet signed-ticket signing now preflights ML-DSA-44 secret-key lengths,
   and signed-ticket decode/direct verification now reject ML-DSA-44 verifier
   public-key and signature vectors whose lengths disagree with the suite
-  metadata before signing payloads, accepting tokens, or entering backend
-  verification, while signed-ticket relay/transcript binding checks now run
+  metadata, and all-zero signed-ticket signature material, before signing
+  payloads, accepting tokens, or entering backend verification, while
+  signed-ticket relay/transcript binding checks now run
   before signature work in the full verifier, and signed-ticket policy metadata
   now rejects unsupported versions, difficulty mismatches, expiry, and TTL
   window failures before signature work; signed-ticket ML-DSA payloads now use
@@ -2303,8 +2438,9 @@ redistributable schemas, and official trust/revocation bundles.
   fail closed without panicking, and their compatibility `new` constructors now
   return fail-closed policies instead of unwinding on invalid timing bounds; PoW
   ticket minting, Argon2 puzzle minting, and
-  revocation-store insertion now reject unrepresentable expiry timestamps
-  through checked `SystemTime` conversion; PoW challenge, solution-digest, and
+  revocation-store insertion now reject malformed or all-zero raw signatures
+  and unrepresentable expiry timestamps through checked `SystemTime`
+  conversion; PoW challenge, solution-digest, and
   revocation fingerprints plus Argon2 puzzle challenges now feed BLAKE3
   incrementally while preserving the previous contiguous transcript layout, and
   Argon2 puzzle solution salts now use a fixed-size stack buffer. P2P SoraNet
@@ -2335,11 +2471,13 @@ redistributable schemas, and official trust/revocation bundles.
   configured capacity;
   SoraNet guard-directory snapshot decode now rejects duplicate or
   key-mismatched issuer fingerprints and enforces ML-DSA-65 issuer public-key
-  length/phase requirements before snapshots are admitted, with issuer key
-  shape and the fingerprint `u32` key-length field now checked before
-  fingerprint derivation; the public directory issuer-fingerprint helper now
-  returns `Result`, and orchestrator guard-directory admission maps fingerprint
-  recomputation errors before advertised fingerprint comparison; relay
+  length/phase requirements plus all-zero issuer ML-DSA public-key material
+  before snapshots are admitted, with issuer key shape, inert-key rejection, and
+  the fingerprint `u32` key-length field now checked before fingerprint
+  derivation; the public directory issuer-fingerprint helper now returns
+  `Result`, rejects all-zero nonempty ML-DSA public keys, and orchestrator
+  guard-directory admission maps fingerprint recomputation errors before
+  advertised fingerprint comparison; relay
   directory build and snapshot rotation now propagate fingerprint-computation
   errors with issuer context before signing or publishing a snapshot, and
   guard-pinning fixtures derive ML-KEM public-key lengths from the advertised
@@ -2358,9 +2496,11 @@ redistributable schemas, and official trust/revocation bundles.
   SoraNet admission-token replay-store reload now rejects duplicate persisted
   token IDs and overflowing expiry timestamps, and admission-token verification
   rejects zero-length or inverted validity windows and preflights ML-DSA issuer
-  public-key and detached-signature lengths before backend verification or
-  replay-store mutation. Torii SoraFS stream-token issuance now generates token
-  IDs through checked OS RNG fills and returns labelled issuance errors before
+  public-key and detached-signature lengths before classifying full-length
+  all-zero detached signatures, all before backend verification or replay-store
+  mutation. Torii SoraFS stream-token
+  issuance now generates token IDs through checked OS RNG fills and returns
+  labelled issuance errors before
   signed token bodies are emitted; Torii internal operator-signature request
   headers now generate their base64url nonces through checked OS RNG fills and
   return labelled signing-header errors before canonical request signing, and
@@ -2446,15 +2586,19 @@ redistributable schemas, and official trust/revocation bundles.
   mint errors; SoraNet SRCv2 bundle
   verification re-runs canonical certificate-payload admission for in-memory
   bundles, rejects weak Ed25519 verifier keys, and preflights ML-DSA-65
-  issuer public-key and detached-signature lengths before backend verification;
+  issuer public-key and detached-signature lengths plus all-zero Ed25519/ML-DSA
+  signature placeholders before backend verification;
   local SRCv2 issuance reuses certificate-payload admission and ML-DSA-65
   issuer secret-key length preflight before signing bundles; Phase 2 SRCv2
   rollout accepts Ed25519-only relay certificates while Phase 3 remains the
   dual-signature gate;
   SoraNet SRCv2 certificate decode now rejects unknown ML-KEM suite ids and
   key-material length drift for ML-DSA-65 identity keys and advertised ML-KEM
-  relay public keys, rejects malformed/noncanonical/weak Ed25519 identity
-  public keys, rejects ML-DSA-65 detached signature length drift, and its
+  relay public keys, rejects all-zero ML-DSA identity and all-zero or
+  noncanonical ML-KEM relay public-key material, rejects
+  malformed/noncanonical/weak Ed25519 identity
+  public keys, rejects ML-DSA-65 detached signature length drift and all-zero
+  Ed25519/ML-DSA signature fields, and its
   canonical CBOR parser rejects trailing payload/bundle bytes plus non-shortest
   integer/length encodings and duplicate nested
   bundle/signature/endpoint/KEM-policy fields, with byte/text/exact payload
@@ -2611,7 +2755,9 @@ redistributable schemas, and official trust/revocation bundles.
   before blinded digest or signature material is produced; proof-token base64
   header encoding/decoding now uses the `base64` crate's checked no-alloc slice
   helpers instead of manual capacity arithmetic and panic-only buffer
-  assertions.
+  assertions; proof-token binary/base64 decode and direct signature verification
+  now reject all-zero Ed25519 signature placeholders before accepting or
+  verifying externally supplied moderation-token signature material.
 - Remaining breadth should include SDK validation once Java is available and
   any wider admission/manifest-envelope/full-corridor reruns not covered by the
   current focused Torii SoraFS checks.

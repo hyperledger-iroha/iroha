@@ -3174,20 +3174,12 @@ class EvmSccpProverTest {
                 executionProvider = EthereumMainnetExecutionProvider { _, _ -> "0x38" },
             ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
         }
-        assertFailsWith<IllegalArgumentException> {
-            EthereumMainnetSccp(
-                executionProvider = EthereumMainnetExecutionProvider { _, _ -> "1" },
-            ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            EthereumMainnetSccp(
-                executionProvider = EthereumMainnetExecutionProvider { _, _ -> "0x01" },
-            ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            EthereumMainnetSccp(
-                executionProvider = EthereumMainnetExecutionProvider { _, _ -> 1L },
-            ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
+        for (chainId in listOf<Any>("1", "0x01", "0X1", " 0x1", "0x1 ", 1L)) {
+            assertFailsWith<IllegalArgumentException> {
+                EthereumMainnetSccp(
+                    executionProvider = EthereumMainnetExecutionProvider { _, _ -> chainId },
+                ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
+            }
         }
         assertFailsWith<IllegalArgumentException> {
             sdk.collectInboundEvidenceFromReceipt(

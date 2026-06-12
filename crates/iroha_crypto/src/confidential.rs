@@ -28,6 +28,9 @@ pub enum ConfidentialKeyError {
     /// Spend key must be exactly 32 bytes.
     #[error("expected 32-byte spend key, got {0} bytes")]
     InvalidSpendKeyLength(usize),
+    /// Spend key material must not be an inert all-zero placeholder.
+    #[error("spend key material must not be all zero")]
+    InertSpendKey,
     /// Random spend-key generation failed.
     #[error("random spend-key generation failed")]
     RandomBytes,
@@ -117,8 +120,13 @@ fn expand_key(
 /// Derive the confidential key hierarchy from a 32-byte spend key.
 ///
 /// # Errors
-/// Returns [`ConfidentialKeyError::HkdfExpand`] if domain-separated key expansion fails.
+/// Returns [`ConfidentialKeyError::InertSpendKey`] when the spend key is all zero, or
+/// [`ConfidentialKeyError::HkdfExpand`] if domain-separated key expansion fails.
 pub fn derive_keyset(mut spend_key: [u8; 32]) -> Result<ConfidentialKeyset> {
+    if spend_key.iter().all(|&byte| byte == 0) {
+        spend_key.zeroize();
+        return Err(ConfidentialKeyError::InertSpendKey);
+    }
     let hkdf = Hkdf::<Sha3_512>::new(Some(KEY_SALT), &spend_key);
 
     let nk = expand_key(&hkdf, "nk", INFO_NK)?;
@@ -141,7 +149,8 @@ pub fn derive_keyset(mut spend_key: [u8; 32]) -> Result<ConfidentialKeyset> {
 ///
 /// # Errors
 /// Returns [`ConfidentialKeyError::InvalidSpendKeyLength`] when the slice does not contain exactly 32 bytes,
-/// or [`ConfidentialKeyError::HkdfExpand`] if key expansion fails.
+/// [`ConfidentialKeyError::InertSpendKey`] when the spend key is all zero, or
+/// [`ConfidentialKeyError::HkdfExpand`] if key expansion fails.
 pub fn derive_keyset_from_slice(spend_key: &[u8]) -> Result<ConfidentialKeyset> {
     if spend_key.len() != 32 {
         return Err(ConfidentialKeyError::InvalidSpendKeyLength(spend_key.len()));
@@ -155,6 +164,7 @@ pub fn derive_keyset_from_slice(spend_key: &[u8]) -> Result<ConfidentialKeyset> 
 ///
 /// # Errors
 /// Returns [`ConfidentialKeyError::RandomBytes`] if the RNG cannot provide a spend key, or
+/// [`ConfidentialKeyError::InertSpendKey`] if the RNG returns all-zero material, or
 /// [`ConfidentialKeyError::HkdfExpand`] if key expansion fails.
 pub fn generate_keyset<R: TryCryptoRng>(rng: &mut R) -> Result<ConfidentialKeyset> {
     let mut seed = Zeroizing::new([0u8; 32]);
@@ -181,8 +191,24 @@ mod tests {
     }
 
     #[test]
+    fn derive_keyset_rejects_all_zero_spend_key() {
+        assert!(matches!(
+            derive_keyset([0u8; 32]),
+            Err(ConfidentialKeyError::InertSpendKey)
+        ));
+    }
+
+    #[test]
     fn derive_keyset_from_slice_rejects_wrong_length() {
         assert!(derive_keyset_from_slice(&[0u8; 31]).is_err());
+    }
+
+    #[test]
+    fn derive_keyset_from_slice_rejects_all_zero_spend_key() {
+        assert!(matches!(
+            derive_keyset_from_slice(&[0u8; 32]),
+            Err(ConfidentialKeyError::InertSpendKey)
+        ));
     }
 
     #[test]
@@ -290,9 +316,40 @@ mod tests {
     }
 
     #[test]
+    fn generate_keyset_rejects_all_zero_rng_bytes() {
+        struct ZeroRng;
+
+        impl TryRngCore for ZeroRng {
+            type Error = core::convert::Infallible;
+
+            fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {
+                Ok(0)
+            }
+
+            fn try_next_u64(&mut self) -> core::result::Result<u64, Self::Error> {
+                Ok(0)
+            }
+
+            fn try_fill_bytes(&mut self, dest: &mut [u8]) -> core::result::Result<(), Self::Error> {
+                dest.fill(0);
+                Ok(())
+            }
+        }
+
+        impl TryCryptoRng for ZeroRng {}
+
+        let mut rng = ZeroRng;
+
+        assert!(matches!(
+            generate_keyset(&mut rng),
+            Err(ConfidentialKeyError::InertSpendKey)
+        ));
+    }
+
+    #[test]
     #[ignore = "generates example vectors for manual inspection"]
     fn dump_confidential_vectors() {
-        for byte in [0x00u8, 0x42, 0xFF] {
+        for byte in [0x42u8, 0xFF] {
             let seed = [byte; 32];
             let keyset = derive_keyset(seed).expect("derive keyset");
             println!(

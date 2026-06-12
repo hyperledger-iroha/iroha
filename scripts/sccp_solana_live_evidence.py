@@ -75,20 +75,11 @@ def _encode_solana_base58(raw: bytes) -> str:
     return "1" * leading_zeros + (encoded or "")
 
 
-def _http_error_detail(exc: urllib.error.HTTPError) -> str:
-    raw = exc.read(SOLANA_JSON_RPC_MAX_ERROR_BYTES + 1)
-    truncated = len(raw) > SOLANA_JSON_RPC_MAX_ERROR_BYTES
-    detail = raw[:SOLANA_JSON_RPC_MAX_ERROR_BYTES].decode("utf-8", "replace")
-    if truncated:
-        detail += "...<truncated>"
-    return detail
-
-
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     decoded: dict[str, Any] = {}
     for key, value in pairs:
         if key in decoded:
-            raise ValueError(f"JSON-RPC returned duplicate JSON key {key!r}")
+            raise ValueError("JSON-RPC returned duplicate JSON keys")
         decoded[key] = value
     return decoded
 
@@ -114,12 +105,9 @@ def _json_rpc(
         with opener(request, timeout=timeout) as response:
             raw = response.read(SOLANA_JSON_RPC_MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        detail = _http_error_detail(exc)
-        raise RuntimeError(
-            f"JSON-RPC {method} failed with HTTP {exc.code}: {detail}"
-        ) from exc
+        raise RuntimeError(f"JSON-RPC {method} failed with HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"JSON-RPC {method} request failed: {exc.reason}") from exc
+        raise RuntimeError(f"JSON-RPC {method} request failed") from exc
     if len(raw) > SOLANA_JSON_RPC_MAX_RESPONSE_BYTES:
         raise RuntimeError(
             f"JSON-RPC {method} response exceeds "
@@ -135,12 +123,14 @@ def _json_rpc(
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
     except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
+        if str(exc) == "JSON-RPC returned duplicate JSON keys":
+            raise RuntimeError(f"JSON-RPC {method} returned duplicate JSON keys") from None
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
     if not isinstance(decoded, dict):
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     error = decoded.get("error")
     if error is not None:
-        raise RuntimeError(f"JSON-RPC {method} error: {error}")
+        raise RuntimeError(f"JSON-RPC {method} returned error response")
     if "result" not in decoded:
         raise RuntimeError(f"JSON-RPC {method} returned no result")
     return decoded["result"]
@@ -389,16 +379,22 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
             str(live.get("verifier_program_id", "")),
             label="verifier program id",
         )
+    except argparse.ArgumentTypeError:
+        raise ValueError("Solana live verifier program id metadata is invalid") from None
+    try:
         programdata_address = evidence.normalize_solana_program_id(
             str(live.get("programdata_address", "")),
             label="programdata address",
         )
+    except argparse.ArgumentTypeError:
+        raise ValueError("Solana live ProgramData address metadata is invalid") from None
+    try:
         verifier_code_hash = _parse_hex32(
             str(live.get("verifier_code_hash", "")),
             label="verifier_code_hash",
         )
-    except argparse.ArgumentTypeError as exc:
-        raise ValueError(str(exc)) from exc
+    except argparse.ArgumentTypeError:
+        raise ValueError("Solana live verifier code hash metadata is invalid") from None
     if programdata_address == program_id:
         raise ValueError("Solana verifier ProgramData account must differ from program id")
 
@@ -414,8 +410,8 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
             executable_base64,
             label="Solana ProgramData executable base64 metadata",
         )
-    except argparse.ArgumentTypeError as exc:
-        raise ValueError(str(exc)) from exc
+    except argparse.ArgumentTypeError:
+        raise ValueError("Solana ProgramData executable base64 metadata is invalid") from None
     derived_code_hash = evidence.solana_verifier_program_code_hash(program_bytes)
     if derived_code_hash != verifier_code_hash:
         raise ValueError("Solana ProgramData executable bytes must match live verifier_code_hash")
@@ -485,8 +481,10 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
             programdata_address,
             label="programdata address",
         )
-    except argparse.ArgumentTypeError as exc:
-        raise ValueError(str(exc)) from exc
+    except argparse.ArgumentTypeError:
+        raise ValueError(
+            "Solana Program account ProgramData address metadata is invalid"
+        ) from None
     if program_account_data[4:36] != expected_programdata_raw:
         raise ValueError(
             "Solana Program account data metadata must reference the ProgramData account"
@@ -879,6 +877,39 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+SENSITIVE_CLI_ERROR_MARKERS = (
+    "secret-token",
+    "private-key",
+    "private_key",
+    "password",
+    "passphrase",
+    "bearer ",
+    "authorization",
+    "access-key",
+    "access_key",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "session=",
+    "token=",
+)
+
+
+def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
+    if isinstance(exc, OSError):
+        return fallback
+    text = str(exc)
+    if not text:
+        return fallback
+    lowered = text.lower()
+    if any(marker in lowered for marker in SENSITIVE_CLI_ERROR_MARKERS):
+        return fallback
+    if any((ord(ch) < 0x20 and ch not in "\n\t") or ord(ch) == 0x7F for ch in text):
+        return fallback
+    return text
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -893,8 +924,12 @@ def main(argv: list[str] | None = None) -> int:
             print(render_toml(args, live), end="")
         else:
             print(json.dumps(_summary(args, live), sort_keys=True, indent=2))
-    except (RuntimeError, ValueError) as exc:
-        parser.error(str(exc))
+    except (OSError, RuntimeError, ValueError) as exc:
+        detail = _cli_error_detail(
+            exc,
+            fallback="SCCP Solana live evidence collection failed",
+        )
+        parser.exit(2, f"{parser.prog}: error: {detail}\n")
     return 0
 
 

@@ -697,6 +697,7 @@ python3 scripts/kagemusha_lineage_proof_evidence.py \
   --artifact-dir artifacts/kagemusha \
   --proof-log artifacts/kagemusha/record-archive-proof.log \
   --elapsed-seconds "$elapsed_seconds" \
+  --max-generated-at-future-skew-seconds 300 \
   --out artifacts/kagemusha/lineage-proof-evidence.json
 
 # If the production proof ran in a detached staging directory, finalize only
@@ -732,6 +733,7 @@ python3 scripts/kagemusha_recursive_compact_key_evidence.py \
   --artifact-dir artifacts/kagemusha \
   --generator-log artifacts/kagemusha/recursive-compact-key-artifacts.log \
   --generated-at-utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --max-generated-at-future-skew-seconds 300 \
   --out artifacts/kagemusha/recursive-compact-key-evidence.json
 
 # If the compact keygen must run detached, run it through the staged wrapper
@@ -1000,6 +1002,11 @@ and rejects all-zero Reserved-lineage artifacts before emitting evidence JSON.
 It also rejects parent-segment and backslash aliases in `--artifact-dir`,
 `--proof-log`, `--generator-log`, and `--out` before resolving paths or reading
 filesystem metadata.
+The direct lineage and compact-key evidence helpers reject `generated_at_utc`
+values more than 300 seconds ahead of the helper clock by default, matching the
+production readiness rollup's future-skew allowance; use
+`--max-generated-at-future-skew-seconds` only to make that local helper bound
+stricter for a controlled release run.
 Its evidence writer also syncs through an identity-bound output parent before
 readback, so parent directory swaps after atomic replacement fail closed;
 the compact key evidence helper applies the same output checks for

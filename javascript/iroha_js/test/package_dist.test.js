@@ -5150,6 +5150,110 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
   );
 });
 
+test("package dist entrypoint enforces SCCP route-canary role separation", () => {
+  const distSolanaRouteCanaryEvidence = {
+    routeAllowlistHash: `0x${"31".repeat(32)}`,
+    destinationBindingHash: sccpDestinationBindingHash(SCCP_DOMAIN_SOL),
+    sourceVerifierMaterialHash: `0x${"33".repeat(32)}`,
+    sourceAdapterEngineDeploymentHash: `0x${"34".repeat(32)}`,
+    verifierIdentity: "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3",
+    verifierCodeHash:
+      "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
+    solanaRpcCommitment: "finalized",
+    solanaProgramOwner: SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
+    solanaProgramdataOwner: SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
+    solanaProgramImmutable: true,
+    solanaProgramAccountDataBase64:
+      "AgAAABERERERERERERERERERERERERERERERERERERERERER",
+    solanaProgramdataAddress: "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+    solanaProgramdataSlot: "4321",
+    solanaExpectedProgramdataSlot: "4321",
+    solanaProgramAccountContextSlot: "5000",
+    solanaProgramdataAccountContextSlot: "5001",
+    solanaProgramdataMetadataBlake2b256:
+      "0x2b5f26278ea949463e97c1dc5e53a821b82515b405454a1b0e3cd652c3b00209",
+    solanaProgramdataMetadataBase64:
+      "AwAAAOEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    solanaProgramdataExecutableBlake2b256:
+      "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
+    solanaProgramdataExecutableBase64: "f0VMRgECAwQF",
+  };
+  const distSolanaRouteCanaryGovernedHashReuse = {
+    ...distSolanaRouteCanaryEvidence,
+    routeAllowlistHash: distSolanaRouteCanaryEvidence.sourceVerifierMaterialHash,
+  };
+  assert.throws(
+    () =>
+      solanaSccpRouteCanaryEvidenceHash(
+        distSolanaRouteCanaryGovernedHashReuse,
+      ),
+    /Solana route canary governed hashes/u,
+  );
+
+  const distTonRouteCanaryEvidence = {
+    routeAllowlistHash: `0x${"31".repeat(32)}`,
+    destinationBindingHash: sccpDestinationBindingHash(SCCP_DOMAIN_TON),
+    sourceVerifierMaterialHash: `0x${"33".repeat(32)}`,
+    sourceAdapterEngineDeploymentHash: `0x${"34".repeat(32)}`,
+    verifierContractAddress: `0:${"11".repeat(32)}`,
+    verifierCodeHash: `0x${"44".repeat(32)}`,
+    accountStatus: "active",
+    accountStateHash: `0x${"55".repeat(32)}`,
+    lastTransactionLt: "123456789",
+    lastTransactionHash: `0x${"66".repeat(32)}`,
+    verifierCodeBocRootHash: `0x${"44".repeat(32)}`,
+  };
+  const distTonRouteCanaryGovernedHashReuse = {
+    ...distTonRouteCanaryEvidence,
+    routeAllowlistHash: distTonRouteCanaryEvidence.sourceVerifierMaterialHash,
+  };
+  assert.throws(
+    () => tonSccpRouteCanaryEvidenceHash(distTonRouteCanaryGovernedHashReuse),
+    /TON route canary governed hashes/u,
+  );
+
+  const distTronRouteCanaryEvidence = {
+    routeAllowlistHash:
+      "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
+    destinationBindingHash:
+      "0x17c953ad5b8c9a2b6f7102aca993fa7c427d018505cf4f58fac35ea454caba7f",
+    sourceVerifierMaterialHash:
+      "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8",
+    sourceAdapterEngineDeploymentHash:
+      "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
+    networkId: `0x${"33".repeat(32)}`,
+    verifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+    verifierCodeHash: `0x${"bb".repeat(32)}`,
+    verifierKeyHash: `0x${"cc".repeat(32)}`,
+    transactionId: `0x${"fa".repeat(32)}`,
+    transactionOwnerAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    blockNumber: 234n,
+    blockTimestamp: 567000n,
+    logIndex: 0,
+    messageId: `0x${"dd".repeat(32)}`,
+    callDataSha256:
+      "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+    payloadHash: `0x${"ab".repeat(32)}`,
+    commitmentRoot: `0x${"ee".repeat(32)}`,
+    finalityHeight: `0x${"00".repeat(31)}7b`,
+    finalityBlockHash: `0x${"cd".repeat(32)}`,
+    statementHash: `0x${"f1".repeat(32)}`,
+    usedMessageProof: true,
+    rawDataOwnerMatchesTransaction: true,
+    signatureSha256: `0x${"c4".repeat(32)}`,
+    signatureRecoveredAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    signatureRecoversToOwner: true,
+  };
+  const distTronRouteCanaryGovernedHashReuse = {
+    ...distTronRouteCanaryEvidence,
+    routeAllowlistHash: distTronRouteCanaryEvidence.sourceVerifierMaterialHash,
+  };
+  assert.throws(
+    () => tronSccpRouteCanaryEvidenceHash(distTronRouteCanaryGovernedHashReuse),
+    /TRON route canary governed hashes/u,
+  );
+});
+
 test("package dist entrypoint exports Solana tower lockout helpers", () => {
   assert.equal(SCCP_DOMAIN_SOL, 3);
   assert.equal(SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH, 32n);
@@ -5296,9 +5400,19 @@ test("package dist entrypoint enforces TON source-state proof cap", async () => 
   const request = buildTonShardStateProofRequest(
     sampleDistTonShardStateSourceStateInput(),
   );
+  const distTonDebugProofFamily = "debug-proof-family";
   const oversizedTonDistSourceStateProofBytes = new Uint8Array(
     SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1,
   ).fill(1);
+  assert.throws(
+    () =>
+      canonicalTonSccpSourceStateVerificationProofBytes({
+        circuitId: SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+        proofFamily: distTonDebugProofFamily,
+        proofBytes: new Uint8Array([1, 2, 3]),
+      }),
+    /TON source-state stark-fri-v1 proof/u,
+  );
   assert.throws(
     () =>
       wrapTonSccpSourceStateVerificationProof(
@@ -6010,6 +6124,14 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     () =>
       validateEthereumMainnetNativeEvmProverBundle(
         { ...nativeProverBundle, proof_artifact: "ipfs:proof-artifact.r1cs" },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /proofArtifact must not contain URI schemes or drive prefixes/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle(
+        { ...nativeProverBundle, proof_artifact: "ipfs:proof-artifact.bin" },
         { destinationBinding: ethereumMainnetBinding },
       ),
     /proofArtifact must not contain URI schemes or drive prefixes/u,

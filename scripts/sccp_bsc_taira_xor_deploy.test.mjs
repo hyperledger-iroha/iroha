@@ -1111,6 +1111,71 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
     () =>
       buildBscTairaXorRouteConfigToml(
         productionReadyManifest({
+          source_event_transaction_production_blockers: [
+            "witness seal proof required",
+          ],
+        }),
+      ),
+    /productionReady requires empty postDeployLiveEvidence production blockers.*source_event_transaction_production_blockers: witness seal proof required/u,
+    "BSC source event transaction contradictory blockers",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          source_event_transaction_production_blockers:
+            "witness seal proof required",
+        }),
+      ),
+    /source_event_transaction_production_blockers must be a list/u,
+    "BSC source event transaction scalar blockers",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          source_event_transaction_production_blockers: [
+            " witness seal proof required",
+          ],
+        }),
+      ),
+    /source_event_transaction_production_blockers\[0\].*non-empty canonical string/u,
+    "BSC source event transaction malformed blocker entry",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          post_deploy_production_blockers: ["route overlay still pending"],
+        }),
+      ),
+    /productionReady requires empty postDeployLiveEvidence production blockers.*post_deploy_production_blockers: route overlay still pending/u,
+    "BSC post-deploy blocker contradictory blockers",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          full_toml_production_blockers: [123],
+        }),
+      ),
+    /full_toml_production_blockers\[0\].*non-empty canonical string/u,
+    "BSC full TOML blocker malformed entry",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          route_canary_production_blockers: [" route canary evidence is stale"],
+        }),
+      ),
+    /route_canary_production_blockers\[0\].*non-empty canonical string/u,
+    "BSC route canary blocker malformed entry",
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
           productionBlockers: "source event transaction is still pending",
         }),
       ),

@@ -2477,15 +2477,15 @@ public sealed class SccpEthereumMainnetTests
             () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
                 new EthereumMainnetInboundEvidence { Receipt = receipt },
                 new ExecutionProviderStub("0x38", receipt, block)).AsTask());
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => EthereumMainnetSccp.ValidateExecutionProviderMainnetAsync(
-                new ExecutionProviderStub("0x01", receipt, block)).AsTask());
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => EthereumMainnetSccp.ValidateExecutionProviderMainnetAsync(
-                new ExecutionProviderStub("1", receipt, block)).AsTask());
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => EthereumMainnetSccp.ValidateExecutionProviderMainnetAsync(
-                new ExecutionProviderStub(1, receipt, block)).AsTask());
+        foreach (var chainId in new object?[]
+        {
+            "0x01", "1", "0X1", " 0x1", "0x1 ", 1,
+        })
+        {
+            await Assert.ThrowsAsync<ArgumentException>(
+                () => EthereumMainnetSccp.ValidateExecutionProviderMainnetAsync(
+                    new ExecutionProviderStub(chainId!, receipt, block)).AsTask());
+        }
 
         var failedReceipt = new Dictionary<string, object?>(receipt)
         {

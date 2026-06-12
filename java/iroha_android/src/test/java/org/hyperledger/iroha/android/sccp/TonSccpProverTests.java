@@ -1273,6 +1273,19 @@ public final class TonSccpProverTests {
     }
     assert badShardStateVerificationProofVersionThrew
         : "TON source-state verification proof version must be v1";
+    boolean badShardStateVerificationProofFamilyThrew = false;
+    try {
+      TonSccpProver.canonicalSourceStateVerificationProofBytes(
+          new TonSccpProver.SourceStateVerificationProof(
+              1,
+              "debug-proof-family",
+              TonSccpProver.SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+              new byte[] {1, 2, 3}));
+    } catch (final IllegalArgumentException ex) {
+      badShardStateVerificationProofFamilyThrew = ex.getMessage().contains("stark-fri-v1");
+    }
+    assert badShardStateVerificationProofFamilyThrew
+        : "TON source-state verification proof family must be stark-fri-v1";
     boolean nullProofFamilyThrew = false;
     try {
       new TonSccpProver.SourceStateVerificationProof(

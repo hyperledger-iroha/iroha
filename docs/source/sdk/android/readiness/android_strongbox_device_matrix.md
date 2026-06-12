@@ -545,9 +545,12 @@ Production release criteria:
   beyond the validator clock-skew allowance is also blocked, and
 	  `generated_at_utc` must use canonical UTC
 		  `YYYY-MM-DDTHH:MM:SSZ` form without whitespace or control-character
-		  normalization. The lineage evidence helper rejects
+  normalization. The lineage evidence helper rejects
 		  noncanonical `--generated-at-utc` input, including `+00:00` offsets or
-		  surrounding whitespace, instead of normalizing it, and rejects symlinked
+		  surrounding whitespace, instead of normalizing it. The lineage and
+		  compact-key evidence helpers also reject `generated_at_utc` values more
+		  than 300 seconds ahead of the helper clock by default before writing
+		  evidence JSON. The lineage helper rejects symlinked
 			  output ancestors before creating missing `--out` parent directories or
 			  reading release artifact and proof-log inputs. It also rejects dangling
 			  symlink and unreadable-metadata output parents or leaves before following

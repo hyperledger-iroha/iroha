@@ -149,23 +149,29 @@ impl MlKemSuite {
     /// Validate a public key encoding for this suite.
     ///
     /// # Errors
-    /// Returns an error when the byte string has the wrong length or contains
-    /// noncanonical polynomial coefficients.
+    /// Returns an error when the byte string has the wrong length, is inert
+    /// all-zero material, or contains noncanonical polynomial coefficients.
     pub fn validate_public_key(self, bytes: &[u8]) -> Result<(), MlKemError> {
         validate_len(self.public_key_kind(), bytes.len(), self.public_key_len())?;
+        self.validate_key_material_not_all_zero(self.public_key_kind(), bytes)?;
         self.validate_public_key_canonical(bytes)
     }
 
     /// Validate a secret key encoding for this suite.
     ///
     /// # Errors
-    /// Returns an error when the byte string has the wrong length, its private
-    /// component is noncanonical, or its embedded public key is noncanonical or
-    /// inconsistent with its `H(ek)` hash.
+    /// Returns an error when the byte string has the wrong length, is inert
+    /// all-zero material, its private component is noncanonical, or its embedded
+    /// public key is inert, noncanonical, or inconsistent with its `H(ek)` hash.
     pub fn validate_secret_key(self, bytes: &[u8]) -> Result<(), MlKemError> {
         self.validate_secret_key_len(bytes)?;
+        self.validate_key_material_not_all_zero(self.secret_key_kind(), bytes)?;
         self.validate_secret_key_private_component(bytes)?;
         let embedded_public = self.public_key_from_validated_secret_key(bytes);
+        self.validate_key_material_not_all_zero(
+            self.secret_key_embedded_public_kind(),
+            embedded_public,
+        )?;
         self.validate_public_key_canonical(embedded_public)?;
         self.validate_secret_key_public_hash(bytes)
     }
@@ -282,6 +288,14 @@ impl MlKemSuite {
         }
     }
 
+    const fn secret_key_embedded_public_kind(self) -> &'static str {
+        match self {
+            MlKemSuite::MlKem512 => "ML-KEM-512 secret key embedded public key",
+            MlKemSuite::MlKem768 => "ML-KEM-768 secret key embedded public key",
+            MlKemSuite::MlKem1024 => "ML-KEM-1024 secret key embedded public key",
+        }
+    }
+
     const fn secret_key_public_key_offset(self) -> usize {
         self.secret_key_public_key_hash_offset() - self.public_key_len()
     }
@@ -292,6 +306,17 @@ impl MlKemSuite {
 
     fn validate_secret_key_len(self, bytes: &[u8]) -> Result<(), MlKemError> {
         validate_len(self.secret_key_kind(), bytes.len(), self.secret_key_len())
+    }
+
+    fn validate_key_material_not_all_zero(
+        self,
+        kind: &'static str,
+        bytes: &[u8],
+    ) -> Result<(), MlKemError> {
+        if bytes.iter().all(|&byte| byte == 0) {
+            return Err(MlKemError::InertKeyMaterial { suite: self, kind });
+        }
+        Ok(())
     }
 
     fn validate_secret_key_private_component(self, secret_key: &[u8]) -> Result<(), MlKemError> {
@@ -641,6 +666,14 @@ pub enum MlKemError {
         coefficient_index: usize,
         /// Rejected 12-bit value.
         value: u16,
+    },
+    /// Key material was an inert all-zero placeholder.
+    #[error("{suite} {kind} must not be all zero")]
+    InertKeyMaterial {
+        /// ML-KEM parameter set being validated.
+        suite: MlKemSuite,
+        /// Identifier of the key material that was all zero.
+        kind: &'static str,
     },
     /// The ML-KEM backend returned a nonzero status for an operation.
     #[error("{suite} backend {operation} failed with status {status}")]
@@ -1167,6 +1200,22 @@ mod tests {
         assert_noncanonical_encoding(err, suite, "public key");
     }
 
+    fn assert_inert_key_material(err: MlKemError, suite: MlKemSuite, expected_kind_fragment: &str) {
+        match err {
+            MlKemError::InertKeyMaterial {
+                suite: found_suite,
+                kind,
+            } => {
+                assert_eq!(found_suite, suite);
+                assert!(
+                    kind.contains(expected_kind_fragment),
+                    "expected {kind:?} to mention {expected_kind_fragment:?}"
+                );
+            }
+            other => panic!("expected inert {expected_kind_fragment} error, got {other:?}"),
+        }
+    }
+
     #[test]
     fn coefficient_validation_rejects_partial_12_bit_group() {
         let suite = MlKemSuite::MlKem512;
@@ -1403,6 +1452,7 @@ mod tests {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("public key")),
             MlKemError::KeyPairMismatch { .. }
             | MlKemError::KeyPairPublicHashMismatch { .. }
+            | MlKemError::InertKeyMaterial { .. }
             | MlKemError::NonCanonicalEncoding { .. } => {
                 panic!("unexpected key-pair mismatch")
             }
@@ -1470,6 +1520,7 @@ mod tests {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("secret key")),
             MlKemError::KeyPairMismatch { .. }
             | MlKemError::KeyPairPublicHashMismatch { .. }
+            | MlKemError::InertKeyMaterial { .. }
             | MlKemError::NonCanonicalEncoding { .. } => {
                 panic!("unexpected key-pair mismatch")
             }
@@ -1484,6 +1535,7 @@ mod tests {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("ciphertext")),
             MlKemError::KeyPairMismatch { .. }
             | MlKemError::KeyPairPublicHashMismatch { .. }
+            | MlKemError::InertKeyMaterial { .. }
             | MlKemError::NonCanonicalEncoding { .. } => {
                 panic!("unexpected key-pair mismatch")
             }
@@ -1565,6 +1617,7 @@ mod tests {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("public key")),
             MlKemError::KeyPairMismatch { .. }
             | MlKemError::KeyPairPublicHashMismatch { .. }
+            | MlKemError::InertKeyMaterial { .. }
             | MlKemError::NonCanonicalEncoding { .. } => {
                 panic!("unexpected key-pair mismatch")
             }
@@ -1620,6 +1673,26 @@ mod tests {
             )
             .expect_err("noncanonical public key must fail before encapsulation");
             assert_noncanonical_public_key(err, suite);
+        }
+    }
+
+    #[test]
+    fn validation_rejects_all_zero_public_key_material() {
+        for suite in MlKemSuite::ALL {
+            let all_zero_public = vec![0_u8; suite.public_key_len()];
+
+            let err = validate_mlkem_public_key(suite, all_zero_public.as_slice())
+                .expect_err("all-zero ML-KEM public key must fail validation");
+            assert_inert_key_material(err, suite, "public key");
+
+            let err = encapsulate_mlkem_from_seed(
+                suite,
+                all_zero_public.as_slice(),
+                HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xE1); 32]),
+                b"all-zero-public-encapsulation",
+            )
+            .expect_err("all-zero ML-KEM public key must fail before encapsulation");
+            assert_inert_key_material(err, suite, "public key");
         }
     }
 
@@ -1749,6 +1822,30 @@ mod tests {
     }
 
     #[test]
+    fn secret_key_validation_rejects_all_zero_embedded_public_key() {
+        let suite = MlKemSuite::MlKem768;
+        let keys = generate_mlkem_keypair_from_seed(
+            suite,
+            HedgedRngSeed::from_entropy([0xC8; 32]),
+            b"secret-all-zero-embedded-public",
+        )
+        .expect("seeded keygen succeeds");
+        let mut secret_key = keys.secret_key().to_vec();
+        let public_start = suite.secret_key_public_key_offset();
+        let public_end = public_start + suite.public_key_len();
+        secret_key[public_start..public_end].fill(0);
+        let public_hash = mlkem_public_key_hash(&secret_key[public_start..public_end]);
+        let public_hash_start = suite.secret_key_public_key_hash_offset();
+        secret_key[public_hash_start..public_hash_start + MLKEM_PUBLIC_KEY_HASH_BYTES]
+            .copy_from_slice(&public_hash);
+
+        let err = validate_mlkem_secret_key(suite, secret_key.as_slice())
+            .expect_err("secret-key embedded all-zero public key must fail validation");
+
+        assert_inert_key_material(err, suite, "embedded public key");
+    }
+
+    #[test]
     fn secret_key_validation_rejects_noncanonical_private_component() {
         for suite in MlKemSuite::ALL {
             let keys = generate_mlkem_keypair_from_seed(
@@ -1763,6 +1860,38 @@ mod tests {
             let err = validate_mlkem_secret_key(suite, secret_key.as_slice())
                 .expect_err("secret-key private component must be canonical");
             assert_noncanonical_encoding(err, suite, "private component");
+        }
+    }
+
+    #[test]
+    fn validation_rejects_all_zero_secret_key_material() {
+        for suite in MlKemSuite::ALL {
+            let keys = generate_mlkem_keypair_from_seed(
+                suite,
+                HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xD4); 32]),
+                b"all-zero-secret-keypair",
+            )
+            .expect("seeded keygen succeeds");
+            let (_, ciphertext) = encapsulate_mlkem_from_seed(
+                suite,
+                keys.public_key(),
+                HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xD5); 32]),
+                b"all-zero-secret-encapsulation",
+            )
+            .expect("encapsulation succeeds");
+            let all_zero_secret = vec![0_u8; suite.secret_key_len()];
+
+            let err = validate_mlkem_secret_key(suite, all_zero_secret.as_slice())
+                .expect_err("all-zero ML-KEM secret key must fail validation");
+            assert_inert_key_material(err, suite, "secret key");
+
+            let err = validate_mlkem_key_pair(suite, keys.public_key(), all_zero_secret.as_slice())
+                .expect_err("all-zero ML-KEM secret key must fail key-pair validation");
+            assert_inert_key_material(err, suite, "secret key");
+
+            let err = decapsulate_mlkem(suite, all_zero_secret.as_slice(), ciphertext.as_bytes())
+                .expect_err("all-zero ML-KEM secret key must fail before decapsulation");
+            assert_inert_key_material(err, suite, "secret key");
         }
     }
 

@@ -140,6 +140,10 @@ use crate::secrecy::Secret;
 #[cfg(feature = "bls")]
 const POP_DST: &str = "iroha:bls:pop:v1";
 
+fn is_all_zero_material(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && bytes.iter().all(|&byte| byte == 0)
+}
+
 /// Key pair generation option. Passed to a specific algorithm.
 #[derive(Debug)]
 pub enum KeyGenOption<K> {
@@ -563,6 +567,11 @@ impl PublicKeyFull {
                 use pqcrypto_traits::sign::PublicKey as _;
                 if payload.len() != mldsa65::public_key_bytes() {
                     return Err(ParseError("invalid ML-DSA public key length".to_string()));
+                }
+                if is_all_zero_material(payload) {
+                    return Err(ParseError(
+                        "invalid ML-DSA public key: all-zero material".to_string(),
+                    ));
                 }
                 let pk = mldsa65::PublicKey::from_bytes(payload)
                     .map_err(|_| ParseError("invalid ML-DSA public key".to_string()))?;
@@ -1021,6 +1030,9 @@ pub fn pqc_verify_batch_deterministic(
         .zip(public_keys.iter())
     {
         if s.len() != exp_sig || pk.len() != exp_pk {
+            return Err(Error::BadSignature);
+        }
+        if is_all_zero_material(s) || is_all_zero_material(pk) {
             return Err(Error::BadSignature);
         }
         let sig = match mldsa65::DetachedSignature::from_bytes(s) {
@@ -2175,6 +2187,12 @@ impl MlDsaSecretKey {
 
     fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
         use pqcrypto_traits::sign::SecretKey as _;
+        if bytes.len() == pqcrypto_mldsa::mldsa65::secret_key_bytes() && is_all_zero_material(bytes)
+        {
+            return Err(ParseError(
+                "invalid ML-DSA secret key: all-zero material".to_string(),
+            ));
+        }
         let mut inner = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(bytes)
             .map_err(|err| ParseError(err.to_string()))?;
         let secret = Self::new(&inner);
@@ -2432,7 +2450,7 @@ impl PrivateKey {
     /// libraries do not provide move functionality.
     pub fn to_bytes(&self) -> (Algorithm, Vec<u8>) {
         self.try_to_bytes()
-            .unwrap_or_else(|_| (self.algorithm(), Vec::new()))
+            .expect("validated private-key payload should export")
     }
 
     /// Fallibly extract the signature algorithm and raw private-key payload.
@@ -3038,6 +3056,10 @@ mod tests {
                 .try_to_bytes()
                 .expect("private key payload exports");
             assert_eq!(exported_algorithm, *algorithm);
+            assert!(
+                !payload.is_empty(),
+                "{algorithm:?} private-key export must not be empty"
+            );
 
             let parsed = PrivateKey::from_bytes(exported_algorithm, &payload)
                 .expect("exported private key payload parses");
@@ -3067,6 +3089,10 @@ mod tests {
                 .try_to_bytes()
                 .expect("private key payload exports");
             assert_eq!(exported_algorithm, *algorithm);
+            assert!(
+                !payload.is_empty(),
+                "{algorithm:?} private-key export must not be empty"
+            );
 
             let parsed = PrivateKey::from_bytes(exported_algorithm, &payload)
                 .expect("exported BLS private key payload parses");
@@ -3463,6 +3489,19 @@ mod tests {
     }
 
     #[test]
+    fn ml_dsa_private_key_parse_rejects_all_zero_material() {
+        let all_zero = vec![0u8; pqcrypto_mldsa::mldsa65::secret_key_bytes()];
+
+        let err = PrivateKey::from_bytes(Algorithm::MlDsa, &all_zero)
+            .expect_err("all-zero ML-DSA private key material must fail closed");
+
+        assert!(
+            err.to_string().contains("all-zero material"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
     fn ml_dsa_public_key_parse_rejects_invalid_length() {
         use pqcrypto_mldsa::mldsa65;
         use pqcrypto_traits::sign::PublicKey as _;
@@ -3476,6 +3515,19 @@ mod tests {
         let err = PublicKey::from_bytes(Algorithm::MlDsa, &bad).unwrap_err();
         assert!(
             err.0.contains("invalid ML-DSA public key length"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn ml_dsa_public_key_parse_rejects_all_zero_material() {
+        let all_zero = vec![0u8; pqcrypto_mldsa::mldsa65::public_key_bytes()];
+
+        let err = PublicKey::from_bytes(Algorithm::MlDsa, &all_zero)
+            .expect_err("all-zero ML-DSA public key material must fail closed");
+
+        assert!(
+            err.to_string().contains("all-zero material"),
             "unexpected error: {err:?}"
         );
     }
@@ -3833,6 +3885,7 @@ mod tests {
         let exposed = ExposedPrivateKey(private_key.clone());
 
         assert_eq!(algorithm, Algorithm::Sm2);
+        assert!(!payload.is_empty(), "SM2 private payload must not be empty");
         assert_eq!(private_key.to_bytes(), (algorithm, payload.clone()));
         assert_eq!(
             PrivateKey::from_bytes(algorithm, &payload).expect("decode checked SM2 payload"),
