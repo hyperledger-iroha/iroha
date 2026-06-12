@@ -166,7 +166,9 @@ pub enum DaPinIntentValidationError {
         sequence: u64,
     },
     /// Duplicate storage ticket found.
-    #[error("duplicate DA pin-intent storage ticket detected for lane {lane}, epoch {epoch}, sequence {sequence}")]
+    #[error(
+        "duplicate DA pin-intent storage ticket detected for lane {lane}, epoch {epoch}, sequence {sequence}"
+    )]
     DuplicateStorageTicket {
         /// Lane identifier that failed validation.
         lane: LaneId,
@@ -176,7 +178,9 @@ pub enum DaPinIntentValidationError {
         sequence: u64,
     },
     /// Duplicate manifest hash found.
-    #[error("duplicate DA pin-intent manifest hash detected for lane {lane}, epoch {epoch}, sequence {sequence}")]
+    #[error(
+        "duplicate DA pin-intent manifest hash detected for lane {lane}, epoch {epoch}, sequence {sequence}"
+    )]
     DuplicateManifest {
         /// Lane identifier that failed validation.
         lane: LaneId,

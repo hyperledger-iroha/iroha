@@ -2,6 +2,15 @@
 
 Last updated: 2026-06-12
 
+## 2026-06-12 Rustfmt edition default
+
+- Set the repository rustfmt configuration to default to Rust edition 2024,
+  matching the workspace edition and contributor formatting guidance.
+- Testing:
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - `git diff --quiet -- Cargo.lock`
+
 ## 2026-06-12 DA pin-intent index coherence
 
 - Hardened `DaPinStore` insertion so duplicate storage tickets, manifest

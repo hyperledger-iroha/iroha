@@ -12342,12 +12342,16 @@ mod tests {
             .get("required")
             .and_then(Value::as_array)
             .expect("BfvRamProgramProfile required fields");
-        assert!(required
-            .iter()
-            .any(|value| value.as_str() == Some("profile_version")));
-        assert!(required
-            .iter()
-            .any(|value| value.as_str() == Some("encrypted_input_mode")));
+        assert!(
+            required
+                .iter()
+                .any(|value| value.as_str() == Some("profile_version"))
+        );
+        assert!(
+            required
+                .iter()
+                .any(|value| value.as_str() == Some("encrypted_input_mode"))
+        );
         assert!(schemas.contains_key("BfvRamEncryptedInputMode"));
     }
 

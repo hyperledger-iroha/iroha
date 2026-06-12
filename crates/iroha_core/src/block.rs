@@ -5777,11 +5777,9 @@ pub(crate) mod valid {
             };
 
             let world = state.world();
-            crate::da::validate_pin_intent_bundle(
-                bundle,
-                &state.nexus().lane_config,
-                |account| world.accounts().get(account).is_some(),
-            )?;
+            crate::da::validate_pin_intent_bundle(bundle, &state.nexus().lane_config, |account| {
+                world.accounts().get(account).is_some()
+            })?;
 
             Ok(())
         }
@@ -14417,15 +14415,13 @@ pub(crate) mod valid {
                 ManifestDigest::new([0xB2; 32]),
             );
             let bundle = DaPinIntentBundle::new(vec![first, duplicate_ticket]);
-            let signed: SignedBlock = BlockBuilder::new_with_time_source(
-                Vec::new(),
-                time_source.clone(),
-            )
-            .chain(0, state.view().latest_block().as_deref())
-            .with_da_pin_intents(Some(bundle))
-            .sign(leader.private_key())
-            .unpack(|_| {})
-            .into();
+            let signed: SignedBlock =
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                    .chain(0, state.view().latest_block().as_deref())
+                    .with_da_pin_intents(Some(bundle))
+                    .sign(leader.private_key())
+                    .unpack(|_| {})
+                    .into();
 
             let mut voting_block = None;
             let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
@@ -14486,15 +14482,13 @@ pub(crate) mod valid {
             );
             let mut bundle = DaPinIntentBundle::new(vec![intent]);
             bundle.version = DaPinIntentBundle::VERSION_V1 + 1;
-            let signed: SignedBlock = BlockBuilder::new_with_time_source(
-                Vec::new(),
-                time_source.clone(),
-            )
-            .chain(0, state.view().latest_block().as_deref())
-            .with_da_pin_intents(Some(bundle))
-            .sign(leader.private_key())
-            .unpack(|_| {})
-            .into();
+            let signed: SignedBlock =
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                    .chain(0, state.view().latest_block().as_deref())
+                    .with_da_pin_intents(Some(bundle))
+                    .sign(leader.private_key())
+                    .unpack(|_| {})
+                    .into();
 
             let mut voting_block = None;
             let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
