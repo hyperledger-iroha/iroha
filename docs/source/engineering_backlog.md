@@ -5308,7 +5308,10 @@ redistributable schemas, and official trust/revocation bundles.
     seeded Ed25519 key generation plus `Signature::try_new`, with wrong-verifier
     receipt, stale/replay/tampered body proof, multisig, certificate
     usage-limit, signed-balance tamper, and refill lineage coverage on checked
-    fixtures. The
+    fixtures; native AMX BLS vote fixtures now use checked seeded/random key
+    generation plus `Signature::try_new`, verifying each vote preimage
+    signature before aggregate-QC ordering and rejection regressions consume it.
+    The
     ML-DSA key
     path now rejects inconsistent imported secrets and exposes
     `KeyPair::try_from_seed`, `KeyPair::try_random`,

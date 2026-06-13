@@ -1041,24 +1041,6 @@ def _source_adapter_gate_semantic_errors(
     return errors
 
 
-def _cryptographic_evidence_source_gate_material_present(
-    payload: dict[str, Any],
-    audit_hashes: Any,
-) -> bool:
-    material_fields = (
-        "source_verifier_material_hash",
-        "source_adapter_engine_deployment_hash",
-        "destination_binding_hash",
-        "route_allowlist_hash",
-        "route_canary_evidence_hash",
-    )
-    return (
-        any(payload.get(field) for field in material_fields)
-        or payload.get("source_adapter_gate_hash") not in (None, "")
-        or bool(audit_hashes)
-    )
-
-
 def _cryptographic_evidence_source_adapter_gate_bundle_errors(
     label: str,
     payload: dict[str, Any],
@@ -1071,10 +1053,6 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
         return []
 
     errors: list[str] = []
-    require_gate_material = _cryptographic_evidence_source_gate_material_present(
-        payload,
-        audit_hashes,
-    )
     expected_audit_keys = (
         _source_adapter_gate_audit_keys_for_domain_chain(domain, payload.get("chain"))
         if type(domain) is int
@@ -1085,7 +1063,7 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
             errors.append(
                 f"{label} source_adapter_gate_required must be false for this domain"
             )
-        if require_gate_material and not _is_nonzero_bytes32_hex_text(gate_hash):
+        if not _is_nonzero_bytes32_hex_text(gate_hash):
             errors.append(
                 f"{label} source_adapter_gate_hash must be a non-zero canonical "
                 "bytes32 hex string when required"
@@ -1111,9 +1089,9 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
                         )
                     )
                 missing_audit_keys = expected_audit_keys - set(semantic_audit_hashes)
-                for key in sorted(missing_audit_keys if require_gate_material else ()):
+                for key in sorted(missing_audit_keys):
                     errors.append(f"{audit_label} missing field: {key}")
-        if require_gate_material and not semantic_audit_hashes:
+        if not semantic_audit_hashes:
             errors.append(
                 f"{label} source_adapter_gate_audit_hashes must not be empty "
                 "when required"

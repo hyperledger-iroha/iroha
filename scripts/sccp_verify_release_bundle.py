@@ -16841,24 +16841,6 @@ def _true_field_errors(
     return []
 
 
-def _cryptographic_evidence_source_gate_material_present(
-    row: dict[str, Any],
-    audit_hashes: Any,
-) -> bool:
-    material_fields = (
-        "source_verifier_material_hash",
-        "source_adapter_engine_deployment_hash",
-        "destination_binding_hash",
-        "route_allowlist_hash",
-        "route_canary_evidence_hash",
-    )
-    return (
-        any(row.get(field) for field in material_fields)
-        or row.get("source_adapter_gate_hash") not in (None, "")
-        or bool(audit_hashes)
-    )
-
-
 def _cryptographic_evidence_source_adapter_gate_schema_errors(
     row: dict[str, Any],
     audit_hashes: Any,
@@ -16893,10 +16875,6 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
             )
     if row.get("source_adapter_gate_required") is True:
         gate_hash = row.get("source_adapter_gate_hash")
-        require_gate_material = _cryptographic_evidence_source_gate_material_present(
-            row,
-            audit_hashes,
-        )
         expected_audit_keys = _source_adapter_gate_audit_keys_for_domain_chain(
             row.get("domain"),
             row.get("chain"),
@@ -16906,7 +16884,7 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
                 "readiness report cryptographic evidence row "
                 "source_adapter_gate_required must be false for this domain"
             )
-        elif require_gate_material and isinstance(audit_hashes, dict):
+        elif isinstance(audit_hashes, dict):
             for key in sorted(set(semantic_audit_hashes) - expected_audit_keys):
                 errors.append(
                     _unexpected_source_adapter_gate_audit_field_blocker(
@@ -16920,12 +16898,12 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
                     "readiness report cryptographic evidence row "
                     f"source_adapter_gate_audit_hashes missing field: {key}"
                 )
-        if require_gate_material and not gate_hash:
+        if not gate_hash:
             errors.append(
                 "readiness report cryptographic evidence row "
                 "source_adapter_gate_hash must not be empty when required"
             )
-        if require_gate_material and not semantic_audit_hashes:
+        if not semantic_audit_hashes:
             errors.append(
                 "readiness report cryptographic evidence row "
                 "source_adapter_gate_audit_hashes must not be empty when required"

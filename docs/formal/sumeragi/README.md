@@ -10133,14 +10133,12 @@ Temporal properties:
   reachable change to header, digest, CHUNK-count, or READY-vote evidence is
   also covered by the exact per-field installation, invalidation, counter
   increase, or reset classifier for the field that moved.
-- The RBC progress mutation classifier is checked as six smaller temporal
-  obligations: global protocol/fault provenance for any RBC state/evidence
-  mutation, local state-exit classification for state mutations, local
-  evidence-effect classification for evidence mutations, delivered-entry
-  classification, corrupted-entry classification, and corrupted-repair exit
-  classification. Together these are equivalent to the aggregate
-  `RbcProgressMutationAlwaysMatchesLocalClassification` theorem while keeping
-  the fast formal gate solver-sized.
+- The aggregate `RbcProgressMutationAlwaysMatchesLocalClassification` theorem
+  composes four already checked RBC state/evidence obligations with three
+  boundary obligations: delivered-entry classification, corrupted-entry
+  classification, and corrupted-repair exit classification. The fast, deep, and
+  TLC-fast configs wire the new boundary obligations directly while reusing the
+  existing protocol/fault provenance and local state/evidence classifiers.
 - `RbcHeaderInstallationOnlyByProposalOrInit` proves that RBC header evidence
   can move from absent to present only through an honest proposal starting RBC
   from `Idle` or an explicit RBC INIT repair/recovery step.

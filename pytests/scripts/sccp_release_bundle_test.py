@@ -7869,6 +7869,46 @@ def test_release_bundle_bsc_source_gate_policy_matches_verifier_before_render() 
         for error in bundle_gate_errors(mainnet_no_gate)
     )
 
+    mainnet_required_without_evidence = bsc_row(
+        chain="bsc",
+        required=True,
+        gate_hash="",
+        audit_hashes={},
+    )
+    verifier_required_without_evidence_errors = verifier_gate_errors(
+        mainnet_required_without_evidence
+    )
+    bundle_required_without_evidence_errors = bundle_gate_errors(
+        mainnet_required_without_evidence
+    )
+    assert any(
+        "source_adapter_gate_hash must not be empty when required" in error
+        for error in verifier_required_without_evidence_errors
+    )
+    assert any(
+        "source_adapter_gate_hash must be a non-zero canonical bytes32 hex string "
+        "when required" in error
+        for error in bundle_required_without_evidence_errors
+    )
+    assert any(
+        "source_adapter_gate_audit_hashes missing field: evm_source_gate_hash"
+        in error
+        for error in verifier_required_without_evidence_errors
+    )
+    assert any(
+        "source_adapter_gate_audit_hashes missing field: evm_source_gate_hash"
+        in error
+        for error in bundle_required_without_evidence_errors
+    )
+    assert any(
+        "source_adapter_gate_audit_hashes must not be empty when required" in error
+        for error in verifier_required_without_evidence_errors
+    )
+    assert any(
+        "source_adapter_gate_audit_hashes must not be empty when required" in error
+        for error in bundle_required_without_evidence_errors
+    )
+
     testnet_with_gate = bsc_row(
         chain="bsc-testnet",
         required=True,

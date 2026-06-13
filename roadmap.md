@@ -2216,12 +2216,15 @@ and completed history lives in [`status.md`](./status.md).
 - SCCP native EVM prover manifests must carry exactly one artifact row for each
   required public SDK; duplicate SDK rows and missing SDK rows remain readiness
   and published-bundle blockers even if the native manifest is rehashed.
-  Manifest SDK artifact rows must also remain canonical objects with all
-  required fields, no unknown fields, approved SDK/implementation bindings, and
-  artifact hashes matching their committed roles. SDK implementation artifact
-  paths and hashes are checked with the same local-artifact and hash-binding
-  rules as the primary prover payloads. Duplicate JSON keys inside SDK artifact
-  rows must fail before implementation hashes are trusted.
+  Manifest and public readiness-report SDK artifact rows must also stay in the
+  verifier-owned sorted SDK order before Markdown rendering or bundle
+  verification can pass. Manifest SDK artifact rows must also remain canonical
+  objects with all required fields, no unknown fields, approved
+  SDK/implementation bindings, and artifact hashes matching their committed
+  roles. SDK implementation artifact paths and hashes are checked with the same
+  local-artifact and hash-binding rules as the primary prover payloads.
+  Duplicate JSON keys inside SDK artifact rows must fail before implementation
+  hashes are trusted.
 - SCCP native EVM prover manifests must also keep their root object and
   `audit_hashes` map schemas exact. Rehashed manifests that add unknown root
   fields, add unexpected audit-hash roles, or omit required audit-hash roles are
@@ -3884,6 +3887,9 @@ and completed history lives in [`status.md`](./status.md).
   `Signature::try_new`, with wrong-verifier receipt,
   stale/replay/tampered body proof, multisig, certificate usage-limit,
   signed-balance tamper, and refill lineage coverage on checked fixtures;
+  native AMX BLS vote fixtures now use checked seeded/random key generation
+  plus `Signature::try_new`, verifying each vote preimage signature before
+  aggregate-QC ordering and rejection regressions consume it;
   transaction builders, multisig signature bundles, and sealed transaction
   commitments now route through fallible `SignatureOf::try_new` APIs while
   retaining compatibility wrappers for existing callers;
@@ -5968,9 +5974,6 @@ and completed history lives in [`status.md`](./status.md).
   RBC global state-change exit classification,
   RBC evidence protocol/fault provenance,
   RBC global evidence-change effect classification,
-  RBC global progress/evidence mutation provenance classifier,
-  RBC state mutation local-exit classifier,
-  RBC evidence mutation local-effect classifier,
   RBC delivered-entry mutation classifier,
   RBC corruption-entry mutation classifier,
   RBC corruption-repair exit classifier,
