@@ -519,6 +519,9 @@ pub(super) fn apply_hydrated_payload(
     chunk_max_bytes: usize,
 ) -> HydrationOutcome {
     let mut outcome = HydrationOutcome::default();
+    let existing_chunk_root_was_inferred = session.expected_chunk_root.is_some()
+        && session.expected_chunk_digests.is_none()
+        && session.payload_hash().is_none();
     if payload_bytes.is_empty() {
         session.invalid = true;
         outcome.updated = true;
@@ -643,8 +646,13 @@ pub(super) fn apply_hydrated_payload(
         if let Some(observed_root) = observed_root {
             if let Some(expected_root) = session.expected_chunk_root {
                 if expected_root != observed_root {
-                    session.invalid = true;
-                    outcome.chunk_root_mismatch = true;
+                    if existing_chunk_root_was_inferred {
+                        session.expected_chunk_root = Some(observed_root);
+                        outcome.updated = true;
+                    } else {
+                        session.invalid = true;
+                        outcome.chunk_root_mismatch = true;
+                    }
                 }
             } else {
                 session.expected_chunk_root = Some(observed_root);
@@ -4248,6 +4256,9 @@ impl Actor {
         let near_frontier = key.1 <= frontier_height.saturating_add(1);
         let needs_missing_roster_recovery = near_frontier && !roster_source.is_authoritative();
         if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
+            let existing_chunk_root_was_inferred = session.expected_chunk_root.is_some()
+                && session.expected_chunk_digests.is_none()
+                && session.payload_hash().is_none();
             if session.layout().payload_size_known() && init_layout.payload_size_known() {
                 if session.layout() != init_layout {
                     warn!(
@@ -4301,7 +4312,19 @@ impl Actor {
                     "dropping cached RBC chunks that mismatch INIT digests"
                 );
             }
-            if session.expected_chunk_root.is_none() {
+            if existing_chunk_root_was_inferred {
+                if session.expected_chunk_root != Some(init.chunk_root) {
+                    debug!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        inferred = ?session.expected_chunk_root,
+                        authoritative = ?init.chunk_root,
+                        "replacing pre-INIT inferred RBC chunk root with verified INIT root"
+                    );
+                }
+                session.expected_chunk_root = Some(init.chunk_root);
+            } else if session.expected_chunk_root.is_none() {
                 session.expected_chunk_root = Some(init.chunk_root);
             }
             let complete_chunk_set =
@@ -4628,10 +4651,29 @@ impl Actor {
             return Ok(());
         }
         let mut missing_indices = request.missing_indices;
+        let total_chunks = session.total_chunks();
+        let Ok(total_chunks_len) = usize::try_from(total_chunks) else {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunkRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        };
+        if missing_indices.is_empty() || missing_indices.len() > total_chunks_len {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunkRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        }
         missing_indices.sort_unstable();
-        missing_indices.dedup();
-        missing_indices.retain(|idx| *idx < session.total_chunks());
-        if missing_indices.is_empty() {
+        let has_duplicate = missing_indices.windows(2).any(|pair| pair[0] == pair[1]);
+        let has_out_of_range = missing_indices
+            .last()
+            .is_some_and(|idx| *idx >= total_chunks);
+        if has_duplicate || has_out_of_range {
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::RbcChunkRequest,
                 super::status::ConsensusMessageOutcome::Dropped,
@@ -4730,6 +4772,21 @@ impl Actor {
                 super::status::ConsensusMessageKind::RbcChunk,
                 super::status::ConsensusMessageOutcome::Dropped,
                 super::status::ConsensusMessageReason::PayloadTooLarge,
+            );
+            return Ok(());
+        }
+        if chunk_idx >= RBC_MAX_TOTAL_CHUNKS {
+            warn!(
+                height = chunk_height,
+                view = chunk_view,
+                idx = chunk_idx,
+                max_chunks = RBC_MAX_TOTAL_CHUNKS,
+                "dropping RBC chunk with impossible chunk index"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunk,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
             );
             return Ok(());
         }
@@ -6575,16 +6632,44 @@ impl Actor {
         if !deliver.ready_signatures.is_empty() {
             let max_ready = signature_topology.as_ref().len();
             if deliver.ready_signatures.len() > max_ready {
-                debug!(
+                warn!(
                     height = deliver.height,
                     view = deliver.view,
                     sender = deliver.sender,
                     ready_entries = deliver.ready_signatures.len(),
                     max_ready,
-                    "truncating oversized RBC DELIVER READY bundle"
+                    "dropping RBC DELIVER with oversized READY bundle"
                 );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcDeliver,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidPayload,
+                );
+                return Ok(());
             }
-            for entry in deliver.ready_signatures.iter().take(max_ready) {
+            let mut bundle_senders = BTreeSet::new();
+            for entry in &deliver.ready_signatures {
+                let sender_in_range = usize::try_from(entry.sender)
+                    .ok()
+                    .is_some_and(|idx| idx < max_ready);
+                if !sender_in_range || !bundle_senders.insert(entry.sender) {
+                    warn!(
+                        height = deliver.height,
+                        view = deliver.view,
+                        sender = deliver.sender,
+                        ready_sender = entry.sender,
+                        max_ready,
+                        "dropping RBC DELIVER with malformed READY bundle"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcDeliver,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::InvalidPayload,
+                    );
+                    return Ok(());
+                }
+            }
+            for entry in &deliver.ready_signatures {
                 let ready = RbcReady {
                     block_hash: deliver.block_hash,
                     height: deliver.height,
@@ -7360,6 +7445,10 @@ impl Actor {
                     let mut session = if let Some(existing) =
                         self.subsystems.da_rbc.rbc.sessions.remove(&key)
                     {
+                        let existing_chunk_root_was_inferred =
+                            existing.expected_chunk_root.is_some()
+                                && existing.expected_chunk_digests.is_none()
+                                && existing.payload_hash().is_none();
                         let mut mismatch = existing.total_chunks != seeded.total_chunks;
                         if existing.epoch != seeded.epoch {
                             mismatch = true;
@@ -7380,7 +7469,7 @@ impl Actor {
                         if let (Some(expected), Some(seed_root)) =
                             (existing.expected_chunk_root, seeded.expected_chunk_root)
                         {
-                            if expected != seed_root {
+                            if expected != seed_root && !existing_chunk_root_was_inferred {
                                 mismatch = true;
                             }
                         }
@@ -7402,7 +7491,9 @@ impl Actor {
                             if existing.expected_chunk_digests.is_none() {
                                 existing.expected_chunk_digests = seeded.expected_chunk_digests;
                             }
-                            if existing.expected_chunk_root.is_none() {
+                            if existing_chunk_root_was_inferred {
+                                existing.expected_chunk_root = seeded.expected_chunk_root;
+                            } else if existing.expected_chunk_root.is_none() {
                                 existing.expected_chunk_root = seeded.expected_chunk_root;
                             }
                             if existing.received_chunks < existing.total_chunks {

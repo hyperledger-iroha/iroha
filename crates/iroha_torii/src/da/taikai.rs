@@ -806,6 +806,40 @@ pub(crate) mod taikai_ingest {
             bytes,
         )
     }
+
+    fn install_artifact_without_overwrite(
+        tmp_path: &Path,
+        target_path: &Path,
+        expected: &[u8],
+        prefix: &str,
+    ) -> io::Result<()> {
+        match fs::hard_link(tmp_path, target_path) {
+            Ok(()) => {
+                let _ = fs::remove_file(tmp_path);
+                Ok(())
+            }
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                let _ = fs::remove_file(tmp_path);
+                let existing = fs::read(target_path)?;
+                if existing == expected {
+                    Ok(())
+                } else {
+                    Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "Taikai artifact {prefix} already exists at {} with different bytes",
+                            target_path.display()
+                        ),
+                    ))
+                }
+            }
+            Err(err) => {
+                let _ = fs::remove_file(tmp_path);
+                Err(err)
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn persist_artifact(
         spool_dir: &Path,
@@ -833,7 +867,17 @@ pub(crate) mod taikai_ingest {
         );
         let target_path = base_dir.join(&file_name);
         if target_path.exists() {
-            return Ok(Some(target_path));
+            let existing = fs::read(&target_path)?;
+            if existing == bytes {
+                return Ok(Some(target_path));
+            }
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Taikai artifact {prefix} already exists at {} with different bytes",
+                    target_path.display()
+                ),
+            ));
         }
 
         let tmp_name = format!(
@@ -850,10 +894,7 @@ pub(crate) mod taikai_ingest {
             }
         }
 
-        if let Err(err) = fs::rename(&tmp_path, &target_path) {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(err);
-        }
+        install_artifact_without_overwrite(&tmp_path, &target_path, bytes, prefix)?;
 
         debug!(
             path = ?target_path,
@@ -1240,6 +1281,13 @@ pub(crate) mod taikai_ingest {
             }
 
             let base_id = &file_name["taikai-envelope-".len()..file_name.len() - ".norito".len()];
+            if !valid_spool_artifact_base_id(base_id) {
+                iroha_logger::warn!(
+                    base = base_id,
+                    "skipping Taikai envelope with malformed spool artifact id"
+                );
+                continue;
+            }
             let sentinel_path = spool_dir.join(format!(
                 "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
             ));
@@ -1370,6 +1418,35 @@ pub(crate) mod taikai_ingest {
         }
 
         Ok(result)
+    }
+
+    fn valid_spool_artifact_base_id(base_id: &str) -> bool {
+        let mut fields = base_id.split('-');
+        let Some(lane_hex) = fields.next() else {
+            return false;
+        };
+        let Some(epoch_hex) = fields.next() else {
+            return false;
+        };
+        let Some(sequence_hex) = fields.next() else {
+            return false;
+        };
+        let Some(ticket_hex) = fields.next() else {
+            return false;
+        };
+        let Some(fingerprint_hex) = fields.next() else {
+            return false;
+        };
+        fields.next().is_none()
+            && fixed_hex(lane_hex, 8)
+            && fixed_hex(epoch_hex, 16)
+            && fixed_hex(sequence_hex, 16)
+            && fixed_hex(ticket_hex, 64)
+            && fixed_hex(fingerprint_hex, 64)
+    }
+
+    fn fixed_hex(value: &str, width: usize) -> bool {
+        value.len() == width && value.bytes().all(|byte| byte.is_ascii_hexdigit())
     }
 }
 

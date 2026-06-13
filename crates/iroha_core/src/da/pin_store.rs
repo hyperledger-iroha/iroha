@@ -115,6 +115,18 @@ impl DaPinStore {
         self.by_lane_epoch.get(&(lane_id, epoch, sequence))
     }
 
+    /// Return whether a pin intent collides with any committed pin intent identity.
+    ///
+    /// Aliases are intentionally excluded: they are mutable shortcuts and may
+    /// be reassigned by later pin intents.
+    #[must_use]
+    pub fn contains_intent_identity(&self, intent: &DaPinIntent) -> bool {
+        self.get_by_lane_epoch_sequence(intent.lane_id.as_u32(), intent.epoch, intent.sequence)
+            .is_some()
+            || self.get_by_manifest(&intent.manifest_hash).is_some()
+            || self.get_by_ticket(&intent.storage_ticket).is_some()
+    }
+
     /// Return all intents ordered by `(block_height, index_in_bundle)`.
     pub fn all_sorted(&self) -> impl Iterator<Item = &DaPinIntentWithLocation> {
         self.by_location.values()
@@ -334,6 +346,36 @@ mod tests {
                 .get_by_manifest(&second.intent.manifest_hash)
                 .is_none(),
             "duplicate location must not leave a manifest index entry"
+        );
+    }
+
+    #[test]
+    fn contains_intent_identity_detects_key_manifest_and_ticket_collisions() {
+        let mut store = DaPinStore::default();
+        let first = located(sample_intent(1, 1, Some("first-alias")), 9, 0);
+        assert!(store.insert_with_location(first.clone()));
+
+        let mut duplicate_key = sample_intent(1, 1, Some("fresh-alias"));
+        duplicate_key.storage_ticket = StorageTicketId::new([0x90; 32]);
+        duplicate_key.manifest_hash = ManifestDigest::new([0x91; 32]);
+        assert!(store.contains_intent_identity(&duplicate_key));
+
+        let mut duplicate_ticket = sample_intent(2, 2, Some("fresh-ticket-alias"));
+        duplicate_ticket.storage_ticket = first.intent.storage_ticket;
+        duplicate_ticket.manifest_hash = ManifestDigest::new([0x92; 32]);
+        assert!(store.contains_intent_identity(&duplicate_ticket));
+
+        let mut duplicate_manifest = sample_intent(3, 3, Some("fresh-manifest-alias"));
+        duplicate_manifest.storage_ticket = StorageTicketId::new([0x93; 32]);
+        duplicate_manifest.manifest_hash = first.intent.manifest_hash;
+        assert!(store.contains_intent_identity(&duplicate_manifest));
+
+        let mut alias_reassignment = sample_intent(4, 4, Some("first-alias"));
+        alias_reassignment.storage_ticket = StorageTicketId::new([0x94; 32]);
+        alias_reassignment.manifest_hash = ManifestDigest::new([0x95; 32]);
+        assert!(
+            !store.contains_intent_identity(&alias_reassignment),
+            "alias reassignment alone should not be treated as an identity collision"
         );
     }
 }

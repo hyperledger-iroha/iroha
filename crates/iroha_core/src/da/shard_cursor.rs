@@ -220,11 +220,13 @@ impl DaShardCursorIndex {
         records: &[DaCommitmentRecord],
         block_height: u64,
     ) -> Result<(), DaShardCursorError> {
-        self.sync_mapping(lane_config);
+        let mut candidate = self.clone();
+        candidate.sync_mapping(lane_config);
         for record in records {
-            let shard_id = self.shard_id_for_lane(record.lane_id, block_height)?;
-            self.advance(shard_id, record, block_height)?;
+            let shard_id = candidate.shard_id_for_lane(record.lane_id, block_height)?;
+            candidate.advance(shard_id, record, block_height)?;
         }
+        *self = candidate;
         Ok(())
     }
 
@@ -923,6 +925,58 @@ mod tests {
             matches!(err, DaShardCursorError::UnknownLane { lane_id, .. } if lane_id == LaneId::new(3))
         );
         assert!(index.get(3).is_none(), "cursor should remain untouched");
+    }
+
+    #[test]
+    fn record_records_rolls_back_when_later_record_regresses() {
+        let lane_config = {
+            let lanes = (0..=1)
+                .map(|lane_id| {
+                    let mut metadata = BTreeMap::new();
+                    metadata.insert("da_shard_id".to_string(), lane_id.to_string());
+                    ModelLaneConfig {
+                        id: LaneId::new(lane_id),
+                        dataspace_id: DataSpaceId::UNIVERSAL,
+                        alias: format!("lane{lane_id}"),
+                        metadata,
+                        ..ModelLaneConfig::default()
+                    }
+                })
+                .collect();
+            let catalog = LaneCatalog::new(NonZeroU32::new(2).expect("lane count"), lanes)
+                .expect("lane catalog");
+            ConfigLaneConfig::from_catalog(&catalog)
+        };
+        let mut index = DaShardCursorIndex::new(&lane_config);
+        index
+            .record_records(
+                &lane_config,
+                &[sample_record(0, 1, 1), sample_record(1, 3, 3)],
+                1,
+            )
+            .expect("initial records");
+
+        let err = index
+            .record_records(
+                &lane_config,
+                &[sample_record(0, 2, 0), sample_record(1, 3, 2)],
+                2,
+            )
+            .expect_err("later regression must fail");
+        assert!(
+            matches!(err, DaShardCursorError::Regression { lane_id, .. } if lane_id == LaneId::new(1))
+        );
+        let lane0 = index.get(0).expect("lane 0 cursor remains");
+        assert_eq!(
+            (lane0.epoch, lane0.sequence, lane0.last_block_height),
+            (1, 1, 1),
+            "earlier successful candidate advance must roll back"
+        );
+        let lane1 = index.get(1).expect("lane 1 cursor remains");
+        assert_eq!(
+            (lane1.epoch, lane1.sequence, lane1.last_block_height),
+            (3, 3, 1)
+        );
     }
 
     #[test]

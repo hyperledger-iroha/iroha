@@ -417,6 +417,15 @@ impl InternalProposalWork {
     }
 }
 
+fn pin_intent_available_for_proposal(
+    sealed_pin_intents: &std::collections::BTreeSet<(u32, u64, u64)>,
+    committed_pin_intents: &crate::da::pin_store::DaPinStore,
+    intent: &iroha_data_model::da::pin_intent::DaPinIntent,
+) -> bool {
+    let key = (intent.lane_id.as_u32(), intent.epoch, intent.sequence);
+    !sealed_pin_intents.contains(&key) && !committed_pin_intents.contains_intent_identity(intent)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ProposalBackpressure {
     pub(super) queue_state: BackpressureState,
@@ -823,10 +832,12 @@ impl Actor {
                 #[cfg(not(feature = "telemetry"))]
                 let _ = cache_outcome;
                 value.is_some_and(|bundle| {
+                    let committed = self.state.da_commitments();
                     bundle.commitments.iter().any(|record| {
                         let key =
                             iroha_data_model::da::commitment::DaCommitmentKey::from_record(record);
                         !da_rbc.da.sealed_commitments.contains(&key)
+                            && !committed.contains_record_identity(record)
                     })
                 })
             }
@@ -850,9 +861,13 @@ impl Actor {
                 #[cfg(not(feature = "telemetry"))]
                 let _ = cache_outcome;
                 value.is_some_and(|bundle| {
+                    let committed = self.state.da_pin_intents();
                     bundle.intents.iter().any(|intent| {
-                        let key = (intent.lane_id.as_u32(), intent.epoch, intent.sequence);
-                        !da_rbc.da.sealed_pin_intents.contains(&key)
+                        pin_intent_available_for_proposal(
+                            &da_rbc.da.sealed_pin_intents,
+                            &committed,
+                            intent,
+                        )
                     })
                 })
             }
@@ -3078,6 +3093,19 @@ impl Actor {
                             if da_rbc.da.sealed_commitments.contains(&key) {
                                 continue;
                             }
+                            let already_committed = {
+                                let committed = self.state.da_commitments();
+                                committed.contains_record_identity(record)
+                            };
+                            if already_committed {
+                                warn!(
+                                    lane = record.lane_id.as_u32(),
+                                    epoch = record.epoch,
+                                    sequence = record.sequence,
+                                    "dropping DA commitment already present in the committed index before sealing bundle"
+                                );
+                                continue;
+                            }
                             let policy = lane_config.manifest_policy(record.lane_id);
                             let (available, cache_outcome) =
                                 crate::sumeragi::main_loop::manifest_available_for_commitment(
@@ -3219,10 +3247,15 @@ impl Actor {
                     }
                     #[cfg(feature = "telemetry")]
                     let dedupe_before = intents.len();
+                    let committed_pin_intents = self.state.da_pin_intents();
                     intents.retain(|intent| {
-                        let key = (intent.lane_id.as_u32(), intent.epoch, intent.sequence);
-                        !self.subsystems.da_rbc.da.sealed_pin_intents.contains(&key)
+                        pin_intent_available_for_proposal(
+                            &self.subsystems.da_rbc.da.sealed_pin_intents,
+                            &committed_pin_intents,
+                            intent,
+                        )
                     });
+                    drop(committed_pin_intents);
                     #[cfg(feature = "telemetry")]
                     {
                         let deduped = dedupe_before.saturating_sub(intents.len());

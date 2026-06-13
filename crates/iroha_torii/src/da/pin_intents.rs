@@ -115,6 +115,9 @@ fn list_from_store(
             Vec::new()
         };
     }
+    if request_targets_pin_intent(request) {
+        return Vec::new();
+    }
 
     store
         .all_sorted()
@@ -129,15 +132,20 @@ fn find_in_store(
     request: &DaPinIntentQueryRequest,
 ) -> Option<DaPinIntentWithLocation> {
     if let Some(ticket) = request.storage_ticket {
-        return store.get_by_ticket(&ticket).cloned();
+        let target = store.get_by_ticket(&ticket)?.clone();
+        return request_matches_pin_intent(&target, request).then_some(target);
     }
 
     if let Some(alias) = &request.alias {
-        return store.get_by_alias(alias).map(|(_, record)| record.clone());
+        let target = store
+            .get_by_alias(alias)
+            .map(|(_, record)| record.clone())?;
+        return request_matches_pin_intent(&target, request).then_some(target);
     }
 
     if let Some(manifest) = request.manifest_hash {
-        return store.get_by_manifest(&manifest).cloned();
+        let target = store.get_by_manifest(&manifest)?.clone();
+        return request_matches_pin_intent(&target, request).then_some(target);
     }
 
     let (Some(lane_id), Some(epoch), Some(sequence)) =
@@ -149,6 +157,59 @@ fn find_in_store(
     store
         .get_by_lane_epoch_sequence(lane_id, epoch, sequence)
         .cloned()
+}
+
+fn request_targets_pin_intent(request: &DaPinIntentQueryRequest) -> bool {
+    request.manifest_hash.is_some()
+        || request.storage_ticket.is_some()
+        || request.alias.is_some()
+        || request.lane_id.is_some()
+        || request.epoch.is_some()
+        || request.sequence.is_some()
+}
+
+fn request_matches_pin_intent(
+    target: &DaPinIntentWithLocation,
+    request: &DaPinIntentQueryRequest,
+) -> bool {
+    if request
+        .storage_ticket
+        .is_some_and(|ticket| target.intent.storage_ticket != ticket)
+    {
+        return false;
+    }
+    if request
+        .alias
+        .as_ref()
+        .is_some_and(|alias| target.intent.alias.as_deref() != Some(alias.as_str()))
+    {
+        return false;
+    }
+    if request
+        .manifest_hash
+        .is_some_and(|manifest| target.intent.manifest_hash != manifest)
+    {
+        return false;
+    }
+    if request
+        .lane_id
+        .is_some_and(|lane_id| target.intent.lane_id.as_u32() != lane_id)
+    {
+        return false;
+    }
+    if request
+        .epoch
+        .is_some_and(|epoch| target.intent.epoch != epoch)
+    {
+        return false;
+    }
+    if request
+        .sequence
+        .is_some_and(|sequence| target.intent.sequence != sequence)
+    {
+        return false;
+    }
+    true
 }
 
 fn verify_against_store(store: &DaPinStore, proof: &DaPinIntentWithLocation) -> bool {
@@ -259,6 +320,33 @@ mod tests {
     }
 
     #[test]
+    fn list_manifest_filter_rejects_conflicting_tuple() {
+        let store = store_with_records();
+        let request = DaPinIntentQueryRequest {
+            manifest_hash: Some(ManifestDigest::new([5; 32])),
+            lane_id: Some(2),
+            epoch: Some(1),
+            sequence: Some(5),
+            ..DaPinIntentQueryRequest::default()
+        };
+
+        let items = list_from_store(&store, &request);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn list_partial_tuple_filter_does_not_fall_back_to_full_list() {
+        let store = store_with_records();
+        let request = DaPinIntentQueryRequest {
+            lane_id: Some(3),
+            ..DaPinIntentQueryRequest::default()
+        };
+
+        let items = list_from_store(&store, &request);
+        assert!(items.is_empty());
+    }
+
+    #[test]
     fn prove_uses_lane_epoch_sequence() {
         let store = store_with_records();
         let request = DaPinIntentQueryRequest {
@@ -271,6 +359,20 @@ mod tests {
         let proof = find_in_store(&store, &request).expect("proof should exist");
         assert_eq!(proof.location.index_in_bundle, 2);
         assert_eq!(proof.location.block_height, 7);
+    }
+
+    #[test]
+    fn prove_rejects_conflicting_ticket_and_tuple_selectors() {
+        let store = store_with_records();
+        let request = DaPinIntentQueryRequest {
+            storage_ticket: Some(StorageTicketId::new([3; 32])),
+            lane_id: Some(2),
+            epoch: Some(1),
+            sequence: Some(5),
+            ..DaPinIntentQueryRequest::default()
+        };
+
+        assert!(find_in_store(&store, &request).is_none());
     }
 
     #[test]
