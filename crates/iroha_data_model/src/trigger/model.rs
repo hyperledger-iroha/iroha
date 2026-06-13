@@ -396,8 +396,12 @@ pub mod action {
             Executable::Ivm(IvmBytecode::from_compiled(Vec::new()))
         }
 
+        fn checked_random_keypair() -> KeyPair {
+            KeyPair::try_random().expect("generate checked trigger fixture keypair")
+        }
+
         fn account_in(_domain: &str) -> AccountId {
-            let kp = KeyPair::random();
+            let kp = checked_random_keypair();
             AccountId::new(kp.public_key().clone())
         }
 

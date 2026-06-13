@@ -469,6 +469,12 @@ pub enum ReadinessSmokeBuildError {
     /// Failed to construct the smoke domain identifier.
     #[error("invalid readiness smoke domain `{0}`")]
     InvalidDomain(String),
+    /// Failed to sign a smoke transaction.
+    #[error("failed to sign readiness smoke transaction: {reason}")]
+    Signing {
+        /// Human readable failure reason.
+        reason: String,
+    },
 }
 
 /// Result of a readiness smoke probe.
@@ -607,7 +613,11 @@ fn build_readiness_smoke_transaction(
     }
     builder.set_ttl(SMOKE_TTL);
 
-    Ok(builder.sign(signer.key_pair().private_key()))
+    builder
+        .try_sign(signer.key_pair().private_key())
+        .map_err(|err| ReadinessSmokeBuildError::Signing {
+            reason: err.to_string(),
+        })
 }
 
 impl Default for ReadinessOptions {
@@ -5869,6 +5879,27 @@ mod tests {
             .await
             .expect_err("connection should fail");
         matches!(err, ToriiError::WebSocket(_));
+    }
+
+    #[test]
+    fn readiness_smoke_plan_uses_checked_transaction_signing() {
+        let signer = crate::compose::development_signing_authorities()
+            .iter()
+            .next()
+            .expect("development signer available");
+        let plan = ReadinessSmokePlan::for_signer_with_attempts("mochi-smoke", signer, 2)
+            .expect("build readiness smoke plan");
+
+        assert_eq!(plan.transactions.len(), 2);
+        for tx in &plan.transactions {
+            tx.verify_signature()
+                .expect("checked smoke transaction signature verifies");
+        }
+        assert_ne!(
+            plan.transactions[0].hash(),
+            plan.transactions[1].hash(),
+            "smoke attempts should carry distinct nonces"
+        );
     }
 
     const BLOCK_WIRE_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/canonical_block_wire.bin");

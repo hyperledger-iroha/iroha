@@ -1110,7 +1110,8 @@ mod tests {
         );
         let signature = BlockSignature::new(
             0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+            SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                .expect("test block signing should succeed"),
         );
         let mut block = SignedBlock::presigned(signature, header, transactions);
         let results =
@@ -1199,7 +1200,8 @@ mod tests {
         );
         let signature = BlockSignature::new(
             0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+            SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                .expect("test block signing should succeed"),
         );
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         let entry_hashes = [entry_hash];

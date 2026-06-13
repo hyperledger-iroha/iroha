@@ -112,20 +112,21 @@ fn ensure_asset_lock(record: &AssetEscrowRecord) -> Result<(), Error> {
 }
 
 /// Derive the deterministic protocol custody account for an escrow.
-#[must_use]
 pub fn escrow_custody_account_id(
     chain_id: &iroha_data_model::ChainId,
     escrow_id: &EscrowId,
     asset_definition: &AssetDefinitionId,
-) -> AccountId {
+) -> Result<AccountId, Error> {
     let seed_material = format!(
         "{ESCROW_CUSTODY_SEED_LABEL}|{}|{}|{asset_definition}",
         chain_id.as_str(),
         hex::encode(escrow_id.as_hash().as_ref()),
     );
     let seed: [u8; Hash::LENGTH] = Hash::new(seed_material).into();
-    let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
-    AccountId::new(keypair.public_key().clone())
+    let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519).map_err(|err| {
+        validation_err(format!("escrow custody account seed was rejected: {err}"))
+    })?;
+    Ok(AccountId::new(keypair.public_key().clone()))
 }
 
 fn ensure_custody_account(
@@ -528,7 +529,7 @@ impl Execute for OpenAssetEscrow {
             state_transaction.chain_id(),
             &self.escrow_id,
             &self.asset_definition,
-        );
+        )?;
 
         let seller_asset = AssetId::new(self.asset_definition.clone(), authority.clone());
         let custody_asset = AssetId::new(self.asset_definition.clone(), custody.clone());
@@ -899,7 +900,7 @@ impl Execute for OpenAssetLock {
             state_transaction.chain_id(),
             &self.escrow_id,
             &self.asset_definition,
-        );
+        )?;
         let source_asset = AssetId::new(self.asset_definition.clone(), authority.clone());
         let custody_asset = AssetId::new(self.asset_definition.clone(), custody.clone());
         let custody_created = ensure_custody_account(&custody, state_transaction)?;
@@ -1852,7 +1853,9 @@ mod tests {
 
     fn fixture_account(label: &str) -> AccountId {
         let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
-        let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
+        let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("derive escrow fixture account key")
+            .into_parts();
         AccountId::new(public_key)
     }
 
@@ -2243,8 +2246,10 @@ mod tests {
             "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().expect("asset");
         let escrow_id = EscrowId::new(Hash::new("escrow"));
         assert_eq!(
-            escrow_custody_account_id(&chain_id, &escrow_id, &asset_definition),
             escrow_custody_account_id(&chain_id, &escrow_id, &asset_definition)
+                .expect("custody account derivation succeeds"),
+            escrow_custody_account_id(&chain_id, &escrow_id, &asset_definition)
+                .expect("custody account derivation is repeatable")
         );
     }
 
@@ -2684,7 +2689,8 @@ mod tests {
             balance(&tx, &seller, &asset_definition),
             Numeric::new(100_u32, 0)
         );
-        let custody = escrow_custody_account_id(tx.chain_id(), &escrow_id, &asset_definition);
+        let custody = escrow_custody_account_id(tx.chain_id(), &escrow_id, &asset_definition)
+            .expect("custody account derivation succeeds");
         assert_eq!(balance(&tx, &custody, &asset_definition), Numeric::zero());
     }
 
@@ -3178,7 +3184,8 @@ mod tests {
             .is_err(),
             "insufficient source balance must be rejected"
         );
-        let custody = escrow_custody_account_id(tx.chain_id(), &over_balance_id, &asset_definition);
+        let custody = escrow_custody_account_id(tx.chain_id(), &over_balance_id, &asset_definition)
+            .expect("custody account derivation succeeds");
         assert!(tx.world.asset_escrows.get(&over_balance_id).is_none());
         assert!(tx.world.account(&custody).is_err());
 

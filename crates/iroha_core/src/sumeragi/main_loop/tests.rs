@@ -168826,7 +168826,6 @@ async fn debug_corrupt_witness_roots_changes_local_post_root() {
 fn validate_block_for_voting_recovers_stale_signature_indices() {
     use std::collections::BTreeSet;
 
-    use iroha_crypto::SignatureOf;
     use iroha_data_model::block::BlockSignature;
 
     let world = World::default();

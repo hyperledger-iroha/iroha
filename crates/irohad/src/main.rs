@@ -2416,18 +2416,14 @@ fn sumeragi_block_message_requires_blocking(
         BlockMessage::BlockSyncUpdate(_)
             | BlockMessage::BlockCreated(_)
             | BlockMessage::Proposal(_)
-            | BlockMessage::FetchPendingBlock(
-                iroha_core::sumeragi::message::FetchPendingBlock {
-                    priority: Some(iroha_core::sumeragi::message::FetchPendingBlockPriority::Consensus),
-                    ..
-                }
-            )
-            | BlockMessage::FetchPendingBlock(
-                iroha_core::sumeragi::message::FetchPendingBlock {
-                    commit_qc_only: Some(true),
-                    ..
-                }
-            )
+            | BlockMessage::FetchPendingBlock(iroha_core::sumeragi::message::FetchPendingBlock {
+                priority: Some(iroha_core::sumeragi::message::FetchPendingBlockPriority::Consensus),
+                ..
+            })
+            | BlockMessage::FetchPendingBlock(iroha_core::sumeragi::message::FetchPendingBlock {
+                commit_qc_only: Some(true),
+                ..
+            })
             | BlockMessage::QcVote(_)
             | BlockMessage::Qc(_)
             | BlockMessage::CertifiedBlockFetch(_)
@@ -2947,7 +2943,8 @@ mod network_relay_tests {
         let (_, leader_private) = leader_key.into_parts();
         let leader_signature = BlockSignature::new(
             0,
-            SignatureOf::from_hash(&leader_private, block_header.hash()),
+            SignatureOf::try_from_hash(&leader_private, block_header.hash())
+                .expect("test block signing should succeed"),
         );
         let init = iroha_core::sumeragi::consensus::RbcInit {
             block_hash,
@@ -3830,11 +3827,15 @@ mod snapshot_read_error_tests {
         ));
 
         assert!(snapshot_read_error_is_recoverable(
-            &TryReadSnapshotError::MissingSpaceDirectoryManifestSection { snapshot_height: 608 }
+            &TryReadSnapshotError::MissingSpaceDirectoryManifestSection {
+                snapshot_height: 608
+            }
         ));
 
         assert!(snapshot_read_error_is_recoverable(
-            &TryReadSnapshotError::MissingOfflineNoteReplayKeys { snapshot_height: 608 }
+            &TryReadSnapshotError::MissingOfflineNoteReplayKeys {
+                snapshot_height: 608
+            }
         ));
 
         assert!(snapshot_read_error_is_recoverable(
@@ -5232,7 +5233,8 @@ impl Iroha {
 
         let chain_id = Arc::new(config.common.chain.clone());
         if config.nexus.relay_worker.enabled {
-            let relay_worker_authority = AccountId::new(config.common.key_pair.public_key().clone());
+            let relay_worker_authority =
+                AccountId::new(config.common.key_pair.public_key().clone());
             let relay_worker_storage_root = config
                 .kura
                 .store_dir
@@ -5290,8 +5292,9 @@ impl Iroha {
 
         let receipt_signer = torii_receipt_signer_or_ephemeral(config.torii.receipt_signer.clone())
             .map_err(|err| {
-                Report::new(StartError::StartTorii)
-                    .attach(format!("failed to generate ephemeral Torii receipt signer: {err}"))
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to generate ephemeral Torii receipt signer: {err}"
+                ))
             })?;
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
@@ -8603,13 +8606,14 @@ fn consensus_entry_caps(
         "Npos" => iroha_core::sumeragi::consensus::NPOS_TAG,
         _ => iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
     };
-    let consensus_params = iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
-        chain_id,
-        &mode_tag,
-        entry.bls_domain.clone(),
-        params,
-        sumeragi,
-    );
+    let consensus_params =
+        iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
+            chain_id,
+            &mode_tag,
+            entry.bls_domain.clone(),
+            params,
+            sumeragi,
+        );
 
     let fingerprint = iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params(
         chain_id,
@@ -8826,13 +8830,14 @@ fn verify_genesis_metadata(
     ensure_crypto_snapshot_matches_config(&manifest_crypto, config)
         .map_err(|err| Report::new(MainError::Config).attach(err))?;
 
-    let consensus_params = iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
-        &config.common.chain,
-        mode_tag,
-        matched_meta.bls_domain.clone(),
-        &params,
-        &config.sumeragi,
-    );
+    let consensus_params =
+        iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
+            &config.common.chain,
+            mode_tag,
+            matched_meta.bls_domain.clone(),
+            &params,
+            &config.sumeragi,
+        );
     let computed_fp = iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params(
         &config.common.chain,
         &consensus_params,

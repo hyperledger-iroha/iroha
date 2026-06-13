@@ -301,14 +301,19 @@ impl JsonKeyCodec for crate::ram_lfe::RamLfeProgramId {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::KeyPair;
     use mv::json::JsonKeyCodec;
     use norito::json::Parser;
 
     use crate::account::AccountId;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")
+    }
+
     #[test]
     fn account_id_json_key_codec_roundtrip() {
-        let keypair = iroha_crypto::KeyPair::random();
+        let keypair = checked_random_keypair();
         let account = AccountId::new(keypair.public_key().clone());
         let mut encoded = String::new();
         account.encode_json_key(&mut encoded);

@@ -2,6 +2,1311 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Data-model state/json/trigger fixture checked keys
+
+- Routed state advisory account, JSON key codec account, and trigger authority
+  test fixtures through checked random Ed25519 key generation.
+- Revalidated canonical state-key roundtrips, account JSON-key codec roundtrip,
+  and trigger execute-filter authority binding.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model key_roundtrip_and_ordering --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo test -j 1 -p iroha_data_model account_id_json_key_codec_roundtrip --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo test -j 1 -p iroha_data_model bind_execute_trigger_filter_authority --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 Core native escrow custody checked derivation
+
+- Routed native asset escrow custody account derivation and escrow fixture
+  account generation through `KeyPair::try_from_seed`.
+- Propagated custody seed rejection as an instruction invariant error and
+  revalidated both direct derivation stability and an open/accept/mark/release
+  custody flow.
+- Validation:
+  - `rustfmt crates/iroha_core/src/smartcontracts/isi/escrow.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-derivation CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core custody_account_derivation_is_stable --lib -- --nocapture`
+    (`1` passed, `5027` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-derivation CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core escrow_open_accept_mark_and_release_moves_custody_to_buyer --lib -- --nocapture`
+    (`1` passed, `5027` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-derivation CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 Data-model Soranet incentives checked account fixtures
+
+- Routed Soranet incentive test account fixtures through
+  `KeyPair::try_from_seed`, preserving deterministic Ed25519 accounts while
+  making invalid fixture seeds fail explicitly.
+- Revalidated relay bond policy, uptime/bandwidth proof, compliance reward,
+  reward-transfer, and dispute default regressions.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model soranet::incentives::tests --lib -- --nocapture`
+    (`12` passed, `1533` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+  - `git diff --check`
+
+## 2026-06-13 SCCP TRON inbound inventory pinning
+
+- Extended TRON inbound adversarial sparse-inventory regressions so readiness
+  reports and strict bundle verification remove every required marker across the
+  readiness gate, readiness self-inventory, bundle self-inventory, and Rust
+  duplicate-log runtime guard rows.
+- Coverage now checks all `4` TRON inbound adversarial source rows (`12`
+  markers); every marker is uniquely removable.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_tron_inbound_adversarial_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_tron_inbound_adversarial_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'tron_inbound_adversarial'`
+    (`2` passed, `632` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'tron_inbound_adversarial'`
+    (`2` passed, `367` deselected)
+
+## 2026-06-13 Torii DA receipt fixture checked signing
+
+- Routed Torii DA alias-proof council and receipt-log fixture signatures through
+  checked `Signature::try_new`, preserving the wrong-signer invalid-signature
+  fixture.
+- Revalidated Taikai SSM accept/manifest-mismatch/tampered-signature cases plus
+  receipt signing, idempotent and concurrent persistence, malformed and
+  conflicting receipt loads, invalid signatures, sequence-rebound protection,
+  receipt-log reopening, ordering/dedupe, and cursor-seed failure paths.
+- Validation:
+  - Direct `iroha_torii` test-binary filters for
+    `da::ingest::tests::build_receipt_signs_with_operator_key`,
+    `da::ingest::tests::validate_taikai_ssm_*`,
+    `da::ingest::tests::persist_da_receipt*`,
+    `da::ingest::tests::load_da_receipts_rejects*`, and
+    `da::ingest::tests::da_receipt_log_*` (all targeted and grouped cases
+    passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-consensus-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP active-launch checklist inventory pinning
+
+- Extended active-launch checklist schema sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every uniquely
+  detectable marker across readiness blocker collection, lane blocker schemas,
+  source-record role separation, EVM live metadata, source-adapter gate
+  summaries, route-allowlist bindings, route-canary metadata, embedded-evidence
+  matching, unknown-field redaction, and self-inventory rows.
+- Coverage now checks all `5` active-launch checklist source rows, with `154`
+  uniquely detectable removals out of `157` required markers.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_active_launch_checklist_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'active_launch_checklist_schema'`
+    (`2` passed, `632` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'active_launch_checklist_schema'`
+    (`2` passed, `367` deselected)
+
+## 2026-06-13 SCCP all-lanes checklist inventory pinning
+
+- Extended all-lanes release-checklist exact-boolean sparse-inventory
+  regressions so readiness reports and strict bundle verification remove every
+  uniquely detectable marker across exact readiness aggregation, production-ready
+  CLI exits, audit-field redaction, source-gate blocker summaries,
+  source-adapter/route-canary hash-role replay regressions, SDK route-canary
+  role separation, and self-inventory rows.
+- Coverage now checks all `37` release-checklist source rows, with `142`
+  uniquely detectable removals out of `144` required markers.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolean_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_release_checklist_exact_boolean_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'all_lanes_release_checklist_exact_boolean or all_lanes_route_canary_sdk_role'`
+    (`3` passed, `631` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'all_lanes_release_checklist_exact_boolean'`
+    (`2` passed, `367` deselected)
+
+## 2026-06-13 SCCP all-lanes evidence/blocker inventory pinning
+
+- Extended all-lanes evidence-root and governed-blocker schema sparse-inventory
+  regressions so readiness reports and strict bundle verification remove every
+  uniquely detectable marker across evidence root validation, unsupported-section
+  and unexpected-field redaction, copied evidence bundle checks, source-adapter
+  gate semantics, route-canary semantics, governed blocker validation, blocker
+  redaction, and self-inventory rows.
+- Coverage now checks all `7` evidence-root source rows, with `133` uniquely
+  detectable removals out of `142` required markers, and all `5`
+  governed-blocker source rows, with `27` uniquely detectable removals out of
+  `28` required markers.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_governed_blocker_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_governed_blocker_schema_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'all_lanes_evidence_root_schema or all_lanes_governed_blocker_schema'`
+    (`5` passed, `629` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'all_lanes_evidence_root_schema or all_lanes_governed_blocker_schema'`
+    (`4` passed, `365` deselected)
+
+## 2026-06-13 Core VPN and Kaigi deterministic account checked derivation
+
+- Routed VPN lease custody account derivation and Kaigi private-call opaque
+  account derivation through `KeyPair::try_from_seed`.
+- Propagated deterministic seed rejection as existing instruction invariant
+  errors and added direct VPN custody-account repeatability coverage.
+- Validation:
+  - `rustfmt crates/iroha_core/src/smartcontracts/isi/vpn.rs crates/iroha_core/src/smartcontracts/isi/kaigi.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-derivation CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core opaque_account_from_seed_accepts_arbitrary_digest_bytes --lib -- --nocapture`
+    (`1` passed, `5026` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-derivation CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core vpn_lease_custody_account_id_uses_checked_deterministic_seed --lib -- --nocapture`
+    (`1` passed, `5027` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-derivation CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP TRON runtime/scalar inventory pinning
+
+- Extended TRON runtime route-manifest and all-lanes route-canary scalar
+  sparse-inventory regressions so readiness reports and strict bundle
+  verification remove every required marker across Rust route parsing,
+  post-deploy evidence validation, runtime manifest diagnostics, readiness gate
+  wiring, route-canary scalar extraction, route-allowlist recompute redaction,
+  and adversarial scalar tests.
+- Coverage now checks all `4` TRON runtime route-manifest source rows (`23`
+  markers) and all `5` route-canary scalar source rows (`22` markers); every
+  marker in both inventories is uniquely removable.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_tron_runtime_route_manifest_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_route_canary_scalar_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_tron_runtime_route_manifest_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_route_canary_scalar_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'tron_runtime_route_manifest or all_lanes_route_canary_scalar'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'tron_runtime_route_manifest or all_lanes_route_canary_scalar'`
+    (`4` passed, `365` deselected)
+
+## 2026-06-13 Data-model Soranet ticket checked issuer derivation
+
+- Replaced the Soranet ticket test fixture's all-zero issuer seed with checked
+  nonzero Ed25519 derivation, keeping the envelope fixture deterministic while
+  making malformed key material fail explicitly.
+- Revalidated the ticket envelope roundtrip, commitment mutation checks,
+  activation/expiration bounds, scope labels, and data-model lint gate.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model soranet::ticket::tests --lib -- --nocapture`
+    (`6` passed, `1539` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 Data-model ISI identifier fixture checked signing
+
+- Routed hidden-identifier instruction test fixture key derivation through
+  `KeyPair::try_from_seed` and receipt/output-opening signatures through
+  `SignatureOf::try_new`.
+- Verified the generated typed signatures before embedding their raw signature
+  bytes in the instruction receipt fixture.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model isi::identifier --lib -- --nocapture`
+    (`2` passed, `1543` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP BSC/TRON route-config inventory pinning
+
+- Extended BSC and TRON route-config canonical-manifest sparse-inventory
+  regressions so readiness reports and strict bundle verification remove every
+  required marker across deployment scripts, canonical manifest validators,
+  post-deploy blocker extraction, route/TOML field normalization, settlement
+  aliases, and adversarial manifest tests.
+- Coverage now checks all `5` BSC route-config source rows (`66` markers) and
+  all `5` TRON route-config source rows (`69` markers); every marker in both
+  inventories is uniquely removable.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_bsc_route_config_canonical_manifest_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_tron_route_config_canonical_manifest_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_bsc_route_config_canonical_manifest_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_tron_route_config_canonical_manifest_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'bsc_route_config_canonical_manifest or tron_route_config_canonical_manifest'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'bsc_route_config_canonical_manifest or tron_route_config_canonical_manifest'`
+    (`4` passed, `365` deselected)
+
+## 2026-06-13 SCCP native prover schema inventory pinning
+
+- Extended the native EVM prover bundle schema sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every uniquely
+  detectable marker across verifier schema enforcement, readiness gate wiring,
+  bundle manifest generation, native-prover adversarial bundle tests, SDK
+  artifact/order tests, duplicate-key redaction, path-redaction tests, and
+  readiness self-inventory rows.
+- Coverage now checks all `5` native prover schema source rows, with `158`
+  uniquely detectable removals out of `162` required markers.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_native_prover_bundle_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_native_prover_bundle_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_native_prover_bundle_schema'`
+    (`2` passed, `632` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_native_prover_bundle_schema'`
+    (`2` passed, `367` deselected)
+
+## 2026-06-13 Torii app-auth fixture checked signing
+
+- Routed Torii canonical request app-auth and multisig witness test signatures
+  through a checked `Signature::try_new` helper while preserving wrong-key and
+  forged-message negative fixtures.
+- Revalidated valid account/alias signatures plus wrong signature, mismatched
+  path account, missing freshness headers, replayed nonce, stale timestamp,
+  multisig account rejection, duplicate witness signer, below-threshold witness,
+  and replayed witness nonce cases.
+- Cleared the current Kaigi dependency compile blocker by converting the new
+  checked-seed error string into the `InvariantViolation` boxed string type.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-consensus-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii app_auth --lib -- --nocapture`
+    (`15` passed, `2440` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-consensus-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP public Markdown invariant pinning
+
+- Extended release-notes attachment and readiness Markdown invariant
+  sparse-inventory regressions so readiness reports and strict bundle
+  verification remove every uniquely detectable marker across bundle rendering,
+  strict verifier invariant checks, manifest handoff text, status/blocker rows,
+  public Markdown section checks, pre-write drift tests, malformed-label
+  redaction tests, renderer-redaction tests, and readiness self-inventory rows.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_notes_attachment_invariants_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_readiness_markdown_invariants_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_notes_attachment_invariants_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_readiness_markdown_invariants_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_notes_attachment_invariants or readiness_markdown_invariants'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_notes_attachment_invariants or readiness_markdown_invariants'`
+    (`4` passed, `365` deselected)
+
+## 2026-06-13 SCCP blocker/scalar inventory pinning
+
+- Extended public blocker-list and public scalar-text sparse-inventory
+  regressions so readiness reports and strict bundle verification remove every
+  uniquely detectable marker across verifier schema checks, live-evidence helper
+  diagnostics, all-lanes scalar extraction, bundle pre-render schema checks,
+  padded/duplicate/hostile blocker regressions, Markdown invalid-marker tests,
+  adversarial redaction tests, copied-corridor/crypto/submission regressions,
+  and readiness self-inventory rows.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_blocker_list_schema_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_blocker_list_schema_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_blocker_list_schema or release_public_scalar_text_schema'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_blocker_list_schema or release_public_scalar_text_schema'`
+    (`4` passed, `365` deselected)
+
+## 2026-06-13 SCCP manifest inventory pinning
+
+- Extended manifest readiness-flags and manifest artifact-set/order
+  sparse-inventory regressions so readiness reports and strict bundle
+  verification remove every uniquely detectable marker across bundle manifest
+  generation, strict verifier equality, Rust SCCP manifest admission, artifact
+  row schema checks, required-artifact closure, root/entry enumeration, copied
+  artifact preflights, adversarial bundle tests, and readiness self-inventory
+  rows.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_manifest_readiness_flags_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_manifest_artifact_set_order_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_manifest_readiness_flags_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_manifest_artifact_set_order_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_manifest_readiness_flags or release_manifest_artifact_set_order'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_manifest_readiness_flags or release_manifest_artifact_set_order'`
+    (`4` passed, `365` deselected)
+
+## 2026-06-13 Data-model ISI endorsement/contract-alias checked key derivation
+
+- Routed endorsement and contract-alias ISI test fixture accounts through
+  `KeyPair::try_from_seed`, keeping deterministic Ed25519 fixtures while making
+  malformed fixture seeds fail closed.
+- Revalidated the stable registry IDs and Norito slice roundtrips that consume
+  those fixtures.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model isi::endorsement::tests --lib -- --nocapture`
+    (`2` passed, `1543` filtered out)
+  - `cargo test -j 1 -p iroha_data_model isi::contract_alias::tests --lib -- --nocapture`
+    (`2` passed, `1543` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+  - `git diff --check`
+
+## 2026-06-13 SCCP public binding inventory pinning
+
+- Extended public cryptographic-evidence and public submission-surface
+  sparse-inventory regressions so readiness reports and strict bundle
+  verification remove every uniquely detectable marker across verifier
+  recomputation, readiness wiring, bundle row-schema checks, source-adapter gate
+  policy, route-canary metadata, helper inventory, copied-corridor binding,
+  validation-status/blocker coupling, adversarial bundle tests, redaction tests,
+  and readiness self-inventory rows.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_crypto_evidence_binding_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_crypto_evidence_binding or release_public_submission_surface_binding'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_crypto_evidence_binding or release_public_submission_surface_binding'`
+    (`4` passed, `365` deselected)
+
+## 2026-06-13 Kagami genesis direct-manifest fixture checked key derivation
+
+- Routed the Kagami genesis direct-manifest signing regression's expected
+  fixture key through `KeyPair::try_from_seed`.
+- Kept the production seed-loading path on the existing checked derivation and
+  revalidated that signing an unchanged manifest preserves transaction payloads,
+  DA proof policies, and the default ZK policy hash commitment.
+- Validation:
+  - `rustfmt crates/iroha_kagami/src/genesis/sign.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-genesis CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_kagami sign_without_manifest_mutations_preserves_direct_manifest_payload -- --nocapture`
+    (`1` passed, `212` filtered out in `src/main.rs`; auxiliary Kagami tests
+    had `0` matched tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-genesis CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_kagami --all-targets --no-deps -- -D warnings`
+
+## 2026-06-13 Data-model Kaigi fixture checked key generation
+
+- Routed Kaigi participant, host, relay manifest, relay registration, feedback,
+  and allowlist test account fixtures through checked random Ed25519 key
+  generation.
+- Revalidated the Kaigi Norito roundtrips, roster roots, relay manifest
+  mutation, relay feedback key, allowlist membership, and private-Kaigi query
+  filters that consume those accounts.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model kaigi --lib -- --nocapture`
+    (`22` passed, `1523` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP release public JSON/Markdown inventory pinning
+
+- Extended public JSON-root and public Markdown sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every uniquely
+  detectable marker across duplicate-key guards, canonical JSON, UTF-8/JSON and
+  Markdown loading, copied public-field schema, public Markdown drift guards,
+  adversarial bundle tests, redaction tests, and readiness self-inventory rows.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_json_root_schema_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_markdown_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_json_root_schema_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_markdown_text_schema_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_input_provenance_schema or release_public_json_root_schema or release_public_markdown_text_schema'`
+    (`6` passed, `628` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_input_provenance_schema or release_public_json_root_schema or release_public_markdown_text_schema'`
+    (`6` passed, `363` deselected)
+
+## 2026-06-13 SCCP release input provenance inventory pinning
+
+- Extended copied input provenance sparse-inventory regressions so readiness
+  reports and strict bundle verification remove every uniquely detectable marker
+  across verifier schema checks, readiness wiring, bundle render preflights,
+  copied-layout verification, adversarial bundle tests, and readiness
+  self-inventory rows.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_input_provenance_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_input_provenance_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_input_provenance_schema or release_public_json_root_schema or release_public_markdown_text_schema'`
+    (`6` passed, `628` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_input_provenance_schema or release_public_json_root_schema or release_public_markdown_text_schema'`
+    (`6` passed, `363` deselected)
+
+## 2026-06-13 Torii consensus evidence fixture checked signing
+
+- Routed Torii `/v1/sumeragi/evidence` double-vote fixture signing through
+  checked `Signature::try_new`.
+- Revalidated plain/prefixed/whitespace evidence decoding plus invalid hex,
+  truncated payload, structurally invalid double-vote, mismatched mode tag,
+  stale subject-height, unknown-mode dual-seed, NPoS subject-height seed, and
+  permissioned PRF-seeded topology cases.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-consensus-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii evidence_submit_tests --lib -- --nocapture`
+    (`11` passed, `2444` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-consensus-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP release artifact path text inventory pinning
+
+- Extended release artifact path text sparse-inventory regressions so readiness
+  reports and strict bundle verification remove every uniquely detectable marker
+  across readiness, release bundle rendering, verifier-side manifest/report/archive
+  checks, copied filename checks, native prover payload path checks, adversarial
+  path tests, and both public gate self-inventories.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_release_artifact_path_text_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_release_artifact_path_text_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_bundle_source_copy or release_bundle_output_path or release_artifact_path_text'`
+    (`6` passed, `628` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_bundle_source_copy or release_bundle_output_path or release_artifact_path_text'`
+    (`6` passed, `363` deselected)
+
+## 2026-06-13 SCCP release bundle path-safety inventory pinning
+
+- Extended release bundle source-copy and output-path sparse-inventory
+  regressions so readiness reports and strict bundle verification remove every
+  uniquely detectable marker across readiness wiring, source-copy/output
+  preflights, duplicate-source diagnostics, existing-output and `--force`
+  diagnostics, dangerous-root/repository containment checks, symlink controls,
+  control-character handling, Markdown/traversal filename guards, adversarial
+  tests, and readiness self-inventory rows.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_release_bundle_source_copy_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_release_bundle_output_path_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_release_bundle_source_copy_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_release_bundle_output_path_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_bundle_source_copy or release_bundle_output_path'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_bundle_source_copy or release_bundle_output_path'`
+    (`4` passed, `365` deselected)
+
+## 2026-06-13 Data-model account submodule checked key derivation
+
+- Routed account-address, multisig-controller, and account-recovery test
+  fixture public keys through `KeyPair::try_from_seed`.
+- Replaced zero-byte deterministic controller/address fixture seeds with
+  nonzero deterministic templates where checked Ed25519 seed expansion requires
+  explicit valid seed material.
+- Validation:
+  - `cargo fmt --package iroha_data_model`
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo test -j 1 -p iroha_data_model account::address::tests --lib -- --nocapture`
+    (`52` passed, `1493` filtered out)
+  - `cargo test -j 1 -p iroha_data_model account::controller::tests --lib -- --nocapture`
+    (`6` passed, `1539` filtered out)
+  - `cargo test -j 1 -p iroha_data_model account::recovery::tests --lib -- --nocapture`
+    (`4` passed, `1541` filtered out)
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP EVM contract-smoke inventory pinning
+
+- Extended EVM contract-smoke sparse-inventory regressions so readiness reports
+  and strict bundle verification remove every uniquely detectable Ethereum
+  mainnet network-id and production-surface marker from the smoke tests,
+  bridge replay guard, readiness wiring, readiness tests, and bundle tests.
+- Added the strict bundle sparse guard functions to
+  `CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS` and
+  `CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS` so marker-level contract-smoke
+  coverage cannot disappear while the release gate still claims network-id,
+  verifier binding, proof-shape, cross-deployment, and replay coverage.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_contract_smoke_evm_production_surface pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_contract_smoke_eth_mainnet_network_id_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_contract_smoke_evm_production_surface_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'contract_smoke_eth_mainnet_network_id or contract_smoke_evm_production_surface'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'contract_smoke_eth_mainnet_network_id or contract_smoke_evm_production_surface'`
+    (`4` passed, `365` deselected)
+
+## 2026-06-13 SoraNet VPN helper checked metering key derivation
+
+- Routed VPN helper metering private-key seed derivation and SoraNet VPN
+  settlement request signer seed derivation through `KeyPair::try_from_seed`.
+- Kept the existing checked voucher/request signing paths and updated fixture
+  tests to derive metering and settlement keys through checked seed expansion
+  before verifying signatures.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-keygen CARGO_INCREMENTAL=0 cargo test -j 1 -p sora-vpn-helper usage_voucher_signer_builds_signed_cumulative_voucher -- --nocapture`
+    (`1` passed, `20` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-keygen CARGO_INCREMENTAL=0 cargo test -j 1 -p sora-vpn-helper usage_voucher_signer_rejects_wrong_metering_seed -- --nocapture`
+    (`1` passed, `20` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-keygen CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet-relay --bin soranet_vpn_settlement signs_spooled_artifact_with_verifiable_canonical_message -- --nocapture`
+    (`1` passed, `2` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-keygen CARGO_INCREMENTAL=0 cargo clippy -j 1 -p sora-vpn-helper -p soranet-relay --all-targets --no-deps -- -D warnings`
+
+## 2026-06-13 Data-model alias, asset id, and receipt fixture checked keys
+
+- Routed alias account, asset id literal, and transaction submission receipt
+  test fixture key generation through `KeyPair::try_random`.
+- Kept receipt signing on the existing checked `TransactionSubmissionReceipt`
+  path while making fixture key-generation failures explicit.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model alias --lib -- --nocapture`
+    (`43` passed, `1502` filtered out)
+  - `cargo test -j 1 -p iroha_data_model asset_id --lib -- --nocapture`
+    (`4` passed, `1541` filtered out)
+  - `cargo test -j 1 -p iroha_data_model submission_receipt_roundtrips_signature --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP public discovery documentation inventory pinning
+
+- Extended public SCCP discovery documentation sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every launch-scope
+  docs marker, Torii OpenAPI capability/manifest description marker, exact
+  no-support sentence marker, readiness marker, and bundle marker from each
+  inventory row.
+- Added the readiness and strict bundle sparse guard functions to
+  `SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS` so marker-level public-discovery
+  documentation coverage cannot disappear while the release gate still claims
+  supported-lane and no-support wording coverage.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_public_discovery_documentation pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_openapi_no_support_discovery_note pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_public_discovery_documentation_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_openapi_no_support_discovery_note -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'public_discovery_documentation or openapi_no_support_discovery_note or launch_policy_documentation'`
+    (`5` passed, `629` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'public_discovery_documentation or openapi_no_support_discovery_note or launch_policy_documentation'`
+    (`5` passed, `364` deselected)
+
+## 2026-06-13 SCCP Ethereum launch-policy documentation inventory pinning
+
+- Extended Ethereum launch-policy documentation sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every required
+  Ethereum-first launch-policy docs marker and inject every forbidden stale
+  BSC-first launch-policy marker.
+- Kept the inventory scoped to public docs because the stale BSC wording is
+  intentionally present in negative tests.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_launch_policy_documentation pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_launch_policy_documentation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'launch_policy_selector or launch_policy_documentation'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'launch_policy_selector or launch_policy_documentation'`
+    (`5` passed, `364` deselected)
+
+## 2026-06-13 SCCP Ethereum launch-policy selector inventory pinning
+
+- Extended Ethereum launch-policy selector sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every uniquely
+  detectable Rust launch selector, negative cross-lane policy, readiness, and
+  bundle marker from each inventory row.
+- Added the strict bundle sparse guard itself to
+  `ETHEREUM_LAUNCH_POLICY_SELECTOR_MARKERS` so marker-level launch-policy
+  selector coverage cannot disappear while the release gate still claims active
+  Ethereum launch-policy coverage.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_launch_policy_selector pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_launch_policy_selector_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'launch_policy_selector or launch_policy_documentation'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'launch_policy_selector or launch_policy_documentation'`
+    (`5` passed, `364` deselected)
+
+## 2026-06-13 SCCP Ethereum EVM block-tag inventory pinning
+
+- Extended active Ethereum EVM block-tag metadata sparse-inventory regressions
+  so readiness reports and strict bundle verification remove every uniquely
+  detectable source/destination collector, ETH/BSC TOML helper, all-lanes
+  metadata preflight, adversarial test, readiness, and bundle marker from each
+  inventory row.
+- Added the strict bundle sparse guard itself to
+  `ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS` so marker-level finalized block-tag
+  coverage cannot disappear while the release gate still claims source and
+  destination block-tag evidence coverage.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_evm_block_tag_metadata_sources pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_evm_block_tag_metadata_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'evm_block_tag_metadata or evm_source_live_production or evm_live_destination_production or route_canary_finalized_receipt_block'`
+    (`8` passed, `626` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'ethereum_evm_block_tag_metadata_gate_inventory or ethereum_evm_source_live_production_gate_inventory or ethereum_evm_live_destination_production_gate_inventory or ethereum_route_canary_finalized_receipt_block_gate_inventory or evm_block_tag_metadata or evm_source_live_production or evm_live_destination_production or route_canary_finalized_receipt_block'`
+    (`11` passed, `358` deselected)
+
+## 2026-06-13 SCCP Ethereum route-canary finalized-receipt inventory pinning
+
+- Extended Ethereum route-canary finalized receipt-block sparse-inventory
+  regressions so readiness reports and strict bundle verification remove every
+  uniquely detectable EVM live collector, destination TOML, all-lanes metadata,
+  Rust evidence hashing/config admission, readiness, and bundle marker from each
+  inventory row.
+- Added the strict bundle sparse guard itself to
+  `ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS` so marker-level
+  finalized receipt-block coverage cannot disappear while the release gate still
+  claims route-canary finality coverage.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_evm_route_canary_finalized_receipt_block pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_route_canary_finalized_receipt_block_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'evm_source_live_production or evm_live_destination_production or route_canary_finalized_receipt_block'`
+    (`6` passed, `628` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'ethereum_evm_source_live_production_gate_inventory or ethereum_evm_live_destination_production_gate_inventory or ethereum_route_canary_finalized_receipt_block_gate_inventory or evm_source_live_production or evm_live_destination_production or route_canary_finalized_receipt_block'`
+    (`9` passed, `360` deselected)
+
+## 2026-06-13 irohad RBC init fixture checked block signing
+
+- Routed the `irohad` network-relay RBC init fixture block signature through
+  checked `SignatureOf::try_from_hash`.
+- Revalidated consensus-ingress rate, critical bucket, byte-limit, penalty, and
+  RBC session-limit tests that consume the fixture, including the unique-session
+  rejection path.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p irohad consensus_ingress -- --nocapture`
+    (`20` passed in `iroha3d`, `20` passed in `irohad`, `1` filtered
+    integration target had `0` matched tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p irohad --all-targets --no-deps -- -D warnings`
+
+## 2026-06-13 MOCHI checked transaction preview and readiness signing
+
+- Routed MOCHI transaction preview composition and readiness smoke transaction
+  construction through `TransactionBuilder::try_sign`.
+- Added explicit compose/readiness signing error variants and focused
+  regressions that verify the generated preview and smoke transaction
+  signatures.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mochi-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p mochi-core compose_preview_with_options_applies_overrides -- --nocapture`
+    (`1` passed, `248` filtered out in `src/lib.rs`; mochi integration tests
+    had `0` matched tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mochi-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p mochi-core readiness_smoke_plan_uses_checked_transaction_signing -- --nocapture`
+    (`1` passed, `248` filtered out in `src/lib.rs`; mochi integration tests
+    had `0` matched tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mochi-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p mochi-core --all-targets --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP Ethereum EVM destination-live inventory pinning
+
+- Extended active Ethereum EVM destination-live sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every uniquely
+  detectable live destination collector, route-canary calldata/proof validation,
+  copied runtime-bytecode TOML redaction, readiness, and bundle marker from each
+  inventory row.
+- Added the strict bundle sparse guard itself to
+  `ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS` so marker-level
+  destination-live coverage cannot disappear while the release gate still claims
+  live destination production evidence coverage.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_evm_live_destination_production pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_evm_live_destination_production_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'evm_source_live_production or evm_live_destination_production or route_canary_finalized_receipt_block'`
+    (`6` passed, `628` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'ethereum_evm_source_live_production_gate_inventory or ethereum_evm_live_destination_production_gate_inventory or ethereum_route_canary_finalized_receipt_block_gate_inventory or evm_source_live_production or evm_live_destination_production or route_canary_finalized_receipt_block'`
+    (`9` passed, `360` deselected)
+
+## 2026-06-13 SCCP Ethereum EVM source-live inventory pinning
+
+- Extended active Ethereum EVM source-live sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every uniquely
+  detectable source collector, adversarial source-live test, copied all-lanes
+  runtime-bytecode redaction, readiness, and bundle marker from each inventory
+  row.
+- Added the strict bundle sparse guard itself to
+  `ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS` so marker-level live-source
+  coverage cannot disappear while the release gate still claims source-live
+  production evidence coverage.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_evm_source_live_production pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_evm_source_live_production_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'evm_source_live_production or evm_live_destination_production or route_canary_finalized_receipt_block'`
+    (`6` passed, `628` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'ethereum_evm_source_live_production_gate_inventory or ethereum_evm_live_destination_production_gate_inventory or ethereum_route_canary_finalized_receipt_block_gate_inventory or evm_source_live_production or evm_live_destination_production or route_canary_finalized_receipt_block'`
+    (`9` passed, `360` deselected)
+
+## 2026-06-13 Data-model identifier receipt fixture checked signing
+
+- Routed identifier resolution and output-opening receipt fixtures through
+  checked random/seeded Ed25519 key generation plus `SignatureOf::try_new`.
+- Verified generated output-opening signatures before receipt serialization and
+  tightened shared fixture mutation handling so padded resolver-key and policy-id
+  literals are rejected before canonical parsing.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model identifier_resolution_receipt_matches_shared_fixture_vectors --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo test -j 1 -p iroha_data_model identifier --lib -- --nocapture`
+    (`15` passed, `1530` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 Data-model account fixture checked key derivation
+
+- Routed account address/parsing and large-multisig JSON fixture key derivation
+  through `KeyPair::try_from_seed`, including the public account doc example.
+- Replaced the large-multisig all-zero first seed with a deterministic nonzero
+  seed template so checked Ed25519 seed expansion remains explicit and valid.
+- Validation:
+  - `cargo fmt --package iroha_data_model`
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo test -j 1 -p iroha_data_model account_id_parsing_tests --lib -- --nocapture`
+    (`21` passed, `1524` filtered out)
+  - `cargo test -j 1 -p iroha_data_model account_id_json_roundtrips_large_multisig_as_canonical_i105 --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 Network-message fixture checked block signing
+
+- Routed the `NetworkMessage::SumeragiBlock` topic-classification fixture block
+  signature through checked `SignatureOf::try_from_hash`.
+- Revalidated the topic classifier that covers consensus, payload, and RBC chunk
+  message routing for the synthetic block fixture.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-block-sync-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features bls sumeragi_block_classifies_topics --lib -- --nocapture`
+    (`1` passed, `5026` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-block-sync-checked-clippy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features bls --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP Ethereum source-bridge config inventory pinning
+
+- Extended Ethereum source-bridge config sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every Python,
+  all-lanes, JavaScript source/dist, Swift, Kotlin/JVM, Java Android, C#,
+  readiness, and bundle marker from each inventory row.
+- Added the strict bundle sparse guard itself to
+  `ETHEREUM_SOURCE_BRIDGE_CONFIG_MARKERS` so marker-level cross-SDK
+  source-bridge config coverage cannot disappear while the release gate still
+  claims config-hash binding coverage.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_source_bridge_config_tests pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_source_bridge_config_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'source_bridge_config or torii_pinned_message_proof or core_message_replay_guard'`
+    (`6` passed, `628` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'source_bridge_config or ethereum_torii_pinned_message_proof_gate_inventory or torii_pinned_message_proof or ethereum_core_message_replay_guard_gate_inventory or core_message_replay_guard'`
+    (`7` passed, `362` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_eth_source_bridge_evidence_test.py -q -k 'source_bridge_config_hash'`
+    (`1` passed, `28` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_source_bridge_config_tests -q`
+    (`1` passed)
+
+## 2026-06-13 SCCP Ethereum Torii pinned-proof inventory pinning
+
+- Extended Ethereum Torii pinned message-proof sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every Torii routing,
+  readiness, and bundle marker from each inventory row.
+- Added the strict bundle sparse guard itself to
+  `ETHEREUM_TORII_PINNED_MESSAGE_PROOF_MARKERS` so marker-level public readback
+  coverage cannot disappear while the release gate still claims pinned-proof
+  protection.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_torii_pinned_message_proof pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_torii_pinned_message_proof_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'torii_pinned_message_proof or core_message_replay_guard or core_range_finality_binding'`
+    (`6` passed, `628` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'ethereum_torii_pinned_message_proof_gate_inventory or torii_pinned_message_proof or ethereum_core_message_replay_guard_gate_inventory or ethereum_core_range_finality_binding_gate_inventory or core_message_replay_guard or core_range_finality_binding'`
+    (`6` passed, `363` deselected)
+
+## 2026-06-13 SCCP Ethereum core message replay inventory pinning
+
+- Extended Ethereum Core message replay sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every implementation,
+  negative replay/history, readiness, and strict-bundle marker from each
+  inventory row.
+- Added the strict bundle sparse guard itself to
+  `ETHEREUM_CORE_MESSAGE_REPLAY_GUARD_MARKERS` so marker-level coverage cannot
+  disappear while the release gate still claims replay protection.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_core_message_replay_guard pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_core_message_replay_guard_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'core_message_replay_guard or core_range_finality_binding'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'ethereum_core_message_replay_guard_gate_inventory or ethereum_core_range_finality_binding_gate_inventory or core_message_replay_guard or core_range_finality_binding'`
+    (`4` passed, `365` deselected)
+
+## 2026-06-13 SCCP TRON deploy operator boolean inventory pinning
+
+- Extended TRON deploy operator boolean sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every marker from the
+  deploy script, deploy-script tests, readiness-report gate, and readiness-test
+  inventory rows.
+- Revalidated the underlying Node tests for malformed deploy and route-manifest
+  boolean values so the inventory pinning still covers executable behavior.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_tron_deploy_operator_boolean_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_tron_deploy_operator_boolean_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k 'tron_deploy_operator_boolean'`
+    (`3` passed, `1000` deselected)
+  - `node --test --test-name-pattern 'TRON deploy operator booleans reject malformed option values|TRON route-manifest readiness booleans reject malformed option values' scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`2` passed)
+
+## 2026-06-13 SCCP unready transparent-proof config inventory pinning
+
+- Extended unready transparent-proof config sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every uniquely
+  detectable marker from each inventory row, covering config-owned TOML fields,
+  Taira default overrides, BSC/TRON production-ready route-config rejections,
+  malformed `--allow-unready` option tests, and release-gate wiring markers.
+- Kept the forbidden `ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS` environment
+  override scan as a separate negative assertion so marker-missing checks do not
+  mask environment override regressions.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_unready_config_only_sources pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_unready_transparent_proof_config_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'unready_transparent_proof_config or unready_config_only or sccp_unready_config_only'`
+    (`1` passed, `633` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'unready_transparent_proof_config or sccp_allow_unready'`
+    (`3` passed, `366` deselected)
+
+## 2026-06-13 SCCP launch-scope constants inventory pinning
+
+- Extended launch-scope constants sparse-inventory regressions so readiness
+  reports and strict bundle verification remove every uniquely detectable
+  marker from each inventory row, covering Rust supported-domain constants,
+  all-lanes supported-domain evidence, active Ethereum launch policy metadata,
+  and release-gate wiring markers.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_launch_scope_constant_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_launch_scope_constant_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'launch_scope_constant_inventory or launch_scope_inventory_gate or active_launch_policy or supported_scope'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'launch_scope_constant_gate or missing_launch_scope_source_gate or active_launch_policy or supported_launch_scope'`
+    (`4` passed, `365` deselected)
+
+## 2026-06-13 SCCP retired-network surface inventory pinning
+
+- Extended retired-network surface sparse-inventory regressions so readiness
+  reports and strict bundle verification remove every uniquely detectable
+  marker from each inventory row, covering scan roots, expected file coverage,
+  translated-pipeline coverage, specific/generic no-support notes, active-tree
+  forbidden-token scans, release gate wiring, and stale allowlist markers.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_retired_network_surface_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_retired_network_surface_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_retired_network_surface_test.py -q`
+    (`7` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'retired_network_surface_inventory or retired_network_surface_forbidden_marker or stale_retired_network_surface_allowlist or retired_network_scan_evidence'`
+    (`6` passed, `628` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'retired_network_surface_gate_inventory or retired_network_surface_scan or missing_retired_network_source_gate or retired_network_scan_evidence'`
+    (`5` passed, `364` deselected)
+
+## 2026-06-13 SCCP source-material role-validation inventory pinning
+
+- Extended the SCCP source-material role-validation sparse-inventory
+  regressions so readiness reports and strict bundle verification remove every
+  uniquely detectable marker from each inventory row, covering zero/reused
+  role-hash guards, canonical adapter verifier checks, full-light-client audit
+  separation, public diagnostic redaction wrappers, and Rust canonical
+  source-state proof preflights.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'sccp_source_material_template_rejection_inventory or sccp_source_material_role_validation_inventory'`
+    (`2` passed, `632` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'sccp_source_material_template_rejection_gate_inventory or sccp_source_material_role_validation_gate_inventory'`
+    (`2` passed, `367` deselected)
+
+## 2026-06-13 SCCP source-material template inventory pinning
+
+- Extended the SCCP source-material template-rejection sparse-inventory
+  regressions so readiness reports and strict bundle verification remove every
+  uniquely detectable marker from each inventory row, covering lane-specific
+  template hash guards, copied all-lanes evidence guards, public JSON guards,
+  and release-gate self-inventory markers.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_template_rejection_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_template_rejection_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'sccp_source_material_template_rejection_inventory or sccp_source_material_role_validation_inventory'`
+    (`2` passed, `632` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'sccp_source_material_template_rejection_gate_inventory or sccp_source_material_role_validation_gate_inventory'`
+    (`2` passed, `367` deselected)
+
+## 2026-06-13 SCCP Ethereum core range/finality inventory pinning
+
+- Extended the Ethereum Core range/finality sparse-inventory regressions so
+  readiness reports and strict bundle verification remove every required Core
+  implementation marker and negative outer-range replay marker one by one.
+- Added the strict bundle sparse guard itself to the verifier-owned
+  `ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS` inventory so the marker-level
+  regression cannot disappear while the release gate still claims coverage.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_core_range_finality_binding pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_core_range_finality_binding_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'core_range_finality_binding or core_message_replay_guard'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'ethereum_core_range_finality_binding_gate_inventory or ethereum_core_message_replay_guard_gate_inventory or core_range_finality_binding or core_message_replay_guard'`
+    (`4` passed, `365` deselected)
+
+## 2026-06-13 SCCP active-launch checklist schema inventory pinning
+
+- Extended active-launch checklist schema sparse-inventory regressions so
+  readiness reports and strict bundle verification pin every primary
+  readiness-report active checklist marker for blocker collection, lane blocker
+  schema, source-record role separation, EVM live metadata, EVM source-adapter
+  gate summaries, route-allowlist bindings, and route-canary metadata.
+- Extended strict bundle verification to pin every primary verifier-side active
+  checklist marker for release-checklist schema errors, embedded-evidence
+  matching, unknown-field redaction, active-lane blocker schemas, EVM live
+  metadata, EVM source-adapter gate summaries, route-allowlist bindings, and
+  route-canary metadata.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_active_launch_checklist_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'all_lanes_release_checklist_exact_boolean_inventory or active_launch_checklist_schema_inventory'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'all_lanes_release_checklist_exact_boolean_gate_inventory or active_launch_checklist_schema_gate_inventory'`
+    (`2` passed, `367` deselected)
+
+## 2026-06-13 SCCP all-lanes exact-boolean inventory pinning
+
+- Extended all-lanes release-checklist exact-boolean sparse-inventory
+  regressions so readiness reports and strict bundle verification pin every
+  script-side boolean aggregation, CLI exit, source-adapter audit-field, and
+  source-gate hash-role marker in the primary all-lanes evidence script.
+- Pinned every primary all-lanes exact-boolean test marker in both public gates,
+  including exact item-ready comparisons, CLI production-ready checks,
+  route-canary replay tests, source-adapter audit-field redaction, source-gate
+  blocker summaries, and source-adapter gate hash-role regressions.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolean_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_release_checklist_exact_boolean_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'all_lanes_governed_blocker_schema_inventory or all_lanes_release_checklist_exact_boolean_inventory'`
+    (`4` passed, `630` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'all_lanes_governed_blocker_schema_gate_inventory or all_lanes_release_checklist_exact_boolean_gate_inventory'`
+    (`2` passed, `367` deselected)
+
+## 2026-06-13 Bridge fixture checked block signing
+
+- Routed bridge test block-signature fixtures through checked
+  `SignatureOf::try_from_hash` so synthetic SCCP/finality blocks fail loudly on
+  fixture signing errors.
+- Revalidated the full bridge unit-test filter, including SCCP message
+  extraction, invalid payload skipping, commitment-root checks, persisted-QC
+  proof building, and unsigned-QC local-state rejection.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-block-sync-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features bls 'bridge::tests::' --lib -- --nocapture`
+    (`16` passed, `5011` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-block-sync-checked-clippy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features bls --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 xtask SoraFS and Kagami checked fixture signing
+
+- Routed SoraFS admission and pin-registry fixture key derivation/signatures
+  through `KeyPair::try_from_seed` and `Signature::try_new`, with contextual
+  fixture-generation errors.
+- Routed Kagami profile deterministic genesis/peer keys through
+  `KeyPair::try_from_seed` and propagated deterministic peer/PoP construction
+  failures from bundle generation.
+- Added regressions that verify generated SoraFS advert, council, alias-proof,
+  pin manifest-envelope, and Kagami deterministic key signatures.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-xtask-sorafs-kagami CARGO_INCREMENTAL=0 cargo test -j 1 -p xtask admission_fixtures_write_checked_public_key_artifacts -- --nocapture`
+    (`1` passed, `337` filtered in `src/main.rs`; auxiliary xtask bins and
+    integration tests had `0` matched tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-xtask-sorafs-kagami CARGO_INCREMENTAL=0 cargo test -j 1 -p xtask pin_registry_fixtures_use_checked_signatures -- --nocapture`
+    (`1` passed, `337` filtered in `src/main.rs`; auxiliary xtask bins and
+    integration tests had `0` matched tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-xtask-sorafs-kagami CARGO_INCREMENTAL=0 cargo test -j 1 -p xtask deterministic_keypair_uses_checked_seed_expansion -- --nocapture`
+    (`1` passed, `337` filtered in `src/main.rs`; auxiliary xtask bins and
+    integration tests had `0` matched tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-xtask-sorafs-kagami CARGO_INCREMENTAL=0 cargo clippy -j 1 -p xtask --all-targets --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP all-lanes governed blocker schema inventory pinning
+
+- Extended all-lanes governed blocker sparse-inventory regressions so readiness
+  reports and strict bundle verification pin destination-rollout and
+  route-allowlist blocker-list hooks, empty-ready blocker diagnostics, and the
+  sensitive public blocker marker set.
+- Pinned malformed governed-blocker adversarial test inputs for scalar,
+  numeric, empty, padded, sensitive, Markdown-unsafe, confusable, and non-empty
+  ready blocker cases in both public gates.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_governed_blocker_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_governed_blocker_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'all_lanes_evidence_root_schema_inventory or all_lanes_governed_blocker_schema_inventory'`
+    (`5` passed, `629` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'all_lanes_evidence_root_schema_gate_inventory or all_lanes_governed_blocker_schema_gate_inventory'`
+    (`2` passed, `367` deselected)
+
+## 2026-06-13 SCCP all-lanes evidence-root schema inventory pinning
+
+- Extended all-lanes evidence-root schema sparse-inventory regressions so both
+  readiness reports and strict bundle verification pin the root validator,
+  non-string section-name blocker, unsupported-section detail helper, and
+  unexpected-field detail helper markers.
+- Pinned malformed-root, unknown-section, non-string section-key, and unsafe
+  section/field redaction adversarial test markers in both public gates.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'all_lanes_route_canary_scalar_inventory or all_lanes_evidence_root_schema_inventory'`
+    (`5` passed, `629` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'all_lanes_route_canary_scalar_gate_inventory or all_lanes_evidence_root_schema_gate_inventory'`
+    (`2` passed, `367` deselected)
+
+## 2026-06-13 Data-model verification fixture checked key generation
+
+- Routed formal verification snapshot fixture account keys through checked
+  random Ed25519 key generation.
+- Revalidated the valid snapshot, inconsistent snapshot, and cross-domain owner
+  verification regressions that consume those fixture account IDs.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model verification::tests --lib -- --nocapture`
+    (`3` passed, `1542` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 Sumeragi evidence fixture checked signing
+
+- Routed Sumeragi evidence double-vote fixture signing through checked
+  `Signature::try_new` so synthetic BLS vote signatures fail loudly if fixture
+  signing cannot be constructed.
+- Revalidated the evidence suite, including invalid signature payloads,
+  missing/truncated signatures, duplicate signer mutations, epoch/height
+  mismatches, mixed manifest payloads, stale replay rejection, and the invalid
+  double-vote mutation fuzz case.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-block-sync-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features bls evidence_validation_formal_gate_kind_and_double_vote_matrix --lib -- --nocapture`
+    (`1` passed, `5026` filtered out)
+  - `/tmp/iroha-codex-block-sync-checked/debug/deps/iroha_core-967b830786c6419f 'sumeragi::evidence::tests::' --nocapture`
+    (`59` passed, `4968` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-block-sync-checked-clippy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features bls --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP all-lanes route-canary scalar inventory pinning
+
+- Extended all-lanes route-canary scalar sparse-inventory regressions so both
+  readiness reports and strict bundle verification pin script-side canonical
+  status/evidence-source handling, route-allowlist recompute redaction, and the
+  supported recompute exception tuple.
+- Pinned the adversarial scalar test markers for numeric and padded
+  `status`/`evidence_source` values plus the secret-bearing route-material
+  redaction test in both public gates.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_route_canary_scalar_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_route_canary_scalar_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'all_lanes_route_canary_scalar_inventory or all_lanes_evidence_root_schema_inventory'`
+    (`5` passed, `629` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'all_lanes_route_canary_scalar_gate_inventory or all_lanes_evidence_root_schema_gate_inventory'`
+    (`2` passed, `367` deselected)
+
+## 2026-06-13 SCCP BSC/TRON route-config blocker inventory pinning
+
+- Extended the strict release-bundle TRON route-config sparse-inventory
+  regression so removing the full-TOML production-blocker marker fails bundle
+  verification, matching the readiness-report gate.
+- Pinned the actual adversarial post-deploy, route-canary, and full-TOML
+  blocker input markers in both readiness-report and strict-bundle sparse
+  inventory tests, not only their expected diagnostic regexes.
+- Extended BSC route-config sparse-inventory tests with the same protection for
+  named source-event, post-deploy, full-TOML, and route-canary adversarial
+  blocker cases, plus the missing complementary full-TOML/route-canary
+  malformed-entry diagnostics.
+- Pinned BSC deploy-script inventory markers for post-deploy blocker keys,
+  canonical route-manifest text/hash/address normalizers, and governed BSC route
+  metadata checks in both public gates.
+- Pinned TRON deploy-script inventory markers for post-deploy blocker keys,
+  canonical route-manifest normalizers, and governed TRON route metadata checks
+  in both public gates.
+- Pinned the TRON runtime route-manifest Rust markers for post-deploy evidence
+  validation, parser wiring, Base58 normalization, production metadata
+  diagnostics, and adversarial route-manifest regressions in both public gates.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_tron_runtime_route_manifest_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_tron_runtime_route_manifest_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_bsc_route_config_canonical_manifest_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_bsc_route_config_canonical_manifest_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_tron_route_config_canonical_manifest_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_tron_route_config_canonical_manifest_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'bsc_route_config_canonical_manifest_inventory or tron_route_config_canonical_manifest_inventory or tron_runtime_route_manifest_inventory'`
+    (`6` passed, `628` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'bsc_route_config_canonical_manifest_gate_inventory or tron_route_config_canonical_manifest_gate_inventory or tron_runtime_route_manifest_gate_inventory'`
+    (`3` passed, `366` deselected)
+
+## 2026-06-13 Block-sync fixture checked signing
+
+- Routed block-sync QC aggregate, share-block sidecar, block-filter, wrong-key,
+  and roster-metadata fixture signatures through local checked
+  `Signature::try_new` / `SignatureOf::try_from_hash` helpers.
+- Preserved adversarial wrong-key block-signature cases while making fixture
+  signing failures explicit.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-block-sync-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features bls qc_from_signers_requires_quorum_and_signature --lib -- --nocapture`
+    (`1` passed, `5026` filtered out)
+  - `/tmp/iroha-codex-block-sync-checked/debug/deps/iroha_core-967b830786c6419f`
+    focused filters: `share_blocks_accepts_direct_recovery_response_permit`,
+    `share_blocks_preserves_roster_commit_sidecars`,
+    `block_sync_keeps_qc_on_bad_signatures`,
+    `validate_signatures_subset_rejects_invalid_signatures`,
+    `filter_blocks_rejects_tampered_signature`, and
+    `filter_blocks_prefers_roster_metadata` (`1` passed for each)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-block-sync-checked-clippy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features bls --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 Data-model runtime manifest fixture checked key generation
+
+- Routed the runtime-upgrade manifest provenance fixture keypair through
+  checked random Ed25519 key generation.
+- Revalidated the signature-payload exclusion regression so provenance
+  signatures still verify while remaining outside the signed payload.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model signature_payload_excludes_provenance_signatures --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP source-adapter deployment inventory pinning
+
+- Extended the Ethereum EVM source-adapter deployment source inventory so
+  release readiness and strict bundle verification pin the Rust
+  source-adapter deployment metadata-drift regressions for governed descriptor
+  schema, source-chain label, source-proof plan, finality model, adapter proof
+  family, and adapter circuit id.
+- Added sparse-inventory checks in both release-readiness and strict-bundle
+  tests so removing any of those Rust markers fails the public
+  production-readiness gate.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_evm_source_adapter_deployment_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_evm_source_adapter_deployment_gate -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'ethereum_evm_source_adapter_deployment_gate_inventory'`
+    (`1` passed, `368` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'evm_source_adapter_deployment_gate'`
+    (`1` passed, `633` deselected)
+
+## 2026-06-13 xtask Norito RPC checked transaction signing
+
+- Routed Norito RPC fixture signing key derivation through
+  `KeyPair::try_from_seed` and transaction fixture construction through
+  `TransactionBuilder::try_sign`.
+- Promoted the Java/Kotlin `typed_metadata_gas_limit` transaction fixture into
+  the canonical Norito RPC fixture manifest, payload list, and encoded payload
+  file so strict SDK manifest parity no longer fails on that entry.
+- Kept checked-signing verification helpers imported only under `#[cfg(test)]`
+  in the `xtask` Kagami profile and SoraFS fixture slices so normal `xtask`
+  builds stay warning-free under strict clippy.
+- Added a focused regression that decodes generated signed fixture bytes and
+  verifies the transaction signature.
+- Validation:
+  - `cargo fmt --package xtask`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-xtask-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p xtask generated_transaction_fixture_uses_checked_signing -- --nocapture`
+    (`1` passed, `335` filtered in `src/main.rs`; auxiliary xtask bins and
+    integration tests had `0` matched tests)
+  - `cargo test -j 1 -p xtask norito_rpc -- --nocapture`
+    (`12` passed, `326` filtered out in `src/main.rs`; auxiliary xtask bins
+    and integration tests had `0` matched tests)
+  - `cargo clippy -j 1 -p xtask --all-targets --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP source-adapter deployment metadata drift coverage
+
+- Added adversarial Rust coverage proving source-adapter deployment descriptors
+  with replayed V1 schema, source-chain label, source-proof plan, finality
+  model, adapter proof family, or adapter circuit id metadata do not match
+  governed material and cannot open source-adapter readiness.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-manifest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_adapter_engine_readiness_with_deployment_opens_source_adapter --lib -- --nocapture`
+    (`1` passed, `259` filtered out)
+  - `cargo fmt --package iroha_sccp -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-manifest CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_sccp --lib`
+
+## 2026-06-13 SCCP Rust manifest readiness inventory pinning
+
+- Extended the release manifest readiness-flags source inventory so release
+  reports and strict bundle verification pin the Rust
+  `sccp_manifest_is_production_ready` gate alongside generated manifest
+  readiness booleans.
+- Added sparse-inventory regressions that fail when the Rust gate no longer
+  checks disabled metadata, V1 schema, destination-binding metadata,
+  submission-template metadata, or the direct adversarial manifest-readiness
+  test marker.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_manifest_readiness_flags_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_manifest_readiness_flags_inventory -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_manifest_readiness_flags_gate_inventory'`
+    (`1` passed, `368` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_manifest_readiness_flags_inventory'`
+    (`2` passed, `632` deselected)
+
+## 2026-06-13 Sumeragi main-loop fixture constructor checked signing
+
+- Completed the remaining checked-signing cleanup in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`: the precise raw
+  constructor scan now finds no direct `Signature::new` or
+  `SignatureOf::from_hash` fixture calls, and the stale local `SignatureOf`
+  import left by the migration is removed.
+- Covered the remaining main-loop commit-vote seeders, QC aggregate helpers,
+  merge-committee signatures, block-sync block-signature/QC fixtures, RBC
+  READY/DELIVER stash and malformed-bundle fixtures, manifest-guard blocks, and
+  stale-signature-index vote-validation fixtures.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-mainloop-checked-all CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features bls,sumeragi-main-loop-tests block_sync_update_accepts_uncertified_missing_block_when_behind --lib -- --nocapture`
+    (`1` passed, `7642` filtered out)
+  - `/tmp/iroha-codex-sumeragi-mainloop-checked-all/debug/deps/iroha_core-03124c46c6315244` focused filters:
+    `merge_committee_accepts_remote_signature`,
+    `manifest_block_guard_rejects_hash_mismatch_on_audit_lane`,
+    `block_sync_update_payload_only_frontier_npos_uses_sender_lane_vote_roster`,
+    `block_sync_update_drops_qc_height_mismatch`,
+    `block_sync_update_records_commit_qc_from_cached_qc`,
+    `quorum_reschedule_near_quorum_replays_votes_without_hydration_on_repeat`,
+    `handle_rbc_deliver_rejects_malformed_ready_bundles`,
+    `handle_rbc_ready_rejects_chunk_root_mismatch`, and
+    `validate_block_for_voting_recovers_stale_signature_indices`
+    (`1` passed for each)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-mainloop-checked-all-clippy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features bls,sumeragi-main-loop-tests --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 Data-model oracle fixture checked key derivation
+
+- Routed the oracle test helper for deterministic provider account IDs through
+  checked Ed25519 seed expansion.
+- Revalidated committee draw, report caps, and aggregation paths that consume
+  the derived oracle fixture keys.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model committee_draw_is_deterministic_and_stable --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo test -j 1 -p iroha_data_model report_caps_enforce_entry_limits_and_duplicates --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo test -j 1 -p iroha_data_model aggregation_produces_success_and_outlier_flags --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP manifest readiness disabled-metadata hardening
+
+- Tightened Rust SCCP proof-manifest production readiness so a manifest cannot
+  be accepted as production-ready while still carrying `disabled_reason`.
+- Added an adversarial manifest-readiness regression that rejects contradictory
+  disabled metadata plus schema-version, production-flag, chain/domain,
+  destination-binding, proof-family, backend/finality, manifest-seed,
+  submission-template, and verifier-target drift at the core readiness gate.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-manifest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp production_manifest_readiness_rejects_disabled_or_drifted_metadata --lib -- --nocapture`
+    (`1` passed, `259` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-manifest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp reference_evm_attestation_manifest_cannot_be_promoted_to_production --lib -- --nocapture`
+    (`1` passed, `259` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-manifest CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp production_submission_builders_reject_structural_non_sora_source_proofs --lib -- --nocapture`
+    (`1` passed, `259` filtered out)
+  - `cargo fmt --package iroha_sccp -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-manifest CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_sccp --lib --no-deps -- -D warnings`
+
+## 2026-06-13 Data-model escrow fixture checked key derivation
+
+- Routed native and anonymous asset escrow Norito roundtrip fixture account keys
+  through checked deterministic Ed25519 seed expansion.
+- Kept the stable escrow id and record roundtrip assertions unchanged while
+  making fixture key-derivation failures explicit.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model escrow --lib -- --nocapture`
+    (`8` passed, `1537` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP local helper validation sweep
+
+- Revalidated the non-release-aggregate SCCP helper suites covering direct
+  EVM/BSC/ETH/Solana/TON/TRON source, destination, live, receipt-proof, and
+  retired-network evidence surfaces after the TRON parser-redaction hardening.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_*.py pytests/scripts/sccp_*_test.py`
+  - `python3 -m pytest pytests/scripts/check_sccp_production_corridor_test.py -q`
+    (`28` passed)
+  - `python3 -m pytest pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_retired_network_surface_test.py pytests/scripts/sccp_solana_destination_evidence_test.py pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_solana_source_state_evidence_test.py pytests/scripts/sccp_ton_destination_evidence_test.py pytests/scripts/sccp_ton_live_evidence_test.py pytests/scripts/sccp_ton_source_state_evidence_test.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py -q`
+    (`408` passed)
+
+## 2026-06-13 SCCP TRON live parser ValueError redaction
+
+- Hardened TRON live source-event log topic, route-canary log topic, and
+  metadata runtime-bytecode parser wrappers so helper `ValueError`s follow the
+  same non-match or malformed-metadata categories as existing parser failures.
+- Extended the source-event topic, route-canary topic, and metadata bytecode
+  adversarial regressions to inject `ValueError`, and updated release-readiness
+  plus strict release-bundle inventory markers.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py pytests/scripts/sccp_tron_live_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'source_event_topic_parser_failures or route_canary_topic_parser_failures or metadata_parser_exception_causes'`
+    (`3` passed, `182` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory or sccp_source_material_role_validation_gate_inventory'`
+    (`2` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory or sccp_source_material_role_validation_inventory'`
+    (`3` passed, `631` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py -q`
+    (`185` passed)
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q`
+    (`168` passed)
+  - `python3 -m pytest pytests/scripts/sccp_ton_live_evidence_test.py pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py -q -k 'redacts or parser_failures or parser_exception or cli_redacts_top_level_exception_details'`
+    (`21` passed, `100` deselected)
+
 ## 2026-06-13 SCCP phase diagnostics and active-lane bundle readiness
 
 - Kept corridor phase blocker Markdown visible when diagnostics include

@@ -225,6 +225,12 @@ pub enum ComposeError {
         /// Action that was denied.
         action: InstructionPermission,
     },
+    /// Transaction signing failed.
+    #[error("failed to sign composed transaction: {reason}")]
+    Signing {
+        /// Human readable failure reason.
+        reason: String,
+    },
 }
 
 /// Named signing authority used to author transactions in local workflows.
@@ -610,7 +616,11 @@ pub fn compose_preview_with_options(
     if let Some(nonce) = options.nonce() {
         builder.set_nonce(nonce);
     }
-    let signed = builder.sign(authority.key_pair().private_key());
+    let signed = builder
+        .try_sign(authority.key_pair().private_key())
+        .map_err(|err| ComposeError::Signing {
+            reason: err.to_string(),
+        })?;
     Ok(TransactionPreview::new(signed))
 }
 
@@ -2195,5 +2205,9 @@ mod tests {
             NonZeroU32::new(42),
             "nonce override should propagate"
         );
+        preview
+            .signed_transaction()
+            .verify_signature()
+            .expect("checked composed transaction signature verifies");
     }
 }

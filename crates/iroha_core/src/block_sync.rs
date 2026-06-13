@@ -3744,6 +3744,10 @@ mod qc_build_tests {
     use super::*;
     use crate::{query::store::LiveQueryStore, state::World};
 
+    fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
+        Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn qc_preimage_with_chain_order(
         chain_id: &ChainId,
@@ -3840,7 +3844,7 @@ mod qc_build_tests {
                 .iter()
                 .find(|kp| kp.public_key() == peer.public_key())
                 .expect("matching keypair");
-            let sig = Signature::new(kp.private_key(), &preimage);
+            let sig = checked_signature(kp.private_key(), &preimage);
             signatures.push(sig.payload().to_vec());
         }
         let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -6334,6 +6338,14 @@ pub mod message {
             },
         };
 
+        fn checked_signature_of_hash<T>(
+            private_key: &iroha_crypto::PrivateKey,
+            hash: HashOf<T>,
+        ) -> SignatureOf<T> {
+            SignatureOf::try_from_hash(private_key, hash)
+                .expect("test fixture hash signing should succeed")
+        }
+
         #[test]
         fn share_blocks_enqueue_does_not_block_tokio_timer() {
             let _guard = crate::sumeragi::status::block_sync_test_guard();
@@ -6613,7 +6625,7 @@ pub mod message {
                 };
                 let block_signature = BlockSignature::new(
                     0,
-                    SignatureOf::from_hash(validator.private_key(), header.hash()),
+                    checked_signature_of_hash(validator.private_key(), header.hash()),
                 );
                 let block =
                     SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
@@ -6757,7 +6769,7 @@ pub mod message {
                 };
                 let block_signature = BlockSignature::new(
                     0,
-                    SignatureOf::from_hash(validator.private_key(), header.hash()),
+                    checked_signature_of_hash(validator.private_key(), header.hash()),
                 );
                 let block =
                     SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
@@ -7900,6 +7912,18 @@ pub mod message {
             KeyPair::from_seed(seed_hash.as_ref().to_vec(), algorithm)
         }
 
+        fn checked_signature(private_key: &PrivateKey, payload: &[u8]) -> Signature {
+            Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+        }
+
+        fn checked_signature_of_hash<T>(
+            private_key: &PrivateKey,
+            hash: HashOf<T>,
+        ) -> SignatureOf<T> {
+            SignatureOf::try_from_hash(private_key, hash)
+                .expect("test fixture hash signing should succeed")
+        }
+
         fn state_with_consensus_keys(
             peers: &[(&KeyPair, &str)],
             activation_height: u64,
@@ -8004,7 +8028,7 @@ pub mod message {
                     .expect("signer in topology");
                 signatures.insert(BlockSignature::new(
                     idx as u64,
-                    SignatureOf::from_hash(signer.private_key(), block_hash),
+                    checked_signature_of_hash(signer.private_key(), block_hash),
                 ));
             }
             block
@@ -8110,7 +8134,7 @@ pub mod message {
                     .iter()
                     .find(|kp| kp.public_key() == peer.public_key())
                     .expect("matching keypair");
-                let sig = Signature::new(kp.private_key(), &preimage);
+                let sig = checked_signature(kp.private_key(), &preimage);
                 signatures.push(sig.payload().to_vec());
             }
             let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -8362,7 +8386,7 @@ pub mod message {
             let mut signatures = BTreeSet::new();
             signatures.insert(BlockSignature::new(
                 0,
-                SignatureOf::from_hash(kp_wrong.private_key(), invalid_block.hash()),
+                checked_signature_of_hash(kp_wrong.private_key(), invalid_block.hash()),
             ));
             invalid_block
                 .replace_signatures(signatures)
@@ -8426,7 +8450,7 @@ pub mod message {
             let mut signatures = BTreeSet::new();
             signatures.insert(BlockSignature::new(
                 0,
-                SignatureOf::from_hash(kp_wrong.private_key(), invalid_block.hash()),
+                checked_signature_of_hash(kp_wrong.private_key(), invalid_block.hash()),
             ));
             invalid_block
                 .replace_signatures(signatures)
@@ -8788,7 +8812,7 @@ pub mod message {
             let mut signatures = BTreeSet::new();
             signatures.insert(BlockSignature::new(
                 0,
-                SignatureOf::from_hash(kp_wrong.private_key(), invalid_block.hash()),
+                checked_signature_of_hash(kp_wrong.private_key(), invalid_block.hash()),
             ));
             invalid_block
                 .replace_signatures(signatures)
@@ -8935,7 +8959,7 @@ pub mod message {
                     .expect("signer in topology");
                 signatures.insert(BlockSignature::new(
                     idx as u64,
-                    SignatureOf::from_hash(signer.private_key(), block_hash),
+                    checked_signature_of_hash(signer.private_key(), block_hash),
                 ));
             }
             block

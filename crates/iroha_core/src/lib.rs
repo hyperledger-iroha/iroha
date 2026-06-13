@@ -784,7 +784,8 @@ mod tests {
         let leader_keypair = KeyPair::random();
         let leader_signature = BlockSignature::new(
             0,
-            SignatureOf::from_hash(leader_keypair.private_key(), block_hash),
+            SignatureOf::try_from_hash(leader_keypair.private_key(), block_hash)
+                .expect("test block signing should succeed"),
         );
         let init = RbcInit {
             block_hash,

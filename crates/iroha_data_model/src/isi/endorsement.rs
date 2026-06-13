@@ -132,7 +132,8 @@ mod tests {
     };
 
     fn key_pair(seed: u8) -> KeyPair {
-        KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked endorsement ISI fixture keypair")
     }
 
     fn public_key(seed: u8) -> PublicKey {

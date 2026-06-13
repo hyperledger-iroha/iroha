@@ -725,7 +725,8 @@ mod tests {
             let keypair = self.signer_keypair_for_view(vote.signer, vote.height, vote.view);
             let preimage =
                 super::super::consensus::vote_preimage(&self.chain_id, self.mode_tag, vote);
-            let signature = Signature::new(keypair.private_key(), &preimage);
+            let signature = Signature::try_new(keypair.private_key(), &preimage)
+                .expect("test fixture signing should succeed");
             vote.bls_sig = signature.payload().to_vec();
         }
     }

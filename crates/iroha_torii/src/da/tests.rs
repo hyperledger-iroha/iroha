@@ -77,6 +77,10 @@ use crate::da::{
 
 use super::*;
 
+fn checked_signature(private_key: &PrivateKey, payload: &[u8]) -> Signature {
+    Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+}
+
 #[test]
 fn replay_cursor_temp_path_keeps_suffixes() {
     let base = Path::new("/var/lib/iroha/replay_cursors.norito.json");
@@ -868,7 +872,7 @@ fn encode_alias_proof_bytes(
     let council_key =
         PrivateKey::from_bytes(Algorithm::Ed25519, &[0x33; 32]).expect("seeded council key");
     let keypair = KeyPair::from_private_key(council_key).expect("derive council keypair");
-    let signature = iroha_crypto::Signature::new(keypair.private_key(), digest.as_ref());
+    let signature = checked_signature(keypair.private_key(), digest.as_ref());
     let (_, signer_bytes) = keypair
         .public_key()
         .try_to_bytes()
@@ -3379,7 +3383,7 @@ fn test_receipt(
     };
     let unsigned =
         persistence::unsigned_receipt_bytes(&receipt, sequence).expect("test receipt encodes");
-    receipt.operator_signature = Signature::new(signer.private_key(), &unsigned);
+    receipt.operator_signature = checked_signature(signer.private_key(), &unsigned);
     receipt
 }
 
@@ -3586,7 +3590,7 @@ fn load_da_receipts_rejects_same_manifest_duplicate_with_different_receipt() {
     let mut conflicting = test_receipt(&signer, LaneId::new(3), 5, 7, 0xB0);
     conflicting.manifest_hash = receipt.manifest_hash;
     let unsigned = persistence::unsigned_receipt_bytes(&conflicting, 7).expect("unsigned bytes");
-    conflicting.operator_signature = Signature::new(signer.private_key(), &unsigned);
+    conflicting.operator_signature = checked_signature(signer.private_key(), &unsigned);
 
     for (receipt, fingerprint) in [(&receipt, [0xC0; 32]), (&conflicting, [0xC1; 32])] {
         let stored = persistence::StoredDaReceipt {
@@ -3820,7 +3824,7 @@ fn da_receipt_log_rejects_invalid_signature() {
     let mut receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 4);
     let unsigned = persistence::unsigned_receipt_bytes(&receipt, 1).expect("unsigned bytes");
     let wrong_signer = KeyPair::random();
-    receipt.operator_signature = Signature::new(wrong_signer.private_key(), &unsigned);
+    receipt.operator_signature = checked_signature(wrong_signer.private_key(), &unsigned);
 
     let outcome = log.append(lane_epoch, 1, receipt, test_fingerprint(4));
     assert!(
@@ -3910,7 +3914,7 @@ fn da_receipt_log_rejects_same_manifest_duplicate_with_different_receipt_on_open
     let mut conflicting = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x92);
     conflicting.manifest_hash = receipt.manifest_hash;
     let unsigned = persistence::unsigned_receipt_bytes(&conflicting, 1).expect("unsigned bytes");
-    conflicting.operator_signature = Signature::new(signer.private_key(), &unsigned);
+    conflicting.operator_signature = checked_signature(signer.private_key(), &unsigned);
 
     for (receipt, fingerprint) in [(&receipt, [0xA1; 32]), (&conflicting, [0xA2; 32])] {
         let stored = persistence::StoredDaReceipt {

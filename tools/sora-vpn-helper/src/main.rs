@@ -1289,7 +1289,12 @@ impl UsageVoucherSigner {
                 "helper ticket session id does not match connect sessionId".to_owned(),
             ));
         }
-        let key_pair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
+        let key_pair =
+            KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519).map_err(|err| {
+                ControllerError::InvalidPayload(format!(
+                    "metering private key seed was rejected: {err}"
+                ))
+            })?;
         if key_pair.public_key() != &ticket.metering_public_key {
             return Err(ControllerError::InvalidPayload(
                 "metering private key does not match helper ticket public key".to_owned(),
@@ -2913,7 +2918,8 @@ mod tests {
 
     #[test]
     fn helper_ticket_metadata_decodes_without_secret() {
-        let metering_keys = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
+        let metering_keys = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
+            .expect("derive metering fixture key");
         let tariff = VpnTariffV1 {
             lease_fee_nanos: 1_000,
             active_fee_nanos_per_minute: 100,
@@ -2939,7 +2945,8 @@ mod tests {
     #[test]
     fn usage_voucher_signer_builds_signed_cumulative_voucher() {
         let session_id = "f69c894aa32726fe586fab520f88ae42d1fbb4ebf3083df057f4e40ca0a11111";
-        let metering_keys = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
+        let metering_keys = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
+            .expect("derive metering fixture key");
         let tariff = VpnTariffV1 {
             lease_fee_nanos: 1_000,
             active_fee_nanos_per_minute: 6_000,
@@ -2989,7 +2996,8 @@ mod tests {
     #[test]
     fn usage_voucher_signer_rejects_wrong_metering_seed() {
         let session_id = "f69c894aa32726fe586fab520f88ae42d1fbb4ebf3083df057f4e40ca0a11111";
-        let metering_keys = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
+        let metering_keys = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
+            .expect("derive metering fixture key");
         let ticket = VpnHelperTicketV1 {
             session_id: relay_session_id_from_session_id(session_id),
             quote_id: [0x22; 32],

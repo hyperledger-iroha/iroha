@@ -5569,8 +5569,40 @@ mod tests {
     }
 
     fn sample_account(seed: u8) -> AccountId {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive Python fixture account key");
         AccountId::new(keypair.public_key().clone())
+    }
+
+    #[test]
+    fn seed_derivation_pyfunctions_use_checked_backend_derivation() {
+        ensure_python();
+        let seed = b"python checked seed derivation";
+        let expected = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+            .expect("derive expected checked Ed25519 key pair");
+        let (_, expected_private) = expected.private_key().to_bytes();
+        let (_, expected_public) =
+            public_key_to_bytes(expected.public_key(), "expected public key")
+                .expect("expected public key payload is well-formed");
+
+        Python::attach(|py| {
+            let (generic_private, generic_public) =
+                derive_keypair_from_seed_py(py, seed, Algorithm::Ed25519.as_static_str())
+                    .expect("generic checked seed derivation succeeds");
+            let (ed25519_private, ed25519_public) = derive_ed25519_keypair_from_seed_py(py, seed)
+                .expect("Ed25519 checked seed derivation succeeds");
+
+            assert_eq!(
+                generic_private.bind(py).as_bytes(),
+                expected_private.as_slice()
+            );
+            assert_eq!(generic_public.bind(py).as_bytes(), expected_public);
+            assert_eq!(
+                ed25519_private.bind(py).as_bytes(),
+                expected_private.as_slice()
+            );
+            assert_eq!(ed25519_public.bind(py).as_bytes(), expected_public);
+        });
     }
 
     #[test]
@@ -11210,7 +11242,8 @@ mod tests {
     fn parse_public_key_multihash_returns_checked_payload() {
         ensure_python();
         let key_pair =
-            KeyPair::from_seed(b"python-public-key-multihash".to_vec(), Algorithm::Ed25519);
+            KeyPair::try_from_seed(b"python-public-key-multihash".to_vec(), Algorithm::Ed25519)
+                .expect("derive Python public-key multihash fixture key");
         let (algorithm, expected_payload) =
             public_key_to_bytes(key_pair.public_key(), "fixture public key")
                 .expect("fixture public key is well-formed");
@@ -11230,7 +11263,9 @@ mod tests {
     #[test]
     fn multihash_helpers_use_checked_formatters() {
         ensure_python();
-        let key_pair = KeyPair::from_seed(b"python-multihash-helper".to_vec(), Algorithm::Ed25519);
+        let key_pair =
+            KeyPair::try_from_seed(b"python-multihash-helper".to_vec(), Algorithm::Ed25519)
+                .expect("derive Python multihash helper fixture key");
         let (_, public_payload) = public_key_to_bytes(key_pair.public_key(), "fixture public key")
             .expect("fixture public key is well-formed");
         let public_payload = public_payload.to_vec();
@@ -11325,7 +11360,9 @@ mod tests {
     #[test]
     fn keypair_and_account_public_exports_use_checked_payloads() {
         ensure_python();
-        let key_pair = KeyPair::from_seed(b"python-keypair-export".to_vec(), Algorithm::Ed25519);
+        let key_pair =
+            KeyPair::try_from_seed(b"python-keypair-export".to_vec(), Algorithm::Ed25519)
+                .expect("derive Python keypair export fixture key");
         let (_, expected_public) = public_key_to_bytes(key_pair.public_key(), "fixture public key")
             .expect("fixture public key is well-formed");
         let expected_public = expected_public.to_vec();
@@ -18548,7 +18585,8 @@ fn derive_keypair_from_seed_py(
     algorithm: &str,
 ) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
     let algorithm = parse_algorithm_arg(algorithm)?;
-    let key_pair = KeyPair::from_seed(seed.to_vec(), algorithm);
+    let key_pair = KeyPair::try_from_seed(seed.to_vec(), algorithm)
+        .map_err(|err| PyValueError::new_err(format!("failed to derive key pair: {err}")))?;
     keypair_to_py(py, key_pair)
 }
 
@@ -18683,7 +18721,9 @@ fn derive_ed25519_keypair_from_seed_py(
     py: Python<'_>,
     seed: &[u8],
 ) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
-    let key_pair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
+    let key_pair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519).map_err(|err| {
+        PyValueError::new_err(format!("failed to derive Ed25519 key pair: {err}"))
+    })?;
     keypair_to_py(py, key_pair)
 }
 

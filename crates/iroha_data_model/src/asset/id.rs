@@ -505,9 +505,13 @@ mod tests {
     use super::*;
     use crate::account::AccountId;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked asset id fixture keypair")
+    }
+
     #[test]
     fn debug_formats_without_recursion() {
-        let kp = KeyPair::random();
+        let kp = checked_random_keypair();
         let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
         let name: Name = "xor".parse().unwrap();
         let account: AccountId = AccountId::new(kp.public_key().clone());
@@ -560,7 +564,7 @@ mod tests {
 
     #[test]
     fn asset_id_parse_literal_roundtrips_global() {
-        let kp = KeyPair::random();
+        let kp = checked_random_keypair();
         let account = AccountId::new(kp.public_key().clone());
         let definition = AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").expect("domain"),
@@ -575,7 +579,7 @@ mod tests {
 
     #[test]
     fn asset_id_parse_literal_roundtrips_scoped() {
-        let kp = KeyPair::random();
+        let kp = checked_random_keypair();
         let account = AccountId::new(kp.public_key().clone());
         let definition = AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").expect("domain"),

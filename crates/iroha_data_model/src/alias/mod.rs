@@ -201,8 +201,12 @@ mod tests {
     use super::*;
     use crate::{account::AccountId, domain::DomainId, name::Name};
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked alias fixture keypair")
+    }
+
     fn sample_account_id() -> AccountId {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let _domain = DomainId::try_new("wonderland", "universal").expect("valid domain");
         AccountId::new(key_pair.public_key().clone())
     }
