@@ -48541,7 +48541,7 @@ mod tests {
 
     #[cfg(feature = "telemetry")]
     #[test]
-    fn da_shard_cursor_unknown_lane_records_telemetry() {
+    fn da_commitment_unknown_lane_fails_before_cursor_telemetry() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let metrics = Arc::new(Metrics::default());
@@ -48592,30 +48592,18 @@ mod tests {
             .expect_err("unknown lane should fail validation");
         assert!(matches!(
             err,
-            BlockValidationError::DaShardCursor(DaShardCursorError::UnknownLane { .. })
+            BlockValidationError::DaCommitmentBundle(
+                crate::da::DaCommitmentValidationError::ProofPolicy(
+                    crate::da::DaProofPolicyError::UnknownLane { .. }
+                )
+            )
         ));
 
         let counter = metrics
             .da_shard_cursor_events_total
             .with_label_values(&["unknown_lane", "9", "9"])
             .get();
-        assert_eq!(counter, 1);
-        let height = metrics
-            .da_shard_cursor_height
-            .with_label_values(&["9", "9"])
-            .get();
-        assert_eq!(
-            height,
-            i64::try_from(block.header().height().get()).expect("height fits in i64")
-        );
-        let lag = metrics
-            .da_shard_cursor_lag_blocks
-            .with_label_values(&["9", "9"])
-            .get();
-        assert_eq!(
-            lag,
-            i64::try_from(block.header().height().get()).expect("height fits in i64")
-        );
+        assert_eq!(counter, 0);
     }
 
     #[cfg(feature = "telemetry")]

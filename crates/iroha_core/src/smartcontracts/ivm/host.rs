@@ -7773,7 +7773,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
@@ -7843,7 +7843,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 out.extend_from_slice(&body);
                 let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                 out.extend_from_slice(&h);
-                let p = vm.alloc_input_tlv(&out)?;
+                let p = vm.alloc_host_tlv(&out)?;
                 vm.set_register(10, p);
                 if let Some((idx, _)) = statuses.iter().enumerate().find(|(_, s)| **s == 0) {
                     vm.set_register(12, idx as u64);
@@ -19968,10 +19968,10 @@ seiyaku Vault {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_string(),
-            n_log2: 4,
-            blowup_log2: 2,
+            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: 2,
+            queries: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
@@ -20003,8 +20003,12 @@ seiyaku Vault {
         host.set_verifying_keys(map).expect("set registry");
 
         let payload = norito::to_bytes(&vec![env]).expect("encode batch");
-        let mut vm = IVM::new(1_000_000);
-        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        let mut vm = IVM::new(50_000_000);
+        let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
+        let ptr = vm
+            .alloc_heap(tlv.len() as u64)
+            .expect("allocate STARK batch TLV");
+        vm.store_bytes(ptr, &tlv).expect("store STARK batch TLV");
         vm.set_register(10, ptr);
 
         host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm)

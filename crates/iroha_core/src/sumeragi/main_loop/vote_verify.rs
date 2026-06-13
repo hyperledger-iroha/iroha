@@ -638,7 +638,7 @@ mod tests {
             let mut keypairs = Vec::new();
             let mut peers = Vec::new();
             for idx in 0..4u8 {
-                let seed = vec![idx; 32];
+                let seed = vec![idx + 1; 32];
                 let kp = KeyPair::from_seed(seed, Algorithm::BlsNormal);
                 peers.push(PeerId::from(kp.public_key().clone()));
                 keypairs.push(kp);

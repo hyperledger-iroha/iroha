@@ -2,6 +2,37 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Core zk-stark fixture failure fixes
+
+- Aligned Soracloud BFV full-bootstrap test fixtures with the current
+  exact-lift policy by using full-bootstrap refresh transcripts without
+  deterministic zero-refresh bootstrap seeds, refreshing the shared operation
+  vector digests, and constructing reserved-circuit generic binding-AIR
+  fixtures without routing through the production BFV prover guard.
+- Updated IVM STARK batch verification to accept heap-backed TLVs and spill
+  host-produced TLVs when needed, then moved the registry-bound STARK test to
+  the production FRI verifier-key floor.
+- Adjusted stale test expectations for IVM execution circuit rejection, DA
+  unknown-lane validation, and BLS deterministic test seeds.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib full_bootstrap_ -- --nocapture`
+    (`112` passed, `5193` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib soracloud_bfv_operation_vectors -- --nocapture`
+    (`2` passed, `1` ignored, `5302` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows -- --nocapture`
+    (`1` passed, `5304` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib overlay_stark_prover_rejects_circuit_mismatch -- --nocapture`
+    (`1` passed, `5304` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib zk_verify_batch_accepts_stark_registry_bound_envelope -- --nocapture`
+    (`1` passed, `5304` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib da_commitment_unknown_lane_fails_before_cursor_telemetry -- --nocapture`
+    (`1` passed, `5304` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib vote_verify_uses_multi_message_batch_for_distinct_preimages -- --nocapture`
+    (`1` passed, `5304` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib soracloud_fhe_full_bootstrap_stark_proof_finalizer_binds_circuit_and_hashes -- --nocapture`
+    (`1` passed, `5304` filtered out)
+  - `cargo fmt --all`
+
 ## 2026-06-13 Crypto packed signature fixture checked signing
 
 - Routed the `iroha_crypto` packed signature alignment fixtures through checked
