@@ -10730,6 +10730,12 @@ Temporal properties:
   wait state: all consensus, RBC, Byzantine-fault, GST, timer, vote/counter,
   view/evidence, and commit-artifact surfaces remain unchanged, and the named
   wait-state envelope is preserved exactly.
+- `DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteBranchClassifier`
+  proves the aggregate named wait-state branch classifier for every
+  `[Next]_vars` step: non-stuttering steps are exactly one named consensus,
+  commit-vote, timeout, NewView, proposal, or GST branch with RBC/fault actions
+  closed, while stuttering steps keep the full delivered-pending complete
+  wait-state envelope unchanged.
 - `PendingProtocolStepsNeverChangeGst` proves that non-final NewView,
   prepare-vote, honest commit-vote, Byzantine commit-vote, and RBC DELIVER
   pending branches preserve the GST observation flag; synchrony observation

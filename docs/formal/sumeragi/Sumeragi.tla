@@ -11172,6 +11172,76 @@ DeliveredPendingCompleteWaitStateStutterStepKeepsWaitStateStep ==
     /\ ~RbcDeliverGoodEnabled'
     /\ ~ByzantineFaultEnabled'
 
+DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteBranchClassifierStep ==
+  (/\ DeliveredPendingCompleteWaitState
+   /\ [Next]_vars) =>
+    /\ DeliveredPendingCompleteWaitStateSpecStepClosesStep
+    /\ RbcDeliveredPendingSpecStepActionSourcesExclusiveStep
+    /\ (Next <=>
+          \/ HonestCommitVote
+          \/ ByzantineEquivocateCommit
+          \/ HonestPrepareVote
+          \/ TimeoutTick
+          \/ HonestNewViewVote
+          \/ HonestPropose
+          \/ GstElapsed)
+    /\ ~RbcInit
+    /\ ~RbcChunkGood
+    /\ ~RbcReadyGood
+    /\ ~RbcDeliverGood
+    /\ ~ByzantineFault
+    /\ (Next =>
+          /\ DeliveredPendingCompleteWaitStateNextStepMatchesNamedActionBranchStep
+          /\ RbcDeliveredPendingNextStepCoveredByHandoffs
+          /\ (\/ HonestCommitVote
+              \/ ByzantineEquivocateCommit
+              \/ HonestPrepareVote
+              \/ TimeoutTick
+              \/ HonestNewViewVote
+              \/ HonestPropose
+              \/ GstElapsed)
+          /\ ((HonestCommitVote \/ ByzantineEquivocateCommit) =>
+                DeliveredPendingCompleteWaitStateCommitVoteStepSplitsStep)
+          /\ (HonestPrepareVote =>
+                DeliveredPendingCompleteWaitStatePrepareVoteStepSplitsStep)
+          /\ (TimeoutTick =>
+                DeliveredPendingCompleteWaitStateTimeoutStepStartsNewViewStep)
+          /\ (HonestNewViewVote =>
+                DeliveredPendingCompleteWaitStateNewViewVoteStepSplitsStep)
+          /\ (HonestPropose =>
+                DeliveredPendingCompleteWaitStateHonestProposeStepStartsPrepareStep)
+          /\ (GstElapsed =>
+                DeliveredPendingCompleteWaitStateGstElapsedStepKeepsWaitStateStep))
+    /\ (~Next =>
+          /\ DeliveredPendingCompleteWaitStateStutterStepKeepsWaitStateStep
+          /\ vars' = vars
+          /\ DeliveredPendingCompleteWaitState'
+          /\ ~committed'
+          /\ ~HonestPropose
+          /\ ~HonestPrepareVote
+          /\ ~HonestCommitVote
+          /\ ~ByzantineEquivocateCommit
+          /\ ~TimeoutTick
+          /\ ~HonestNewViewVote
+          /\ ~GstElapsed)
+    /\ (committed' =>
+          /\ Next
+          /\ phase' = "Committed"
+          /\ ~DeliveredPendingCompleteWaitState'
+          /\ FinalityCertificateStackPresent'
+          /\ CommitDisablesProgressActions'
+          /\ commitEvidenceVotes' = commitVotesHonest' + commitVotesByz'
+          /\ commitEvidenceStake' = stakeSigned'
+          /\ commitView' = view')
+    /\ (~committed' =>
+          /\ DeliveredPendingCompleteWaitState'
+          /\ RbcDeliveredWithoutFinalityWaitsForCommitEvidence'
+          /\ RbcDeliveredWithoutFinalityHasNoCommitCertificate'
+          /\ commitEvidenceVotes' = 0
+          /\ commitEvidenceStake' = 0
+          /\ commitView' = 0
+          /\ ~FinalityCertificateStackPresent')
+
 RbcStateChangeMatchesLocalExitClassificationStep ==
   (rbcState' # rbcState) =>
     /\ RbcStateOnlyChangesByProtocolOrFaultStep
@@ -12052,6 +12122,9 @@ DeliveredPendingCompleteWaitStateNextStepAlwaysMatchesNamedActionBranch ==
 
 DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState ==
   [] [DeliveredPendingCompleteWaitStateStutterStepKeepsWaitStateStep]_vars
+
+DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteBranchClassifier ==
+  [] [DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteBranchClassifierStep]_vars
 
 RbcDeliveryEntryOnlyByDeliver ==
   [] [RbcDeliveryEntryOnlyByDeliverStep]_vars

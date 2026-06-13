@@ -3081,6 +3081,30 @@ def test_release_readiness_report_guards_all_lanes_governed_blocker_schema_gate_
         for error in errors
     )
 
+    test_markers = verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS[1][1]
+    for removed_marker_index, removed_marker in enumerate((
+        "secret-token-governed-blocker",
+        "operator|governed-blocker",
+        "confusable_blocker",
+    )):
+        sparse_marker_test = tmp_path / (
+            f"sccp_all_lanes_governed_marker_{removed_marker_index}.py"
+        )
+        sparse_marker_test.write_text(
+            "\n".join(marker for marker in test_markers if marker != removed_marker),
+            encoding="utf-8",
+        )
+        errors = report._all_lanes_governed_blocker_schema_gate_inventory_errors(
+            ((sparse_marker_test, test_markers),)
+        )
+
+        assert any(
+            "SCCP all-lanes governed blocker schema source inventory" in error
+            and str(sparse_marker_test) in error
+            and f"missing marker: {removed_marker}" in error
+            for error in errors
+        )
+
 
 def test_release_readiness_report_guards_all_lanes_release_checklist_exact_boolean_gate_inventory(
     tmp_path: Path,
@@ -3094,6 +3118,9 @@ def test_release_readiness_report_guards_all_lanes_release_checklist_exact_boole
         == []
     )
 
+    required_script_markers = (
+        verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[0][1]
+    )
     sparse_script = tmp_path / "sccp_all_lanes_evidence.py"
     sparse_script.write_text(
         '"ready": all(item["ready"] is True for item in items)\n',
@@ -3103,7 +3130,7 @@ def test_release_readiness_report_guards_all_lanes_release_checklist_exact_boole
         (
             (
                 sparse_script,
-                verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[0][1],
+                required_script_markers,
             ),
         )
     )
@@ -3120,6 +3147,40 @@ def test_release_readiness_report_guards_all_lanes_release_checklist_exact_boole
         in error
         for error in errors
     )
+
+    for removed_script_marker_index, removed_script_marker in enumerate((
+        "def _unexpected_audit_hash_field_detail(",
+        "source adapter gate audit hashes contains unexpected field with sensitive name",
+        "source adapter gate audit hashes contains unexpected field with malformed name",
+        "source adapter gate audit hashes contains non-string field name",
+    )):
+        sparse_script_marker = tmp_path / (
+            f"sccp_all_lanes_evidence_{removed_script_marker_index}.py"
+        )
+        sparse_script_marker.write_text(
+            "\n".join(
+                marker
+                for marker in required_script_markers
+                if marker != removed_script_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = report._all_lanes_release_checklist_exact_boolean_gate_inventory_errors(
+            (
+                (
+                    sparse_script_marker,
+                    required_script_markers,
+                ),
+            )
+        )
+
+        assert any(
+            "SCCP all-lanes release-checklist exact-boolean source inventory"
+            in error
+            and str(sparse_script_marker) in error
+            and f"missing marker: {removed_script_marker}" in error
+            for error in errors
+        )
 
     required_test_markers = verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[
         1
@@ -3147,6 +3208,40 @@ def test_release_readiness_report_guards_all_lanes_release_checklist_exact_boole
         and f"missing marker: {removed_marker}" in error
         for error in errors
     )
+
+    for removed_test_marker_index, removed_test_marker in enumerate((
+        "def test_all_lanes_release_checklist_redacts_unsafe_source_gate_audit_fields",
+        "secret-token-audit-field",
+        "route|operator-audit-field",
+        "secret-token-replayed-audit-field",
+    )):
+        sparse_redaction_tests = tmp_path / (
+            f"sccp_all_lanes_redaction_{removed_test_marker_index}_test.py"
+        )
+        sparse_redaction_tests.write_text(
+            "\n".join(
+                marker
+                for marker in required_test_markers
+                if marker != removed_test_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = report._all_lanes_release_checklist_exact_boolean_gate_inventory_errors(
+            (
+                (
+                    sparse_redaction_tests,
+                    required_test_markers,
+                ),
+            )
+        )
+
+        assert any(
+            "SCCP all-lanes release-checklist exact-boolean source inventory"
+            in error
+            and str(sparse_redaction_tests) in error
+            and f"missing marker: {removed_test_marker}" in error
+            for error in errors
+        )
 
     removed_gate_blocker_marker = "source_gate.checklist_empty"
     sparse_gate_blocker_tests = tmp_path / "sccp_all_lanes_source_gate_test.py"
@@ -3732,6 +3827,7 @@ def test_release_readiness_report_guards_release_manifest_artifact_set_order_gat
         "def test_release_bundle_verifier_rejects_manifest_artifact_order_drift",
         "def test_release_bundle_verifier_rejects_unknown_artifact_fields",
         "def test_release_bundle_verifier_rejects_malformed_artifact_fields",
+        "secret_token_artifact_field",
         "def test_release_bundle_verifier_rejects_artifact_field_type_drift",
         "def test_release_bundle_verifier_rejects_artifact_digest_text_drift",
         "def test_release_bundle_rejects_malformed_copied_artifacts_before_render",
@@ -3812,6 +3908,10 @@ def test_release_readiness_report_guards_release_public_blocker_list_schema_gate
         "def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift",
         "def test_release_bundle_verifier_rejects_padded_public_blocker_strings",
         "def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings",
+        "def test_release_bundle_verifier_rejects_hostile_public_blocker_strings",
+        "secret-token-public-blocker",
+        "operator|public-blocker",
+        "operator public blоcker",
         "def test_release_bundle_verifier_active_launch_blockers_reject_malformed_containers",
         "def test_release_bundle_verifier_rejects_malformed_active_launch_blockers",
         "def test_release_bundle_verifier_rejects_all_lanes_root_blockers",
@@ -3846,6 +3946,7 @@ def test_release_readiness_report_guards_release_public_blocker_list_schema_gate
     )
     removed_readiness_markers = {
         "def test_release_readiness_report_markdown_marks_malformed_blocker_containers",
+        "def test_release_readiness_report_markdown_marks_hostile_public_blocker_strings",
         "def test_release_readiness_report_classifies_malformed_active_lane_blockers",
         "def test_release_readiness_report_blocks_malformed_native_prover_blockers",
     }
@@ -3953,6 +4054,10 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
         'f"/wallet/getcontract returned malformed {label} contract_address"',
         'f"TRON constant call {function_selector} returned non-hex data"',
         "except (RuntimeError, TypeError, ValueError):",
+        "def _unsupported_tron_field_detail(",
+        "field with sensitive name",
+        "field with malformed name",
+        "non-string field name",
         "witness schedule payload is invalid",
         'f"witness schedule transition {index} message is invalid"',
         'f"witness schedule transition {index} seal is invalid"',
@@ -4199,6 +4304,18 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
             "secret-token transaction source proof parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "def test_live_evidence_redacts_unsupported_transaction_result_fields",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token-result-field",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token-detail-field",
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
@@ -6065,6 +6182,39 @@ def test_release_readiness_report_guards_ethereum_evm_source_live_production_gat
         for error in errors
     )
 
+    for removed_marker_index, removed_marker in enumerate(
+        (
+            "test_evm_source_live_cli_redacts_top_level_exception_details",
+            "secret-token-evm-source-error",
+        )
+    ):
+        sparse_source_test = tmp_path / (
+            f"sccp_evm_source_live_cli_redaction_{removed_marker_index}_test.py"
+        )
+        sparse_source_test.write_text(
+            "\n".join(
+                marker for marker in source_test_markers if marker != removed_marker
+            ),
+            encoding="utf-8",
+        )
+
+        errors = report._ethereum_evm_source_live_production_gate_inventory_errors(
+            (
+                (
+                    sparse_source_test,
+                    source_test_markers,
+                ),
+            )
+        )
+
+        assert any(
+            "Ethereum mainnet live EVM source production SDK test inventory"
+            in error
+            and str(sparse_source_test) in error
+            and removed_marker in error
+            for error in errors
+        )
+
 
 def test_release_readiness_report_guards_ethereum_evm_live_destination_production_gate_inventory(
     tmp_path: Path,
@@ -6203,6 +6353,39 @@ def test_release_readiness_report_guards_ethereum_evm_live_destination_productio
         and removed_marker in error
         for error in errors
     )
+
+    for removed_marker_index, removed_marker in enumerate(
+        (
+            "test_evm_live_cli_redacts_top_level_exception_details",
+            "secret-token-evm-error",
+        )
+    ):
+        sparse_live_test = tmp_path / (
+            f"sccp_evm_live_cli_redaction_{removed_marker_index}_test.py"
+        )
+        sparse_live_test.write_text(
+            "\n".join(
+                marker for marker in live_test_markers if marker != removed_marker
+            ),
+            encoding="utf-8",
+        )
+
+        errors = report._ethereum_evm_live_destination_production_gate_inventory_errors(
+            (
+                (
+                    sparse_live_test,
+                    live_test_markers,
+                ),
+            )
+        )
+
+        assert any(
+            "Ethereum mainnet live EVM destination production SDK test inventory"
+            in error
+            and str(sparse_live_test) in error
+            and removed_marker in error
+            for error in errors
+        )
 
     destination_test_markers = next(
         markers
@@ -8328,6 +8511,9 @@ def test_release_readiness_report_guards_release_public_crypto_evidence_binding_
         == []
     )
 
+    verifier_markers = verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS[
+        0
+    ][1]
     sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
     sparse_verifier.write_text(
         "def _cryptographic_evidence_inventory_errors(crypto):\n",
@@ -8337,7 +8523,7 @@ def test_release_readiness_report_guards_release_public_crypto_evidence_binding_
         (
             (
                 sparse_verifier,
-                verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS[0][1],
+                verifier_markers,
             ),
         )
     )
@@ -8366,6 +8552,64 @@ def test_release_readiness_report_guards_release_public_crypto_evidence_binding_
         for error in errors
     )
 
+    for removed_verifier_marker in (
+        "SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (",
+        "def _unexpected_source_adapter_gate_audit_field_blocker(",
+        "contains unexpected field with sensitive name",
+    ):
+        sparse_verifier_marker = tmp_path / (
+            f"sccp_verify_crypto_{removed_verifier_marker[:8]}.py"
+        )
+        sparse_verifier_marker.write_text(
+            "\n".join(
+                marker for marker in verifier_markers if marker != removed_verifier_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = report._sccp_release_public_crypto_evidence_binding_gate_inventory_errors(
+            ((sparse_verifier_marker, verifier_markers),)
+        )
+
+        assert any(
+            "SCCP release public cryptographic-evidence binding source inventory"
+            in error
+            and str(sparse_verifier_marker) in error
+            and f"missing marker: {removed_verifier_marker}" in error
+            for error in errors
+        )
+
+    bundle_script_markers = next(
+        markers
+        for path, markers in verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS
+        if path == "scripts/sccp_release_bundle.py"
+    )
+    for removed_bundle_script_marker in (
+        "def _unexpected_source_adapter_gate_audit_field_error(",
+        "contains unexpected field with sensitive name",
+    ):
+        sparse_bundle_script = tmp_path / (
+            f"sccp_release_bundle_{removed_bundle_script_marker[:8]}.py"
+        )
+        sparse_bundle_script.write_text(
+            "\n".join(
+                marker
+                for marker in bundle_script_markers
+                if marker != removed_bundle_script_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = report._sccp_release_public_crypto_evidence_binding_gate_inventory_errors(
+            ((sparse_bundle_script, bundle_script_markers),)
+        )
+
+        assert any(
+            "SCCP release public cryptographic-evidence binding source inventory"
+            in error
+            and str(sparse_bundle_script) in error
+            and f"missing marker: {removed_bundle_script_marker}" in error
+            for error in errors
+        )
+
     bundle_test_markers = next(
         markers
         for path, markers in verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS
@@ -8379,6 +8623,10 @@ def test_release_readiness_report_guards_release_public_crypto_evidence_binding_
         "test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes",
         "test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift",
         "test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift",
+        "test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before_render",
+        "test_release_bundle_verifier_redacts_sensitive_source_adapter_gate_audit_fields",
+        "secret-token-audit-field",
+        "audit_hashes contains unexpected field with sensitive name",
         "test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile",
     }
     sparse_bundle_test = tmp_path / "sccp_release_bundle_crypto_test.py"
@@ -14387,6 +14635,51 @@ def test_release_readiness_report_markdown_marks_malformed_blocker_containers(
     assert "- o\n- p\n- e\n- r" not in markdown
 
 
+def test_release_readiness_report_markdown_marks_hostile_public_blocker_strings(
+    tmp_path: Path,
+) -> None:
+    """Markdown blocker cells must classify hostile public blocker strings."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+    control_blocker = "operator\npublic-blocker"
+    markdown_blocker = "operator|public-blocker"
+    confusable_blocker = "operator public blоcker"
+    sensitive_blocker = "operator secret-token-public-blocker"
+    checklist_item = readiness["release_checklist"]["items"][0]
+    checklist_item["blockers"] = [confusable_blocker]
+    readiness["corridor"]["blockers"] = [markdown_blocker]
+    readiness["source_inventory"]["proof_request_bundle_gate"][
+        "validation_blockers"
+    ] = [sensitive_blocker]
+    active_lane = next(
+        lane
+        for lane in readiness["evidence"]["lanes"]
+        if lane["domain"] == report.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["blockers"] = [markdown_blocker]
+    readiness["blockers"] = [control_blocker]
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert f"| `{checklist_item['id']}` | ready | `<invalid blockers>` |" in markdown
+    assert "`<invalid validation_blockers>`" in markdown
+    assert "- `<invalid blockers>`" in markdown
+    assert markdown.count("`<invalid blockers>`") >= 3
+    assert "secret-token-public-blocker" not in markdown
+    assert "operator|public-blocker" not in markdown
+    assert "operator public blоcker" not in markdown
+    assert "operator\npublic-blocker" not in markdown
+
+
 def test_release_readiness_report_markdown_names_native_sdk_id_evidence(
     tmp_path: Path,
 ) -> None:
@@ -15303,22 +15596,54 @@ def test_release_readiness_report_blocks_malformed_native_prover_blockers(
         (
             "operator override",
             "native EVM prover validation_blockers must be a list of non-empty canonical strings",
+            None,
+            False,
         ),
         (
             [123],
             "native EVM prover validation_blockers[0] must be a non-empty canonical string",
+            None,
+            False,
         ),
         (
             [" padded "],
             "native EVM prover validation_blockers[0] must be a non-empty canonical string",
+            " padded ",
+            True,
+        ),
+        (
+            ["operator\nnative-blocker"],
+            "native EVM prover validation_blockers[0] contains control character",
+            "operator\nnative-blocker",
+            True,
+        ),
+        (
+            ["operator|native-blocker"],
+            "native EVM prover validation_blockers[0] contains Markdown-unsafe character",
+            "operator|native-blocker",
+            True,
+        ),
+        (
+            ["operator native bl\u043ecker"],
+            "native EVM prover validation_blockers[0] contains non-ASCII character",
+            "operator native bl\u043ecker",
+            True,
+        ),
+        (
+            ["operator secret-token-native-blocker"],
+            "native EVM prover validation_blockers[0] contains sensitive name",
+            "operator secret-token-native-blocker",
+            True,
         ),
         (
             ["operator launch hold"],
             "operator launch hold",
+            None,
+            False,
         ),
     )
 
-    for blocker_value, expected_blocker in cases:
+    for blocker_value, expected_blocker, forbidden_text, invalid_marker in cases:
         evidence_summary = report._load_evidence_summary([evidence])
         native_status = report._native_evm_prover_bundle_status(
             native_bundle,
@@ -15336,6 +15661,7 @@ def test_release_readiness_report_blocks_malformed_native_prover_blockers(
         assert checklist["ready"] is False, repr(blocker_value)
         assert native_item["ready"] is False, repr(blocker_value)
         assert expected_blocker in native_item["blockers"]
+        assert "secret-token" not in "\n".join(native_item["blockers"])
 
         monkeypatch.setattr(
             report,
@@ -15353,6 +15679,13 @@ def test_release_readiness_report_blocks_malformed_native_prover_blockers(
         assert readiness["production_ready"] is False, repr(blocker_value)
         assert expected_blocker in readiness["blockers"]
         assert "o" not in readiness["blockers"]
+        assert "secret-token" not in "\n".join(readiness["blockers"])
+
+        markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+        if invalid_marker:
+            assert "`<invalid validation_blockers>`" in markdown
+        if forbidden_text is not None:
+            assert forbidden_text not in markdown
 
 
 def test_release_readiness_report_blocks_without_native_evm_prover_bundle(
@@ -15649,6 +15982,11 @@ def test_release_readiness_report_blocks_native_evm_prover_malformed_duplicate_j
     cases = (
         ("operator\\nnote", "control character", "operator\nnote"),
         ("operat\\u043er_note", "non-ASCII character", "operat\u043er_note"),
+        (
+            "secret-token-native-duplicate",
+            "sensitive key name",
+            "secret-token-native-duplicate",
+        ),
     )
     for index, (encoded_key, expected_reason, decoded_key) in enumerate(cases):
         case_dir = tmp_path / f"case-{index}"
@@ -15975,16 +16313,20 @@ def test_release_readiness_report_blocks_native_evm_prover_malformed_unknown_fie
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
     confusable_root = "operat\u043er_note"
     confusable_audit = "aud\u0456t_note"
+    secret_root = "secret_token_native_root_field"
+    secret_audit = "secret_token_native_audit_field"
     payload[" operator_note "] = "not allowed"
     payload["operator\nnote"] = "not allowed"
     payload["operator note"] = "not allowed"
     payload["operator|note"] = "not allowed"
     payload[confusable_root] = "not allowed"
+    payload[secret_root] = "not allowed"
     payload["audit_hashes"][" audit_note "] = fixed_hex32(0xD6)
     payload["audit_hashes"]["audit\nnote"] = fixed_hex32(0xD7)
     payload["audit_hashes"]["audit note"] = fixed_hex32(0xD8)
     payload["audit_hashes"]["audit|note"] = fixed_hex32(0xD9)
     payload["audit_hashes"][confusable_audit] = "not-a-hex32"
+    payload["audit_hashes"][secret_audit] = fixed_hex32(0xDA)
     native_bundle.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -16032,6 +16374,10 @@ def test_release_readiness_report_blocks_native_evm_prover_malformed_unknown_fie
         "with non-ASCII character"
     ) in blockers
     assert (
+        "native EVM Groth16 prover bundle contains unknown field name "
+        "with sensitive name"
+    ) in blockers
+    assert (
         "native EVM Groth16 prover bundle audit_hashes contains unexpected "
         "field name with surrounding whitespace"
     ) in blockers
@@ -16051,8 +16397,14 @@ def test_release_readiness_report_blocks_native_evm_prover_malformed_unknown_fie
         "native EVM Groth16 prover bundle audit_hashes contains unexpected "
         "field name with non-ASCII character"
     ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle audit_hashes contains unexpected "
+        "field name with sensitive name"
+    ) in blockers
     assert all(confusable_root not in blocker for blocker in blockers)
     assert all(confusable_audit not in blocker for blocker in blockers)
+    assert all(secret_root not in blocker for blocker in blockers)
+    assert all(secret_audit not in blocker for blocker in blockers)
     assert payload["release_checklist"]["ready"] is False
 
 
@@ -16570,12 +16922,14 @@ def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_malforme
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
     confusable_field = "operat\u043er_sdk_note"
+    secret_field = "secret_token_native_sdk_field"
     row = payload["native_sdk_artifacts"][0]
     row[" operator_sdk_note "] = "not allowed"
     row["operator\nsdk_note"] = "not allowed"
     row["operator sdk_note"] = "not allowed"
     row["operator|sdk_note"] = "not allowed"
     row[confusable_field] = "not allowed"
+    row[secret_field] = "not allowed"
     native_bundle.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -16619,7 +16973,12 @@ def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_malforme
         "native_sdk_artifacts[0] contains unknown field name with non-ASCII character"
         in blockers
     )
+    assert (
+        "native_sdk_artifacts[0] contains unknown field name with sensitive name"
+        in blockers
+    )
     assert all(confusable_field not in blocker for blocker in blockers)
+    assert all(secret_field not in blocker for blocker in blockers)
     assert payload["release_checklist"]["ready"] is False
 
 
@@ -16726,10 +17085,14 @@ def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_dr
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
     unknown_sdk = "rogue-sdk"
+    secret_unknown_sdk = "secret-token-sdk"
     missing_sdk = payload["native_sdk_artifacts"][0]["sdk"]
     drift_implementation_sdk = payload["native_sdk_artifacts"][1]["sdk"]
     expected_implementation = payload["native_sdk_artifacts"][1]["implementation"]
     drift_sdk = payload["native_sdk_artifacts"][2]["sdk"]
+    secret_row = dict(payload["native_sdk_artifacts"][3])
+    secret_row["sdk"] = secret_unknown_sdk
+    payload["native_sdk_artifacts"].append(secret_row)
     payload["native_sdk_artifacts"][0]["sdk"] = unknown_sdk
     payload["native_sdk_artifacts"][1]["implementation"] = "wrong-implementation"
     payload["native_sdk_artifacts"][2]["prover_artifact_hash"] = fixed_hex32(0xD3)
@@ -16760,6 +17123,7 @@ def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_dr
     payload = json.loads(completed.stdout)
     blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
     assert f"native_sdk_artifacts contains unknown sdk: {unknown_sdk}" in blockers
+    assert "native_sdk_artifacts contains unknown sdk with sensitive name" in blockers
     assert f"native_sdk_artifacts missing sdk: {missing_sdk}" in blockers
     assert (
         f"{drift_implementation_sdk} implementation must be {expected_implementation}"
@@ -16767,6 +17131,9 @@ def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_dr
     assert (
         f"{drift_sdk} prover_artifact_hash must match proof_artifact_hash"
     ) in blockers
+    assert secret_unknown_sdk not in "\n".join(blockers)
+    assert secret_unknown_sdk not in completed.stdout
+    assert secret_unknown_sdk not in completed.stderr
     assert payload["release_checklist"]["ready"] is False
 
 
@@ -17794,11 +18161,13 @@ def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results(
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
     rogue_sdk = "rogue-sdk"
+    secret_sdk = "secret-token-sdk"
 
     parity_path = tmp_path / payload["cross_sdk_fixture_parity_artifact"]
     parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
     parity_result = next(iter(parity_payload["sdk_results"].values()))
     parity_payload["sdk_results"][rogue_sdk] = dict(parity_result)
+    parity_payload["sdk_results"][secret_sdk] = dict(parity_result)
     parity_bytes = (
         json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -17811,6 +18180,7 @@ def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results(
     self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
     self_test_result = next(iter(self_test_payload["sdk_results"].values()))
     self_test_payload["sdk_results"][rogue_sdk] = dict(self_test_result)
+    self_test_payload["sdk_results"][secret_sdk] = dict(self_test_result)
     self_test_bytes = (
         json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -17850,9 +18220,20 @@ def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results(
         f"sdk_results contains unknown sdk: {rogue_sdk}"
     ) in blockers
     assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        "sdk_results contains unknown sdk with sensitive name"
+    ) in blockers
+    assert (
         "native EVM Groth16 prover bundle native_prover_self_test_artifact "
         f"sdk_results contains unknown sdk: {rogue_sdk}"
     ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+        "sdk_results contains unknown sdk with sensitive name"
+    ) in blockers
+    assert secret_sdk not in "\n".join(blockers)
+    assert secret_sdk not in completed.stdout
+    assert secret_sdk not in completed.stderr
     assert payload["release_checklist"]["ready"] is False
 
 
@@ -17872,6 +18253,10 @@ def test_release_readiness_report_blocks_native_evm_fixture_padded_sdk_results(
     parity_payload["sdk_results"][parity_padded_sdk] = parity_payload[
         "sdk_results"
     ].pop(parity_sdk)
+    secret_padded_sdk = " secret-token-sdk "
+    parity_payload["sdk_results"][secret_padded_sdk] = next(
+        iter(parity_payload["sdk_results"].values())
+    )
     parity_bytes = (
         json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -17887,6 +18272,9 @@ def test_release_readiness_report_blocks_native_evm_fixture_padded_sdk_results(
     self_test_payload["sdk_results"][self_test_padded_sdk] = self_test_payload[
         "sdk_results"
     ].pop(self_test_sdk)
+    self_test_payload["sdk_results"][secret_padded_sdk] = next(
+        iter(self_test_payload["sdk_results"].values())
+    )
     self_test_bytes = (
         json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -17923,8 +18311,7 @@ def test_release_readiness_report_blocks_native_evm_fixture_padded_sdk_results(
     blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
     assert (
         "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
-        "sdk_results sdk key must not contain surrounding whitespace: "
-        f"{parity_padded_sdk!r}"
+        "sdk_results sdk key must not contain surrounding whitespace"
     ) in blockers
     assert (
         "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
@@ -17932,13 +18319,15 @@ def test_release_readiness_report_blocks_native_evm_fixture_padded_sdk_results(
     ) in blockers
     assert (
         "native EVM Groth16 prover bundle native_prover_self_test_artifact "
-        "sdk_results sdk key must not contain surrounding whitespace: "
-        f"{self_test_padded_sdk!r}"
+        "sdk_results sdk key must not contain surrounding whitespace"
     ) in blockers
     assert (
         "native EVM Groth16 prover bundle native_prover_self_test_artifact "
         f"sdk_results missing sdk: {self_test_sdk}"
     ) in blockers
+    assert secret_padded_sdk.strip() not in "\n".join(blockers)
+    assert secret_padded_sdk.strip() not in completed.stdout
+    assert secret_padded_sdk.strip() not in completed.stderr
     assert payload["release_checklist"]["ready"] is False
 
 
@@ -18835,7 +19224,7 @@ def test_release_readiness_report_suppresses_unknown_phase_result_name(
     )
 
     assert completed.returncode == 2
-    assert "unknown SCCP corridor phase" in completed.stderr
+    assert "phase result name contains sensitive name" in completed.stderr
     assert "secret-token" not in completed.stderr
     assert "Status:" not in completed.stdout
 
@@ -19124,7 +19513,7 @@ def test_release_readiness_report_suppresses_unknown_phase_evidence_name(
     )
 
     assert completed.returncode == 2
-    assert "unknown SCCP corridor phase" in completed.stderr
+    assert "phase evidence name contains sensitive name" in completed.stderr
     assert "secret-token" not in completed.stderr
     assert "Status:" not in completed.stdout
 

@@ -2827,6 +2827,78 @@ def test_live_evidence_rejects_non_int64_result_numbers():
             raise AssertionError(f"{result!r} was accepted")
 
 
+def test_live_evidence_redacts_unsupported_transaction_result_fields():
+    module = load_live_module()
+    result_cases = (
+        (
+            {"secret-token-result-field": 1},
+            "ret[0] has unsupported fields: field with sensitive name",
+            "secret-token-result-field",
+        ),
+        (
+            {"operator|result": 1},
+            "ret[0] has unsupported fields: field with malformed name",
+            "operator|result",
+        ),
+        (
+            {7: 1},
+            "ret[0] has unsupported fields: non-string field name",
+            None,
+        ),
+        (
+            {"operator_override": 1},
+            "ret[0] has unsupported fields: operator_override",
+            None,
+        ),
+    )
+    for result, expected_error, forbidden in result_cases:
+        try:
+            module._tron_transaction_result_bytes(result, label="ret[0]")
+        except RuntimeError as exc:
+            message = str(exc)
+            assert expected_error in message
+            if forbidden is not None:
+                assert forbidden not in message
+        else:
+            raise AssertionError(f"{result!r} was accepted")
+
+    detail_cases = (
+        (
+            {"secret-token-detail-field": 1},
+            "ret[0] orderDetails[0] has unsupported fields: field with sensitive name",
+            "secret-token-detail-field",
+        ),
+        (
+            {"operator|detail": 1},
+            "ret[0] orderDetails[0] has unsupported fields: field with malformed name",
+            "operator|detail",
+        ),
+        (
+            {7: 1},
+            "ret[0] orderDetails[0] has unsupported fields: non-string field name",
+            None,
+        ),
+        (
+            {"operator_override": 1},
+            "ret[0] orderDetails[0] has unsupported fields: operator_override",
+            None,
+        ),
+    )
+    for detail, expected_error, forbidden in detail_cases:
+        try:
+            module._tron_market_order_detail_bytes(
+                detail,
+                label="ret[0] orderDetails[0]",
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            assert expected_error in message
+            if forbidden is not None:
+                assert forbidden not in message
+        else:
+            raise AssertionError(f"{detail!r} was accepted")
+
+
 def test_live_evidence_emits_solid_block_header_proof_hash_when_roots_present():
     module = load_live_module()
     witness_payload = tron_witness_schedule_payload_hex(

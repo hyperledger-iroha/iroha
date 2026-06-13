@@ -6688,7 +6688,8 @@ mod evidence_http_tests {
             PrivateKey::from_bytes(Algorithm::Ed25519, &[0x44; 32]).expect("seeded key"),
         )
         .expect("derive keypair");
-        let signature = Signature::new(keypair.private_key(), digest.as_ref());
+        let signature = Signature::try_new(keypair.private_key(), digest.as_ref())
+            .expect("alias proof fixture should sign");
         let (_, signer_bytes) = keypair
             .public_key()
             .try_to_bytes()
@@ -7743,7 +7744,9 @@ mod evidence_http_tests {
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .unwrap();
-        let tx = TransactionBuilder::new(chain, authority.clone()).sign(&private_key);
+        let tx = TransactionBuilder::new(chain, authority.clone())
+            .try_sign(&private_key)
+            .expect("queued status fixture transaction should sign");
         let hash = tx.hash();
         let entry = TransactionEntrypoint::External(tx);
         let entry_hash = entry.hash();
@@ -7953,7 +7956,9 @@ mod evidence_http_tests {
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .unwrap();
-        let tx = TransactionBuilder::new(chain, authority.clone()).sign(&private_key);
+        let tx = TransactionBuilder::new(chain, authority.clone())
+            .try_sign(&private_key)
+            .expect("rejection status fixture transaction should sign");
         let hash = tx.hash();
         let entry = TransactionEntrypoint::External(tx);
         let entry_hash = entry.hash();
@@ -8520,7 +8525,9 @@ mod evidence_http_tests {
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .unwrap();
-        let tx = TransactionBuilder::new(chain, authority).sign(&private_key);
+        let tx = TransactionBuilder::new(chain, authority)
+            .try_sign(&private_key)
+            .expect("committed transaction fixture should sign");
         let hash = tx.hash();
         let entry = TransactionEntrypoint::External(tx);
         let entry_hash = entry.hash();
@@ -16221,7 +16228,9 @@ mod tx_hash_tests {
                 .parse()
                 .unwrap();
 
-        let tx = TransactionBuilder::new(chain, authority.clone()).sign(&private_key);
+        let tx = TransactionBuilder::new(chain, authority.clone())
+            .try_sign(&private_key)
+            .expect("external entrypoint fixture transaction should sign");
         let entry = TransactionEntrypoint::External(tx.clone());
         let entry_hash = entry.hash();
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
@@ -18168,7 +18177,9 @@ mod tests {
                 .parse()
                 .expect("private key");
         let authority = AccountId::new(public_key);
-        let tx = TransactionBuilder::new(chain, authority).sign(&private_key);
+        let tx = TransactionBuilder::new(chain, authority)
+            .try_sign(&private_key)
+            .expect("block stream fixture transaction should sign");
         let block = SignedBlock::genesis(vec![tx], &private_key, None, None);
 
         let bytes = norito::to_bytes(&BlockMessage(block.clone())).expect("encode block message");
@@ -20013,7 +20024,8 @@ mod tests {
         let (authority, keypair) = gen_account_in("foreign-chain-authority");
         let tx = TransactionBuilder::new(ChainId::from("foreign-chain"), authority)
             .with_instructions(Vec::<InstructionBox>::new())
-            .sign(keypair.private_key());
+            .try_sign(keypair.private_key())
+            .expect("foreign-chain fixture transaction should sign");
         let prepared = client.prepare_transaction_payload(&tx);
 
         assert_eq!(prepared.hash(), tx.hash());

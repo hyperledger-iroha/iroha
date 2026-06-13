@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -41,6 +41,10 @@ and completed history lives in [`status.md`](./status.md).
   platform-specific native library name, fails if the freshly built artifact is
   missing, prints the selected native bridge path, and prepends that directory
   to the macOS, Linux, and Windows loader paths before invoking `dotnet test`.
+  The cross-SDK parity guard also requires refreshed local NoritoBridge
+  XCFramework slices to export the recursive compact prove/verify symbols; if a
+  generated `dist/NoritoBridge.xcframework` is stale, rebuild it with
+  `scripts/build_norito_xcframework.sh` before accepting parity evidence.
   The
   Windows pass must also pin the C# negative controls for malformed Norito
   input/output headers, caller archive-copy immutability, verifier-unavailable
@@ -1062,6 +1066,7 @@ and completed history lives in [`status.md`](./status.md).
   treated as Sub&#115;trate/Pol&#107;adot-compatible.
   That exclusion is intentional current-launch scope, not a hidden
   compatibility lane.
+  Do not track that family as remaining SCCP launch work in this cycle.
   Torii OpenAPI SCCP discovery descriptions must carry the same no-support
   sentence so relayers see the exclusion before reading proof manifests.
   Release-readiness and strict bundle source inventories now pin both Torii
@@ -3572,7 +3577,8 @@ and completed history lives in [`status.md`](./status.md).
   handshake `Result` path; peer-trust gossip entry signing now uses
   `Signature::try_new` and skips logged per-entry failures instead of
   unwinding the periodic peer-gossip broadcast loop; local Sumeragi consensus
-  vote signing now uses `Signature::try_new` and skips logged local vote
+  vote signing plus native AMX, merge committee, and RBC ready/deliver
+  wire-message signing now use `Signature::try_new` and skip logged local vote
   emission failures instead of unwinding the commit/precommit path; contract manifest
   provenance signing now exposes `ContractManifest::try_signed`, with CLI
   manifest build/deploy, Torii app API deployment prep, and Connect Norito
@@ -3602,6 +3608,88 @@ and completed history lives in [`status.md`](./status.md).
   client transaction build/sign helpers now use `TransactionBuilder::try_sign`
   and return contextual `eyre` errors from fallible construction/submission
   paths while retaining compatibility wrappers for existing infallible callers;
+  test-network genesis consensus metadata overrides and cached-genesis
+  augmentation now use checked transaction signing and checked genesis block
+  signature reconstruction;
+  snapshot digest files now use `Signature::try_new` during snapshot writes,
+  verify generated signatures against stored digests, and reject wrong-key
+  signatures over matching digests in focused regressions;
+  quarantined Sumeragi vNext re-chain and view-change votes now use
+  `Signature::try_new`, verify canonical vote signatures, and reject
+  wrong-mode consensus-domain preimages in focused regressions;
+  peer trust gossip roundtrip and adversarial trust-record fixtures now share a
+  checked `Signature::try_new` helper, matching the production trust-gossip
+  signing path in focused regressions;
+  SoraFS ISI council envelope and alias proof fixtures now sign through
+  `Signature::try_new`, keeping approval and pending-manifest
+  invalid-signature regressions on checked fixture signatures;
+  `iroha` client SoraFS alias-proof bundle fixtures now sign through
+  `Signature::try_new`, with fresh, stale, and send-builder alias-policy
+  regressions covering checked council signatures; remaining direct `iroha`
+  client transaction fixtures now use `TransactionBuilder::try_sign` across
+  pipeline-status, committed-query/hash, block WebSocket, and prepared-payload
+  regressions;
+  SoraDNS resolver CLI directory-record fixtures now sign through
+  `Signature::try_new`, with the directory fetch/verify CLI suite covering the
+  checked builder signature;
+  SoraDNS ISI directory-record fixtures now sign through `Signature::try_new`,
+  with submit-draft and publish-directory instruction regressions covering the
+  checked builder signature;
+  VPN usage vouchers now expose `VpnUsageVoucherV1::try_sign`, verify checked
+  voucher signatures, and reject tampered or wrong-key voucher signatures in
+  focused regressions;
+  core VPN lease settlement fixtures now build settlement vouchers through
+  `VpnUsageVoucherV1::try_sign`, covering tariff recomputation and relay
+  overclaim rejection on checked voucher signatures;
+  Torii app-API VPN receipt fixtures now build client vouchers through
+  `VpnUsageVoucherV1::try_sign`, with the filtered receipt suite covering
+  WSV-grace success and wrong-key, tampered, malformed, replayed, and
+  substituted receipt/voucher cases;
+  `sora-vpn-helper` usage voucher control-cell envelopes now sign through
+  `Signature::try_new`, propagate controller signing errors, and exercise the
+  fallible envelope builder in the cumulative voucher signer regression;
+  `soranet-vpn-settlement` request header signatures now use
+  `Signature::try_new`, relay runtime usage-voucher fixtures now use
+  `VpnUsageVoucherV1::try_sign`, and the relay DoS outcome labels classify
+  inert admission-token signatures as invalid signature material;
+  Offline v1/v2 vector issuer certificate signatures now use
+  `Signature::try_new`, verify generated certificate signatures, and reject
+  tampered signature or canonical payload bytes in binary regressions;
+  Torii IVM proof-route synthetic transaction construction now uses
+  `TransactionBuilder::try_sign` for `/v1/zk/ivm/derive` and
+  `/v1/zk/ivm/prove`, returning route errors on backend signing failures while
+  keeping proof derivation bound to the requested authority; the STARK route
+  fixture now uses production-floor STARK/FRI verifier parameters in the
+  focused route suite; Torii contract-call, bridge proof/message, and multisig
+  propose/approve/cancel signable scaffold and detached-signature routes now
+  use checked scaffold key generation plus `TransactionBuilder::try_sign`, with
+  route errors on entropy or signing failures before client signable payloads
+  are returned;
+  Swift parity fixture generation and the standalone Norito fixture exporter
+  now use checked transaction signing and verify regenerated fixture
+  signatures in regressions; the exporter also uses `Signature::try_new` for
+  hand-reencoded payload hashes, rejects malformed signed-envelope framing in
+  adversarial tests, and pins standalone `time` resolution to the root-locked
+  `0.3.47`;
+  the confidential wallet fixture exporter now routes shield, ZK transfer, and
+  unshield transactions through `TransactionBuilder::try_sign`, verifies
+  regenerated fixture signatures, rejects tampered signatures, and validates
+  proof backend identifiers in example regressions;
+  the `iroha_core` transaction-size example now builds its measured transaction
+  through `TransactionBuilder::try_sign` and verifies the checked signature in
+  an example regression;
+  the SoraFS pin snapshot fixture generator now signs alias proof and council
+  envelope fixtures through `Signature::try_new` and verifies both generated
+  signatures in example regressions;
+  the `iroha_core` parity fixture generator now routes event fixture
+  transactions and synthetic fixture block signing through checked signing
+  helpers and verifies both paths in example regressions;
+  the Nexus app transfer example wallet path now uses `Signature::try_new` and
+  verifies the checked demo wallet signature while rejecting malformed payload
+  hashes in example regressions;
+  Nexus app facade wallet-signature regressions now share a checked
+  `Signature::try_new` helper for Connect finalization, wallet flow,
+  hash-mismatch, and submit/status error-code fixtures;
   split and IVM contract deploy CLI helpers now use
   `TransactionBuilder::try_sign` for deploy-envelope transaction construction
   and return contextual command errors on backend signing failure; CLI ZK
@@ -3629,16 +3717,35 @@ and completed history lives in [`status.md`](./status.md).
   manifests, contract call/deploy/alias, verifier-key registry, SoraFS, and
   subscription endpoints; JavaScript host transaction assembly and re-sign
   N-API paths now use a checked `TransactionBuilder::try_sign` helper and
-  return N-API errors on backend signing failure; SoraFS CLI fallback manifest
-  `/transaction` submissions now use a checked `TransactionBuilder::try_sign`
-  helper and return contextual command errors before HTTP dispatch on backend
-  signing failure; genesis batch transaction construction now uses
+  return N-API errors on backend signing failure, and JavaScript host SM2
+  sign/fixture N-API paths now use `Sm2PrivateKey::try_sign`; Offline V1/V2
+  interop vector generator certificate issuer signatures now use
+  `Signature::try_new`, and SCCP source-proof, Torii routing
+  finality/evidence, data-model bridge finality, SoraFS manifest alias-proof,
+  SoraFS node gateway, data-model endorsement/manifest/ISI fixture signatures,
+  data-model block fixture signatures, signed-block transparent API fixtures,
+  and data-model transaction payload/multisig fixtures now use
+  `Signature::try_new`/`SignatureOf::try_from_hash`; SoraFS
+  CLI fallback manifest `/transaction`
+  submissions now use a checked `TransactionBuilder::try_sign` helper and
+  return contextual command errors before HTTP dispatch on backend signing
+  failure; genesis batch transaction construction now uses
   `TransactionBuilder::try_sign` and returns contextual genesis-build errors on
   backend signing failure; Sumeragi recovery-heartbeat transaction construction
   now uses a fallible `TransactionBuilder::try_sign` helper and returns
   contextual consensus errors on backend signing failure; transaction-gossip
   frame-size probing now uses `TransactionBuilder::try_sign` and falls back to a
-  zero payload cap with a warning on dummy probe signing failure;
+  zero payload cap with a warning on dummy probe signing failure; Torii
+  runtime-handler signed app-header, pipeline-status, block/header, commit-QC,
+  and SCCP message-bundle fixtures now share checked `Signature::try_new`,
+  `SignatureOf::try_from_hash`, and `TransactionBuilder::try_sign` helpers,
+  with wrong-key BLS block-signature coverage for adversarial verification
+  failure; Kagami Kura block-store test fixtures now use checked transaction
+  and block signing, verify the fixture transaction signature before append,
+  and reject a wrong block-signature key in focused coverage; `iroha_crypto`
+  packed signature alignment fixtures now use checked Ed25519 key generation,
+  `Signature::try_new`, and `SignatureOf::try_from_hash`, with raw and typed
+  signature wrong-key rejection coverage;
   transaction builders, multisig signature bundles, and sealed transaction
   commitments now route through fallible `SignatureOf::try_new` APIs while
   retaining compatibility wrappers for existing callers;
@@ -4003,7 +4110,8 @@ and completed history lives in [`status.md`](./status.md).
 	  Offline note tests, ADDR-2 compliance vectors, and Offline V1/V2 interop
 	  vector generators now also extract fixture public-key payloads through
 	  checked accessors before embedding certificate, address, or offline FI
-	  public-key fields. The remaining SoraFS conformance/chunker/pin/discovery
+	  public-key fields and sign issuer certificate payloads through
+	  `Signature::try_new`. The remaining SoraFS conformance/chunker/pin/discovery
 	  fixtures, gov draw fixtures, bridge proof vectors, config/test-network
 	  assertions, dev key example, Swift parity generator, and offline-note
 	  integration certificate helpers now also use checked public-key accessors,
@@ -5633,6 +5741,7 @@ and completed history lives in [`status.md`](./status.md).
 	  RBC delivered-pending named GST preservation,
 	  RBC delivered-pending named exact action-branch classifier,
 	  RBC delivered-pending named stutter preservation,
+	  RBC delivered-pending named complete branch classifier,
 	  RBC delivered-pending commit-vote preservation handoff,
 	  RBC delivered-pending commit-vote finality handoff,
 	  RBC delivered-pending prepare-vote handoff,

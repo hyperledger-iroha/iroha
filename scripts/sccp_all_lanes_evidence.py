@@ -1005,20 +1005,49 @@ def _decode_canonical_base64(value: str, *, label: str) -> bytes:
     return raw
 
 
+MARKDOWN_UNSAFE_BLOCKER_CHARACTERS = frozenset("|`<>")
+SENSITIVE_PUBLIC_BLOCKER_MARKERS = (
+    "secret-token",
+    "private-key",
+    "private_key",
+    "password",
+    "passphrase",
+    "bearer",
+    "authorization",
+    "access-key",
+    "access_key",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "session",
+    "token",
+)
+
+
+def _blocker_text_issue(blocker: Any) -> str | None:
+    if not isinstance(blocker, str) or not blocker or blocker.strip() != blocker:
+        return "must be a non-empty canonical string"
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in blocker):
+        return "contains control character"
+    if not blocker.isascii():
+        return "contains non-ASCII character"
+    if any(character in MARKDOWN_UNSAFE_BLOCKER_CHARACTERS for character in blocker):
+        return "contains Markdown-unsafe character"
+    if any(marker in blocker.lower() for marker in SENSITIVE_PUBLIC_BLOCKER_MARKERS):
+        return "contains sensitive name"
+    return None
+
+
 def _blocker_list_errors(record: dict[str, Any], label: str) -> list[str]:
     blockers = record.get("blockers", [])
     if not isinstance(blockers, list):
         return [f"{label} blockers must be a list of non-empty canonical strings"]
     errors: list[str] = []
     for index, blocker in enumerate(blockers):
-        if (
-            not isinstance(blocker, str)
-            or not blocker
-            or blocker.strip() != blocker
-        ):
-            errors.append(
-                f"{label} blockers[{index}] must be a non-empty canonical string"
-            )
+        issue = _blocker_text_issue(blocker)
+        if issue is not None:
+            errors.append(f"{label} blockers[{index}] {issue}")
     if blockers:
         errors.append(f"{label} blockers must be empty")
     return errors
@@ -1033,14 +1062,9 @@ def _canonical_blocker_list(
     blockers: list[str] = []
     errors: list[str] = []
     for index, blocker in enumerate(value):
-        if (
-            not isinstance(blocker, str)
-            or not blocker
-            or blocker.strip() != blocker
-        ):
-            errors.append(
-                f"{label} blockers[{index}] must be a non-empty canonical string"
-            )
+        issue = _blocker_text_issue(blocker)
+        if issue is not None:
+            errors.append(f"{label} blockers[{index}] {issue}")
         else:
             blockers.append(blocker)
     return blockers, errors
@@ -1303,6 +1327,22 @@ def _unexpected_record_field_detail(field: object) -> str:
     ):
         return "unexpected field with malformed name"
     return f"unexpected field {field}"
+
+
+def _unexpected_audit_hash_field_detail(field: object) -> str:
+    if not isinstance(field, str):
+        return "source adapter gate audit hashes contains non-string field name"
+    lowered = field.lower()
+    if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
+        return "source adapter gate audit hashes contains unexpected field with sensitive name"
+    if (
+        not field
+        or not field.isascii()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in field)
+        or any(ch not in MINIMAL_TOML_SAFE_KEY_CHARS for ch in field)
+    ):
+        return "source adapter gate audit hashes contains unexpected field with malformed name"
+    return f"source adapter gate audit hashes contains unexpected field: {field}"
 
 
 def _is_canonical_decimal_text(value: object, *, positive: bool) -> bool:
@@ -6193,10 +6233,11 @@ def _source_adapter_gate_release_metadata_blockers(
         blockers.append(
             f"{lane_label}: source adapter gate audit hashes must not be empty when required"
         )
-    for field in sorted(set(audit_hashes) - set(expected_audit_fields)):
-        blockers.append(
-            f"{lane_label}: source adapter gate audit hashes contains unexpected field: {field}"
-        )
+    for field in sorted(
+        set(audit_hashes) - set(expected_audit_fields),
+        key=lambda item: str(item),
+    ):
+        blockers.append(f"{lane_label}: {_unexpected_audit_hash_field_detail(field)}")
     for field in expected_audit_fields:
         value = audit_hashes.get(field)
         parsed = _hex_bytes(value, byte_length=32)
@@ -6263,8 +6304,11 @@ def _source_adapter_gate_release_metadata_blockers(
         ),
     ]
     role_fields.extend(
-        (f"audit_hashes.{field}", _hex_bytes(value, byte_length=32))
-        for field, value in sorted(audit_hashes.items())
+        (
+            f"audit_hashes.{field}",
+            _hex_bytes(audit_hashes.get(field), byte_length=32),
+        )
+        for field in sorted(expected_audit_fields)
     )
     _expect_distinct_byte_values(
         blockers,

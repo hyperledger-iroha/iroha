@@ -11,6 +11,7 @@ import subprocess
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -455,6 +456,7 @@ def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_r
     source_deployment_hash = fixed_hex32(0xB2)
     destination_binding_hash = fixed_hex32(0xB3)
     route_hash = fixed_hex32(0xB4)
+    source_gate_hash = fixed_hex32(0xB5)
     valid_lane = {
         "source_record_hashes": {
             "source_verifier_material_hash": source_material_hash,
@@ -467,9 +469,9 @@ def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_r
         },
         "source_adapter_gate": {
             "ready": True,
-            "required": False,
-            "gate_hash": "",
-            "audit_hashes": {},
+            "required": True,
+            "gate_hash": source_gate_hash,
+            "audit_hashes": {"evm_source_gate_hash": source_gate_hash},
         },
         "route_allowlist": {
             "route_allowlist_hash": route_hash,
@@ -549,6 +551,7 @@ def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_a
     source_material_hash = fixed_hex32(0xC1)
     source_deployment_hash = fixed_hex32(0xC2)
     destination_binding_hash = fixed_hex32(0xC3)
+    source_gate_hash = fixed_hex32(0xC4)
     valid_lane = {
         "source_record_hashes": {
             "source_verifier_material_hash": source_material_hash,
@@ -561,9 +564,9 @@ def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_a
         },
         "source_adapter_gate": {
             "ready": True,
-            "required": False,
-            "gate_hash": "",
-            "audit_hashes": {},
+            "required": True,
+            "gate_hash": source_gate_hash,
+            "audit_hashes": {"evm_source_gate_hash": source_gate_hash},
         },
     }
     assert verifier._active_launch_governed_deployment_metadata_blockers(
@@ -1792,6 +1795,34 @@ def test_release_bundle_verifier_guards_all_lanes_governed_blocker_schema_invent
         for error in errors
     )
 
+    script_markers = verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS[0][1]
+    for removed_script_marker_index, removed_script_marker in enumerate((
+        "def _blocker_text_issue(",
+        "contains control character",
+        "contains non-ASCII character",
+        "contains Markdown-unsafe character",
+        "contains sensitive name",
+    )):
+        sparse_script_marker = tmp_path / (
+            f"sccp_all_lanes_governed_blockers_{removed_script_marker_index}.py"
+        )
+        sparse_script_marker.write_text(
+            "\n".join(
+                marker for marker in script_markers if marker != removed_script_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = verifier._all_lanes_governed_blocker_schema_inventory_errors(
+            ((sparse_script_marker, script_markers),)
+        )
+
+        assert any(
+            "SCCP all-lanes governed blocker schema source inventory" in error
+            and str(sparse_script_marker) in error
+            and f"missing marker: {removed_script_marker}" in error
+            for error in errors
+        )
+
     blocker_test_marker = 'sol_route["blockers"] = [" route canary still pending"]'
     sparse_test = tmp_path / "sccp_all_lanes_evidence_test.py"
     sparse_test.write_text(
@@ -1818,6 +1849,32 @@ def test_release_bundle_verifier_guards_all_lanes_governed_blocker_schema_invent
         for error in errors
     )
 
+    test_markers = verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS[1][1]
+    for removed_test_marker_index, removed_test_marker in enumerate((
+        "secret-token-governed-blocker",
+        "operator|governed-blocker",
+        "confusable_blocker",
+    )):
+        sparse_test_marker = tmp_path / (
+            f"sccp_all_lanes_governed_blockers_test_{removed_test_marker_index}.py"
+        )
+        sparse_test_marker.write_text(
+            "\n".join(
+                marker for marker in test_markers if marker != removed_test_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = verifier._all_lanes_governed_blocker_schema_inventory_errors(
+            ((sparse_test_marker, test_markers),)
+        )
+
+        assert any(
+            "SCCP all-lanes governed blocker schema source inventory" in error
+            and str(sparse_test_marker) in error
+            and f"missing marker: {removed_test_marker}" in error
+            for error in errors
+        )
+
 
 def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolean_inventory(
     tmp_path: Path,
@@ -1830,6 +1887,9 @@ def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolea
         == []
     )
 
+    required_script_markers = (
+        verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[0][1]
+    )
     sparse_script = tmp_path / "sccp_all_lanes_evidence.py"
     sparse_script.write_text(
         '"production_ready": not all_blockers\n',
@@ -1839,7 +1899,7 @@ def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolea
         (
             (
                 sparse_script,
-                verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[0][1],
+                required_script_markers,
             ),
         )
     )
@@ -1856,6 +1916,40 @@ def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolea
         in error
         for error in errors
     )
+
+    for removed_script_marker_index, removed_script_marker in enumerate((
+        "def _unexpected_audit_hash_field_detail(",
+        "source adapter gate audit hashes contains unexpected field with sensitive name",
+        "source adapter gate audit hashes contains unexpected field with malformed name",
+        "source adapter gate audit hashes contains non-string field name",
+    )):
+        sparse_script_marker = tmp_path / (
+            f"sccp_all_lanes_evidence_{removed_script_marker_index}.py"
+        )
+        sparse_script_marker.write_text(
+            "\n".join(
+                marker
+                for marker in required_script_markers
+                if marker != removed_script_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
+            (
+                (
+                    sparse_script_marker,
+                    required_script_markers,
+                ),
+            )
+        )
+
+        assert any(
+            "SCCP all-lanes release-checklist exact-boolean source inventory"
+            in error
+            and str(sparse_script_marker) in error
+            and f"missing marker: {removed_script_marker}" in error
+            for error in errors
+        )
 
     required_test_markers = verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[
         1
@@ -1883,6 +1977,40 @@ def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolea
         and f"missing marker: {removed_marker}" in error
         for error in errors
     )
+
+    for removed_test_marker_index, removed_test_marker in enumerate((
+        "def test_all_lanes_release_checklist_redacts_unsafe_source_gate_audit_fields",
+        "secret-token-audit-field",
+        "route|operator-audit-field",
+        "secret-token-replayed-audit-field",
+    )):
+        sparse_redaction_tests = tmp_path / (
+            f"sccp_all_lanes_redaction_{removed_test_marker_index}_test.py"
+        )
+        sparse_redaction_tests.write_text(
+            "\n".join(
+                marker
+                for marker in required_test_markers
+                if marker != removed_test_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
+            (
+                (
+                    sparse_redaction_tests,
+                    required_test_markers,
+                ),
+            )
+        )
+
+        assert any(
+            "SCCP all-lanes release-checklist exact-boolean source inventory"
+            in error
+            and str(sparse_redaction_tests) in error
+            and f"missing marker: {removed_test_marker}" in error
+            for error in errors
+        )
 
     removed_gate_blocker_marker = "source_gate.checklist_empty"
     sparse_gate_blocker_tests = tmp_path / "sccp_all_lanes_source_gate_test.py"
@@ -2601,6 +2729,7 @@ def test_release_bundle_verifier_guards_release_manifest_artifact_set_order_inve
         "def test_release_bundle_verifier_rejects_manifest_artifact_order_drift",
         "def test_release_bundle_verifier_rejects_unknown_artifact_fields",
         "def test_release_bundle_verifier_rejects_malformed_artifact_fields",
+        "secret_token_artifact_field",
         "def test_release_bundle_verifier_rejects_artifact_field_type_drift",
         "def test_release_bundle_verifier_rejects_artifact_digest_text_drift",
         "def test_release_bundle_rejects_malformed_copied_artifacts_before_render",
@@ -2678,6 +2807,10 @@ def test_release_bundle_verifier_guards_release_public_blocker_list_schema_inven
         "def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift",
         "def test_release_bundle_verifier_rejects_padded_public_blocker_strings",
         "def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings",
+        "def test_release_bundle_verifier_rejects_hostile_public_blocker_strings",
+        "secret-token-public-blocker",
+        "operator|public-blocker",
+        "operator public blоcker",
         "def test_release_bundle_verifier_active_launch_blockers_reject_malformed_containers",
         "def test_release_bundle_verifier_rejects_malformed_active_launch_blockers",
         "def test_release_bundle_verifier_rejects_all_lanes_root_blockers",
@@ -2712,6 +2845,7 @@ def test_release_bundle_verifier_guards_release_public_blocker_list_schema_inven
     )
     removed_readiness_markers = {
         "def test_release_readiness_report_markdown_marks_malformed_blocker_containers",
+        "def test_release_readiness_report_markdown_marks_hostile_public_blocker_strings",
         "def test_release_readiness_report_classifies_malformed_active_lane_blockers",
         "def test_release_readiness_report_blocks_malformed_native_prover_blockers",
     }
@@ -2818,6 +2952,10 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         'f"/wallet/getcontract returned malformed {label} contract_address"',
         'f"TRON constant call {function_selector} returned non-hex data"',
         "except (RuntimeError, TypeError, ValueError):",
+        "def _unsupported_tron_field_detail(",
+        "field with sensitive name",
+        "field with malformed name",
+        "non-string field name",
         "witness schedule payload is invalid",
         'f"witness schedule transition {index} message is invalid"',
         'f"witness schedule transition {index} seal is invalid"',
@@ -3064,6 +3202,18 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
             "secret-token transaction source proof parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "def test_live_evidence_redacts_unsupported_transaction_result_fields",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token-result-field",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token-detail-field",
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
@@ -3769,6 +3919,9 @@ def test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_i
         == []
     )
 
+    verifier_markers = verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS[
+        0
+    ][1]
     sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
     sparse_verifier.write_text(
         "def _cryptographic_evidence_inventory_errors(crypto):\n",
@@ -3778,7 +3931,7 @@ def test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_i
         (
             (
                 sparse_verifier,
-                verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS[0][1],
+                verifier_markers,
             ),
         )
     )
@@ -3807,6 +3960,64 @@ def test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_i
         for error in errors
     )
 
+    for removed_verifier_marker in (
+        "SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (",
+        "def _unexpected_source_adapter_gate_audit_field_blocker(",
+        "contains unexpected field with sensitive name",
+    ):
+        sparse_verifier_marker = tmp_path / (
+            f"sccp_verify_crypto_{removed_verifier_marker[:8]}.py"
+        )
+        sparse_verifier_marker.write_text(
+            "\n".join(
+                marker for marker in verifier_markers if marker != removed_verifier_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = verifier._sccp_release_public_crypto_evidence_binding_inventory_errors(
+            ((sparse_verifier_marker, verifier_markers),)
+        )
+
+        assert any(
+            "SCCP release public cryptographic-evidence binding source inventory"
+            in error
+            and str(sparse_verifier_marker) in error
+            and f"missing marker: {removed_verifier_marker}" in error
+            for error in errors
+        )
+
+    bundle_script_markers = next(
+        markers
+        for path, markers in verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS
+        if path == "scripts/sccp_release_bundle.py"
+    )
+    for removed_bundle_script_marker in (
+        "def _unexpected_source_adapter_gate_audit_field_error(",
+        "contains unexpected field with sensitive name",
+    ):
+        sparse_bundle_script = tmp_path / (
+            f"sccp_release_bundle_{removed_bundle_script_marker[:8]}.py"
+        )
+        sparse_bundle_script.write_text(
+            "\n".join(
+                marker
+                for marker in bundle_script_markers
+                if marker != removed_bundle_script_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = verifier._sccp_release_public_crypto_evidence_binding_inventory_errors(
+            ((sparse_bundle_script, bundle_script_markers),)
+        )
+
+        assert any(
+            "SCCP release public cryptographic-evidence binding source inventory"
+            in error
+            and str(sparse_bundle_script) in error
+            and f"missing marker: {removed_bundle_script_marker}" in error
+            for error in errors
+        )
+
     bundle_test_markers = next(
         markers
         for path, markers in verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS
@@ -3820,6 +4031,10 @@ def test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_i
         "test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes",
         "test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift",
         "test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift",
+        "test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before_render",
+        "test_release_bundle_verifier_redacts_sensitive_source_adapter_gate_audit_fields",
+        "secret-token-audit-field",
+        "audit_hashes contains unexpected field with sensitive name",
         "test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile",
     }
     sparse_bundle_test = tmp_path / "sccp_release_bundle_crypto_test.py"
@@ -5717,6 +5932,7 @@ def test_release_bundle_rejects_malformed_copied_artifacts_before_render(
     output_dir = tmp_path / "bundle"
     markdown_field = "operator|secret-token"
     confusable_field = "operat\u043er_artifact_note"
+    secret_field = "secret_token_artifact_field"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -5740,6 +5956,7 @@ def test_release_bundle_rejects_malformed_copied_artifacts_before_render(
                         "operator artifact_note": "whitespace local claim",
                         markdown_field: "markdown local claim",
                         confusable_field: "confusable local claim",
+                        secret_field: "secret local claim",
                     }
                 ]
                 corridor = report["corridor"]
@@ -5800,8 +6017,13 @@ def test_release_bundle_rejects_malformed_copied_artifacts_before_render(
         "bundled report.input_artifacts[0] contains unknown field name with "
         "non-ASCII character"
     ) in captured.err
+    assert (
+        "bundled report.input_artifacts[0] contains unknown field name with "
+        "sensitive name"
+    ) in captured.err
     assert markdown_field not in captured.err
     assert confusable_field not in captured.err
+    assert secret_field not in captured.err
     assert (
         "bundled report.input_artifacts[0] path must not contain surrounding "
         "whitespace"
@@ -5996,6 +6218,18 @@ def test_release_bundle_rejects_malformed_copied_checklist_before_render(
                             "ready": "true",
                             "blockers": "operator says ready",
                         },
+                        {
+                            "id": "secret_token_checklist_item",
+                            "title": "Sensitive copied checklist row",
+                            "ready": False,
+                            "blockers": ["secret checklist blocker"],
+                        },
+                        {
+                            "id": "secret_token_checklist_item",
+                            "title": "Sensitive copied checklist row duplicate",
+                            "ready": True,
+                            "blockers": [],
+                        },
                     ],
                 }
             return report
@@ -6062,6 +6296,24 @@ def test_release_bundle_rejects_malformed_copied_checklist_before_render(
         "bundled report.release_checklist.items[2] blockers must be a list of "
         "non-empty strings"
     ) in captured.err
+    assert (
+        "bundled report.release_checklist.items[3] id contains sensitive name"
+        in captured.err
+    )
+    assert (
+        "bundled report.release_checklist.items[3] ready must be true"
+        in captured.err
+    )
+    assert (
+        "bundled report.release_checklist.items[3] blockers must be empty"
+        in captured.err
+    )
+    assert (
+        "bundled report.release_checklist.items[4] id contains sensitive name"
+        in captured.err
+    )
+    assert "secret_token_checklist_item" not in captured.err
+    assert "secret checklist blocker" not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -6781,6 +7033,7 @@ def test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_rende
     evidence.write_text("[zk]\n", encoding="utf-8")
     output_dir = tmp_path / "bundle"
     confusable_phase = "jav\u0430-sdk"
+    sensitive_phase = "secret-token-phase"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -6804,6 +7057,7 @@ def test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_rende
                     "kotlin sdk": "passed",
                     "java|android": "passed",
                     confusable_phase: "passed",
+                    sensitive_phase: "passed",
                     "kotlin_sdk": "passed",
                     "-dotnet": "passed",
                     "portal-review": "passed",
@@ -6856,6 +7110,7 @@ def test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_rende
             captured.err
         )
         assert f"{label} contains phase with non-ASCII character" in captured.err
+        assert f"{label} contains phase with sensitive name" in captured.err
         assert f"{label} contains malformed phase" in captured.err
     assert (
         "bundled report.corridor has unknown phase status: portal-review"
@@ -6874,6 +7129,7 @@ def test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_rende
         in captured.err
     )
     assert confusable_phase not in captured.err
+    assert sensitive_phase not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -7290,6 +7546,430 @@ def test_release_bundle_rejects_copied_crypto_source_adapter_gate_drift_before_r
     ) in required_errors
 
 
+def test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before_render() -> None:
+    """Copied source-gate audit diagnostics must not leak secret-like keys."""
+
+    bundle = load_bundle_module()
+    expected_audit_hashes = {
+        "solana_tower_replay_verifier_hash": fixed_hex32(0x61),
+        "solana_full_accountsdb_lattice_verifier_hash": fixed_hex32(0x62),
+        "solana_bank_fork_choice_verifier_hash": fixed_hex32(0x63),
+        "solana_full_light_client_gate_hash": fixed_hex32(0x64),
+    }
+    label = "bundled report.cryptographic_evidence[0]"
+    row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    row.update(
+        {
+            "domain": 3,
+            "chain": "solana",
+            "evm_source_rpc_chain_id": "",
+            "evm_source_block_tag": "",
+            "evm_destination_rpc_chain_id": "",
+            "evm_destination_block_tag": "",
+            "route_canary_evidence_bound": False,
+            "route_canary_receipt_block_finalized": None,
+            "source_adapter_gate_required": True,
+            "source_adapter_gate_hash": expected_audit_hashes[
+                "solana_full_light_client_gate_hash"
+            ],
+            "source_adapter_gate_audit_hashes": {
+                **expected_audit_hashes,
+                "secret-token-audit-field": fixed_hex32(0x65),
+            },
+        }
+    )
+
+    crypto_errors = "\n".join(bundle._cryptographic_evidence_row_bundle_errors(row, label))
+
+    assert (
+        f"{label} source_adapter_gate_audit_hashes contains unexpected field "
+        "with sensitive name"
+    ) in crypto_errors
+    assert "secret-token-audit-field" not in crypto_errors
+
+    safe_row = {
+        **row,
+        "source_adapter_gate_audit_hashes": {
+            **expected_audit_hashes,
+            "operator_override": fixed_hex32(0x65),
+        },
+    }
+    safe_crypto_errors = "\n".join(
+        bundle._cryptographic_evidence_row_bundle_errors(safe_row, label)
+    )
+
+    assert (
+        f"{label} source_adapter_gate_audit_hashes contains unexpected field: "
+        "operator_override"
+    ) in safe_crypto_errors
+
+    lane = {
+        "domain": 3,
+        "chain": "sol",
+    }
+    source_gate = {
+        "required": True,
+        "ready": True,
+        "gate_hash": expected_audit_hashes["solana_full_light_client_gate_hash"],
+        "audit_hashes": {
+            **expected_audit_hashes,
+            "secret-token-audit-field": fixed_hex32(0x65),
+        },
+        "blockers": [],
+    }
+    lane_label = "bundled report.evidence.lanes[0]"
+    gate_errors = "\n".join(
+        bundle._source_adapter_gate_semantic_errors(lane_label, lane, source_gate)
+    )
+
+    assert (
+        f"{lane_label}.source_adapter_gate audit_hashes contains unexpected "
+        "field with sensitive name"
+    ) in gate_errors
+    assert "secret-token-audit-field" not in gate_errors
+
+    safe_source_gate = {
+        **source_gate,
+        "audit_hashes": {
+            **expected_audit_hashes,
+            "operator_override": fixed_hex32(0x65),
+        },
+    }
+    safe_gate_errors = "\n".join(
+        bundle._source_adapter_gate_semantic_errors(
+            lane_label,
+            lane,
+            safe_source_gate,
+        )
+    )
+
+    assert (
+        f"{lane_label}.source_adapter_gate audit_hashes contains unexpected "
+        "field: operator_override"
+    ) in safe_gate_errors
+
+
+def test_release_bundle_bsc_source_gate_policy_matches_verifier_before_render() -> None:
+    """Bundle pre-render and standalone verifier BSC gate policy must agree."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    label = "bundled report.cryptographic_evidence[0]"
+
+    def bsc_row(
+        *,
+        chain: str,
+        required: bool,
+        gate_hash: str,
+        audit_hashes: dict[str, str],
+    ) -> dict[str, Any]:
+        chain_id = "97" if chain == "bsc-testnet" else "56"
+        row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+        row.update(
+            {
+                "domain": verifier.SCCP_DOMAIN_BSC,
+                "chain": chain,
+                "evm_source_rpc_chain_id": chain_id,
+                "evm_source_block_tag": "latest",
+                "evm_destination_rpc_chain_id": chain_id,
+                "evm_destination_block_tag": "latest",
+                "route_canary_evidence_bound": False,
+                "route_canary_receipt_block_finalized": None,
+                "source_adapter_gate_required": required,
+                "source_adapter_gate_hash": gate_hash,
+                "source_adapter_gate_audit_hashes": audit_hashes,
+            }
+        )
+        return row
+
+    def verifier_gate_errors(row: dict[str, Any]) -> list[str]:
+        return [
+            error
+            for error in verifier._cryptographic_evidence_row_schema_errors(row)
+            if "source_adapter_gate" in error
+        ]
+
+    def bundle_gate_errors(row: dict[str, Any]) -> list[str]:
+        return [
+            error
+            for error in bundle._cryptographic_evidence_row_bundle_errors(row, label)
+            if "source_adapter_gate" in error
+        ]
+
+    testnet_no_gate = bsc_row(
+        chain="bsc-testnet",
+        required=False,
+        gate_hash="",
+        audit_hashes={},
+    )
+    assert verifier_gate_errors(testnet_no_gate) == []
+    assert bundle_gate_errors(testnet_no_gate) == []
+
+    mainnet_no_gate = bsc_row(
+        chain="bsc",
+        required=False,
+        gate_hash="",
+        audit_hashes={},
+    )
+    assert any(
+        "source_adapter_gate_required must be true for this domain" in error
+        for error in verifier_gate_errors(mainnet_no_gate)
+    )
+    assert any(
+        "source_adapter_gate_required must be true for this domain" in error
+        for error in bundle_gate_errors(mainnet_no_gate)
+    )
+
+    testnet_with_gate = bsc_row(
+        chain="bsc-testnet",
+        required=True,
+        gate_hash=fixed_hex32(0x11),
+        audit_hashes={"evm_source_gate_hash": fixed_hex32(0x11)},
+    )
+    assert any(
+        "source_adapter_gate_required must be false for this domain" in error
+        for error in verifier_gate_errors(testnet_with_gate)
+    )
+    assert any(
+        "source_adapter_gate_required must be false for this domain" in error
+        for error in bundle_gate_errors(testnet_with_gate)
+    )
+
+    testnet_lane = {"domain": verifier.SCCP_DOMAIN_BSC, "chain": "bsc-testnet"}
+    no_gate_source_adapter = {
+        "required": False,
+        "ready": True,
+        "gate_hash": "",
+        "audit_hashes": {},
+        "blockers": [],
+    }
+    assert (
+        verifier._source_adapter_gate_coherence_errors(
+            "lane.source_adapter_gate",
+            testnet_lane,
+            no_gate_source_adapter,
+        )
+        == []
+    )
+    assert (
+        bundle._source_adapter_gate_semantic_errors(
+            "lane",
+            testnet_lane,
+            no_gate_source_adapter,
+        )
+        == []
+    )
+
+    mainnet_lane = {"domain": verifier.SCCP_DOMAIN_BSC, "chain": "bsc"}
+    assert any(
+        "required must be true for this lane domain" in error
+        for error in verifier._source_adapter_gate_coherence_errors(
+            "lane.source_adapter_gate",
+            mainnet_lane,
+            no_gate_source_adapter,
+        )
+    )
+    assert any(
+        "required must be true for this lane domain" in error
+        for error in bundle._source_adapter_gate_semantic_errors(
+            "lane",
+            mainnet_lane,
+            no_gate_source_adapter,
+        )
+    )
+
+    gate_source_adapter = {
+        "required": True,
+        "ready": True,
+        "gate_hash": fixed_hex32(0x11),
+        "audit_hashes": {"evm_source_gate_hash": fixed_hex32(0x11)},
+        "blockers": [],
+    }
+    assert any(
+        "required must be false for this lane domain" in error
+        for error in verifier._source_adapter_gate_coherence_errors(
+            "lane.source_adapter_gate",
+            testnet_lane,
+            gate_source_adapter,
+        )
+    )
+    assert any(
+        "required must be false for this lane domain" in error
+        for error in bundle._source_adapter_gate_semantic_errors(
+            "lane",
+            testnet_lane,
+            gate_source_adapter,
+        )
+    )
+
+
+def test_release_bundle_bsc_testnet_no_gate_profile_is_exact_and_empty() -> None:
+    """Only exact bsc-testnet may omit gate material, and omitted means empty."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    label = "bundled report.cryptographic_evidence[0]"
+
+    def bsc_row(
+        chain: Any,
+        *,
+        required: bool = False,
+        gate_hash: str = "",
+        audit_hashes: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        chain_id = "97" if chain == "bsc-testnet" else "56"
+        row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+        row.update(
+            {
+                "domain": verifier.SCCP_DOMAIN_BSC,
+                "chain": chain,
+                "evm_source_rpc_chain_id": chain_id,
+                "evm_source_block_tag": "latest",
+                "evm_destination_rpc_chain_id": chain_id,
+                "evm_destination_block_tag": "latest",
+                "route_canary_evidence_bound": False,
+                "route_canary_receipt_block_finalized": None,
+                "source_adapter_gate_required": required,
+                "source_adapter_gate_hash": gate_hash,
+                "source_adapter_gate_audit_hashes": audit_hashes or {},
+            }
+        )
+        return row
+
+    non_empty_testnet_hash = bsc_row(
+        "bsc-testnet",
+        gate_hash=fixed_hex32(0x21),
+    )
+    verifier_errors = verifier._cryptographic_evidence_row_schema_errors(
+        non_empty_testnet_hash
+    )
+    bundle_errors = bundle._cryptographic_evidence_row_bundle_errors(
+        non_empty_testnet_hash,
+        label,
+    )
+
+    assert any(
+        "source_adapter_gate_hash must be empty when gate is not required" in error
+        for error in verifier_errors
+    )
+    assert any(
+        "source_adapter_gate_hash must be empty when gate is not required" in error
+        for error in bundle_errors
+    )
+    assert not any(
+        "source_adapter_gate_required must be true for this domain" in error
+        for error in verifier_errors
+    )
+
+    non_empty_testnet_audits = bsc_row(
+        "bsc-testnet",
+        audit_hashes={"evm_source_gate_hash": fixed_hex32(0x22)},
+    )
+    verifier_errors = verifier._cryptographic_evidence_row_schema_errors(
+        non_empty_testnet_audits
+    )
+    bundle_errors = bundle._cryptographic_evidence_row_bundle_errors(
+        non_empty_testnet_audits,
+        label,
+    )
+
+    assert any(
+        "source_adapter_gate_audit_hashes must be empty when gate is not required"
+        in error
+        for error in verifier_errors
+    )
+    assert any(
+        "source_adapter_gate_audit_hashes must be empty when gate is not required"
+        in error
+        for error in bundle_errors
+    )
+
+    exact_testnet_lane = {"domain": verifier.SCCP_DOMAIN_BSC, "chain": "bsc-testnet"}
+    non_empty_source_gate = {
+        "required": False,
+        "ready": True,
+        "gate_hash": fixed_hex32(0x23),
+        "audit_hashes": {"evm_source_gate_hash": fixed_hex32(0x23)},
+        "blockers": ["operator override"],
+    }
+    assert any(
+        "gate_hash must be empty when gate is not required" in error
+        for error in verifier._source_adapter_gate_coherence_errors(
+            "lane.source_adapter_gate",
+            exact_testnet_lane,
+            non_empty_source_gate,
+        )
+    )
+    assert any(
+        "audit_hashes must be empty when gate is not required" in error
+        for error in bundle._source_adapter_gate_semantic_errors(
+            "lane",
+            exact_testnet_lane,
+            non_empty_source_gate,
+        )
+    )
+
+    malformed_chains: tuple[Any, ...] = (
+        "BSC-TESTNET",
+        "bsc_testnet",
+        "bsc-testnet ",
+        " bsc-testnet",
+        "bsc-testnet\n",
+        "bsc-preview",
+        None,
+        True,
+        97,
+    )
+    for chain in malformed_chains:
+        row = bsc_row(chain)
+        verifier_errors = verifier._cryptographic_evidence_row_schema_errors(row)
+        bundle_errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+        assert any(
+            "source_adapter_gate_required must be true for this domain" in error
+            for error in verifier_errors
+        ), chain
+        assert any(
+            "source_adapter_gate_required must be true for this domain" in error
+            for error in bundle_errors
+        ), chain
+        if isinstance(chain, str) and chain and chain.strip() == chain:
+            assert any(
+                "chain mismatch for domain 2" in error
+                for error in verifier._cryptographic_evidence_inventory_errors([row])
+            ), chain
+        else:
+            assert any(
+                "chain must be a non-empty string" in error
+                for error in verifier_errors
+            ), chain
+
+        lane = {"domain": verifier.SCCP_DOMAIN_BSC, "chain": chain}
+        no_gate_source_gate = {
+            "required": False,
+            "ready": True,
+            "gate_hash": "",
+            "audit_hashes": {},
+            "blockers": [],
+        }
+        assert any(
+            "required must be true for this lane domain" in error
+            for error in verifier._source_adapter_gate_coherence_errors(
+                "lane.source_adapter_gate",
+                lane,
+                no_gate_source_gate,
+            )
+        ), chain
+        assert any(
+            "required must be true for this lane domain" in error
+            for error in bundle._source_adapter_gate_semantic_errors(
+                "lane",
+                lane,
+                no_gate_source_gate,
+            )
+        ), chain
+
+
 def test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render(
     tmp_path: Path,
     monkeypatch,
@@ -7564,13 +8244,23 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
     evidence.write_text("[zk]\n", encoding="utf-8")
     output_dir = tmp_path / "bundle"
     confusable_sdk = "javas\u0441ript-sdk"
+    sensitive_sdk = "secret-token-sdk"
     confusable_phase = "javas\u0441ript-sdk"
+    sensitive_lane = "secret-token-lane"
     markdown_backend = "evm|groth16"
+    sensitive_backend = "secret-token-backend"
     markdown_submission = "submit|with secret-token"
+    sensitive_submission = "operator submission secret-token-submission path"
     markdown_helper = "build|ProofSecret"
+    sensitive_helper = "buildBearerTokenProof"
     markdown_sdk_helpers = "forged|UiSecret"
+    sensitive_sdk_helpers = "forged helper secret-token-helpers"
     markdown_field = "operator|secret-token"
     confusable_field = "operat\u043er_attestation"
+    control_blocker = "operator\nuser-surface-blocker"
+    markdown_blocker = "operator|user-surface-blocker"
+    confusable_blocker = "operator user-surface bl\u043ecker"
+    sensitive_blocker = "operator secret-token-user-surface-blocker"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -7601,6 +8291,7 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
                         "kotlin sdk": ["forgedUiProver"],
                         "java|android": ["forgedUiProver"],
                         confusable_sdk: ["forgedUiProver"],
+                        sensitive_sdk: ["secret helper"],
                         "kotlin_sdk": ["forgedUiProver"],
                         "-dotnet": ["forgedUiProver"],
                         "unknown-sdk": ["forgedUiProver"],
@@ -7626,9 +8317,31 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
                         "js-sdk",
                     ],
                     "validation_status": "reviewed",
-                    "validation_blockers": [" padded blocker "],
+                    "validation_blockers": [
+                        " padded blocker ",
+                        control_blocker,
+                        markdown_blocker,
+                        confusable_blocker,
+                        sensitive_blocker,
+                    ],
                 }
-                report["user_prover_submission_surfaces"] = [surface]
+                sensitive_surface = dict(surface)
+                sensitive_surface["lanes"] = sensitive_lane
+                sensitive_surface["proof_backend"] = sensitive_backend
+                sensitive_surface["on_chain_submission"] = sensitive_submission
+                sensitive_surface["sdk_helpers"] = sensitive_sdk_helpers
+                sensitive_surface["sdk_helper_symbols"] = [
+                    "buildBridgeProofSubmission",
+                    sensitive_helper,
+                ]
+                sensitive_surface["sdk_helper_symbols_by_sdk"] = {
+                    "js-sdk": list(sensitive_surface["sdk_helper_symbols"]),
+                    "python-sdk": ["buildPythonProof", sensitive_helper],
+                }
+                report["user_prover_submission_surfaces"] = [
+                    surface,
+                    sensitive_surface,
+                ]
             return report
 
         def _render_markdown(self, *args, **kwargs) -> str:
@@ -7678,14 +8391,33 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
         f"{label} lanes must be a non-empty string "
         "with no surrounding whitespace"
     ) in captured.err
+    assert (
+        "bundled report.user_prover_submission_surfaces[1] lanes contains sensitive name"
+    ) in captured.err
     assert f"{label} proof_backend contains Markdown-unsafe character" in captured.err
+    assert (
+        "bundled report.user_prover_submission_surfaces[1] "
+        "proof_backend contains sensitive name"
+    ) in captured.err
     assert f"{label} on_chain_submission contains Markdown-unsafe character" in (
         captured.err
     )
+    assert (
+        "bundled report.user_prover_submission_surfaces[1] "
+        "on_chain_submission contains sensitive name"
+    ) in captured.err
     assert f"{label} sdk_helpers contains Markdown-unsafe character" in captured.err
+    assert (
+        "bundled report.user_prover_submission_surfaces[1] "
+        "sdk_helpers contains sensitive name"
+    ) in captured.err
     assert (
         f"{label} sdk_helper_symbols contains helper symbol with "
         "Markdown-unsafe character"
+    ) in captured.err
+    assert (
+        "bundled report.user_prover_submission_surfaces[1] "
+        "sdk_helper_symbols contains helper symbol with sensitive name"
     ) in captured.err
     assert f"{sdk_label} contains SDK key with surrounding whitespace" in captured.err
     assert f"{sdk_label} contains SDK key with control character" in captured.err
@@ -7694,11 +8426,17 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
         captured.err
     )
     assert f"{sdk_label} contains SDK key with non-ASCII character" in captured.err
+    assert f"{sdk_label} contains SDK key with sensitive name" in captured.err
     assert f"{sdk_label} contains malformed SDK key" in captured.err
     assert f"{sdk_label} contains unknown SDK: unknown-sdk" in captured.err
     assert (
         f"{sdk_label}[js-sdk] contains helper symbol with "
         "Markdown-unsafe character"
+    ) in captured.err
+    assert (
+        "bundled report.user_prover_submission_surfaces[1] "
+        "sdk_helper_symbols_by_sdk[js-sdk] contains helper symbol with "
+        "sensitive name"
     ) in captured.err
     assert f"{sdk_label}[python-sdk] contains duplicate symbols" in captured.err
     assert f"{sdk_label}[swift-sdk] must be a list of non-empty strings" in (
@@ -7719,14 +8457,40 @@ def test_release_bundle_rejects_malformed_copied_submission_surface_before_rende
     assert f"{phases_label} contains unknown phase: portal-review" in captured.err
     assert f"{label} validation_status must be passed or blocked" in captured.err
     assert f"{label} validation_blockers {list_error}" in captured.err
+    assert (
+        f"{label} validation_blockers contains blocker with control character"
+        in captured.err
+    )
+    assert (
+        f"{label} validation_blockers contains blocker with Markdown-unsafe character"
+        in captured.err
+    )
+    assert (
+        f"{label} validation_blockers contains blocker with non-ASCII character"
+        in captured.err
+    )
+    assert (
+        f"{label} validation_blockers contains blocker with sensitive name"
+        in captured.err
+    )
     assert confusable_sdk not in captured.err
+    assert sensitive_sdk not in captured.err
     assert confusable_phase not in captured.err
+    assert sensitive_lane not in captured.err
+    assert sensitive_backend not in captured.err
     assert markdown_backend not in captured.err
     assert markdown_submission not in captured.err
+    assert sensitive_submission not in captured.err
     assert markdown_helper not in captured.err
+    assert sensitive_helper not in captured.err
     assert markdown_sdk_helpers not in captured.err
+    assert sensitive_sdk_helpers not in captured.err
     assert markdown_field not in captured.err
     assert confusable_field not in captured.err
+    assert control_blocker not in captured.err
+    assert markdown_blocker not in captured.err
+    assert confusable_blocker not in captured.err
+    assert sensitive_blocker not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -7813,6 +8577,10 @@ def test_release_bundle_rejects_malformed_copied_native_evm_summary_before_rende
     evidence = tmp_path / "evidence.toml"
     evidence.write_text("[zk]\n", encoding="utf-8")
     output_dir = tmp_path / "bundle"
+    control_blocker = "operator\nnative-blocker"
+    markdown_blocker = "operator|native-blocker"
+    confusable_blocker = "operator native bl\u043ecker"
+    sensitive_blocker = "operator secret-token-native-blocker"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -7825,12 +8593,18 @@ def test_release_bundle_rejects_malformed_copied_native_evm_summary_before_rende
             self.calls += 1
             report = minimal_release_bundle_report()
             if self.calls == 2:
+                root_secret = "secret_token_native_summary_field"
+                sdk_secret = "secret_token_native_sdk_field"
                 report["native_evm_prover_bundle"] = {
                     "required": "true",
                     "validation_status": "passed",
                     "validation_blockers": [
                         "stale blocker",
                         " padded blocker ",
+                        control_blocker,
+                        markdown_blocker,
+                        confusable_blocker,
+                        sensitive_blocker,
                         "stale blocker",
                     ],
                     "sdk_artifacts": [
@@ -7838,9 +8612,21 @@ def test_release_bundle_rejects_malformed_copied_native_evm_summary_before_rende
                             "sdk": "js-sdk",
                             "implementation": "native-js",
                             "operator_attestation": "reviewed outside evidence",
+                            sdk_secret: "runtime secret",
+                        },
+                        {
+                            "sdk": "secret-token-sdk",
+                            "implementation": "native-secret",
+                            "implementation_hash": "0x" + "99" * 32,
+                            "implementation_artifact": {
+                                "path": "native-prover/secret.bin",
+                                "bytes": 1,
+                                "sha256": "99" * 32,
+                            },
                         }
                     ],
                     "operator_attestation": "reviewed outside evidence",
+                    root_secret: "runtime secret",
                 }
             return report
 
@@ -7871,6 +8657,10 @@ def test_release_bundle_rejects_malformed_copied_native_evm_summary_before_rende
         "bundled report.native_evm_prover_bundle contains unknown field: "
         "operator_attestation"
     ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle contains unknown field name "
+        "with sensitive name"
+    ) in captured.err
     assert "bundled report.native_evm_prover_bundle required must be true" in captured.err
     assert (
         "bundled report.native_evm_prover_bundle validation_blockers must be a "
@@ -7885,9 +8675,40 @@ def test_release_bundle_rejects_malformed_copied_native_evm_summary_before_rende
         "empty when validation_status is passed"
     ) in captured.err
     assert (
+        "bundled report.native_evm_prover_bundle validation_blockers "
+        "contains blocker with control character"
+    ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle validation_blockers "
+        "contains blocker with Markdown-unsafe character"
+    ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle validation_blockers "
+        "contains blocker with non-ASCII character"
+    ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle validation_blockers "
+        "contains blocker with sensitive name"
+    ) in captured.err
+    assert (
         "bundled report.native_evm_prover_bundle.sdk_artifacts[0] contains "
         "unknown field: operator_attestation"
     ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle.sdk_artifacts[0] contains "
+        "unknown field name with sensitive name"
+    ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle.sdk_artifacts contains unknown "
+        "sdk with sensitive name"
+    ) in captured.err
+    assert "secret_token_native_summary_field" not in captured.err
+    assert "secret_token_native_sdk_field" not in captured.err
+    assert "secret-token-sdk" not in captured.err
+    assert control_blocker not in captured.err
+    assert markdown_blocker not in captured.err
+    assert confusable_blocker not in captured.err
+    assert sensitive_blocker not in captured.err
     assert (
         "bundled report.native_evm_prover_bundle.sdk_artifacts[0] missing field: "
         "implementation_hash"
@@ -8427,6 +9248,8 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
     output_dir = tmp_path / "bundle"
     confusable_field = "operat\u043er_attestation"
     confusable_audit = "aud\u0456t_attestation"
+    secret_source_field = "secret_token_source_hash_field"
+    secret_canary_field = "secret_token_route_canary_field"
     zero_hash = "0x" + "00" * 32
 
     class FakeReportModule:
@@ -8463,6 +9286,8 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
                                 ),
                                 " operator_attestation ": "reviewed elsewhere",
                                 confusable_field: "reviewed elsewhere",
+                                secret_source_field: "reviewed elsewhere",
+                                "operator_attestation": "reviewed elsewhere",
                             },
                             "source_adapter_gate": {
                                 "required": True,
@@ -8513,6 +9338,8 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
                                     " operator_attestation ": "reviewed elsewhere",
                                     "operator|attestation": "reviewed elsewhere",
                                     confusable_field: "reviewed elsewhere",
+                                    secret_canary_field: "reviewed elsewhere",
+                                    "operator_attestation": "reviewed elsewhere",
                                 },
                             },
                             "blockers": ["nested evidence remains blocked"],
@@ -8556,6 +9383,14 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
     assert (
         f"{lane_label}.source_record_hashes contains unknown field name with "
         "non-ASCII character"
+    ) in captured.err
+    assert (
+        f"{lane_label}.source_record_hashes contains unknown field name with "
+        "sensitive name"
+    ) in captured.err
+    assert (
+        f"{lane_label}.source_record_hashes contains unknown field: "
+        "operator_attestation"
     ) in captured.err
     assert (
         f"{lane_label}.source_record_hashes source_verifier_material_hash must "
@@ -8604,6 +9439,12 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
     assert f"{canary_label} contains unknown field name with non-ASCII character" in (
         captured.err
     )
+    assert f"{canary_label} contains unknown field name with sensitive name" in (
+        captured.err
+    )
+    assert f"{canary_label} contains unknown field: operator_attestation" in (
+        captured.err
+    )
     assert (
         f"{canary_label} evidence_hash must be empty, null, or a non-zero "
         "canonical bytes32 hex string"
@@ -8615,6 +9456,8 @@ def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_ren
     assert f"{canary_label} evidence_bound must be true or false" in captured.err
     assert confusable_field not in captured.err
     assert confusable_audit not in captured.err
+    assert secret_source_field not in captured.err
+    assert secret_canary_field not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -10212,6 +11055,7 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
     markdown_field = "operator|secret-token"
     confusable_field = "operat\u043er_note"
     confusable_gate = "operat\u043er_attestation_gate"
+    secret_gate = "secret-token-source-inventory-gate"
 
     class FakeReportModule:
         def __init__(self) -> None:
@@ -10267,6 +11111,10 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
                         "validation_status": "passed",
                         "validation_blockers": [],
                     },
+                    secret_gate: {
+                        "validation_status": "done",
+                        "validation_blockers": ["secret-token gate blocker"],
+                    },
                 }
             return report
 
@@ -10310,6 +11158,9 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
     ) in captured.err
     assert (
         "bundled report.source_inventory contains unknown gate name with non-ASCII character"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory contains unknown gate name with sensitive name"
     ) in captured.err
     assert (
         "bundled report.source_inventory contains unknown gate: "
@@ -10363,6 +11214,8 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
     assert markdown_field not in captured.err
     assert confusable_field not in captured.err
     assert confusable_gate not in captured.err
+    assert secret_gate not in captured.err
+    assert "secret-token gate blocker" not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -10601,7 +11454,7 @@ def test_release_bundle_suppresses_unknown_phase_result_name_before_render(
     )
 
     assert completed.returncode == 2
-    assert "unknown SCCP corridor phase" in completed.stderr
+    assert "phase result name contains sensitive name" in completed.stderr
     assert "secret-token" not in completed.stderr
     assert not output_dir.exists()
 
@@ -10958,7 +11811,7 @@ def test_release_bundle_suppresses_unknown_phase_evidence_name_before_copy(
     )
 
     assert completed.returncode == 2
-    assert "unknown SCCP corridor phase" in completed.stderr
+    assert "phase evidence contains phase with sensitive name" in completed.stderr
     assert "secret-token" not in completed.stderr
     assert not output_dir.exists()
 
@@ -12115,6 +12968,50 @@ def test_release_bundle_native_evm_duplicate_json_redacts_sensitive_key_causes(
         raise AssertionError("sensitive duplicate native EVM prover key was accepted")
 
 
+def test_release_bundle_verifier_redacts_sensitive_native_evm_duplicate_json_keys(
+    tmp_path: Path,
+) -> None:
+    """Published native prover duplicate-key diagnostics must not echo secrets."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    manifest = native_path.read_text(encoding="utf-8")
+    native_path.write_text(
+        manifest.replace(
+            "{\n",
+            "{\n"
+            '  "secret-token-native-duplicate": "first",\n'
+            '  "secret-token-native-duplicate": "second",\n',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle JSON contains duplicate key with sensitive key name"
+    ) in verified.stdout
+    assert "secret-token-native-duplicate" not in verified.stdout
+    assert "secret-token-native-duplicate" not in verified.stderr
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields(
     tmp_path: Path,
 ) -> None:
@@ -12177,16 +13074,20 @@ def test_release_bundle_verifier_rejects_native_evm_prover_malformed_unknown_fie
     payload = json.loads(native_path.read_text(encoding="utf-8"))
     confusable_root = "operat\u043er_note"
     confusable_audit = "aud\u0456t_note"
+    secret_root = "secret_token_native_root_field"
+    secret_audit = "secret_token_native_audit_field"
     payload[" operator_note "] = "not allowed"
     payload["operator\nnote"] = "not allowed"
     payload["operator note"] = "not allowed"
     payload["operator|note"] = "not allowed"
     payload[confusable_root] = "not allowed"
+    payload[secret_root] = "not allowed"
     payload["audit_hashes"][" audit_note "] = "0x" + "d6" * 32
     payload["audit_hashes"]["audit\nnote"] = "0x" + "d7" * 32
     payload["audit_hashes"]["audit note"] = "0x" + "d8" * 32
     payload["audit_hashes"]["audit|note"] = "0x" + "d9" * 32
     payload["audit_hashes"][confusable_audit] = "not-a-hex32"
+    payload["audit_hashes"][secret_audit] = "0x" + "da" * 32
     native_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -12231,6 +13132,10 @@ def test_release_bundle_verifier_rejects_native_evm_prover_malformed_unknown_fie
     ) in verified.stdout
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle contains unknown field name with sensitive name"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
         "bundle audit_hashes contains unexpected field name with surrounding "
         "whitespace"
     ) in verified.stdout
@@ -12253,6 +13158,10 @@ def test_release_bundle_verifier_rejects_native_evm_prover_malformed_unknown_fie
         "bundle audit_hashes contains unexpected field name with non-ASCII "
         "character"
     ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle audit_hashes contains unexpected field name with sensitive name"
+    ) in verified.stdout
     blocker_lines = "\n".join(
         line
         for line in verified.stdout.splitlines()
@@ -12260,6 +13169,8 @@ def test_release_bundle_verifier_rejects_native_evm_prover_malformed_unknown_fie
     )
     assert confusable_root not in blocker_lines
     assert confusable_audit not in blocker_lines
+    assert secret_root not in blocker_lines
+    assert secret_audit not in blocker_lines
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
@@ -14503,23 +15414,29 @@ def test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_fiel
     native_bundle = report["native_evm_prover_bundle"]
     confusable_root = "operat\u043er_report_note"
     confusable_audit = "aud\u0456t_report_note"
+    secret_root = "secret_token_native_report_field"
+    secret_audit = "secret_token_native_report_audit_field"
     native_bundle[" operator_report_note "] = "not allowed"
     native_bundle["operator\nreport_note"] = "not allowed"
     native_bundle["operator report_note"] = "not allowed"
     native_bundle["operator|report_note"] = "not allowed"
     native_bundle[confusable_root] = "not allowed"
+    native_bundle[secret_root] = "not allowed"
     native_bundle["audit_hashes"][" audit_report_note "] = "0x" + "d6" * 32
     native_bundle["audit_hashes"]["audit\nreport_note"] = "0x" + "d7" * 32
     native_bundle["audit_hashes"]["audit report_note"] = "0x" + "d8" * 32
     native_bundle["audit_hashes"]["audit|report_note"] = "0x" + "d9" * 32
     native_bundle["audit_hashes"][confusable_audit] = "not-a-hex32"
+    native_bundle["audit_hashes"][secret_audit] = "0x" + "da" * 32
     confusable_sdk_field = "operat\u043er_sdk_report_note"
+    secret_sdk_field = "secret_token_native_sdk_report_field"
     sdk_row = native_bundle["sdk_artifacts"][0]
     sdk_row[" operator_sdk_report_note "] = "not allowed"
     sdk_row["operator\nsdk_report_note"] = "not allowed"
     sdk_row["operator sdk_report_note"] = "not allowed"
     sdk_row["operator|sdk_report_note"] = "not allowed"
     sdk_row[confusable_sdk_field] = "not allowed"
+    sdk_row[secret_sdk_field] = "not allowed"
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -14561,6 +15478,10 @@ def test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_fiel
         "with non-ASCII character"
     ) in verified.stdout
     assert (
+        "readiness report native_evm_prover_bundle contains unknown field name "
+        "with sensitive name"
+    ) in verified.stdout
+    assert (
         "readiness report native_evm_prover_bundle audit_hashes contains unexpected "
         "field name with surrounding whitespace"
     ) in verified.stdout
@@ -14581,6 +15502,10 @@ def test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_fiel
         "field name with non-ASCII character"
     ) in verified.stdout
     assert (
+        "readiness report native_evm_prover_bundle audit_hashes contains unexpected "
+        "field name with sensitive name"
+    ) in verified.stdout
+    assert (
         "readiness report native_evm_prover_bundle sdk_artifacts[0] contains unknown "
         "field name with surrounding whitespace"
     ) in verified.stdout
@@ -14599,6 +15524,10 @@ def test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_fiel
     assert (
         "readiness report native_evm_prover_bundle sdk_artifacts[0] contains unknown "
         "field name with non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[0] contains unknown "
+        "field name with sensitive name"
     ) in verified.stdout
     native_report_lines = "\n".join(
         line
@@ -14608,6 +15537,9 @@ def test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_fiel
     assert confusable_root not in native_report_lines
     assert confusable_audit not in native_report_lines
     assert confusable_sdk_field not in native_report_lines
+    assert secret_root not in native_report_lines
+    assert secret_audit not in native_report_lines
+    assert secret_sdk_field not in native_report_lines
 
 
 def test_release_bundle_verifier_rejects_native_evm_prover_report_artifact_malformed_field_names(
@@ -14878,12 +15810,14 @@ def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_malforme
     native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
     payload = json.loads(native_path.read_text(encoding="utf-8"))
     confusable_field = "operat\u043er_sdk_note"
+    secret_field = "secret_token_native_sdk_field"
     row = payload["native_sdk_artifacts"][0]
     row[" operator_sdk_note "] = "not allowed"
     row["operator\nsdk_note"] = "not allowed"
     row["operator sdk_note"] = "not allowed"
     row["operator|sdk_note"] = "not allowed"
     row[confusable_field] = "not allowed"
+    row[secret_field] = "not allowed"
     native_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -14926,12 +15860,17 @@ def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_malforme
         "bundled native EVM prover manifest blocker: native_sdk_artifacts[0] "
         "contains unknown field name with non-ASCII character"
     ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts[0] "
+        "contains unknown field name with sensitive name"
+    ) in verified.stdout
     blocker_lines = "\n".join(
         line
         for line in verified.stdout.splitlines()
         if "bundled native EVM prover manifest blocker:" in line
     )
     assert confusable_field not in blocker_lines
+    assert secret_field not in blocker_lines
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
@@ -15184,6 +16123,10 @@ def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifac
     sdk_artifacts = payload["native_sdk_artifacts"]
     removed_sdks = [row["sdk"] for row in sdk_artifacts[:5]]
     confusable_sdk = "javas\u0441ript"
+    secret_unknown_sdk = "secret-token-sdk"
+    secret_row = dict(sdk_artifacts[-1])
+    secret_row["sdk"] = secret_unknown_sdk
+    sdk_artifacts.append(secret_row)
     sdk_artifacts[0]["sdk"] = "java script"
     sdk_artifacts[1]["sdk"] = "swift\nsdk"
     sdk_artifacts[2]["sdk"] = confusable_sdk
@@ -15236,7 +16179,13 @@ def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifac
             "bundled native EVM prover manifest blocker: "
             f"native_sdk_artifacts missing sdk: {sdk}"
         ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts "
+        "contains unknown sdk with sensitive name"
+    ) in verified.stdout
     assert confusable_sdk not in verified.stdout
+    assert secret_unknown_sdk not in verified.stdout
+    assert secret_unknown_sdk not in verified.stderr
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
@@ -15254,6 +16203,10 @@ def test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_sdk_
     sdk_artifacts = report["native_evm_prover_bundle"]["sdk_artifacts"]
     removed_sdks = [row["sdk"] for row in sdk_artifacts[:5]]
     confusable_sdk = "javas\u0441ript"
+    secret_unknown_sdk = "secret-token-sdk"
+    secret_row = dict(sdk_artifacts[-1])
+    secret_row["sdk"] = secret_unknown_sdk
+    sdk_artifacts.append(secret_row)
     sdk_artifacts[0]["sdk"] = "java script"
     sdk_artifacts[1]["sdk"] = "swift\nsdk"
     sdk_artifacts[2]["sdk"] = confusable_sdk
@@ -15304,7 +16257,13 @@ def test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_sdk_
             "readiness report native_evm_prover_bundle sdk_artifacts "
             f"missing sdk: {sdk}"
         ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts contains "
+        "unknown sdk with sensitive name"
+    ) in verified.stdout
     assert confusable_sdk not in verified.stdout
+    assert secret_unknown_sdk not in verified.stdout
+    assert secret_unknown_sdk not in verified.stderr
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
@@ -15320,10 +16279,14 @@ def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_dr
     native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
     payload = json.loads(native_path.read_text(encoding="utf-8"))
     unknown_sdk = "rogue-sdk"
+    secret_unknown_sdk = "secret-token-sdk"
     missing_sdk = payload["native_sdk_artifacts"][0]["sdk"]
     drift_implementation_sdk = payload["native_sdk_artifacts"][1]["sdk"]
     expected_implementation = payload["native_sdk_artifacts"][1]["implementation"]
     drift_sdk = payload["native_sdk_artifacts"][2]["sdk"]
+    secret_row = dict(payload["native_sdk_artifacts"][3])
+    secret_row["sdk"] = secret_unknown_sdk
+    payload["native_sdk_artifacts"].append(secret_row)
     payload["native_sdk_artifacts"][0]["sdk"] = unknown_sdk
     payload["native_sdk_artifacts"][1]["implementation"] = "wrong-implementation"
     payload["native_sdk_artifacts"][2]["prover_artifact_hash"] = "0x" + "d3" * 32
@@ -15355,6 +16318,10 @@ def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_dr
     ) in verified.stdout
     assert (
         "bundled native EVM prover manifest blocker: native_sdk_artifacts "
+        "contains unknown sdk with sensitive name"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts "
         f"missing sdk: {missing_sdk}"
     ) in verified.stdout
     assert (
@@ -15365,6 +16332,8 @@ def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_dr
         "bundled native EVM prover manifest blocker: "
         f"{drift_sdk} prover_artifact_hash must match proof_artifact_hash"
     ) in verified.stdout
+    assert secret_unknown_sdk not in verified.stdout
+    assert secret_unknown_sdk not in verified.stderr
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
@@ -16422,6 +17391,7 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results(
 
     output_dir = build_ready_bundle(tmp_path)
     rogue_sdk = "rogue-sdk"
+    secret_sdk = "secret-token-sdk"
 
     parity_relative_path = (
         "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
@@ -16430,6 +17400,7 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results(
     parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
     parity_result = next(iter(parity_payload["sdk_results"].values()))
     parity_payload["sdk_results"][rogue_sdk] = dict(parity_result)
+    parity_payload["sdk_results"][secret_sdk] = dict(parity_result)
     parity_bytes = (
         json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -16443,6 +17414,7 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results(
     self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
     self_test_result = next(iter(self_test_payload["sdk_results"].values()))
     self_test_payload["sdk_results"][rogue_sdk] = dict(self_test_result)
+    self_test_payload["sdk_results"][secret_sdk] = dict(self_test_result)
     self_test_bytes = (
         json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -16482,9 +17454,21 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results(
     ) in verified.stdout
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact sdk_results contains "
+        "unknown sdk with sensitive name"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
         "bundle native_prover_self_test_artifact sdk_results contains "
         f"unknown sdk: {rogue_sdk}"
     ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact sdk_results contains "
+        "unknown sdk with sensitive name"
+    ) in verified.stdout
+    assert secret_sdk not in verified.stdout
+    assert secret_sdk not in verified.stderr
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
@@ -16509,6 +17493,10 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_padded_sdk_results(
     parity_payload["sdk_results"][parity_padded_sdk] = parity_payload[
         "sdk_results"
     ].pop(parity_sdk)
+    secret_padded_sdk = " secret-token-sdk "
+    parity_payload["sdk_results"][secret_padded_sdk] = next(
+        iter(parity_payload["sdk_results"].values())
+    )
     parity_bytes = (
         json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -16525,6 +17513,9 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_padded_sdk_results(
     self_test_payload["sdk_results"][self_test_padded_sdk] = self_test_payload[
         "sdk_results"
     ].pop(self_test_sdk)
+    self_test_payload["sdk_results"][secret_padded_sdk] = next(
+        iter(self_test_payload["sdk_results"].values())
+    )
     self_test_bytes = (
         json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -16560,7 +17551,7 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_padded_sdk_results(
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
         "bundle cross_sdk_fixture_parity_artifact "
-        f"{padded_sdk_blocker}: {parity_padded_sdk!r}"
+        f"{padded_sdk_blocker}"
     ) in verified.stdout
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
@@ -16570,7 +17561,7 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_padded_sdk_results(
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
         "bundle native_prover_self_test_artifact "
-        f"{padded_sdk_blocker}: {self_test_padded_sdk!r}"
+        f"{padded_sdk_blocker}"
     ) in verified.stdout
     assert (
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
@@ -16581,6 +17572,8 @@ def test_release_bundle_verifier_rejects_native_evm_fixture_padded_sdk_results(
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
     ) in verified.stdout
+    assert secret_padded_sdk.strip() not in verified.stdout
+    assert secret_padded_sdk.strip() not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_result_keys(
@@ -18723,16 +19716,20 @@ def test_release_bundle_verifier_rejects_malformed_source_inventory_gate_names(
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     confusable_gate = "operat\u043er_attestation_gate"
+    secret_gate = "secret-token-source-inventory-gate"
     for gate in (
         " operator_attestation_gate ",
         "operator\nattestation_gate",
         "operator attestation_gate",
         "operator|attestation_gate",
         confusable_gate,
+        secret_gate,
     ):
         report["source_inventory"][gate] = {
-            "validation_status": "passed",
-            "validation_blockers": [],
+            "validation_status": "done" if gate == secret_gate else "passed",
+            "validation_blockers": (
+                ["secret-token gate blocker"] if gate == secret_gate else []
+            ),
         }
     report["source_inventory"]["operator_attestation_gate"] = {
         "validation_status": "passed",
@@ -18774,10 +19771,17 @@ def test_release_bundle_verifier_rejects_malformed_source_inventory_gate_names(
         "non-ASCII character"
     ) in verified.stdout
     assert (
+        "readiness report source_inventory contains unknown gate name with "
+        "sensitive name"
+    ) in verified.stdout
+    assert (
         "readiness report source_inventory contains unknown gate: "
         "operator_attestation_gate"
     ) in verified.stdout
     assert confusable_gate not in verified.stdout
+    assert secret_gate not in verified.stdout
+    assert "secret-token gate blocker" not in verified.stdout
+    assert secret_gate not in verified.stderr
 
 
 def test_release_bundle_verifier_suppresses_malformed_source_inventory_gate_markdown_leaks(
@@ -21094,7 +22098,7 @@ def test_release_bundle_verifier_recomputes_active_checklist_with_exact_metadata
     active_lane["source_record_hashes"][
         "source_adapter_engine_deployment_hash"
     ] = "0x" + "00" * 32
-    active_lane["source_adapter_gate"]["required"] = True
+    active_lane["source_adapter_gate"]["required"] = False
     active_lane["route_allowlist"]["expected_route_allowlist_hash_matches"] = "true"
     route_canary = active_lane["route_allowlist"]["route_canary"]
     route_canary["evidence_hash"] = "0x" + "00" * 32
@@ -21650,22 +22654,54 @@ def test_release_bundle_verifier_blocks_malformed_native_prover_blockers(
         (
             "operator override",
             "native EVM prover validation_blockers must be a list of non-empty canonical strings",
+            None,
+            False,
         ),
         (
             [123],
             "native EVM prover validation_blockers[0] must be a non-empty canonical string",
+            None,
+            False,
         ),
         (
             [" padded "],
             "native EVM prover validation_blockers[0] must be a non-empty canonical string",
+            " padded ",
+            True,
+        ),
+        (
+            ["operator\nnative-blocker"],
+            "native EVM prover validation_blockers[0] contains control character",
+            "operator\nnative-blocker",
+            True,
+        ),
+        (
+            ["operator|native-blocker"],
+            "native EVM prover validation_blockers[0] contains Markdown-unsafe character",
+            "operator|native-blocker",
+            True,
+        ),
+        (
+            ["operator native bl\u043ecker"],
+            "native EVM prover validation_blockers[0] contains non-ASCII character",
+            "operator native bl\u043ecker",
+            True,
+        ),
+        (
+            ["operator secret-token-native-blocker"],
+            "native EVM prover validation_blockers[0] contains sensitive name",
+            "operator secret-token-native-blocker",
+            True,
         ),
         (
             ["operator launch hold"],
             "operator launch hold",
+            None,
+            False,
         ),
     )
 
-    for blocker_value, expected_blocker in cases:
+    for blocker_value, expected_blocker, forbidden_text, invalid_marker in cases:
         native_bundle = dict(report["native_evm_prover_bundle"])
         native_bundle["validation_blockers"] = blocker_value
 
@@ -21680,6 +22716,19 @@ def test_release_bundle_verifier_blocks_malformed_native_prover_blockers(
         assert native_item["ready"] is False, repr(blocker_value)
         assert expected_blocker in native_item["blockers"]
         assert "o" not in native_item["blockers"]
+        assert "secret-token" not in "\n".join(native_item["blockers"])
+
+        tampered_report = dict(report)
+        tampered_report["native_evm_prover_bundle"] = native_bundle
+        markdown = verifier._expected_readiness_markdown(tampered_report)
+        assert verifier._readiness_markdown_invariant_errors(
+            tampered_report,
+            markdown,
+        ) == []
+        if invalid_marker:
+            assert "`<invalid validation_blockers>`" in markdown
+        if forbidden_text is not None:
+            assert forbidden_text not in markdown
 
 
 def test_release_bundle_verifier_rejects_unknown_artifact_fields(
@@ -21737,12 +22786,14 @@ def test_release_bundle_verifier_rejects_malformed_artifact_fields(
 
     output_dir = build_ready_bundle(tmp_path)
     confusable_field = "operat\u043er_attestation"
+    secret_field = "secret_token_artifact_field"
     malformed_fields = {
         " operator_attestation ": "reviewed elsewhere",
         "operator\nattestation": "reviewed elsewhere",
         "operator attestation": "reviewed elsewhere",
         "operator|attestation": "reviewed elsewhere",
         confusable_field: "reviewed elsewhere",
+        secret_field: "reviewed elsewhere",
         "operator_attestation": "reviewed elsewhere",
     }
 
@@ -21802,10 +22853,15 @@ def test_release_bundle_verifier_rejects_malformed_artifact_fields(
             in verified.stdout
         )
         assert (
+            f"{label} contains unknown field name with sensitive name"
+            in verified.stdout
+        )
+        assert (
             f"{label} contains unknown field: operator_attestation"
             in verified.stdout
         )
     assert confusable_field not in verified.stdout
+    assert secret_field not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_artifact_field_type_drift(
@@ -22246,6 +23302,7 @@ def test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids(
         ("all required_lane_records", "whitespace"),
         ("all|required_lane_records", "Markdown-unsafe character"),
         (confusable_id, "non-ASCII character"),
+        ("secret_token_checklist_item", "sensitive name"),
     )
     checklists = (
         report["release_checklist"],
@@ -22253,6 +23310,8 @@ def test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids(
         summary["release_checklist"],
     )
     for checklist in checklists:
+        while len(checklist["items"]) < len(cases):
+            checklist["items"].append(dict(checklist["items"][-1]))
         for index, (item_id, _) in enumerate(cases):
             checklist["items"][index]["id"] = item_id
             checklist["items"][index]["blockers"] = [f"forged checklist blocker {index}"]
@@ -22591,12 +23650,14 @@ def test_release_bundle_verifier_rejects_corridor_malformed_phase_keys(
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     confusable_phase = "jav\u0430-sdk"
+    sensitive_phase = "secret-token-phase"
     malformed_phases = {
         " js-sdk ": "passed",
         "swift\nsdk": "passed",
         "kotlin sdk": "passed",
         "java|android": "passed",
         confusable_phase: "passed",
+        sensitive_phase: "passed",
         "kotlin_sdk": "passed",
         "-dotnet": "passed",
         "portal-review": "passed",
@@ -22635,6 +23696,7 @@ def test_release_bundle_verifier_rejects_corridor_malformed_phase_keys(
             verified.stdout
         )
         assert f"{label} contains phase with non-ASCII character" in verified.stdout
+        assert f"{label} contains phase with sensitive name" in verified.stdout
         assert f"{label} contains malformed phase" in verified.stdout
     assert (
         "readiness report corridor has unknown phase status: portal-review"
@@ -22645,6 +23707,7 @@ def test_release_bundle_verifier_rejects_corridor_malformed_phase_keys(
         "portal-review"
     ) in verified.stdout
     assert confusable_phase not in verified.stdout
+    assert sensitive_phase not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_corridor_blockers(
@@ -22990,6 +24053,16 @@ def test_release_bundle_verifier_rejects_readiness_boolean_type_drift(
     report["release_checklist"]["items"][0]["ready"] = "true"
     report["corridor"]["production_ready"] = 1
     report["corridor"]["require_phase_evidence"] = "true"
+    report["blockers"] = [
+        "secret-token-public-blocker",
+        "operator|public-blocker",
+        "operator public blоcker",
+        "operator\npublic-blocker",
+    ]
+    report["user_prover_submission_surfaces"][0]["validation_status"] = "blocked"
+    report["user_prover_submission_surfaces"][0]["validation_blockers"] = [
+        "operator secret-token-user-surface-blocker"
+    ]
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -23009,6 +24082,18 @@ def test_release_bundle_verifier_rejects_readiness_boolean_type_drift(
     rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
     rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
     rewrite_canonical_report_and_notes(output_dir)
+    public_markdown = (
+        (output_dir / "sccp-release-readiness.md").read_text(encoding="utf-8")
+        + (output_dir / "sccp-release-notes-attachment.md").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "`<invalid blockers>`" in public_markdown
+    assert "`<invalid validation_blockers>`" in public_markdown
+    assert "secret-token-public-blocker" not in public_markdown
+    assert "operator|public-blocker" not in public_markdown
+    assert "operator public blоcker" not in public_markdown
+    assert "operator\npublic-blocker" not in public_markdown
 
     manifest_path = output_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -23168,6 +24253,7 @@ def test_release_bundle_verifier_rejects_all_lanes_malformed_unknown_fields(
 
     confusable_field = "operat\u043er_attestation"
     confusable_audit = "aud\u0456t_attestation"
+    secret_field = "secret_token_public_field"
 
     def add_unknown_fields(payload: dict) -> None:
         payload.update(
@@ -23177,6 +24263,7 @@ def test_release_bundle_verifier_rejects_all_lanes_malformed_unknown_fields(
                 "operator attestation": "reviewed elsewhere",
                 "operator|attestation": "reviewed elsewhere",
                 confusable_field: "reviewed elsewhere",
+                secret_field: "reviewed elsewhere",
                 "operator_attestation": "reviewed elsewhere",
             }
         )
@@ -23245,6 +24332,7 @@ def test_release_bundle_verifier_rejects_all_lanes_malformed_unknown_fields(
         "readiness report embedded evidence lane domain 1",
         "all-lanes summary lane domain 1",
         "readiness report embedded evidence lane domain 1 source_record_hashes",
+        "readiness report embedded evidence lane domain 1 source_adapter_gate",
         "readiness report embedded evidence lane domain 1 destination_binding",
         "readiness report embedded evidence lane domain 1 route_allowlist route_canary",
         "all-lanes summary lane domain 1 route_allowlist route_canary",
@@ -23260,6 +24348,9 @@ def test_release_bundle_verifier_rejects_all_lanes_malformed_unknown_fields(
             verified.stdout
         )
         assert f"{label} contains unknown field name with non-ASCII character" in (
+            verified.stdout
+        )
+        assert f"{label} contains unknown field name with sensitive name" in (
             verified.stdout
         )
     for label in (
@@ -23298,6 +24389,7 @@ def test_release_bundle_verifier_rejects_all_lanes_malformed_unknown_fields(
     ) in verified.stdout
     assert confusable_field not in verified.stdout
     assert confusable_audit not in verified.stdout
+    assert secret_field not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift(
@@ -23559,6 +24651,111 @@ def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings(
         and "blockers must not contain duplicate strings" in line
         for line in verified.stdout.splitlines()
     )
+
+
+def test_release_bundle_verifier_rejects_hostile_public_blocker_strings(
+    tmp_path: Path,
+) -> None:
+    """Public blocker strings must fail by category without leaking raw text."""
+
+    def set_summary_blockers(summary: dict) -> None:
+        summary["blockers"] = [sensitive_blocker]
+        summary["lanes"][0]["blockers"] = [control_blocker]
+        summary["lanes"][0]["source_adapter_gate"]["blockers"] = [markdown_blocker]
+        summary["release_checklist"]["items"][0]["blockers"] = [confusable_blocker]
+
+    output_dir = build_ready_bundle(tmp_path)
+    control_blocker = "operator\npublic-blocker"
+    markdown_blocker = "operator|public-blocker"
+    confusable_blocker = "operator public blоcker"
+    sensitive_blocker = "operator secret-token-public-blocker"
+
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["blockers"] = [control_blocker]
+    report["corridor"]["blockers"] = [markdown_blocker]
+    report["release_checklist"]["items"][0]["blockers"] = [confusable_blocker]
+    report["source_inventory"]["proof_request_bundle_gate"][
+        "validation_blockers"
+    ] = [sensitive_blocker]
+    set_summary_blockers(report["evidence"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    set_summary_blockers(summary)
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["blockers"] = [sensitive_blocker]
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    expected_fragments = (
+        "manifest blockers contains blocker with sensitive name",
+        "readiness report blockers contains blocker with control character",
+        "readiness report corridor blockers contains blocker with "
+        "Markdown-unsafe character",
+        "readiness report release_checklist item all_required_lane_records "
+        "blockers contains blocker with non-ASCII character",
+        "readiness report source_inventory.proof_request_bundle_gate "
+        "validation_blockers contains blocker with sensitive name",
+        "readiness report embedded evidence blockers contains blocker with "
+        "sensitive name",
+        "all-lanes summary blockers contains blocker with sensitive name",
+        "all-lanes summary release_checklist item all_required_lane_records "
+        "blockers contains blocker with non-ASCII character",
+    )
+    for fragment in expected_fragments:
+        assert fragment in verified.stdout
+    assert any(
+        "readiness report embedded evidence lane domain " in line
+        and "blockers contains blocker with control character" in line
+        for line in verified.stdout.splitlines()
+    )
+    assert any(
+        "readiness report embedded evidence lane domain " in line
+        and "source_adapter_gate blockers contains blocker with "
+        "Markdown-unsafe character" in line
+        for line in verified.stdout.splitlines()
+    )
+    assert any(
+        "all-lanes summary lane domain " in line
+        and "blockers contains blocker with control character" in line
+        for line in verified.stdout.splitlines()
+    )
+    assert any(
+        "all-lanes summary lane domain " in line
+        and "source_adapter_gate blockers contains blocker with "
+        "Markdown-unsafe character" in line
+        for line in verified.stdout.splitlines()
+    )
+    verifier_output = verified.stdout + verified.stderr
+    assert "secret-token-public-blocker" not in verifier_output
+    assert "operator|public-blocker" not in verifier_output
+    assert "operator public blоcker" not in verifier_output
 
 
 def test_release_bundle_verifier_active_launch_blockers_reject_malformed_containers(
@@ -27489,6 +28686,46 @@ def test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile() -> None:
         for error in verifier._cryptographic_evidence_inventory_errors([row])
     )
 
+    enabled_testnet_gate = {
+        **row,
+        "source_adapter_gate_required": True,
+        "source_adapter_gate_hash": hex32("aa"),
+        "source_adapter_gate_audit_hashes": {"evm_source_gate_hash": hex32("aa")},
+    }
+    assert any(
+        "source_adapter_gate_required must be false for this domain" in error
+        for error in verifier._cryptographic_evidence_row_schema_errors(
+            enabled_testnet_gate
+        )
+    )
+
+    disabled_mainnet_gate = {
+        **row,
+        "chain": "bsc",
+        "evm_source_rpc_chain_id": "56",
+        "evm_destination_rpc_chain_id": "56",
+    }
+    assert any(
+        "source_adapter_gate_required must be true for this domain" in error
+        for error in verifier._cryptographic_evidence_row_schema_errors(
+            disabled_mainnet_gate
+        )
+    )
+
+    unknown_bsc_chain = {**disabled_mainnet_gate, "chain": "bsc-preview"}
+    assert any(
+        "source_adapter_gate_required must be true for this domain" in error
+        for error in verifier._cryptographic_evidence_row_schema_errors(
+            unknown_bsc_chain
+        )
+    )
+    assert any(
+        "chain mismatch for domain 2" in error
+        for error in verifier._cryptographic_evidence_inventory_errors(
+            [unknown_bsc_chain]
+        )
+    )
+
     wrong_chain_id = {**row, "evm_source_rpc_chain_id": "56"}
     assert (
         "readiness report cryptographic evidence row "
@@ -27681,6 +28918,127 @@ def test_release_bundle_verifier_rejects_crypto_source_adapter_gate_policy_drift
         "source_adapter_gate_hash must match "
         "source_adapter_gate_audit_hashes.solana_full_light_client_gate_hash" in error
         for error in required_errors
+    )
+
+
+def test_release_bundle_verifier_redacts_sensitive_source_adapter_gate_audit_fields() -> None:
+    """Unexpected source-gate audit fields must not leak secret-like names."""
+
+    verifier = load_verify_helpers()
+    expected_audit_hashes = {
+        "solana_tower_replay_verifier_hash": "0x" + "61" * 32,
+        "solana_full_accountsdb_lattice_verifier_hash": "0x" + "62" * 32,
+        "solana_bank_fork_choice_verifier_hash": "0x" + "63" * 32,
+        "solana_full_light_client_gate_hash": "0x" + "64" * 32,
+    }
+    row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+    row.update(
+        {
+            "domain": verifier.SCCP_DOMAIN_SOL,
+            "chain": "solana",
+            "evm_source_rpc_chain_id": "",
+            "evm_source_block_tag": "",
+            "evm_destination_rpc_chain_id": "",
+            "evm_destination_block_tag": "",
+            "route_canary_evidence_bound": False,
+            "route_canary_receipt_block_finalized": None,
+            "source_adapter_gate_required": True,
+            "source_adapter_gate_hash": expected_audit_hashes[
+                "solana_full_light_client_gate_hash"
+            ],
+            "source_adapter_gate_audit_hashes": {
+                **expected_audit_hashes,
+                "secret-token-audit-field": "0x" + "65" * 32,
+            },
+        }
+    )
+
+    crypto_errors = "\n".join(verifier._cryptographic_evidence_row_schema_errors(row))
+
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes contains unexpected field with "
+        "sensitive name"
+    ) in crypto_errors
+    assert "secret-token-audit-field" not in crypto_errors
+
+    safe_row = {
+        **row,
+        "source_adapter_gate_audit_hashes": {
+            **expected_audit_hashes,
+            "operator_override": "0x" + "65" * 32,
+        },
+    }
+    safe_crypto_errors = "\n".join(
+        verifier._cryptographic_evidence_row_schema_errors(safe_row)
+    )
+
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes contains unexpected field: "
+        "operator_override"
+    ) in safe_crypto_errors
+
+    lane = {
+        "domain": verifier.SCCP_DOMAIN_SOL,
+        "chain": "solana",
+        "source_record_hashes": {
+            "source_verifier_material_hash": "0x" + "71" * 32,
+            "source_adapter_engine_deployment_hash": "0x" + "72" * 32,
+        },
+        "destination_binding": {
+            "destination_binding_hash": "0x" + "73" * 32,
+        },
+        "route_allowlist": {
+            "route_allowlist_hash": "0x" + "74" * 32,
+            "route_canary": {
+                "evidence_hash": "0x" + "75" * 32,
+            },
+        },
+    }
+    source_gate = {
+        "required": True,
+        "ready": True,
+        "gate_hash": expected_audit_hashes["solana_full_light_client_gate_hash"],
+        "audit_hashes": {
+            **expected_audit_hashes,
+            "secret-token-audit-field": "0x" + "65" * 32,
+        },
+        "blockers": [],
+    }
+    gate_label = "readiness report embedded evidence lane domain 3 source_adapter_gate"
+    gate_errors = "\n".join(
+        verifier._source_adapter_gate_coherence_errors(
+            gate_label,
+            lane,
+            source_gate,
+        )
+    )
+
+    assert (
+        f"{gate_label} audit_hashes contains unexpected field with sensitive name"
+        in gate_errors
+    )
+    assert "secret-token-audit-field" not in gate_errors
+
+    safe_source_gate = {
+        **source_gate,
+        "audit_hashes": {
+            **expected_audit_hashes,
+            "operator_override": "0x" + "65" * 32,
+        },
+    }
+    safe_gate_errors = "\n".join(
+        verifier._source_adapter_gate_coherence_errors(
+            gate_label,
+            lane,
+            safe_source_gate,
+        )
+    )
+
+    assert (
+        f"{gate_label} audit_hashes contains unexpected field: operator_override"
+        in safe_gate_errors
     )
 
 
@@ -28059,11 +29417,13 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper
     report = json.loads(report_path.read_text(encoding="utf-8"))
     row = report["user_prover_submission_surfaces"][0]
     confusable_sdk = "javas\u0441ript-sdk"
+    sensitive_sdk = "secret-token-sdk"
     row["sdk_helper_symbols_by_sdk"][" js-sdk "] = ["forgedUiProver"]
     row["sdk_helper_symbols_by_sdk"]["swift\nsdk"] = ["forgedUiProver"]
     row["sdk_helper_symbols_by_sdk"]["kotlin sdk"] = ["forgedUiProver"]
     row["sdk_helper_symbols_by_sdk"]["java|android"] = ["forgedUiProver"]
     row["sdk_helper_symbols_by_sdk"][confusable_sdk] = ["forgedUiProver"]
+    row["sdk_helper_symbols_by_sdk"][sensitive_sdk] = ["secret helper"]
     row["sdk_helper_symbols_by_sdk"]["kotlin_sdk"] = ["forgedUiProver"]
     row["sdk_helper_symbols_by_sdk"]["-dotnet"] = ["forgedUiProver"]
     row["sdk_helper_symbols_by_sdk"]["unknown-sdk"] = ["forgedUiProver"]
@@ -28105,6 +29465,10 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper
     ) in verified.stdout
     assert (
         "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk contains SDK key with sensitive name"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
         "sdk_helper_symbols_by_sdk contains malformed SDK key"
     ) in verified.stdout
     assert (
@@ -28112,6 +29476,7 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper
         "sdk_helper_symbols_by_sdk contains unknown SDK: unknown-sdk"
     ) in verified.stdout
     assert confusable_sdk not in verified.stdout
+    assert sensitive_sdk not in verified.stdout
     assert (
         "readiness report user_prover_submission_surfaces does not match "
         "corridor phases"
@@ -28284,6 +29649,7 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_required_p
     report = json.loads(report_path.read_text(encoding="utf-8"))
     row = report["user_prover_submission_surfaces"][0]
     confusable_phase = "javas\u0441ript-sdk"
+    sensitive_phase = "secret-token-phase"
     row["required_phases"].extend(
         [
             " js-sdk ",
@@ -28291,6 +29657,7 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_required_p
             "kotlin sdk",
             "java|android",
             confusable_phase,
+            sensitive_phase,
             "kotlin_sdk",
             "-dotnet",
             "portal-review",
@@ -28334,6 +29701,10 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_required_p
     ) in verified.stdout
     assert (
         "readiness report user prover submission surface row "
+        "required_phases contains phase with sensitive name"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
         "required_phases contains malformed phase"
     ) in verified.stdout
     assert (
@@ -28341,6 +29712,7 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_required_p
         "required_phases contains unknown phase: portal-review"
     ) in verified.stdout
     assert confusable_phase not in verified.stdout
+    assert sensitive_phase not in verified.stdout
     assert (
         "readiness report user_prover_submission_surfaces does not match "
         "corridor phases"
@@ -28524,12 +29896,14 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_lanes(
     template = dict(report["user_prover_submission_surfaces"][0])
     confusable_lane = "eth,b\u0455c"
     markdown_lane = "eth|bsc"
+    sensitive_lane = "secret-token-lane"
     report["user_prover_submission_surfaces"] = [
         dict(template, lanes=" eth,bsc "),
         dict(template, lanes="eth\nbsc"),
         dict(template, lanes="eth bsc"),
         dict(template, lanes=markdown_lane),
         dict(template, lanes=confusable_lane),
+        dict(template, lanes=sensitive_lane),
         dict(template, lanes="eth_bsc"),
     ]
     report_path.write_text(
@@ -28569,6 +29943,9 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_lanes(
         "non-ASCII character"
     ) in verified.stdout
     assert (
+        "readiness report user prover submission surface row lanes contains sensitive name"
+    ) in verified.stdout
+    assert (
         "readiness report user prover submission surface row lanes is malformed"
     ) in verified.stdout
     assert (
@@ -28578,6 +29955,7 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_lanes(
     assert "contains unknown lanes row:" not in verified.stdout
     assert confusable_lane not in verified.stdout
     assert markdown_lane not in verified.stdout
+    assert sensitive_lane not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_submission_surface_malformed_proof_backend(
@@ -28592,12 +29970,14 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_proof_back
     markdown_backend = "evm|groth16"
     confusable_backend = "evm-gr\u043eth16-bn254-v1"
     malformed_backend = "evm_groth16"
+    sensitive_backend = "secret-token-backend"
     report["user_prover_submission_surfaces"] = [
         dict(template, proof_backend=" evm-groth16-bn254-v1 "),
         dict(template, proof_backend="evm\ngroth16"),
         dict(template, proof_backend="evm groth16"),
         dict(template, proof_backend=markdown_backend),
         dict(template, proof_backend=confusable_backend),
+        dict(template, proof_backend=sensitive_backend),
         dict(template, proof_backend=malformed_backend),
     ]
     report_path.write_text(
@@ -28638,12 +30018,17 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_proof_back
     ) in verified.stdout
     assert (
         "readiness report user prover submission surface row proof_backend "
+        "contains sensitive name"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row proof_backend "
         "is malformed"
     ) in verified.stdout
     assert "proof_backend mismatch for lanes eth,bsc" not in verified.stdout
     assert markdown_backend not in verified.stdout
     assert confusable_backend not in verified.stdout
     assert malformed_backend not in verified.stdout
+    assert sensitive_backend not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_submission_surface_malformed_on_chain_submission(
@@ -28655,7 +30040,8 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_on_chain_s
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     template = dict(report["user_prover_submission_surfaces"][0])
-    safe_wrong_submission = "Operator-only submission path secret-token"
+    public_wrong_submission = "Operator-only submission path"
+    sensitive_submission = "Operator-only submission path secret-token-submission"
     markdown_submission = "submit|with secret-token"
     confusable_submission = "Torii bridge pr\u043eof submit payload"
     report["user_prover_submission_surfaces"] = [
@@ -28663,7 +30049,8 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_on_chain_s
         dict(template, on_chain_submission="Torii\nbridge proof endpoint"),
         dict(template, on_chain_submission=markdown_submission),
         dict(template, on_chain_submission=confusable_submission),
-        dict(template, on_chain_submission=safe_wrong_submission),
+        dict(template, on_chain_submission=public_wrong_submission),
+        dict(template, on_chain_submission=sensitive_submission),
     ]
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
@@ -28698,6 +30085,10 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_on_chain_s
         "contains non-ASCII character"
     ) in verified.stdout
     assert (
+        "readiness report user prover submission surface row on_chain_submission "
+        "contains sensitive name"
+    ) in verified.stdout
+    assert (
         "readiness report user_prover_submission_surfaces on_chain_submission "
         "must match expected submission text for lanes eth,bsc"
     ) in verified.stdout
@@ -28707,7 +30098,8 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_on_chain_s
     assert "secret-token" not in verified.stdout
     assert markdown_submission not in verified.stdout
     assert confusable_submission not in verified.stdout
-    assert safe_wrong_submission not in verified.stdout
+    assert public_wrong_submission not in verified.stdout
+    assert sensitive_submission not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_submission_surface_malformed_helper_symbols(
@@ -28722,6 +30114,7 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_helper_sym
     markdown_helper = "build|ProofSecret"
     confusable_helper = "buildPr\u043eofSecret"
     malformed_helper = "_buildProofSecret"
+    sensitive_helper = "buildBearerTokenProof"
     row["sdk_helper_symbols"] = [
         " buildEvmSccpProofRequest ",
         "build\nProofSecret",
@@ -28729,6 +30122,7 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_helper_sym
         markdown_helper,
         confusable_helper,
         malformed_helper,
+        sensitive_helper,
     ]
     row["sdk_helper_symbols_by_sdk"]["js-sdk"] = list(row["sdk_helper_symbols"])
     row["sdk_helper_symbols_by_sdk"]["python-sdk"] = [
@@ -28776,9 +30170,18 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_helper_sym
         "contains malformed helper symbol"
     ) in verified.stdout
     assert (
+        "readiness report user prover submission surface row sdk_helper_symbols "
+        "contains helper symbol with sensitive name"
+    ) in verified.stdout
+    assert (
         "readiness report user prover submission surface row "
         "sdk_helper_symbols_by_sdk[js-sdk] contains helper symbol with "
         "Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk[js-sdk] contains helper symbol with "
+        "sensitive name"
     ) in verified.stdout
     assert (
         "readiness report user prover submission surface row "
@@ -28797,6 +30200,8 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_helper_sym
     assert confusable_helper not in readiness_markdown
     assert malformed_helper not in verified.stdout
     assert malformed_helper not in readiness_markdown
+    assert sensitive_helper not in verified.stdout
+    assert sensitive_helper not in readiness_markdown
 
 
 def test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helpers_text(
@@ -28809,8 +30214,10 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper
     report = json.loads(report_path.read_text(encoding="utf-8"))
     row = report["user_prover_submission_surfaces"][0]
     raw_helper_text = "build|HelperSecret secret-token"
+    sensitive_helper_text = "build helper secret-token-helpers"
     row["sdk_helpers"] = raw_helper_text
     row["sdk_helper_symbols_by_sdk"] = raw_helper_text
+    report["user_prover_submission_surfaces"][1]["sdk_helpers"] = sensitive_helper_text
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -28832,6 +30239,10 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper
         "contains Markdown-unsafe character"
     ) in verified.stdout
     assert (
+        "readiness report user prover submission surface row sdk_helpers "
+        "contains sensitive name"
+    ) in verified.stdout
+    assert (
         "readiness report user prover submission surface row "
         "sdk_helper_symbols_by_sdk must be an object"
     ) in verified.stdout
@@ -28840,6 +30251,7 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper
     ).read_text(encoding="utf-8")
     assert "secret-token" not in verified.stdout
     assert raw_helper_text not in verified.stdout
+    assert sensitive_helper_text not in verified.stdout
     assert "secret-token" not in (
         output_dir / "sccp-release-readiness.md"
     ).read_text(encoding="utf-8")
@@ -29242,8 +30654,18 @@ def test_release_bundle_verifier_rejects_blocked_submission_surface(
     report_path = output_dir / "sccp-release-readiness.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     row = report["user_prover_submission_surfaces"][0]
+    control_blocker = "operator\nuser-surface-blocker"
+    markdown_blocker = "operator|user-surface-blocker"
+    confusable_blocker = "operator user-surface bl\u043ecker"
+    sensitive_blocker = "operator secret-token-user-surface-blocker"
     row["validation_status"] = "blocked"
-    row["validation_blockers"] = ["phase evidence missing"]
+    row["validation_blockers"] = [
+        "phase evidence missing",
+        control_blocker,
+        markdown_blocker,
+        confusable_blocker,
+        sensitive_blocker,
+    ]
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -29269,9 +30691,39 @@ def test_release_bundle_verifier_rejects_blocked_submission_surface(
         "validation_blockers must be empty"
     ) in verified.stdout
     assert (
+        "readiness report user prover submission surface row "
+        "validation_blockers contains blocker with control character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "validation_blockers contains blocker with Markdown-unsafe character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "validation_blockers contains blocker with non-ASCII character"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "validation_blockers contains blocker with sensitive name"
+    ) in verified.stdout
+    assert (
         "readiness report user_prover_submission_surfaces does not match "
         "corridor phases"
     ) in verified.stdout
+    readiness_markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    assert "`<invalid validation_blockers>`" in readiness_markdown
+    assert "secret-token" not in verified.stdout
+    assert "secret-token" not in readiness_markdown
+    assert control_blocker not in verified.stdout
+    assert control_blocker not in readiness_markdown
+    assert markdown_blocker not in verified.stdout
+    assert markdown_blocker not in readiness_markdown
+    assert confusable_blocker not in verified.stdout
+    assert confusable_blocker not in readiness_markdown
+    assert sensitive_blocker not in verified.stdout
+    assert sensitive_blocker not in readiness_markdown
 
 
 def test_release_bundle_verifier_rejects_forged_phase_log(
@@ -30526,8 +31978,10 @@ def test_release_bundle_verifier_guards_evm_source_live_production(
                 "test_evm_source_live_redacts_receipt_field_parser_exception_causes",
                 "test_evm_source_live_rejects_deployment_transaction_readback_drift",
                 "test_evm_source_live_toml_requires_independent_pins",
+                "test_evm_source_live_cli_redacts_top_level_exception_details",
                 "secret-token invalid EVM source JSON-RPC payload",
                 "secret-token {target_method} parser detail",
+                "secret-token-evm-source-error",
             ),
         ),
     )
@@ -30611,6 +32065,22 @@ def test_release_bundle_verifier_guards_evm_source_live_production(
         in error
         and (
             "missing marker: "
+            "test_evm_source_live_cli_redacts_top_level_exception_details"
+        )
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet live EVM source production SDK test inventory"
+        in error
+        and "missing marker: secret-token-evm-source-error" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet live EVM source production SDK test inventory"
+        in error
+        and (
+            "missing marker: "
             "test_evm_source_live_rejects_deployment_transaction_readback_drift"
         )
         in error
@@ -30662,8 +32132,10 @@ def test_release_bundle_verifier_guards_evm_live_destination_production(
                 "test_live_evm_route_canary_rejects_unverified_transaction_metadata",
                 "route_canary_call_data_mutator",
                 "proofBytes must not be all zero",
+                "test_evm_live_cli_redacts_top_level_exception_details",
                 "secret-token invalid EVM JSON-RPC payload",
                 "secret-token generated EVM destination TOML parser detail",
+                "secret-token-evm-error",
             ),
         ),
         (
@@ -30754,6 +32226,19 @@ def test_release_bundle_verifier_guards_evm_live_destination_production(
         "Ethereum mainnet live EVM destination production SDK test inventory"
         in error
         and "missing marker: route_canary_call_data_mutator" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet live EVM destination production SDK test inventory"
+        in error
+        and "missing marker: test_evm_live_cli_redacts_top_level_exception_details"
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet live EVM destination production SDK test inventory"
+        in error
+        and "missing marker: secret-token-evm-error" in error
         for error in verified["errors"]
     )
     assert any(

@@ -1,6 +1,6 @@
 //! Utility to print the expected `SoraFS` pin registry snapshot fixture.
 
-use std::{convert::TryInto, fs, path::PathBuf};
+use std::{convert::TryInto, error::Error, fs, path::PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_core::{
@@ -33,6 +33,8 @@ use iroha_executor_data_model::permission::sorafs::{
 use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
 use norito::{json, json::Value, to_bytes};
+#[cfg(test)]
+use sorafs_manifest::pin_registry::verify_alias_proof_bundle;
 use sorafs_manifest::{
     AliasBindingV1, CouncilSignature, REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1,
     ReplicationOrderSlaV1, ReplicationOrderV1, chunker_registry,
@@ -41,7 +43,7 @@ use sorafs_manifest::{
 
 const FIXTURE_PATH: &str = "crates/iroha_core/tests/fixtures/sorafs_pin_registry/snapshot.json";
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let state = make_state();
     let mut block = state.block(default_block_header());
     let mut tx = block.transaction();
@@ -51,9 +53,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let chunk_digest = default_chunk_digest();
     let council_keys = council_keypair();
 
-    register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
+    register_and_approve(&mut tx, digest, chunk_digest, &council_keys)?;
 
-    let alias_binding = alias_binding_for(digest, "sora", "docs", 12, 36, &council_keys);
+    let alias_binding = alias_binding_for(digest, "sora", "docs", 12, 36, &council_keys)?;
     BindManifestAlias {
         digest,
         binding: alias_binding.clone(),
@@ -150,7 +152,7 @@ fn register_and_approve(
     digest: ManifestDigest,
     chunk_digest: [u8; 32],
     council_keys: &KeyPair,
-) {
+) -> Result<(), iroha_crypto::Error> {
     RegisterPinManifest {
         digest,
         chunker: default_chunker(),
@@ -170,7 +172,7 @@ fn register_and_approve(
         .get(&digest)
         .expect("manifest stored")
         .clone();
-    let envelope = build_envelope(&stored, council_keys);
+    let envelope = build_envelope(&stored, council_keys)?;
 
     ApprovePinManifest {
         digest,
@@ -180,6 +182,7 @@ fn register_and_approve(
     }
     .execute(&alice(), tx)
     .expect("approve manifest");
+    Ok(())
 }
 
 fn snapshot_json(
@@ -481,7 +484,7 @@ fn alias_binding_for(
     bound_at: u64,
     expiry_epoch: u64,
     council_keys: &KeyPair,
-) -> ManifestAliasBinding {
+) -> Result<ManifestAliasBinding, iroha_crypto::Error> {
     let binding_payload = AliasBindingV1 {
         alias: format!("{namespace}/{name}"),
         manifest_cid: digest.as_bytes().to_vec(),
@@ -507,7 +510,7 @@ fn alias_binding_for(
     };
 
     let digest = alias_proof_signature_digest(&bundle);
-    let signature = Signature::new(council_keys.private_key(), digest.as_ref());
+    let signature = Signature::try_new(council_keys.private_key(), digest.as_ref())?;
     let public_bytes = checked_ed25519_public_key_bytes(council_keys, "alias council public key");
     let signer: [u8; 32] = public_bytes
         .try_into()
@@ -519,11 +522,11 @@ fn alias_binding_for(
     });
 
     let proof = to_bytes(&bundle).expect("encode alias proof bundle");
-    ManifestAliasBinding {
+    Ok(ManifestAliasBinding {
         name: name.to_owned(),
         namespace: namespace.to_owned(),
         proof,
-    }
+    })
 }
 
 fn council_keypair() -> KeyPair {
@@ -542,9 +545,12 @@ fn checked_ed25519_public_key_bytes<'a>(keypair: &'a KeyPair, context: &str) -> 
     public_bytes
 }
 
-fn build_envelope(record: &PinManifestRecord, keypair: &KeyPair) -> Vec<u8> {
+fn build_envelope(
+    record: &PinManifestRecord,
+    keypair: &KeyPair,
+) -> Result<Vec<u8>, iroha_crypto::Error> {
     let mut sig_entry = json::Map::new();
-    let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
+    let signature = Signature::try_new(keypair.private_key(), record.digest.as_bytes())?;
     let public_bytes_hex = hex::encode(checked_ed25519_public_key_bytes(
         keypair,
         "pin fixture signer public key",
@@ -577,7 +583,7 @@ fn build_envelope(record: &PinManifestRecord, keypair: &KeyPair) -> Vec<u8> {
 
     let mut serialized = json::to_vec_pretty(&Value::Object(envelope)).expect("serialize envelope");
     serialized.push(b'\n');
-    serialized
+    Ok(serialized)
 }
 
 fn alice() -> AccountId {
@@ -586,4 +592,65 @@ fn alice() -> AccountId {
             .parse()
             .expect("public key"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_manifest_record() -> PinManifestRecord {
+        PinManifestRecord::new(
+            default_digest(),
+            default_chunker(),
+            default_chunk_digest(),
+            default_policy(),
+            alice(),
+            5,
+            None,
+            None,
+            Metadata::default(),
+        )
+        .with_content_length(default_content_length())
+    }
+
+    #[test]
+    fn alias_binding_uses_checked_signature_and_verifies() {
+        let council_keys = council_keypair();
+        let binding = alias_binding_for(default_digest(), "sora", "docs", 12, 36, &council_keys)
+            .expect("alias binding should sign");
+        let bundle: AliasProofBundleV1 =
+            norito::decode_from_bytes(&binding.proof).expect("decode alias proof bundle");
+
+        verify_alias_proof_bundle(&bundle).expect("checked alias proof signature should verify");
+    }
+
+    #[test]
+    fn council_envelope_uses_checked_signature_and_verifies() {
+        let keypair = council_keypair();
+        let record = test_manifest_record();
+        let envelope = build_envelope(&record, &keypair).expect("council envelope should sign");
+        let value: Value = json::from_slice(&envelope).expect("parse council envelope json");
+        let map = match value {
+            Value::Object(map) => map,
+            other => panic!("council envelope should be a JSON object, got {other:?}"),
+        };
+        let signatures = match map.get("signatures").expect("signatures field") {
+            Value::Array(signatures) => signatures,
+            other => panic!("signatures field should be an array, got {other:?}"),
+        };
+        let signature_entry = match signatures.first().expect("one signature entry") {
+            Value::Object(entry) => entry,
+            other => panic!("signature entry should be an object, got {other:?}"),
+        };
+        let signature_hex = match signature_entry.get("signature").expect("signature field") {
+            Value::String(signature_hex) => signature_hex,
+            other => panic!("signature field should be a string, got {other:?}"),
+        };
+        let signature_bytes = hex::decode(signature_hex).expect("signature hex");
+        let signature = Signature::from_bytes(&signature_bytes);
+
+        signature
+            .verify(keypair.public_key(), record.digest.as_bytes())
+            .expect("checked council envelope signature should verify");
+    }
 }

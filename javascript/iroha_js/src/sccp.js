@@ -8976,6 +8976,10 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
       "crossSdkFixtureParityArtifact",
       ".json",
     );
+  rejectNonProductionNativeEvmProverArtifactPath(
+    crossSdkFixtureParityArtifact,
+    "crossSdkFixtureParityArtifact",
+  );
   const nativeProverSelfTestArtifact =
     requireNativeEvmProverArtifactPathExtension(
       normalizeNativeEvmProverArtifactPath(
@@ -8992,6 +8996,10 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
       "nativeProverSelfTestArtifact",
       ".json",
     );
+  rejectNonProductionNativeEvmProverArtifactPath(
+    nativeProverSelfTestArtifact,
+    "nativeProverSelfTestArtifact",
+  );
   requireNativeEvmProverBundleObject(auditHashesInput, "auditHashes");
   requireNativeEvmProverBundleKnownFields(
     auditHashesInput,

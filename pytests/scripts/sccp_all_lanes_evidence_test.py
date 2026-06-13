@@ -6330,6 +6330,16 @@ def test_all_lanes_evidence_rejects_malformed_governed_blocker_containers():
         for rollout in records["sccp_destination_rollouts"]
         if rollout["domain"] == module.SCCP_DOMAIN_TRON
     )
+    sol_destination = next(
+        rollout
+        for rollout in records["sccp_destination_rollouts"]
+        if rollout["domain"] == module.SCCP_DOMAIN_SOL
+    )
+    eth_route = next(
+        route
+        for route in records["sccp_route_allowlists"]
+        if route["domain"] == module.SCCP_DOMAIN_ETH
+    )
     bsc_route = next(
         route
         for route in records["sccp_route_allowlists"]
@@ -6340,11 +6350,20 @@ def test_all_lanes_evidence_rejects_malformed_governed_blocker_containers():
         for route in records["sccp_route_allowlists"]
         if route["domain"] == module.SCCP_DOMAIN_SOL
     )
+    ton_route = next(
+        route
+        for route in records["sccp_route_allowlists"]
+        if route["domain"] == module.SCCP_DOMAIN_TON
+    )
 
+    confusable_blocker = "operator public bl\u043ecker"
     eth_destination["blockers"] = "operator says destination rollout is ready"
     tron_destination["blockers"] = [123]
+    sol_destination["blockers"] = ["operator\nsecret-token-governed-blocker"]
+    eth_route["blockers"] = ["operator secret-token-governed-blocker"]
     bsc_route["blockers"] = [""]
     sol_route["blockers"] = [" route canary still pending"]
+    ton_route["blockers"] = ["operator|governed-blocker", confusable_blocker]
 
     summary = module.validate_evidence_bundle(records)
 
@@ -6366,8 +6385,27 @@ def test_all_lanes_evidence_rejects_malformed_governed_blocker_containers():
         "domain 3 (sol): route allowlist blockers[0] must be a non-empty "
         "canonical string"
     ) in blockers
+    assert (
+        "domain 3 (sol): destination rollout blockers[0] contains control "
+        "character"
+    ) in blockers
+    assert (
+        "domain 1 (eth): route allowlist blockers[0] contains sensitive name"
+        in blockers
+    )
+    assert (
+        "domain 4 (ton): route allowlist blockers[0] contains "
+        "Markdown-unsafe character"
+    ) in blockers
+    assert (
+        "domain 4 (ton): route allowlist blockers[1] contains non-ASCII "
+        "character"
+    ) in blockers
     assert "domain 2 (bsc): route allowlist blockers must be empty" in blockers
     assert "domain 3 (sol): route allowlist blockers must be empty" in blockers
+    assert "secret-token-governed-blocker" not in blockers
+    assert "operator|governed-blocker" not in blockers
+    assert confusable_blocker not in blockers
 
 
 
@@ -7238,6 +7276,102 @@ def test_all_lanes_release_checklist_requires_source_gate_hash_and_audits():
     assert (
         "domain 3 (sol): source adapter gate hash must match "
         "audit_hashes.solana_full_light_client_gate_hash"
+    ) in blockers
+
+
+def test_all_lanes_release_checklist_redacts_unsafe_source_gate_audit_fields():
+    module = load_evidence_module()
+    base_lane = {
+        "domain": module.SCCP_DOMAIN_SOL,
+        "chain": "sol",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_record_hashes": {
+            "source_verifier_material_hash": hex32(0x62),
+            "source_adapter_engine_deployment_hash": hex32(0x63),
+        },
+        "source_adapter_gate": {
+            "required": True,
+            "ready": True,
+            "gate_hash": hex32(0x61),
+            "audit_hashes": {
+                "solana_tower_replay_verifier_hash": hex32(0x70),
+                "solana_full_accountsdb_lattice_verifier_hash": hex32(0x71),
+                "solana_bank_fork_choice_verifier_hash": hex32(0x72),
+                "solana_full_light_client_gate_hash": hex32(0x61),
+            },
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+            "destination_binding_hash": hex32(0x65),
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_allowlist_hash": hex32(0x68),
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": hex32(0x69),
+                "evidence_source": "solana_live_programdata_snapshot",
+                "evidence_bound": True,
+            },
+        },
+        "blockers": [],
+    }
+
+    cases = (
+        (
+            "secret-token-audit-field",
+            hex32(0x73),
+            "domain 3 (sol): source adapter gate audit hashes contains "
+            "unexpected field with sensitive name",
+        ),
+        (
+            "route|operator-audit-field",
+            hex32(0x74),
+            "domain 3 (sol): source adapter gate audit hashes contains "
+            "unexpected field with malformed name",
+        ),
+        (
+            7,
+            hex32(0x75),
+            "domain 3 (sol): source adapter gate audit hashes contains "
+            "non-string field name",
+        ),
+        (
+            "secret-token-replayed-audit-field",
+            hex32(0x69),
+            "domain 3 (sol): source adapter gate audit hashes contains "
+            "unexpected field with sensitive name",
+        ),
+    )
+    for field, value, expected_blocker in cases:
+        lane = copy.deepcopy(base_lane)
+        lane["source_adapter_gate"]["audit_hashes"][field] = value
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        blockers = "\n".join(items["governed_deployment_evidence"]["blockers"])
+
+        assert checklist["ready"] is False
+        assert expected_blocker in blockers
+        if isinstance(field, str):
+            assert field not in blockers
+
+    safe_lane = copy.deepcopy(base_lane)
+    safe_lane["source_adapter_gate"]["audit_hashes"]["operator_override"] = hex32(0x73)
+
+    checklist = module._release_checklist([safe_lane], [])
+    items = {item["id"]: item for item in checklist["items"]}
+    blockers = "\n".join(items["governed_deployment_evidence"]["blockers"])
+
+    assert (
+        "domain 3 (sol): source adapter gate audit hashes contains unexpected "
+        "field: operator_override"
     ) in blockers
 
 

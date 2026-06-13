@@ -2444,9 +2444,11 @@ def _parse_phase_assignment_name(raw_name: str, label: str) -> str:
     # Source-inventory markers:
     # - phase result name contains surrounding whitespace
     # - phase result name contains Markdown-unsafe character
+    # - phase result name contains sensitive name
     # - phase result name contains malformed phase
     # - phase evidence name contains surrounding whitespace
     # - phase evidence name contains Markdown-unsafe character
+    # - phase evidence name contains sensitive name
     # - phase evidence name contains malformed phase
     if not raw_name:
         raise argparse.ArgumentTypeError(f"{label} name is empty")
@@ -2464,6 +2466,8 @@ def _parse_phase_assignment_name(raw_name: str, label: str) -> str:
         raise argparse.ArgumentTypeError(
             f"{label} name contains Markdown-unsafe character"
         )
+    if any(marker in raw_name.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        raise argparse.ArgumentTypeError(f"{label} name contains sensitive name")
     allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
     if (
         any(character not in allowed for character in raw_name)
@@ -2738,9 +2742,19 @@ def _native_evm_prover_bundle_artifact_summary(
             blockers.append(sdk_key_blocker)
             continue
         if sdk in by_sdk:
-            blockers.append(f"native_sdk_artifacts contains duplicate sdk: {sdk}")
+            if _native_evm_sdk_name_has_sensitive_marker(sdk):
+                blockers.append(
+                    "native_sdk_artifacts contains duplicate sdk with sensitive name"
+                )
+            else:
+                blockers.append(f"native_sdk_artifacts contains duplicate sdk: {sdk}")
         expected_implementation = NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS.get(sdk)
         if expected_implementation is None:
+            if _native_evm_sdk_name_has_sensitive_marker(sdk):
+                blockers.append(
+                    "native_sdk_artifacts contains unknown sdk with sensitive name"
+                )
+                continue
             blockers.append(f"native_sdk_artifacts contains unknown sdk: {sdk}")
         elif implementation != expected_implementation:
             blockers.append(
@@ -2823,7 +2837,12 @@ def _native_evm_prover_sdk_results_by_sdk(
     for sdk in sorted(
         set(canonical_results) - set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)
     ):
-        blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
+        if _native_evm_sdk_name_has_sensitive_marker(sdk):
+            blockers.append(
+                f"{prefix} sdk_results contains unknown sdk with sensitive name"
+            )
+        else:
+            blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
     for sdk in sorted(
         set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(canonical_results)
     ):
@@ -2842,10 +2861,7 @@ def _native_evm_prover_sdk_result_key_blocker(
     if not sdk.isascii():
         return f"{prefix} sdk_results sdk key must be printable ASCII"
     if sdk.strip() != sdk:
-        return (
-            f"{prefix} sdk_results sdk key must not contain surrounding whitespace: "
-            f"{sdk!r}"
-        )
+        return f"{prefix} sdk_results sdk key must not contain surrounding whitespace"
     if any(character.isspace() for character in sdk):
         return f"{prefix} sdk_results sdk key must not contain whitespace"
     allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
@@ -2878,7 +2894,34 @@ def _native_evm_prover_field_name_blocker(
             f"{label} contains {field_kind} field name with Markdown-unsafe "
             "character"
         )
+    if any(marker in key.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        return f"{label} contains {field_kind} field name with sensitive name"
     return f"{label} contains {field_kind} field: {key}"
+
+
+SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (
+    "secret-token",
+    "private-key",
+    "private_key",
+    "password",
+    "bearer",
+    "authorization",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "token",
+)
+
+
+def _native_evm_sdk_name_has_sensitive_marker(sdk: str) -> bool:
+    return any(marker in sdk.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS)
+
+
+def _native_evm_sdk_name_blocker(label: str, sdk: str, issue: str) -> str:
+    if _native_evm_sdk_name_has_sensitive_marker(sdk):
+        return f"{label} contains {issue} sdk with sensitive name"
+    return f"{label} contains {issue} sdk: {sdk}"
 
 
 def _required_record_summary_unknown_field_blocker(
@@ -2905,6 +2948,8 @@ def _native_evm_prover_duplicate_json_key_blocker(label: str, key: Any) -> str:
         return f"{label} JSON contains duplicate key with whitespace"
     if _path_markdown_unsafe_character(key) is not None:
         return f"{label} JSON contains duplicate key with Markdown-unsafe character"
+    if any(marker in key.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        return f"{label} JSON contains duplicate key with sensitive key name"
     return f"{label} JSON contains duplicate key: {key}"
 
 
@@ -4606,6 +4651,50 @@ def _string_list_or_schema_blockers(value: Any, label: str) -> list[str]:
     return blockers
 
 
+def _native_evm_validation_blocker_issue(
+    item: Any,
+    label: str,
+    index: int,
+) -> str | None:
+    item_label = f"{label}[{index}]"
+    if not isinstance(item, str) or not item or item.strip() != item:
+        return f"{item_label} must be a non-empty canonical string"
+    if _path_control_character(item) is not None:
+        return f"{item_label} contains control character"
+    if not item.isascii():
+        return f"{item_label} contains non-ASCII character"
+    if _path_markdown_unsafe_character(item) is not None:
+        return f"{item_label} contains Markdown-unsafe character"
+    if any(marker in item.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        # Source-inventory marker: validation_blockers[0] contains sensitive name
+        return f"{item_label} contains sensitive name"
+    return None
+
+
+def _native_evm_validation_blockers(value: Any, label: str) -> list[str]:
+    if not isinstance(value, list):
+        return [f"{label} must be a list of non-empty canonical strings"]
+    blockers: list[str] = []
+    for index, item in enumerate(value):
+        issue = _native_evm_validation_blocker_issue(item, label, index)
+        blockers.append(issue if issue is not None else item)
+    return blockers
+
+
+def _public_blocker_text_issue(item: Any) -> str | None:
+    if not isinstance(item, str) or not item or item.strip() != item:
+        return "non-empty canonical string"
+    if _path_control_character(item) is not None:
+        return "control character"
+    if not item.isascii():
+        return "non-ASCII character"
+    if _path_markdown_unsafe_character(item) is not None:
+        return "Markdown-unsafe character"
+    if any(marker in item.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        return "sensitive name"
+    return None
+
+
 def _active_launch_lane_blockers_for_checklist(
     value: Any,
     lane_label: str,
@@ -5010,7 +5099,7 @@ def _active_launch_release_checklist(
     if canary.get("evidence_bound") is not True:
         canary_blockers.append(f"{lane_label}: route canary evidence is not bound")
 
-    native_prover_blockers = _string_list_or_schema_blockers(
+    native_prover_blockers = _native_evm_validation_blockers(
         native_prover_bundle.get("validation_blockers"),
         "native EVM prover validation_blockers",
     )
@@ -5965,7 +6054,7 @@ def _build_report(
     )
     blockers = _active_launch_blockers(evidence)
     blockers.extend(
-        _string_list_or_schema_blockers(
+        _native_evm_validation_blockers(
             native_prover_bundle.get("validation_blockers"),
             "native EVM prover validation_blockers",
         )
@@ -6251,6 +6340,47 @@ def _markdown_string_list_cell(value: Any, *, field_label: str) -> str:
         return "-"
     if not all(isinstance(item, str) and item for item in value):
         return f"`<invalid {field_label}>`"
+    if any(_public_blocker_text_issue(item) is not None for item in value):
+        return f"`<invalid {field_label}>`"
+    return "<br>".join(value)
+
+
+def _user_prover_validation_blockers_cell(value: Any) -> str:
+    field_label = "validation_blockers"
+    if not isinstance(value, list):
+        return f"`<invalid {field_label}>`"
+    if not value:
+        return "-"
+    if not all(isinstance(item, str) and item for item in value):
+        return f"`<invalid {field_label}>`"
+    for item in value:
+        if _path_control_character(item) is not None:
+            return f"`<invalid {field_label}>`"
+        if not item.isascii() or item.strip() != item:
+            return f"`<invalid {field_label}>`"
+        if _path_markdown_unsafe_character(item) is not None:
+            return f"`<invalid {field_label}>`"
+        if any(marker in item.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+            return f"`<invalid {field_label}>`"
+    return "<br>".join(value)
+
+
+def _native_evm_validation_blockers_cell(value: Any) -> str:
+    field_label = "validation_blockers"
+    if not isinstance(value, list):
+        return f"`<invalid {field_label}>`"
+    if not value:
+        return "-"
+    for index, item in enumerate(value):
+        if (
+            _native_evm_validation_blocker_issue(
+                item,
+                "native EVM prover validation_blockers",
+                index,
+            )
+            is not None
+        ):
+            return f"`<invalid {field_label}>`"
     return "<br>".join(value)
 
 
@@ -6260,6 +6390,8 @@ def _markdown_string_list_items(value: Any, *, field_label: str) -> list[str]:
     if not value:
         return ["- None"]
     if not all(isinstance(item, str) and item for item in value):
+        return [f"- `<invalid {field_label}>`"]
+    if any(_public_blocker_text_issue(item) is not None for item in value):
         return [f"- `<invalid {field_label}>`"]
     return [f"- {item}" for item in value]
 
@@ -6394,9 +6526,8 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
         validation = surface["validation_status"]
         validation_blockers = surface.get("validation_blockers")
         if not isinstance(validation_blockers, list) or validation_blockers:
-            validation += ": " + _markdown_string_list_cell(
-                validation_blockers,
-                field_label="validation_blockers",
+            validation += ": " + _user_prover_validation_blockers_cell(
+                validation_blockers
             )
         lines.append(
             "| `{lanes}` | `{proof_backend}` | {sdk_helpers} | {submission} | "
@@ -6441,9 +6572,8 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
         )
     else:
         sdk_cell = "-"
-    native_blocker_text = _markdown_string_list_cell(
-        native_bundle.get("validation_blockers"),
-        field_label="validation_blockers",
+    native_blocker_text = _native_evm_validation_blockers_cell(
+        native_bundle.get("validation_blockers")
     )
     parity_artifact = native_bundle.get("cross_sdk_fixture_parity_artifact")
     parity_cell = (

@@ -482,6 +482,7 @@ fn token_outcome_label(error: &TokenPolicyError) -> &'static str {
             TokenVerifyError::InvalidTemporalBounds => "invalid_temporal_bounds",
             TokenVerifyError::Clock(_) => "store_error",
             TokenVerifyError::Signature(_) => "signature_invalid",
+            TokenVerifyError::InertSignature => "signature_invalid",
             TokenVerifyError::Store(_) => "store_error",
             TokenVerifyError::Replay(_) => "replay",
         },
@@ -1599,6 +1600,12 @@ mod tests {
             )
             .expect_err("token should be revoked");
         assert!(matches!(err, TokenPolicyError::Revoked(_)));
+    }
+
+    #[test]
+    fn token_outcome_labels_inert_signature_as_invalid_signature() {
+        let error = TokenPolicyError::Verify(TokenVerifyError::InertSignature);
+        assert_eq!(token_outcome_label(&error), "signature_invalid");
     }
 
     #[test]

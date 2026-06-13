@@ -19,6 +19,7 @@ No current source proof, manifest, SDK helper, or Torii route should be treated
 as Sub&#115;trate/Pol&#107;adot-compatible.
 That exclusion is intentional current-launch scope, not a hidden compatibility
 lane.
+Do not track that family as remaining SCCP launch work in this cycle.
 Torii public SCCP discovery, proof manifests, route readiness, SDK helpers, and
 operator scripts must advertise only those lanes. Unsupported domain ids fail at
 the absent-manifest/backend boundary rather than routing through diagnostic
@@ -2663,10 +2664,13 @@ the raw TOML first. Public release-bundle
 verification also enforces source-adapter gate audit hash role separation, so
 gate evidence cannot be replayed from source material, source deployment,
 destination, route, or sibling audit digests in either embedded all-lanes view.
-For ETH/BSC rows, that public gate audit set is the single canonical
-`evm_source_gate_hash`; the active Ethereum release checklist requires it to be
-present, non-zero, and equal to the cryptographic-evidence gate hash before a
-bundle can be marked ready.
+For ETH and BSC mainnet rows, that public gate audit set is the single
+canonical `evm_source_gate_hash`; the active Ethereum release checklist
+requires it to be present, non-zero, and equal to the cryptographic-evidence
+gate hash before a bundle can be marked ready. BSC testnet rows use the no-gate
+profile only when `chain` is exactly `bsc-testnet`; those rows must keep
+`source_adapter_gate_required = false` and leave the gate hash and audit set
+empty.
 It also records the user-prover SDK submission
 surface for every lane, separating the EVM/TRON Torii bridge-proof submit
 runtime-call envelopes that portal or mobile provers submit on-chain. Each
@@ -3182,9 +3186,11 @@ Public cryptographic-evidence rows for TRON route canaries must keep
 `route_canary_block_timestamp` as a non-negative u64 integer; oversized copied
 TRON metadata fails at the same pre-render and strict-verification boundary.
 Public cryptographic-evidence source-adapter gate rows also enforce the
-domain-specific audit-key policy before rendering, so Solana, TON, and TRON
-rows cannot carry `source_adapter_gate_required = false`, stale gate hashes, or
-unexpected/missing audit hashes through non-active public evidence paths.
+domain-and-chain-specific audit-key policy before rendering, so BSC mainnet,
+Solana, TON, and TRON rows cannot carry `source_adapter_gate_required = false`,
+stale gate hashes, or unexpected/missing audit hashes through non-active public
+evidence paths. Unknown BSC chain names keep the stricter mainnet gate policy
+and are still reported as chain mismatches.
 Release-readiness and bundle verification also pin public submission-surface
 binding as required source inventory, so lane/backend inventory, per-SDK helper
 inventory, verifier-owned surface recomputation, and corridor-phase binding

@@ -13779,6 +13779,148 @@ pub fn sccp_source_chain_proof_adapter_verifier_commitment(
     Some(env.vk_hash)
 }
 
+fn source_adapter_deployment_has_standalone_valid_shape(
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> bool {
+    let Some(expected_source_chain) = sccp_chain_key_for_domain(deployment.source_domain) else {
+        return false;
+    };
+    let Some(expected_source_proof_plan) =
+        sccp_source_proof_plan_for_domain(deployment.source_domain)
+    else {
+        return false;
+    };
+    let Some(expected_finality_model) =
+        sccp_proof_finality_model_for_domain(deployment.source_domain)
+    else {
+        return false;
+    };
+    let Some(expected_adapter_verifier_vk_hash) =
+        sccp_source_adapter_verifier_commitment_for_lane_v1(
+            deployment.source_domain,
+            deployment.target_domain,
+        )
+    else {
+        return false;
+    };
+
+    let source_state_verifier_is_valid =
+        if sccp_source_state_verifier_required(deployment.source_domain) {
+            sccp_source_state_verifier_id_for_domain(deployment.source_domain)
+                .is_some_and(|expected_id| deployment.source_state_verifier_id == expected_id)
+                && h256_is_nonzero(&deployment.source_state_verifier_hash)
+        } else {
+            deployment.source_state_verifier_id.is_empty()
+                && !h256_is_nonzero(&deployment.source_state_verifier_hash)
+        };
+    let source_bridge_emitter_is_valid =
+        if sccp_source_bridge_emitter_binding_required(deployment.source_domain) {
+            sccp_source_bridge_emitter_id_for_domain(deployment.source_domain)
+                .is_some_and(|expected_id| deployment.source_bridge_emitter_id == expected_id)
+                && sccp_source_bridge_emitter_address_is_nonzero(
+                    &deployment.source_bridge_emitter_address,
+                )
+                && sccp_source_bridge_emitter_code_hash_is_nonzero(
+                    &deployment.source_bridge_emitter_code_hash,
+                )
+        } else {
+            deployment.source_bridge_emitter_id.is_empty()
+                && deployment.source_bridge_emitter_address.is_empty()
+                && !sccp_source_bridge_emitter_code_hash_is_nonzero(
+                    &deployment.source_bridge_emitter_code_hash,
+                )
+        };
+    let audit_shape_is_valid = match deployment.source_domain {
+        SCCP_DOMAIN_SOL => {
+            sccp_source_adapter_deployment_solana_full_light_client_audit_shape_is_valid(deployment)
+                && sccp_source_adapter_deployment_ton_full_light_client_audit_nonzero_count(
+                    deployment,
+                ) == 0
+        }
+        SCCP_DOMAIN_TON => {
+            sccp_source_adapter_deployment_solana_full_light_client_audit_nonzero_count(deployment)
+                == 0
+                && sccp_source_adapter_deployment_ton_full_light_client_audit_shape_is_valid(
+                    deployment,
+                )
+        }
+        _ => {
+            sccp_source_adapter_deployment_solana_full_light_client_audit_nonzero_count(deployment)
+                == 0
+                && sccp_source_adapter_deployment_ton_full_light_client_audit_nonzero_count(
+                    deployment,
+                ) == 0
+        }
+    };
+
+    deployment.version == 1
+        && sccp_domain_in_supported_launch_scope_v1(deployment.source_domain)
+        && deployment.target_domain != deployment.source_domain
+        && sccp_chain_key_for_domain(deployment.target_domain).is_some()
+        && (deployment.source_domain != SCCP_DOMAIN_TRON
+            || deployment.target_domain == SCCP_DOMAIN_SORA)
+        && deployment.source_chain == expected_source_chain
+        && deployment.source_proof_plan == expected_source_proof_plan
+        && deployment.finality_model == expected_finality_model
+        && deployment.adapter_proof_family == SCCP_STARK_FRI_PROOF_FAMILY_V1
+        && deployment.adapter_circuit_id == SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1
+        && deployment.adapter_verifier_vk_hash == expected_adapter_verifier_vk_hash
+        && h256_is_nonzero(&deployment.adapter_verifier_vk_hash)
+        && !deployment.source_trust_anchor_id.is_empty()
+        && !deployment.consensus_verifier_id.is_empty()
+        && !deployment.message_inclusion_verifier_id.is_empty()
+        && !deployment.finality_policy_id.is_empty()
+        && h256_is_nonzero(&deployment.source_trust_anchor_hash)
+        && h256_is_nonzero(&deployment.consensus_verifier_hash)
+        && h256_is_nonzero(&deployment.message_inclusion_verifier_hash)
+        && h256_is_nonzero(&deployment.finality_policy_hash)
+        && source_state_verifier_is_valid
+        && source_bridge_emitter_is_valid
+        && sccp_source_bridge_config_hash_fields_are_consistent(
+            deployment.source_domain,
+            &deployment.source_bridge_emitter_address,
+            deployment.source_bridge_emitter_code_hash,
+            deployment.source_bridge_network_id,
+            &deployment.source_bridge_owner_address,
+            deployment.source_bridge_config_hash,
+        )
+        && h256_is_nonzero(&deployment.deployment_receipt_hash)
+        && audit_shape_is_valid
+        && sccp_source_adapter_engine_deployment_role_hashes_are_separated(deployment)
+        && h256_is_nonzero(&sccp_source_adapter_engine_deployment_hash(deployment))
+}
+
+fn source_verifier_evidence_matches_adapter_deployment(
+    evidence: &SccpSourceVerifierEvidenceV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> bool {
+    evidence.version == 1
+        && evidence.source_domain == deployment.source_domain
+        && evidence.source_chain == deployment.source_chain
+        && evidence.source_proof_plan == deployment.source_proof_plan
+        && evidence.finality_model == deployment.finality_model
+        && evidence.adapter_circuit_id == deployment.adapter_circuit_id
+        && evidence.source_trust_anchor_id == deployment.source_trust_anchor_id
+        && evidence.source_trust_anchor_hash == deployment.source_trust_anchor_hash
+        && evidence.consensus_verifier_id == deployment.consensus_verifier_id
+        && evidence.consensus_verifier_hash == deployment.consensus_verifier_hash
+        && evidence.message_inclusion_verifier_id == deployment.message_inclusion_verifier_id
+        && evidence.message_inclusion_verifier_hash == deployment.message_inclusion_verifier_hash
+        && evidence.finality_policy_id == deployment.finality_policy_id
+        && evidence.finality_policy_hash == deployment.finality_policy_hash
+        && evidence.source_state_verifier_id == deployment.source_state_verifier_id
+        && evidence.source_state_verifier_hash == deployment.source_state_verifier_hash
+        && evidence.source_bridge_emitter_id == deployment.source_bridge_emitter_id
+        && evidence.source_bridge_emitter_address == deployment.source_bridge_emitter_address
+        && evidence.source_bridge_emitter_code_hash == deployment.source_bridge_emitter_code_hash
+        && evidence.source_bridge_network_id == deployment.source_bridge_network_id
+        && evidence.source_bridge_owner_address == deployment.source_bridge_owner_address
+        && evidence.source_bridge_config_hash == deployment.source_bridge_config_hash
+        && evidence.source_adapter_deployment_hash
+            == sccp_source_adapter_engine_deployment_hash(deployment)
+        && evidence.source_adapter_deployment_receipt_hash == deployment.deployment_receipt_hash
+}
+
 #[allow(clippy::suspicious_operation_groupings)]
 pub fn sccp_source_chain_proof_matches_adapter_deployment(
     proof: &SccpSourceChainProofEnvelopeV1,
@@ -13805,7 +13947,8 @@ pub fn sccp_source_chain_proof_matches_adapter_deployment(
     );
     let deployment_hash = sccp_source_adapter_engine_deployment_hash(deployment);
     let verifier_vk_matches_deployment = env.vk_hash == deployment.adapter_verifier_vk_hash;
-    proof.source_domain == deployment.source_domain
+    source_adapter_deployment_has_standalone_valid_shape(deployment)
+        && proof.source_domain == deployment.source_domain
         && proof.target_domain == deployment.target_domain
         && proof.source_chain == deployment.source_chain
         && proof.source_proof_plan == deployment.source_proof_plan
@@ -13818,6 +13961,10 @@ pub fn sccp_source_chain_proof_matches_adapter_deployment(
             .verifier_evidence
             .source_adapter_deployment_receipt_hash
             == deployment.deployment_receipt_hash
+        && source_verifier_evidence_matches_adapter_deployment(
+            &consensus.verifier_evidence,
+            deployment,
+        )
         && consensus.adapter_transcript_hash == adapter_transcript_hash
         && verify_sccp_source_adapter_verification_proof(
             proof,
@@ -35855,6 +36002,24 @@ mod tests {
     const TEST_TON_CODE_BOC_ROOT_HASH: &str =
         "0x49725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe";
 
+    fn checked_sccp_fixture_signature(
+        signer: &KeyPair,
+        message: &[u8],
+        context: &'static str,
+    ) -> iroha_crypto::Signature {
+        iroha_crypto::Signature::try_new(signer.private_key(), message).expect(context)
+    }
+
+    fn checked_sccp_fixture_signature_payload(
+        signer: &KeyPair,
+        message: &[u8],
+        context: &'static str,
+    ) -> Vec<u8> {
+        checked_sccp_fixture_signature(signer, message, context)
+            .payload()
+            .to_vec()
+    }
+
     fn assert_norito_enum_tag_roundtrips<T>(value: T, expected_tag: u32)
     where
         T: norito::NoritoSerialize
@@ -35904,6 +36069,18 @@ mod tests {
             key: String::from("sccp:test:destination-binding"),
             binding_hash: [0x11; 32],
         }
+    }
+
+    #[test]
+    fn sccp_fixture_checked_signature_verifies() {
+        let signer = KeyPair::from_seed(vec![0xA7; 32], Algorithm::Ed25519);
+        let message = b"sccp fixture checked signing";
+        let signature =
+            checked_sccp_fixture_signature(&signer, message, "sign SCCP fixture test payload");
+
+        signature
+            .verify(signer.public_key(), message)
+            .expect("checked SCCP fixture signature verifies");
     }
 
     #[test]
@@ -37732,7 +37909,11 @@ mod tests {
         let signatures = signers[..signer_count]
             .iter()
             .map(|signer| {
-                iroha_crypto::Signature::new(signer.private_key(), &sync_committee_message_hash)
+                checked_sccp_fixture_signature(
+                    signer,
+                    &sync_committee_message_hash,
+                    "sign SCCP ETH sync committee fixture message",
+                )
             })
             .collect::<Vec<_>>();
         let signature_refs = signatures
@@ -37930,9 +38111,11 @@ mod tests {
         let signatures = signers[..3]
             .iter()
             .map(|signer| {
-                iroha_crypto::Signature::new(signer.private_key(), &block_message_hash)
-                    .payload()
-                    .to_vec()
+                checked_sccp_fixture_signature_payload(
+                    signer,
+                    &block_message_hash,
+                    "sign SCCP TON validator fixture message",
+                )
             })
             .collect::<Vec<_>>();
         SccpTonMasterchainValidatorSignaturesProofV1 {
@@ -39000,9 +39183,11 @@ mod tests {
         let signatures = signers[..3]
             .iter()
             .map(|signer| {
-                iroha_crypto::Signature::new(signer.private_key(), &vote_message_hash)
-                    .payload()
-                    .to_vec()
+                checked_sccp_fixture_signature_payload(
+                    signer,
+                    &vote_message_hash,
+                    "sign SCCP Solana vote fixture message",
+                )
             })
             .collect::<Vec<_>>();
         SccpSolanaFinalizedVoteProofV1 {
@@ -39071,9 +39256,11 @@ mod tests {
         adapter.vote_proof.signatures = sample_solana_vote_keypairs()[..3]
             .iter()
             .map(|signer| {
-                iroha_crypto::Signature::new(signer.private_key(), &vote_message_hash)
-                    .payload()
-                    .to_vec()
+                checked_sccp_fixture_signature_payload(
+                    signer,
+                    &vote_message_hash,
+                    "resign SCCP Solana vote fixture message",
+                )
             })
             .collect();
     }
@@ -40438,7 +40625,13 @@ mod tests {
         let message = nexus_commit_vote_preimage(&chain_id, &commit_qc);
         let signatures = keypairs
             .iter()
-            .map(|keypair| iroha_crypto::Signature::new(keypair.private_key(), &message))
+            .map(|keypair| {
+                checked_sccp_fixture_signature(
+                    keypair,
+                    &message,
+                    "sign SCCP Nexus finality fixture message",
+                )
+            })
             .collect::<Vec<_>>();
         let signature_refs = signatures
             .iter()
@@ -41814,6 +42007,99 @@ mod tests {
         let mut consensus = source_consensus_proof_from_envelope(proof);
         mutate(&mut consensus.verifier_evidence);
         replace_source_consensus_proof(proof, &consensus);
+    }
+
+    fn rebuild_source_adapter_verification_proof_for_current_evidence(
+        proof: &mut SccpSourceChainProofEnvelopeV1,
+    ) {
+        let mut consensus = source_consensus_proof_from_envelope(proof);
+        let verifier_evidence_hash =
+            sccp_source_verifier_evidence_hash(&consensus.verifier_evidence);
+        let batch = build_sccp_source_adapter_fastpq_batch(
+            proof,
+            &consensus.adapter_proof,
+            consensus.adapter_transcript_hash,
+            verifier_evidence_hash,
+        )
+        .expect("source adapter FastPQ batch");
+        let raw_proof_bytes =
+            build_sccp_source_adapter_fastpq_raw_proof_bytes(&batch).expect("FastPQ proof bytes");
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: sccp_source_adapter_public_input_columns(
+                proof,
+                consensus.adapter_transcript_hash,
+                verifier_evidence_hash,
+            ),
+            envelope_bytes: raw_proof_bytes,
+        };
+        let env = OpenVerifyEnvelope {
+            backend: BackendTag::Stark,
+            circuit_id: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1.to_owned(),
+            vk_hash: sccp_source_adapter_fastpq_verifier_commitment(proof)
+                .expect("source adapter verifier commitment"),
+            public_inputs: sccp_source_adapter_open_verify_schema_descriptor(proof),
+            proof_bytes: to_bytes(&open).expect("encode source adapter open proof"),
+            aux: Vec::new(),
+        };
+        consensus.adapter_verification_proof = SccpSourceAdapterVerificationProofV1 {
+            version: 1,
+            proof_family: SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
+            circuit_id: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1.to_owned(),
+            proof_bytes: to_bytes(&env).expect("encode source adapter OpenVerify envelope"),
+        };
+        replace_source_consensus_proof(proof, &consensus);
+    }
+
+    fn retarget_source_verifier_evidence_to_deployment(
+        proof: &mut SccpSourceChainProofEnvelopeV1,
+        deployment: &SccpSourceAdapterEngineDeploymentV1,
+    ) {
+        mutate_source_verifier_evidence(proof, |evidence| {
+            evidence.source_domain = deployment.source_domain;
+            evidence.source_chain.clone_from(&deployment.source_chain);
+            evidence.source_proof_plan = deployment.source_proof_plan;
+            evidence.finality_model = deployment.finality_model;
+            evidence
+                .adapter_circuit_id
+                .clone_from(&deployment.adapter_circuit_id);
+            evidence
+                .source_trust_anchor_id
+                .clone_from(&deployment.source_trust_anchor_id);
+            evidence.source_trust_anchor_hash = deployment.source_trust_anchor_hash;
+            evidence
+                .consensus_verifier_id
+                .clone_from(&deployment.consensus_verifier_id);
+            evidence.consensus_verifier_hash = deployment.consensus_verifier_hash;
+            evidence
+                .message_inclusion_verifier_id
+                .clone_from(&deployment.message_inclusion_verifier_id);
+            evidence.message_inclusion_verifier_hash = deployment.message_inclusion_verifier_hash;
+            evidence
+                .finality_policy_id
+                .clone_from(&deployment.finality_policy_id);
+            evidence.finality_policy_hash = deployment.finality_policy_hash;
+            evidence
+                .source_state_verifier_id
+                .clone_from(&deployment.source_state_verifier_id);
+            evidence.source_state_verifier_hash = deployment.source_state_verifier_hash;
+            evidence
+                .source_bridge_emitter_id
+                .clone_from(&deployment.source_bridge_emitter_id);
+            evidence
+                .source_bridge_emitter_address
+                .clone_from(&deployment.source_bridge_emitter_address);
+            evidence.source_bridge_emitter_code_hash = deployment.source_bridge_emitter_code_hash;
+            evidence.source_bridge_network_id = deployment.source_bridge_network_id;
+            evidence
+                .source_bridge_owner_address
+                .clone_from(&deployment.source_bridge_owner_address);
+            evidence.source_bridge_config_hash = deployment.source_bridge_config_hash;
+            evidence.source_adapter_deployment_hash =
+                sccp_source_adapter_engine_deployment_hash(deployment);
+            evidence.source_adapter_deployment_receipt_hash = deployment.deployment_receipt_hash;
+        });
+        rebuild_source_adapter_verification_proof_for_current_evidence(proof);
     }
 
     fn mutate_adapter_source_domain(adapter: &mut SccpSourceAdapterProofV1, source_domain: u32) {
@@ -46344,11 +46630,12 @@ mod tests {
         let signatures = signers[..under_quorum_signer_count]
             .iter()
             .map(|signer| {
-                iroha_crypto::Signature::new(
-                    signer.private_key(),
+                checked_sccp_fixture_signature(
+                    signer,
                     &insufficient_weight
                         .sync_committee_proof
                         .sync_committee_message_hash,
+                    "sign SCCP under-quorum ETH sync committee fixture message",
                 )
             })
             .collect::<Vec<_>>();
@@ -46491,7 +46778,7 @@ mod tests {
         );
         adapter.sync_committee_transition_proofs =
             vec![sample_eth_sync_committee_transition_proof(
-                &parent_signers,
+                parent_signers,
                 parent_sync_period,
                 active_sync_period,
                 parent_period_transition_slot,
@@ -46624,7 +46911,7 @@ mod tests {
         let mut wrong_transition_slot_period = adapter.clone();
         wrong_transition_slot_period.sync_committee_transition_proofs =
             vec![sample_eth_sync_committee_transition_proof(
-                &parent_signers,
+                parent_signers,
                 parent_sync_period,
                 active_sync_period,
                 adapter.beacon_slot,
@@ -46651,7 +46938,7 @@ mod tests {
         let mut stale_terminal_period = adapter.clone();
         stale_terminal_period.sync_committee_transition_proofs =
             vec![sample_eth_sync_committee_transition_proof(
-                &parent_signers,
+                parent_signers,
                 parent_sync_period.saturating_sub(1),
                 parent_sync_period,
                 parent_period_transition_slot
@@ -61172,7 +61459,7 @@ mod tests {
             None
         );
 
-        let ton_material =
+        let ton_full_light_client_material =
             sccp_ton_mainnet_source_verifier_material_with_hashes_and_shard_state_v1(
                 sample_ton_validator_set_hash(),
                 [0x22; 32],
@@ -61181,9 +61468,9 @@ mod tests {
                 [0x24; 32],
             )
             .expect("TON source material");
-        let ton_deployment =
+        let ton_full_light_client_deployment =
             build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
-                &ton_material,
+                &ton_full_light_client_material,
                 [0x29; 32],
                 [0x26; 32],
                 [0x27; 32],
@@ -61191,11 +61478,11 @@ mod tests {
             )
             .expect("audited TON source deployment");
         assert!(sccp_source_adapter_engine_deployment_matches_material(
-            &ton_material,
-            &ton_deployment,
+            &ton_full_light_client_material,
+            &ton_full_light_client_deployment,
         ));
 
-        let mut ton_with_bridge = ton_material.clone();
+        let mut ton_with_bridge = ton_full_light_client_material.clone();
         ton_with_bridge.source_bridge_emitter_id =
             SCCP_TRON_MAINNET_SOURCE_BRIDGE_EMITTER_ID_V1.to_owned();
         ton_with_bridge.source_bridge_emitter_address =
@@ -61210,7 +61497,7 @@ mod tests {
             "TON material must reject EVM/TRON source-bridge roles"
         );
 
-        let mut ton_deployment_with_bridge = ton_deployment.clone();
+        let mut ton_deployment_with_bridge = ton_full_light_client_deployment.clone();
         ton_deployment_with_bridge.source_bridge_emitter_id =
             SCCP_TRON_MAINNET_SOURCE_BRIDGE_EMITTER_ID_V1.to_owned();
         ton_deployment_with_bridge.source_bridge_emitter_address =
@@ -61225,26 +61512,26 @@ mod tests {
             sample_tron_source_bridge_config_hash();
         assert!(
             !sccp_source_adapter_engine_deployment_matches_material(
-                &ton_material,
+                &ton_full_light_client_material,
                 &ton_deployment_with_bridge,
             ),
             "TON deployments must reject injected EVM/TRON source-bridge roles"
         );
         assert!(
             sccp_ton_full_light_client_gate_hash_from_deployment_v1(
-                &ton_material,
+                &ton_full_light_client_material,
                 &ton_deployment_with_bridge,
             )
             .is_none()
         );
 
-        let mut ton_deployment_with_solana_audit = ton_deployment;
+        let mut ton_deployment_with_solana_audit = ton_full_light_client_deployment;
         ton_deployment_with_solana_audit.solana_tower_replay_verifier_hash = [0xAD; 32];
         ton_deployment_with_solana_audit.solana_full_accountsdb_lattice_verifier_hash = [0xAE; 32];
         ton_deployment_with_solana_audit.solana_bank_fork_choice_verifier_hash = [0xAF; 32];
         assert!(
             !sccp_source_adapter_engine_deployment_matches_material(
-                &ton_material,
+                &ton_full_light_client_material,
                 &ton_deployment_with_solana_audit,
             ),
             "TON deployments must reject injected Solana full-light-client audit roles"
@@ -63869,6 +64156,67 @@ mod tests {
             &proof,
             &audited_deployment,
         ));
+
+        let malformed_standalone_deployments: [(&str, fn(&mut SccpSourceAdapterEngineDeploymentV1));
+            5] = [
+            ("missing source-state verifier id", |deployment| {
+                deployment.source_state_verifier_id.clear();
+            }),
+            ("zero source-state verifier hash", |deployment| {
+                deployment.source_state_verifier_hash = [0; 32];
+            }),
+            ("partial Solana audit role set", |deployment| {
+                deployment.solana_bank_fork_choice_verifier_hash = [0; 32];
+            }),
+            ("foreign TON audit role leakage", |deployment| {
+                deployment.ton_masterchain_config_verifier_hash = [0xDA; 32];
+            }),
+            ("foreign source bridge emitter", |deployment| {
+                deployment.source_bridge_emitter_id = "sccp-source-bridge:solana-forged".to_owned();
+                deployment.source_bridge_emitter_address = vec![0x44; 20];
+                deployment.source_bridge_emitter_code_hash = [0x45; 32];
+            }),
+        ];
+        for (label, mutate_deployment) in malformed_standalone_deployments {
+            let mut malformed_deployment = audited_deployment.clone();
+            mutate_deployment(&mut malformed_deployment);
+            let mut forged_proof = proof.clone();
+            retarget_source_verifier_evidence_to_deployment(
+                &mut forged_proof,
+                &malformed_deployment,
+            );
+            let forged_consensus = source_consensus_proof_from_envelope(&forged_proof);
+            assert!(
+                source_verifier_evidence_matches_adapter_deployment(
+                    &forged_consensus.verifier_evidence,
+                    &malformed_deployment,
+                ),
+                "forged Solana {label} evidence should mirror the malformed deployment"
+            );
+            assert!(
+                sccp_source_chain_proof_adapter_verifier_commitment(&forged_proof).is_some(),
+                "forged Solana {label} proof should carry a valid adapter proof over retargeted evidence"
+            );
+            assert!(
+                !source_adapter_deployment_has_standalone_valid_shape(&malformed_deployment),
+                "standalone Solana deployment shape must reject {label}"
+            );
+            assert!(
+                !sccp_source_chain_proof_matches_adapter_deployment(
+                    &forged_proof,
+                    &malformed_deployment,
+                ),
+                "deployment matcher must reject malformed Solana {label} even when evidence and OpenVerify are rebuilt"
+            );
+            assert!(
+                !verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+                    &forged_proof,
+                    &material,
+                    &malformed_deployment,
+                ),
+                "Solana production verifier must reject malformed {label}"
+            );
+        }
         assert!(
             verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
                 &proof,
@@ -65407,6 +65755,19 @@ mod tests {
 
     #[test]
     fn tron_source_verifier_material_requires_deployed_mainnet_profile_hashes() {
+        #[derive(Clone, Copy)]
+        struct TronDeploymentReplay {
+            source_trust_anchor_hash: H256,
+            consensus_verifier_hash: H256,
+            message_inclusion_verifier_hash: H256,
+            source_bridge_emitter_address: [u8; 20],
+            source_bridge_emitter_code_hash: H256,
+            source_bridge_network_id: H256,
+            source_bridge_owner_address: [u8; 20],
+            finality_policy_hash: H256,
+            deployment_receipt_hash: H256,
+        }
+
         let placeholder =
             sccp_source_verifier_material_for_domain(SCCP_DOMAIN_TRON).expect("tron material");
         assert!(placeholder.placeholder_material);
@@ -65993,19 +66354,6 @@ mod tests {
             .is_none(),
             "TRON source proof byte recovery must reject replayed deployment receipts"
         );
-
-        #[derive(Clone, Copy)]
-        struct TronDeploymentReplay {
-            source_trust_anchor_hash: H256,
-            consensus_verifier_hash: H256,
-            message_inclusion_verifier_hash: H256,
-            source_bridge_emitter_address: [u8; 20],
-            source_bridge_emitter_code_hash: H256,
-            source_bridge_network_id: H256,
-            source_bridge_owner_address: [u8; 20],
-            finality_policy_hash: H256,
-            deployment_receipt_hash: H256,
-        }
 
         let original_tron_replay = TronDeploymentReplay {
             source_trust_anchor_hash: sample_tron_witness_schedule_hash(),
@@ -69613,6 +69961,17 @@ mod tests {
 
     #[test]
     fn bsc_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter() {
+        #[derive(Clone, Copy)]
+        struct BscDeploymentReplay {
+            source_trust_anchor_hash: H256,
+            consensus_verifier_hash: H256,
+            message_inclusion_verifier_hash: H256,
+            finality_policy_hash: H256,
+            source_bridge_emitter_address: [u8; 20],
+            source_bridge_emitter_code_hash: H256,
+            deployment_receipt_hash: H256,
+        }
+
         let material = sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
             SCCP_DOMAIN_BSC,
             sample_bsc_validator_set_hash(),
@@ -69847,15 +70206,52 @@ mod tests {
             "BSC source proof byte recovery must reject replayed deployment receipts"
         );
 
-        #[derive(Clone, Copy)]
-        struct BscDeploymentReplay {
-            source_trust_anchor_hash: H256,
-            consensus_verifier_hash: H256,
-            message_inclusion_verifier_hash: H256,
-            finality_policy_hash: H256,
-            source_bridge_emitter_address: [u8; 20],
-            source_bridge_emitter_code_hash: H256,
-            deployment_receipt_hash: H256,
+        let forged_evidence_cases: [(&str, fn(&mut SccpSourceVerifierEvidenceV1)); 8] = [
+            ("source chain", |evidence| {
+                evidence.source_chain = "eth".to_owned();
+            }),
+            ("adapter circuit", |evidence| {
+                evidence.adapter_circuit_id = "sccp-source-adapter-replayed-v1".to_owned();
+            }),
+            ("source trust anchor", |evidence| {
+                evidence.source_trust_anchor_hash = [0xA1; 32];
+            }),
+            ("consensus verifier", |evidence| {
+                evidence.consensus_verifier_hash = [0xA2; 32];
+            }),
+            ("message inclusion verifier", |evidence| {
+                evidence.message_inclusion_verifier_hash = [0xA3; 32];
+            }),
+            ("finality policy", |evidence| {
+                evidence.finality_policy_hash = [0xA4; 32];
+            }),
+            ("source bridge emitter", |evidence| {
+                evidence.source_bridge_emitter_address = vec![0xA5; 20];
+            }),
+            ("source bridge config", |evidence| {
+                evidence.source_bridge_config_hash = [0xA6; 32];
+            }),
+        ];
+        for (label, mutate) in forged_evidence_cases {
+            let mut forged_evidence = proof.clone();
+            mutate_source_verifier_evidence(&mut forged_evidence, mutate);
+            rebuild_source_adapter_verification_proof_for_current_evidence(&mut forged_evidence);
+            assert!(
+                sccp_source_chain_proof_adapter_verifier_commitment(&forged_evidence).is_some(),
+                "forged BSC {label} verifier evidence should still carry a valid adapter proof"
+            );
+            assert!(
+                !sccp_source_chain_proof_matches_adapter_deployment(&forged_evidence, &deployment,),
+                "BSC deployment matcher must reject verifier evidence with forged {label}"
+            );
+            assert!(
+                !verify_sccp_bsc_mainnet_source_chain_proof_envelope_production(
+                    &forged_evidence,
+                    &material,
+                    &deployment,
+                ),
+                "BSC production verifier must reject verifier evidence with forged {label}"
+            );
         }
 
         let original_bsc_replay = BscDeploymentReplay {

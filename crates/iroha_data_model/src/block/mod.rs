@@ -1534,6 +1534,18 @@ mod tests {
         DaCommitmentBundle::new(vec![record])
     }
 
+    fn checked_block_signature(
+        index: u64,
+        keypair: &KeyPair,
+        header: &BlockHeader,
+    ) -> BlockSignature {
+        BlockSignature::new(
+            index,
+            SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                .expect("checked signed-block fixture signature"),
+        )
+    }
+
     #[test]
     fn block_payload_ordering_includes_execution_context() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
@@ -1726,10 +1738,7 @@ mod tests {
         };
         let key_pair =
             iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let signature = BlockSignature::new(
-            0,
-            iroha_crypto::SignatureOf::from_hash(key_pair.private_key(), payload.header.hash()),
-        );
+        let signature = checked_block_signature(0, &key_pair, &payload.header);
 
         let block = SignedBlock::presigned_with_payload(signature.clone(), payload.clone());
 
@@ -1757,10 +1766,7 @@ mod tests {
             previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
-        let signature = BlockSignature::new(
-            0,
-            iroha_crypto::SignatureOf::from_hash(key_pair.private_key(), payload.header.hash()),
-        );
+        let signature = checked_block_signature(0, &key_pair, &payload.header);
 
         let block = SignedBlock::presigned_with_payload(signature, payload);
 
@@ -2716,10 +2722,7 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let keypair = KeyPair::random();
         let mut block = SignedBlock::presigned(
-            BlockSignature::new(
-                0,
-                SignatureOf::from_hash(keypair.private_key(), header.hash()),
-            ),
+            checked_block_signature(0, &keypair, &header),
             header,
             Vec::new(),
         );
@@ -2740,7 +2743,7 @@ mod tests {
     fn set_transaction_results_records_fastpq_transcripts() {
         use std::{collections::BTreeMap, num::NonZeroU64};
 
-        use iroha_crypto::{Hash, KeyPair, SignatureOf};
+        use iroha_crypto::{Hash, KeyPair};
         use iroha_primitives::numeric::Numeric;
 
         use crate::{
@@ -2757,10 +2760,7 @@ mod tests {
 
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let keypair = KeyPair::random();
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
-        );
+        let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, Vec::new());
 
         let domain: DomainId = DomainId::try_new("test", "universal").expect("domain id");
@@ -2814,7 +2814,7 @@ mod tests {
     fn block_proofs_include_fastpq_transcripts() {
         use std::{collections::BTreeMap, num::NonZeroU64};
 
-        use iroha_crypto::{Hash, KeyPair, SignatureOf};
+        use iroha_crypto::{Hash, KeyPair};
         use iroha_primitives::numeric::Numeric;
 
         use crate::{
@@ -2835,10 +2835,7 @@ mod tests {
             TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
-        );
+        let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
 
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
@@ -2931,7 +2928,7 @@ mod tests {
     fn set_transaction_results_updates_merkle_roots_with_time_triggers() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
+        use iroha_crypto::{KeyPair, MerkleTree};
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
@@ -2978,10 +2975,7 @@ mod tests {
         };
 
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
-        );
+        let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
 
         block
@@ -3002,7 +2996,7 @@ mod tests {
     fn set_transaction_results_rejects_too_short_external_hash_prefix() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{KeyPair, SignatureOf};
+        use iroha_crypto::KeyPair;
 
         use crate::{
             ChainId, account::AccountId, transaction::signed::TransactionBuilder,
@@ -3014,10 +3008,7 @@ mod tests {
         let tx = TransactionBuilder::new(ChainId::from("set-results-too-short"), authority)
             .sign(keypair.private_key());
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
-        );
+        let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
 
         let err = block
@@ -3042,7 +3033,7 @@ mod tests {
     fn set_transaction_results_rejects_external_hash_mismatch() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{Hash, KeyPair, SignatureOf};
+        use iroha_crypto::{Hash, KeyPair};
 
         use crate::{
             ChainId, account::AccountId, transaction::signed::TransactionBuilder,
@@ -3056,10 +3047,7 @@ mod tests {
         let expected = tx.hash_as_entrypoint();
         let actual = HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
-        );
+        let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
 
         let err = block
@@ -3085,7 +3073,7 @@ mod tests {
     fn set_transaction_results_rejects_existing_header_merkle_mismatch() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{Hash, KeyPair, MerkleTree, SignatureOf};
+        use iroha_crypto::{Hash, KeyPair, MerkleTree};
 
         use crate::{
             ChainId, account::AccountId, transaction::signed::TransactionBuilder,
@@ -3102,10 +3090,7 @@ mod tests {
             [0xCD; Hash::LENGTH],
         )));
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, actual, None, 0, 0);
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
-        );
+        let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
 
         let err = block
@@ -3127,7 +3112,7 @@ mod tests {
     fn proofs_for_entry_hash_matches_merkle_roots() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
+        use iroha_crypto::{KeyPair, MerkleTree};
 
         use crate::{
             ChainId,
@@ -3163,10 +3148,7 @@ mod tests {
         };
 
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
-        );
+        let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block
             .set_transaction_results(Vec::new(), &entry_hashes, results_inner)
@@ -3202,7 +3184,7 @@ mod tests {
     fn proofs_for_external_entry_with_time_trigger_use_consensus_root() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
+        use iroha_crypto::{KeyPair, MerkleTree};
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
@@ -3241,10 +3223,7 @@ mod tests {
         };
 
         let header = BlockHeader::new(NonZeroU64::new(4).unwrap(), None, None, None, 0, 0);
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
-        );
+        let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block
             .set_transaction_results(vec![time_trigger], &entry_hashes, results_inner)
@@ -3270,7 +3249,7 @@ mod tests {
     fn proofs_for_time_trigger_use_extended_root() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
+        use iroha_crypto::{KeyPair, MerkleTree};
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
@@ -3318,10 +3297,7 @@ mod tests {
         };
 
         let header = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
-        );
+        let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block
             .set_transaction_results(vec![time_trigger], &entry_hashes, results_inner)
@@ -3354,7 +3330,7 @@ mod tests {
     fn proofs_for_entry_hash_missing_returns_none() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{Hash, KeyPair, SignatureOf};
+        use iroha_crypto::{Hash, KeyPair};
 
         use crate::{
             ChainId,
@@ -3373,10 +3349,7 @@ mod tests {
         let entry_hash = tx.hash_as_entrypoint();
 
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
-        );
+        let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block
             .set_transaction_results(
@@ -3486,17 +3459,9 @@ mod tests {
         // Prepare a small block with a few transactions and empty triggers.
         let txs: Vec<crate::transaction::signed::SignedTransaction> = Vec::new();
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut block = SignedBlock::presigned(
-            BlockSignature::new(
-                0,
-                SignatureOf::from_hash(
-                    iroha_crypto::KeyPair::random().private_key(),
-                    header.hash(),
-                ),
-            ),
-            header,
-            txs,
-        );
+        let keypair = KeyPair::random();
+        let mut block =
+            SignedBlock::presigned(checked_block_signature(0, &keypair, &header), header, txs);
 
         // Seed with 4 entrypoints (2 external hashes, 2 time triggers) and 4 results
         let tx_hashes: Vec<HashOf<TransactionEntrypoint>> = (0..4)

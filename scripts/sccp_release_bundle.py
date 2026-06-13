@@ -238,6 +238,7 @@ def _parse_phase_evidence_arg(raw: str) -> tuple[str, Path]:
     # Source-inventory markers:
     # - phase evidence contains phase with surrounding whitespace
     # - phase evidence contains phase with Markdown-unsafe character
+    # - phase evidence contains phase with sensitive name
     # - phase evidence contains malformed phase
     phase_name_error = _corridor_phase_key_error(name, "phase evidence")
     if phase_name_error is not None:
@@ -628,8 +629,6 @@ _NATIVE_EVM_REQUIRED_AUDIT_HASHES: frozenset[str] | None = None
 _ACTIVE_LAUNCH_DOMAIN: int | None = None
 _SCCP_DOMAIN_ETH: int | None = None
 _ALL_LANES_EVM_DESTINATION_DOMAINS: frozenset[int] | None = None
-_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN: dict[int, frozenset[str]] | None = None
-_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN: dict[int, str] | None = None
 _ROUTE_CANARY_SOURCE_BY_DOMAIN: dict[int, str] | None = None
 _SCCP_DOMAIN_SORA: int | None = None
 _SCCP_DOMAIN_SOL: int | None = None
@@ -786,26 +785,22 @@ def _all_lanes_evm_destination_domains() -> frozenset[int]:
     return _ALL_LANES_EVM_DESTINATION_DOMAINS
 
 
-def _source_adapter_gate_audit_keys_by_domain() -> dict[int, frozenset[str]]:
-    global _SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN
-    if _SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN is None:
-        verifier = _verify_module()
-        _SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {
-            int(domain): frozenset(keys)
-            for domain, keys in verifier.ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN.items()
-        }
-    return _SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN
+def _source_adapter_gate_audit_keys_for_domain_chain(
+    domain: Any,
+    chain: Any,
+) -> frozenset[str] | None:
+    verifier = _verify_module()
+    keys = verifier._source_adapter_gate_audit_keys_for_domain_chain(domain, chain)
+    return frozenset(keys) if keys is not None else None
 
 
-def _source_adapter_gate_hash_key_by_domain() -> dict[int, str]:
-    global _SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN
-    if _SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN is None:
-        verifier = _verify_module()
-        _SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN = {
-            int(domain): str(key)
-            for domain, key in verifier.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN.items()
-        }
-    return _SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN
+def _source_adapter_gate_hash_key_for_domain_chain(
+    domain: Any,
+    chain: Any,
+) -> str | None:
+    verifier = _verify_module()
+    key = verifier._source_adapter_gate_hash_key_for_domain_chain(domain, chain)
+    return str(key) if key is not None else None
 
 
 def _route_canary_source_by_domain() -> dict[int, str]:
@@ -870,7 +865,7 @@ def _source_adapter_gate_semantic_errors(
     errors: list[str] = []
     audit_label = f"{label}.source_adapter_gate audit_hashes"
     expected_audit_keys = (
-        _source_adapter_gate_audit_keys_by_domain().get(domain)
+        _source_adapter_gate_audit_keys_for_domain_chain(domain, lane.get("chain"))
         if type(domain) is int
         else None
     )
@@ -927,8 +922,10 @@ def _source_adapter_gate_semantic_errors(
             )
         for key in sorted(set(semantic_audit_hashes) - expected_audit_keys):
             errors.append(
-                f"{label}.source_adapter_gate audit_hashes contains "
-                f"unexpected field: {key}"
+                _unexpected_source_adapter_gate_audit_field_error(
+                    f"{label}.source_adapter_gate audit_hashes",
+                    key,
+                )
             )
         for key in sorted(expected_audit_keys - set(semantic_audit_hashes)):
             errors.append(
@@ -942,7 +939,7 @@ def _source_adapter_gate_semantic_errors(
                 "audit_hashes value"
             )
         expected_gate_key = (
-            _source_adapter_gate_hash_key_by_domain().get(domain)
+            _source_adapter_gate_hash_key_for_domain_chain(domain, lane.get("chain"))
             if type(domain) is int
             else None
         )
@@ -969,6 +966,24 @@ def _source_adapter_gate_semantic_errors(
     return errors
 
 
+def _cryptographic_evidence_source_gate_material_present(
+    payload: dict[str, Any],
+    audit_hashes: Any,
+) -> bool:
+    material_fields = (
+        "source_verifier_material_hash",
+        "source_adapter_engine_deployment_hash",
+        "destination_binding_hash",
+        "route_allowlist_hash",
+        "route_canary_evidence_hash",
+    )
+    return (
+        any(payload.get(field) for field in material_fields)
+        or payload.get("source_adapter_gate_hash") not in (None, "")
+        or bool(audit_hashes)
+    )
+
+
 def _cryptographic_evidence_source_adapter_gate_bundle_errors(
     label: str,
     payload: dict[str, Any],
@@ -981,8 +996,12 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
         return []
 
     errors: list[str] = []
+    require_gate_material = _cryptographic_evidence_source_gate_material_present(
+        payload,
+        audit_hashes,
+    )
     expected_audit_keys = (
-        _source_adapter_gate_audit_keys_by_domain().get(domain)
+        _source_adapter_gate_audit_keys_for_domain_chain(domain, payload.get("chain"))
         if type(domain) is int
         else None
     )
@@ -991,7 +1010,7 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
             errors.append(
                 f"{label} source_adapter_gate_required must be false for this domain"
             )
-        if not _is_nonzero_bytes32_hex_text(gate_hash):
+        if require_gate_material and not _is_nonzero_bytes32_hex_text(gate_hash):
             errors.append(
                 f"{label} source_adapter_gate_hash must be a non-zero canonical "
                 "bytes32 hex string when required"
@@ -1011,11 +1030,15 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
             if expected_audit_keys is not None:
                 for key in sorted(set(semantic_audit_hashes) - expected_audit_keys):
                     errors.append(
-                        f"{audit_label} contains unexpected field: {key}"
+                        _unexpected_source_adapter_gate_audit_field_error(
+                            audit_label,
+                            key,
+                        )
                     )
-                for key in sorted(expected_audit_keys - set(semantic_audit_hashes)):
+                missing_audit_keys = expected_audit_keys - set(semantic_audit_hashes)
+                for key in sorted(missing_audit_keys if require_gate_material else ()):
                     errors.append(f"{audit_label} missing field: {key}")
-        if not semantic_audit_hashes:
+        if require_gate_material and not semantic_audit_hashes:
             errors.append(
                 f"{label} source_adapter_gate_audit_hashes must not be empty "
                 "when required"
@@ -1030,7 +1053,7 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
                 "source_adapter_gate_audit_hashes value"
             )
         expected_gate_key = (
-            _source_adapter_gate_hash_key_by_domain().get(domain)
+            _source_adapter_gate_hash_key_for_domain_chain(domain, payload.get("chain"))
             if type(domain) is int
             else None
         )
@@ -1643,6 +1666,11 @@ def _source_inventory_gate_key_error(gate: Any, label: str) -> str | None:
         return f"{label} contains unknown gate name with whitespace"
     if _path_markdown_unsafe_character(gate) is not None:
         return f"{label} contains unknown gate name with Markdown-unsafe character"
+    if any(
+        marker in gate.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} contains unknown gate name with sensitive name"
     return None
 
 
@@ -1659,6 +1687,11 @@ def _checklist_item_id_error(item_id: Any, label: str) -> str | None:
         return f"{label} id contains whitespace"
     if _path_markdown_unsafe_character(item_id) is not None:
         return f"{label} id contains Markdown-unsafe character"
+    if any(
+        marker in item_id.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} id contains sensitive name"
     return None
 
 
@@ -1675,6 +1708,11 @@ def _corridor_phase_key_error(phase: Any, label: str) -> str | None:
         return f"{label} contains phase with whitespace"
     if _path_markdown_unsafe_character(phase) is not None:
         return f"{label} contains phase with Markdown-unsafe character"
+    if any(
+        marker in phase.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} contains phase with sensitive name"
     allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
     if (
         any(character not in allowed for character in phase)
@@ -1698,6 +1736,11 @@ def _submission_surface_sdk_key_error(sdk: Any, label: str) -> str | None:
         return f"{label} contains SDK key with whitespace"
     if _path_markdown_unsafe_character(sdk) is not None:
         return f"{label} contains SDK key with Markdown-unsafe character"
+    if any(
+        marker in sdk.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} contains SDK key with sensitive name"
     allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
     if (
         any(character not in allowed for character in sdk)
@@ -1727,6 +1770,11 @@ def _submission_surface_lanes_key_error(lanes: Any, label: str) -> str | None:
         return f"{label} lanes contains whitespace"
     if _path_markdown_unsafe_character(lanes) is not None:
         return f"{label} lanes contains Markdown-unsafe character"
+    if any(
+        marker in lanes.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} lanes contains sensitive name"
     allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-,")
     lane_parts = lanes.split(",")
     if (
@@ -1762,6 +1810,11 @@ def _submission_surface_proof_backend_key_error(
         return f"{label} proof_backend contains whitespace"
     if _path_markdown_unsafe_character(proof_backend) is not None:
         return f"{label} proof_backend contains Markdown-unsafe character"
+    if any(
+        marker in proof_backend.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} proof_backend contains sensitive name"
     allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
     if (
         any(character not in allowed for character in proof_backend)
@@ -1789,6 +1842,11 @@ def _submission_surface_submission_text_error(value: Any, label: str) -> str | N
         )
     if _path_markdown_unsafe_character(value) is not None:
         return f"{label} on_chain_submission contains Markdown-unsafe character"
+    if any(
+        marker in value.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} on_chain_submission contains sensitive name"
     return None
 
 
@@ -1805,6 +1863,11 @@ def _submission_surface_helper_symbol_error(symbol: Any, label: str) -> str | No
         return f"{label} contains helper symbol with whitespace"
     if _path_markdown_unsafe_character(symbol) is not None:
         return f"{label} contains helper symbol with Markdown-unsafe character"
+    if any(
+        marker in symbol.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} contains helper symbol with sensitive name"
     allowed = set(
         "abcdefghijklmnopqrstuvwxyz"
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -1836,7 +1899,59 @@ def _submission_surface_sdk_helpers_text_error(value: Any, label: str) -> str | 
         )
     if _path_markdown_unsafe_character(value) is not None:
         return f"{label} sdk_helpers contains Markdown-unsafe character"
+    if any(
+        marker in value.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} sdk_helpers contains sensitive name"
     return None
+
+
+def _submission_surface_validation_blocker_text_error(
+    blocker: Any,
+    label: str,
+) -> str | None:
+    if not isinstance(blocker, str) or not blocker:
+        return f"{label} validation_blockers must be a list of non-empty strings"
+    if _path_control_character(blocker) is not None:
+        return f"{label} validation_blockers contains blocker with control character"
+    if not blocker.isascii():
+        return (
+            f"{label} validation_blockers contains blocker with non-ASCII character"
+        )
+    if blocker.strip() != blocker:
+        return (
+            f"{label} validation_blockers must be a list of non-empty strings "
+            "with no surrounding whitespace"
+        )
+    if _path_markdown_unsafe_character(blocker) is not None:
+        return (
+            f"{label} validation_blockers contains blocker with "
+            "Markdown-unsafe character"
+        )
+    if any(
+        marker in blocker.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} validation_blockers contains blocker with sensitive name"
+    return None
+
+
+def _submission_surface_validation_blocker_list_errors(
+    value: Any,
+    label: str,
+) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    errors: list[str] = []
+    for blocker in value:
+        blocker_error = _submission_surface_validation_blocker_text_error(
+            blocker,
+            label,
+        )
+        if blocker_error is not None:
+            errors.append(blocker_error)
+    return errors
 
 
 def _submission_surface_helper_symbol_list_errors(
@@ -1908,6 +2023,51 @@ def _string_list_field_errors(
         if item in seen:
             errors.append(f"{label} {field} must not contain duplicate strings")
         seen.add(item)
+    return errors
+
+
+def _public_blocker_text_error(blocker: Any, label: str, field: str) -> str | None:
+    if not isinstance(blocker, str) or not blocker:
+        return f"{label} {field} must be a list of non-empty strings"
+    if _path_control_character(blocker) is not None:
+        return f"{label} {field} contains blocker with control character"
+    if not blocker.isascii():
+        return f"{label} {field} contains blocker with non-ASCII character"
+    if blocker.strip() != blocker:
+        return (
+            f"{label} {field} must be a list of non-empty strings "
+            "with no surrounding whitespace"
+        )
+    if _path_markdown_unsafe_character(blocker) is not None:
+        return f"{label} {field} contains blocker with Markdown-unsafe character"
+    if any(
+        marker in blocker.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} {field} contains blocker with sensitive name"
+    return None
+
+
+def _public_blocker_list_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    *,
+    allow_empty: bool,
+) -> list[str]:
+    errors = _string_list_field_errors(
+        label,
+        payload,
+        field,
+        allow_empty=allow_empty,
+    )
+    value = payload.get(field)
+    if not isinstance(value, list):
+        return errors
+    for blocker in value:
+        blocker_error = _public_blocker_text_error(blocker, label, field)
+        if blocker_error is not None and blocker_error not in errors:
+            errors.append(blocker_error)
     return errors
 
 
@@ -1994,6 +2154,11 @@ def _native_evm_field_name_error(
             f"{label} contains {field_kind} field name with Markdown-unsafe "
             "character"
         )
+    if any(
+        marker in key.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} contains {field_kind} field name with sensitive name"
     return f"{label} contains {field_kind} field: {key}"
 
 
@@ -2006,6 +2171,15 @@ def _native_evm_unknown_field_errors(
         _native_evm_field_name_error(field, label, "unknown")
         for field in sorted(set(payload) - set(allowed_fields), key=str)
     ]
+
+
+def _native_evm_sdk_name_error(label: str, sdk: str, issue: str) -> str:
+    if any(
+        marker in sdk.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} contains {issue} sdk with sensitive name"
+    return f"{label} contains {issue} sdk: {sdk}"
 
 
 def _native_evm_sdk_key_error(sdk: Any, label: str) -> str | None:
@@ -2045,6 +2219,18 @@ def _source_adapter_gate_audit_key_error(key: Any, label: str) -> str | None:
     return None
 
 
+def _unexpected_source_adapter_gate_audit_field_error(
+    label: str,
+    key: Any,
+) -> str:
+    if isinstance(key, str) and any(
+        marker in key.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} contains unexpected field with sensitive name"
+    return f"{label} contains unexpected field: {key}"
+
+
 def _unknown_public_field_error(field: Any, label: str) -> str:
     if not isinstance(field, str) or not field:
         return f"{label} contains malformed unknown field name"
@@ -2058,6 +2244,11 @@ def _unknown_public_field_error(field: Any, label: str) -> str:
         return f"{label} contains unknown field name with whitespace"
     if _path_markdown_unsafe_character(field) is not None:
         return f"{label} contains unknown field name with Markdown-unsafe character"
+    if any(
+        marker in field.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return f"{label} contains unknown field name with sensitive name"
     return f"{label} contains unknown field: {field}"
 
 
@@ -2222,7 +2413,12 @@ def _release_report_preflight_errors(report: Any, *, label: str) -> list[str]:
     if type(payload.get("production_ready")) is not bool:
         errors.append(f"{label} production_ready must be true or false")
     errors.extend(
-        _string_list_field_errors(label, payload, "blockers", allow_empty=True)
+        _public_blocker_list_field_errors(
+            label,
+            payload,
+            "blockers",
+            allow_empty=True,
+        )
     )
     blockers = payload.get("blockers")
     if payload.get("production_ready") is True and isinstance(blockers, list) and blockers:
@@ -2563,7 +2759,7 @@ def _release_checklist_bundle_errors(
         elif type(item_payload.get("ready")) is not bool:
             errors.append(f"{item_label} ready must be true or false")
         errors.extend(
-            _string_list_field_errors(
+            _public_blocker_list_field_errors(
                 item_label,
                 item_payload,
                 "blockers",
@@ -2727,6 +2923,12 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                 allow_empty=True,
             )
         )
+        errors.extend(
+            _submission_surface_validation_blocker_list_errors(
+                payload.get("validation_blockers"),
+                label,
+            )
+        )
         validation_blockers = payload.get("validation_blockers")
         if (
             validation_status == "passed"
@@ -2773,11 +2975,23 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
             else:
                 assert isinstance(sdk, str)
                 if sdk in seen_sdks:
-                    errors.append(f"{label}.sdk_artifacts contains duplicate sdk: {sdk}")
+                    errors.append(
+                        _native_evm_sdk_name_error(
+                            f"{label}.sdk_artifacts",
+                            sdk,
+                            "duplicate",
+                        )
+                    )
                 seen_sdks.add(sdk)
                 expected_implementation = _native_evm_required_implementations().get(sdk)
                 if expected_implementation is None:
-                    errors.append(f"{label}.sdk_artifacts contains unknown sdk: {sdk}")
+                    errors.append(
+                        _native_evm_sdk_name_error(
+                            f"{label}.sdk_artifacts",
+                            sdk,
+                            "unknown",
+                        )
+                    )
                 elif row_payload.get("implementation") != expected_implementation:
                     errors.append(
                         f"{row_label} implementation must be {expected_implementation}"
@@ -3288,6 +3502,12 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
                 allow_empty=True,
             )
         )
+        errors.extend(
+            _submission_surface_validation_blocker_list_errors(
+                payload.get("validation_blockers"),
+                label,
+            )
+        )
         validation_blockers = payload.get("validation_blockers")
         if (
             validation_status == "passed"
@@ -3749,7 +3969,7 @@ def _all_lanes_nested_bundle_errors(
         )
     )
     errors.extend(
-        _string_list_field_errors(
+        _public_blocker_list_field_errors(
             f"{label}.source_adapter_gate",
             source_gate,
             "blockers",
@@ -4158,7 +4378,14 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
             allow_empty=True,
         )
     )
-    errors.extend(_string_list_field_errors(label, payload, "blockers", allow_empty=True))
+    errors.extend(
+        _public_blocker_list_field_errors(
+            label,
+            payload,
+            "blockers",
+            allow_empty=True,
+        )
+    )
     blockers = payload.get("blockers")
     if (
         payload.get("production_ready") is True
@@ -4209,7 +4436,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
         ) is not bool:
             errors.append(f"{lane_label} production_ready must be true or false")
         errors.extend(
-            _string_list_field_errors(
+            _public_blocker_list_field_errors(
                 lane_label,
                 lane_payload,
                 "blockers",
@@ -4340,7 +4567,7 @@ def _release_report_bundle_errors(
         elif corridor.get("require_phase_evidence") is not True:
             errors.append(f"{label} does not require hashed phase evidence")
         errors.extend(
-            _string_list_field_errors(
+            _public_blocker_list_field_errors(
                 f"{label}.corridor",
                 corridor,
                 "blockers",
@@ -4497,6 +4724,11 @@ def _release_report_bundle_errors(
             gate_error = _source_inventory_gate_key_error(gate, source_inventory_label)
             if gate_error is not None:
                 errors.append(gate_error)
+                if isinstance(gate, str) and any(
+                    marker in gate.lower()
+                    for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+                ):
+                    continue
             elif gate not in known_source_inventory_gates:
                 errors.append(f"{source_inventory_label} contains unknown gate: {gate}")
             inventory = source_inventory[gate]
@@ -4525,7 +4757,7 @@ def _release_report_bundle_errors(
             elif validation_status != "passed":
                 errors.append(f"{inventory_label} validation_status must be passed")
             errors.extend(
-                _string_list_field_errors(
+                _public_blocker_list_field_errors(
                     inventory_label,
                     inventory_payload,
                     "validation_blockers",
@@ -4690,7 +4922,7 @@ def _release_bundle_manifest_errors(
     )
     errors.extend(verifier._boolean_field_errors("manifest", manifest, "corridor_ready"))
     errors.extend(
-        verifier._string_list_field_errors(
+        verifier._public_blocker_list_field_errors(
             "manifest",
             manifest,
             "blockers",

@@ -335,7 +335,8 @@ mod tests {
         let mut manual = SignedBlock::presigned(
             BlockSignature::new(
                 0,
-                SignatureOf::from_hash(&private_key, built.header().hash()),
+                SignatureOf::try_from_hash(&private_key, built.header().hash())
+                    .expect("checked manual block-builder fixture signature"),
             ),
             built.header(), // reuse header values (roots) for signature correctness
             vec![tx1.clone(), tx2.clone()],

@@ -97,6 +97,50 @@ TRON_TRANSACTION_CONTRACT_RESULTS = {
 TRON_MAX_SOLID_BLOCK_EXTRA_HEADERS = 64
 TRON_API_MAX_RESPONSE_BYTES = 1024 * 1024
 TRON_API_MAX_ERROR_BYTES = 4096
+TRON_SAFE_FIELD_NAME_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+)
+TRON_SENSITIVE_FIELD_NAME_MARKERS = (
+    "secret-token",
+    "private-key",
+    "private_key",
+    "password",
+    "passphrase",
+    "bearer",
+    "authorization",
+    "access-key",
+    "access_key",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "session",
+    "token",
+)
+
+
+def _unsupported_tron_field_detail(field: Any) -> str:
+    if not isinstance(field, str):
+        return "non-string field name"
+    lowered = field.lower()
+    if any(marker in lowered for marker in TRON_SENSITIVE_FIELD_NAME_MARKERS):
+        return "field with sensitive name"
+    if (
+        not field
+        or not field.isascii()
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in field)
+        or any(character not in TRON_SAFE_FIELD_NAME_CHARS for character in field)
+    ):
+        return "field with malformed name"
+    return field
+
+
+def _unsupported_tron_fields_message(label: str, fields: set[Any]) -> str:
+    details = [
+        _unsupported_tron_field_detail(field)
+        for field in sorted(fields, key=lambda item: str(item))
+    ]
+    return f"{label} has unsupported fields: {', '.join(details)}"
 
 
 def _strip_0x(value: str) -> str:
@@ -1267,9 +1311,9 @@ def _tron_transaction_result_bytes(
         "cancel_unfreezeV2_amount",
         "cancelUnfreezeV2Amount",
     }
-    unknown_fields = sorted(set(result) - supported_fields)
+    unknown_fields = set(result) - supported_fields
     if unknown_fields:
-        raise RuntimeError(f"{label} has unsupported fields: {', '.join(unknown_fields)}")
+        raise RuntimeError(_unsupported_tron_fields_message(label, unknown_fields))
     out = bytearray()
     if "fee" in result:
         out.extend(
@@ -1366,9 +1410,9 @@ def _tron_market_order_detail_bytes(detail: Any, *, label: str) -> bytes:
         "fillSellQuantity",
         "fillBuyQuantity",
     }
-    unknown_fields = sorted(set(detail) - supported_fields)
+    unknown_fields = set(detail) - supported_fields
     if unknown_fields:
-        raise RuntimeError(f"{label} has unsupported fields: {', '.join(unknown_fields)}")
+        raise RuntimeError(_unsupported_tron_fields_message(label, unknown_fields))
     out = bytearray()
     if "makerOrderId" in detail:
         out.extend(

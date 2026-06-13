@@ -1916,7 +1916,8 @@ mod tests {
 
     fn provenance(seed: u8) -> ManifestProvenance {
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let signature = Signature::new(key_pair.private_key(), b"soracloud-isi-slice");
+        let signature = Signature::try_new(key_pair.private_key(), b"soracloud-isi-slice")
+            .expect("checked Soracloud ISI provenance fixture signature");
         ManifestProvenance {
             signer: key_pair.public_key().clone(),
             signature,

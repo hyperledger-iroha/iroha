@@ -9140,7 +9140,7 @@ transaction_status_timeout = "77s"
 
     impl CaptureContext {
         fn new(account: AccountId) -> Self {
-            let key_pair = KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519);
+            let key_pair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account,

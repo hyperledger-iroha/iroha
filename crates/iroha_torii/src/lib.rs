@@ -10298,7 +10298,8 @@ async fn handler_zk_ivm_derive(
             )
             .with_metadata(metadata)
             .with_executable(iroha_data_model::transaction::Executable::Ivm(bytecode))
-            .sign(kp.private_key())
+            .try_sign(kp.private_key())
+            .map_err(|err| format!("failed to sign synthetic IVM derive transaction: {err}"))?
             // Proof derivation needs a stable authority, but signature validity is not required here.
             .with_authority(authority);
 
@@ -10594,7 +10595,8 @@ async fn handler_zk_ivm_prove(
                 )
                 .with_metadata(metadata.clone())
                 .with_executable(iroha_data_model::transaction::Executable::Ivm(bytecode.clone()))
-                .sign(iroha_crypto::KeyPair::random().private_key())
+                .try_sign(iroha_crypto::KeyPair::random().private_key())
+                .map_err(|err| format!("failed to sign synthetic IVM prove transaction: {err}"))?
                 // Proof derivation needs stable authority; signature validity is not required.
                 .with_authority(authority.clone());
 
@@ -42427,7 +42429,11 @@ pub(crate) mod tests_runtime_handlers {
         let nonce = format!("lib-test-{timestamp_ms}-{nonce_seq}");
         let message =
             crate::canonical_request_signature_message(method, uri, body, timestamp_ms, &nonce);
-        let signature = Signature::new(key_pair.private_key(), &message);
+        let signature = checked_torii_test_signature(
+            key_pair,
+            &message,
+            "sign Torii signed-app-header fixture",
+        );
         let mut headers = HeaderMap::new();
         headers.insert(
             crate::HEADER_ACCOUNT,
@@ -42445,6 +42451,60 @@ pub(crate) mod tests_runtime_handlers {
         );
         headers.insert(crate::HEADER_NONCE, nonce.parse().expect("nonce header"));
         headers
+    }
+
+    fn checked_torii_test_signature(
+        key_pair: &KeyPair,
+        message: &[u8],
+        context: &'static str,
+    ) -> Signature {
+        Signature::try_new(key_pair.private_key(), message).expect(context)
+    }
+
+    fn checked_torii_test_transaction(
+        builder: TransactionBuilder,
+        keypair: &KeyPair,
+        context: &'static str,
+    ) -> SignedTransaction {
+        builder.try_sign(keypair.private_key()).expect(context)
+    }
+
+    fn checked_torii_test_block_signature(
+        signatory_index: u64,
+        keypair: &KeyPair,
+        header: &BlockHeader,
+        context: &'static str,
+    ) -> BlockSignature {
+        BlockSignature::new(
+            signatory_index,
+            SignatureOf::try_from_hash(keypair.private_key(), header.hash()).expect(context),
+        )
+    }
+
+    #[test]
+    fn checked_torii_test_block_signature_verifies_and_rejects_wrong_key() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let header = BlockHeader::new(
+            NonZeroU64::new(9).expect("nonzero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let signature =
+            checked_torii_test_block_signature(0, &keypair, &header, "sign Torii block fixture");
+
+        signature
+            .signature()
+            .verify_hash(keypair.public_key(), header.hash())
+            .expect("checked Torii block fixture signature verifies");
+
+        let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        signature
+            .signature()
+            .verify_hash(wrong_key.public_key(), header.hash())
+            .expect_err("checked Torii block fixture signature rejects wrong key");
     }
 
     fn mk_app_state_for_tests_with_world_and_options(
@@ -47476,7 +47536,11 @@ pub(crate) mod tests_runtime_handlers {
         let keypair = KeyPair::random();
         let chain: ChainId = "block-header-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(chain, authority).sign(keypair.private_key());
+        let tx = checked_torii_test_transaction(
+            TransactionBuilder::new(chain, authority),
+            &keypair,
+            "sign Torii block-header fixture transaction",
+        );
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("nonzero height"),
@@ -47486,9 +47550,11 @@ pub(crate) mod tests_runtime_handlers {
             0,
             0,
         );
-        let signature = BlockSignature::new(
+        let signature = checked_torii_test_block_signature(
             0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+            &keypair,
+            &header,
+            "sign Torii block-header fixture block",
         );
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         let entry_hashes = [entry_hash];
@@ -47517,7 +47583,11 @@ pub(crate) mod tests_runtime_handlers {
         let keypair = KeyPair::random();
         let chain: ChainId = "trigger-completion-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(chain, authority.clone()).sign(keypair.private_key());
+        let tx = checked_torii_test_transaction(
+            TransactionBuilder::new(chain, authority.clone()),
+            &keypair,
+            "sign Torii trigger-completion fixture transaction",
+        );
         let tx_hash = tx.hash();
         let entrypoint_hash = tx.hash_as_entrypoint();
         let trigger_id: TriggerId = "persisted_data_trigger".parse().expect("trigger id");
@@ -47541,9 +47611,11 @@ pub(crate) mod tests_runtime_handlers {
             0,
             0,
         );
-        let signature = BlockSignature::new(
+        let signature = checked_torii_test_block_signature(
             0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+            &keypair,
+            &header,
+            "sign Torii trigger-completion fixture block",
         );
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block
@@ -47576,7 +47648,11 @@ pub(crate) mod tests_runtime_handlers {
         let keypair = KeyPair::random();
         let chain: ChainId = "block-header-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(chain.clone(), authority).sign(keypair.private_key());
+        let tx = checked_torii_test_transaction(
+            TransactionBuilder::new(chain.clone(), authority),
+            &keypair,
+            "sign Torii sealed-reveal fixture transaction",
+        );
         let salt = [0xA7; 32];
         let commitment = compute_sealed_transaction_commitment(&chain, &tx, salt, height + 2);
         let reveal = SealedTransactionReveal::new(commitment, tx.clone(), salt);
@@ -47590,9 +47666,11 @@ pub(crate) mod tests_runtime_handlers {
             0,
             0,
         );
-        let signature = BlockSignature::new(
+        let signature = checked_torii_test_block_signature(
             0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+            &keypair,
+            &header,
+            "sign Torii sealed-reveal fixture block",
         );
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block.set_external_entrypoints(vec![entrypoint]);
@@ -47638,9 +47716,11 @@ pub(crate) mod tests_runtime_handlers {
             creation_time_ms,
             0,
         );
-        let signature = BlockSignature::new(
+        let signature = checked_torii_test_block_signature(
             0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+            &keypair,
+            &header,
+            "sign Torii empty committed-header fixture block",
         );
         SignedBlock::presigned(signature, header, Vec::new())
     }
@@ -48011,12 +48091,14 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests();
         let keypair = KeyPair::random();
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new((*app.chain_id).clone(), authority)
-            .with_instructions([Log {
+        let tx = checked_torii_test_transaction(
+            TransactionBuilder::new((*app.chain_id).clone(), authority).with_instructions([Log {
                 level: Level::INFO,
                 msg: "queued".to_string(),
-            }])
-            .sign(keypair.private_key());
+            }]),
+            &keypair,
+            "sign Torii queued-status fixture transaction",
+        );
         let params = app.state.world.view().parameters().clone();
         let max_clock_drift = params.sumeragi().max_clock_drift();
         let tx_limits = params.transaction();
@@ -48088,12 +48170,14 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests();
         let keypair = KeyPair::random();
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new((*app.chain_id).clone(), authority)
-            .with_instructions([Log {
+        let tx = checked_torii_test_transaction(
+            TransactionBuilder::new((*app.chain_id).clone(), authority).with_instructions([Log {
                 level: Level::INFO,
                 msg: "queued".to_string(),
-            }])
-            .sign(keypair.private_key());
+            }]),
+            &keypair,
+            "sign Torii typed-status fixture transaction",
+        );
         let params = app.state.world.view().parameters().clone();
         let max_clock_drift = params.sumeragi().max_clock_drift();
         let tx_limits = params.transaction();
@@ -48984,7 +49068,8 @@ pub(crate) mod tests_runtime_handlers {
             bls_sig: Vec::new(),
         };
         let preimage = vote_preimage(chain_id, PERMISSIONED_TAG, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature =
+            checked_torii_test_signature(&keypair, &preimage, "sign Torii commit-QC fixture vote");
         let sig_bytes = signature.payload().to_vec();
         let sig_refs = vec![sig_bytes.as_slice()];
         let aggregate_signature =
@@ -49041,7 +49126,11 @@ pub(crate) mod tests_runtime_handlers {
             bls_sig: Vec::new(),
         };
         let preimage = vote_preimage(&chain_id, PERMISSIONED_TAG, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_torii_test_signature(
+            &keypair,
+            &preimage,
+            "sign Torii recorded commit-cert fixture vote",
+        );
         let cert = Qc {
             phase: Phase::Commit,
             height,
@@ -49546,14 +49635,18 @@ pub(crate) mod tests_runtime_handlers {
             )
             .into(),
         ];
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
-                overlay: overlay.into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas"),
-            }))
-            .sign(keypair.private_key());
+        let tx = checked_torii_test_transaction(
+            TransactionBuilder::new(chain, authority).with_executable(Executable::IvmProved(
+                IvmProved {
+                    bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+                    overlay: overlay.into(),
+                    events_commitment: Hash::new(b"events"),
+                    gas_policy_commitment: Hash::new(b"gas"),
+                },
+            )),
+            &keypair,
+            "sign Torii SCCP-message fixture transaction",
+        );
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(
             std::num::NonZeroU64::new(height).expect("non-zero height"),
@@ -49563,9 +49656,11 @@ pub(crate) mod tests_runtime_handlers {
             0,
             0,
         );
-        let signature = BlockSignature::new(
+        let signature = checked_torii_test_block_signature(
             0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+            &keypair,
+            &header,
+            "sign Torii SCCP-message fixture block",
         );
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block
@@ -60131,10 +60226,10 @@ mod tests {
         let vk_payload = iroha_core::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_owned(),
-            n_log2: 4,
-            blowup_log2: 2,
+            n_log2: iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
+            blowup_log2: iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: 2,
+            queries: iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn,
         };

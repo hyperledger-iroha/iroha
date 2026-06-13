@@ -1461,7 +1461,8 @@ pub mod manifest {
             };
 
             let payload = manifest.signature_payload_bytes();
-            let signature = Signature::new(kp.private_key(), &payload);
+            let signature = Signature::try_new(kp.private_key(), &payload)
+                .expect("checked contract manifest fixture signature");
             manifest.provenance = Some(ManifestProvenance {
                 signer: kp.public_key().clone(),
                 signature: signature.clone(),

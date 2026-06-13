@@ -1146,6 +1146,14 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
 
     use super::*;
+
+    fn signed_trust_payload(signer: &KeyPair, info: &PeerTrustInfo) -> Vec<u8> {
+        Signature::try_new(signer.private_key(), &PeersGossiper::trust_payload(info))
+            .expect("trust gossip fixture should sign")
+            .payload()
+            .to_vec()
+    }
+
     #[test]
     fn peers_gossip_roundtrip() {
         // Use seeded keypairs to produce valid Ed25519 public keys deterministically.
@@ -1186,9 +1194,7 @@ mod tests {
             trusted: true,
             score: 2,
         };
-        let sig = Signature::new(kp.private_key(), &PeersGossiper::trust_payload(&info))
-            .payload()
-            .to_vec();
+        let sig = signed_trust_payload(&kp, &info);
         let gossip = PeerTrustGossip {
             trust: vec![SignedPeerTrust {
                 info: info.clone(),
@@ -1747,12 +1753,7 @@ mod tests {
             trusted: false,
             score: 1,
         };
-        let signature = Signature::new(
-            kp_sender.private_key(),
-            &PeersGossiper::trust_payload(&info),
-        )
-        .payload()
-        .to_vec();
+        let signature = signed_trust_payload(&kp_sender, &info);
         let trust = vec![SignedPeerTrust { info, signature }];
         let now = Instant::now();
         let mut trust_book = TrustBook::new(
@@ -1801,12 +1802,7 @@ mod tests {
             trusted: false,
             score: 1,
         };
-        let signature = Signature::new(
-            kp_sender.private_key(),
-            &PeersGossiper::trust_payload(&info),
-        )
-        .payload()
-        .to_vec();
+        let signature = signed_trust_payload(&kp_sender, &info);
         let trust = vec![SignedPeerTrust { info, signature }];
         let now = Instant::now();
         let mut trust_book = TrustBook::new(
@@ -1872,12 +1868,7 @@ mod tests {
             trusted: true,
             score: 2,
         };
-        let signature = Signature::new(
-            kp_sender.private_key(),
-            &PeersGossiper::trust_payload(&info),
-        )
-        .payload()
-        .to_vec();
+        let signature = signed_trust_payload(&kp_sender, &info);
         let trust = vec![SignedPeerTrust { info, signature }];
         let now = Instant::now();
         let mut trust_book = TrustBook::new(
@@ -1931,12 +1922,7 @@ mod tests {
             trusted: true,
             score: 1,
         };
-        let signature = Signature::new(
-            kp_sender.private_key(),
-            &PeersGossiper::trust_payload(&info),
-        )
-        .payload()
-        .to_vec();
+        let signature = signed_trust_payload(&kp_sender, &info);
         let trust = vec![SignedPeerTrust { info, signature }];
         let now = Instant::now();
         let mut trust_book = TrustBook::new(

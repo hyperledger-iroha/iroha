@@ -1613,7 +1613,7 @@ pub fn sm2_sign(
     distid: Option<String>,
 ) -> napi::Result<Buffer> {
     let private = parse_sm2_private_key(distid, private_key.as_ref())?;
-    let signature = private.sign(message.as_ref()).to_bytes();
+    let signature = try_sign_sm2_message(&private, message.as_ref())?;
     Ok(Buffer::from(signature.to_vec()))
 }
 
@@ -3208,8 +3208,11 @@ pub fn sm2_fixture_from_seed(
         .map_err(norito_to_napi)?;
     let za = public.compute_z(distid.as_str()).map_err(norito_to_napi)?;
     let za_hex = hex::encode_upper(za);
-    let signature = private.sign(&message_bytes);
-    let signature_hex = hex::encode_upper(signature.as_bytes());
+    let signature = private
+        .try_sign(&message_bytes)
+        .map_err(|err| norito_to_napi(format!("failed to sign SM2 fixture message: {err}")))?;
+    let signature_bytes = signature.as_bytes();
+    let signature_hex = hex::encode_upper(signature_bytes);
     let r_hex = hex::encode_upper(signature.r);
     let s_hex = hex::encode_upper(signature.s);
 
@@ -3245,6 +3248,16 @@ fn parse_sm2_private_key(distid: Option<String>, bytes: &[u8]) -> napi::Result<S
     let distid = sm2_distid_arg(distid);
     Sm2PrivateKey::from_bytes(distid, bytes)
         .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))
+}
+
+fn try_sign_sm2_message(
+    private: &Sm2PrivateKey,
+    message: &[u8],
+) -> napi::Result<[u8; SM2_SIGNATURE_LENGTH]> {
+    private
+        .try_sign(message)
+        .map(|signature| signature.as_bytes())
+        .map_err(|err| norito_to_napi(format!("failed to sign SM2 message: {err}")))
 }
 
 fn parse_sm2_public_key(distid: Option<String>, bytes: &[u8]) -> napi::Result<Sm2PublicKey> {
@@ -17714,6 +17727,30 @@ mod tests {
                 .try_to_prefixed_string()
                 .expect("checked SM2 public-key prefixed multihash")
         );
+    }
+
+    #[test]
+    fn sm2_sign_uses_checked_signing_and_verifies() {
+        let distid = "js-sm2-checked-signing".to_owned();
+        let private =
+            Sm2PrivateKey::from_seed(&distid, b"js-sm2-checked-signing-seed").expect("SM2 key");
+        let message = b"js-host SM2 checked signing";
+
+        let signature = sm2_sign(
+            Uint8Array::from(private.secret_bytes().to_vec()),
+            Uint8Array::from(message.to_vec()),
+            Some(distid.clone()),
+        )
+        .expect("checked SM2 signing");
+
+        let verified = sm2_verify(
+            Uint8Array::from(private.public_key().to_sec1_bytes(false)),
+            Uint8Array::from(message.to_vec()),
+            Uint8Array::from(signature.as_ref().to_vec()),
+            Some(distid),
+        )
+        .expect("SM2 verify");
+        assert!(verified);
     }
 
     #[test]

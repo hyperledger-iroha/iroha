@@ -4578,7 +4578,9 @@ mod tests {
             privacy_metrics::{
                 SoranetPowFailureReasonV1, SoranetPrivacyModeV1, SoranetPrivacyThrottleScopeV1,
             },
-            vpn::{VPN_CELL_LEN, VpnCellFlagsV1, VpnCellV1},
+            vpn::{
+                VPN_CELL_LEN, VpnCellFlagsV1, VpnCellV1, VpnUsageVoucherBodyV1, VpnUsageVoucherV1,
+            },
         },
     };
     use norito::{codec::Encode, decode_from_bytes, to_bytes};
@@ -4604,6 +4606,11 @@ mod tests {
     };
 
     const TEST_RELAY_ID: RelayId = [0xAB; 32];
+
+    fn signed_usage_voucher(key_pair: &KeyPair, body: VpnUsageVoucherBodyV1) -> VpnUsageVoucherV1 {
+        VpnUsageVoucherV1::try_sign(body, key_pair.private_key())
+            .expect("usage voucher fixture should sign")
+    }
 
     #[test]
     fn unix_time_ms_saturates_pre_epoch_clock() {
@@ -4919,7 +4926,7 @@ mod tests {
     fn vpn_voucher_debt_window_rejects_wrong_metering_public_key() {
         let helper_ticket = sample_helper_ticket([0xA5; 16]);
         let wrong_key_pair = KeyPair::from_seed(vec![0x77; 32], Algorithm::Ed25519);
-        let body = iroha_data_model::soranet::vpn::VpnUsageVoucherBodyV1 {
+        let body = VpnUsageVoucherBodyV1 {
             session_id: helper_ticket.session_id,
             quote_id: helper_ticket.quote_id,
             relay_id: helper_ticket.relay_id,
@@ -4929,11 +4936,7 @@ mod tests {
             active_ms: 1_000,
             issued_at_ms: 2_000,
         };
-        let voucher = iroha_data_model::soranet::vpn::VpnUsageVoucherV1 {
-            signature: iroha_crypto::Signature::new(wrong_key_pair.private_key(), &body.encode()),
-            client_public_key: wrong_key_pair.public_key().clone(),
-            body,
-        };
+        let voucher = signed_usage_voucher(&wrong_key_pair, body);
         let envelope = VpnUsageVoucherEnvelopeV1 {
             earned_fee_nanos: helper_ticket.tariff.earned_fee_nanos(&voucher.body),
             voucher,
@@ -4950,7 +4953,7 @@ mod tests {
     fn vpn_usage_voucher_control_updates_receipt() {
         let helper_ticket = sample_helper_ticket([0xA4; 16]);
         let key_pair = sample_metering_key_pair();
-        let body = iroha_data_model::soranet::vpn::VpnUsageVoucherBodyV1 {
+        let body = VpnUsageVoucherBodyV1 {
             session_id: helper_ticket.session_id,
             quote_id: helper_ticket.quote_id,
             relay_id: helper_ticket.relay_id,
@@ -4960,11 +4963,7 @@ mod tests {
             active_ms: 1_000,
             issued_at_ms: 2_000,
         };
-        let voucher = iroha_data_model::soranet::vpn::VpnUsageVoucherV1 {
-            signature: iroha_crypto::Signature::new(key_pair.private_key(), &body.encode()),
-            client_public_key: key_pair.public_key().clone(),
-            body,
-        };
+        let voucher = signed_usage_voucher(&key_pair, body);
         let envelope = VpnUsageVoucherEnvelopeV1 {
             voucher,
             earned_fee_nanos: 55,
@@ -4983,14 +4982,7 @@ mod tests {
         lower_fee_body.ingress_bytes = 11;
         lower_fee_body.egress_bytes = 21;
         let lower_fee_envelope = VpnUsageVoucherEnvelopeV1 {
-            voucher: iroha_data_model::soranet::vpn::VpnUsageVoucherV1 {
-                signature: iroha_crypto::Signature::new(
-                    key_pair.private_key(),
-                    &lower_fee_body.encode(),
-                ),
-                client_public_key: key_pair.public_key().clone(),
-                body: lower_fee_body,
-            },
+            voucher: signed_usage_voucher(&key_pair, lower_fee_body),
             earned_fee_nanos: 54,
         };
         let lower_fee_error = window

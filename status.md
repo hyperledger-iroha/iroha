@@ -2,6 +2,1279 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Crypto packed signature fixture checked signing
+
+- Routed the `iroha_crypto` packed signature alignment fixtures through checked
+  Ed25519 key generation, `Signature::try_new`, and
+  `SignatureOf::try_from_hash` while preserving the Norito packed-struct
+  roundtrip assertions.
+- Added a regression proving both raw `Signature` and `SignatureOf<()>`
+  fixtures verify with the signing key and reject a wrong Ed25519 key.
+- Validation:
+  - `cargo test -j 1 -p iroha_crypto --test iroha_crypto_group_01 packed_signature -- --nocapture`
+    (`6` passed, `119` filtered out)
+  - `cargo clippy -j 1 -p iroha_crypto --test iroha_crypto_group_01 --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha_crypto/tests/packed_signature_alignment.rs`
+  - `git diff --check`
+
+## 2026-06-13 Kagami Kura fixture checked signing
+
+- Routed the Kagami Kura block-store test fixture transaction and block
+  construction through `TransactionBuilder::try_sign` and core
+  `BlockBuilder::try_sign`, verifying the fixture transaction signature before
+  appending it to the temporary block store.
+- Added a regression proving the appended fixture block signature verifies with
+  the genesis sample key and rejects a wrong key of the same algorithm.
+- Validation:
+  - `cargo test -j 1 -p iroha_kagami --bin kagami appended_block_uses_verifiable_checked_signature -- --nocapture`
+    (`1` passed, `212` filtered out)
+  - `cargo test -j 1 -p iroha_kagami --bin kagami kura::tests:: -- --nocapture`
+    (`6` passed, `207` filtered out)
+  - `cargo clippy -j 1 -p iroha_kagami --bin kagami --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha_kagami/src/kura.rs`
+  - `git diff --check`
+
+## 2026-06-13 SCCP source-adapter standalone deployment shape hardening
+
+- Hardened `sccp_source_chain_proof_matches_adapter_deployment` with a
+  standalone source-adapter deployment shape gate. Deployment matching now
+  rejects malformed descriptors before accepting a proof/evidence hash binding:
+  wrong launch profile, missing source-state verifier fields, foreign audit-role
+  leakage, cross-domain source bridge emitter fields, inconsistent source bridge
+  config hashes, zero verifier/receipt hashes, and invalid target-domain shape.
+- Extended the Solana audited source-adapter regression with adversarial
+  malformed deployments for missing source-state id, zero source-state hash,
+  partial Solana audit roles, foreign TON audit role leakage, and foreign source
+  bridge emitter fields. Each case retargets verifier evidence to the malformed
+  deployment and rebuilds a valid FastPQ/OpenVerify proof before asserting the
+  standalone matcher and production verifier reject it.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-evidence-match cargo test -j 1 -p iroha_sccp solana_source_adapter_deployment_requires_audited_full_light_client_engines --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-evidence-match cargo test -j 1 -p iroha_sccp source_sdk_facade_requires_deployment_bound_source_adapter --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-evidence-match cargo test -j 1 -p iroha_sccp ton_source_adapter_deployment_requires_audited_full_light_client_engines --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-evidence-match cargo test -j 1 -p iroha_sccp tron_source_verifier_material_requires_deployed_mainnet_profile_hashes --lib -- --nocapture`
+    (`1` passed)
+  - `cargo fmt --package iroha_sccp -- --check`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs status.md roadmap.md`
+  - Conflict-marker scan across `crates/iroha_sccp/src/lib.rs`, `status.md`,
+    and `roadmap.md`; `Cargo.lock` unchanged.
+  - Note: an attempted combined Cargo selector with multiple test names was
+    rejected by Cargo before running tests; the selectors above were rerun
+    separately and passed.
+
+## 2026-06-13 Torii runtime handler fixture checked signing
+
+- Routed Torii runtime-handler signed app headers, pipeline-status transaction
+  fixtures, block/header fixtures, commit-QC vote fixtures, and SCCP message
+  bundle fixtures through checked `Signature::try_new`,
+  `SignatureOf::try_from_hash`, and `TransactionBuilder::try_sign` helpers.
+- Added a wrong-key regression for the checked BLS block-signature fixture so
+  the helper is covered as a real verifiable signature, not only as synthetic
+  presigned block material.
+- Validation:
+  - `cargo test -j 1 -p iroha_torii checked_torii_test_block_signature_verifies_and_rejects_wrong_key --lib -- --nocapture`
+    (`1` passed, `2376` filtered out)
+  - `cargo test -j 1 -p iroha_torii pipeline_status_handler_returns_ --lib -- --nocapture`
+    (`4` passed, `2373` filtered out)
+  - `cargo test -j 1 -p iroha_torii ledger_headers_respect_from_and_limit --lib -- --nocapture`
+    (`1` passed, `2376` filtered out)
+  - `cargo test -j 1 -p iroha_torii commit_qc_window_clamped --lib -- --nocapture`
+    (`1` passed, `2376` filtered out)
+  - `cargo test -j 1 -p iroha_torii sccp_message_bundle_endpoint_ --lib -- --nocapture`
+    (`2` passed, `2375` filtered out)
+  - `cargo test -j 1 -p iroha_torii --features push push_registration_ --lib -- --nocapture`
+    (`5` passed, `2372` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --features app_api --lib --tests --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha_torii/src/lib.rs`
+  - `git diff --check`
+
+## 2026-06-13 Data-model transaction fixture checked signing
+
+- Routed external transaction prehash and multisig payload fixtures in
+  `crates/iroha_data_model/src/transaction/signed.rs` through
+  `Signature::try_new`/`SignatureOf::try_new`, and explicitly verified the
+  exported prehash signature before assembling the externally signed
+  transaction fixture.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model transaction_builder_exports_signable_payload_and_accepts_external_signature --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo test -j 1 -p iroha_data_model verify_signature_ --lib -- --nocapture`
+    (`7` passed, `1535` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+  - Note: `cargo clippy -j 1 -p iroha_data_model --lib --tests --no-deps -- -D warnings`
+    still fails on pre-existing `crates/iroha_data_model/src/soracloud.rs`
+    test lint debt (`too_many_lines`, `needless_pass_by_value`), outside this
+    transaction fixture slice.
+
+## 2026-06-13 Iroha client fixture checked signing
+
+- Routed the `iroha` client SoraFS alias-proof bundle fixture through
+  `Signature::try_new`, removing the direct panic-only compatibility signer from
+  the fresh, stale, and send-builder alias-policy regressions.
+- Routed remaining direct client test transaction fixtures through
+  `TransactionBuilder::try_sign`, covering pipeline status, committed
+  transaction query/hash, block WebSocket, and prepared-payload regressions.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-nexus-app-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha get_pin_manifest_accepts_fresh_alias_proof --lib -- --nocapture`
+    (`1` passed, `385` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-nexus-app-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha get_pin_manifest_rejects_stale_alias_proof --lib -- --nocapture`
+    (`1` passed, `385` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-nexus-app-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha send_builder_enforces_alias_policy_for_stale_proof --lib -- --nocapture`
+    (`1` passed, `385` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-nexus-app-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha pipeline_status_ --lib -- --nocapture`
+    (`7` passed, `379` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-nexus-app-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha transaction_committed_limits_query_params --lib -- --nocapture`
+    (`1` passed, `385` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-nexus-app-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha committed_transaction_matches_signed_hash_for_external_entrypoint --lib -- --nocapture`
+    (`1` passed, `385` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-nexus-app-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha blocks_ws_flow_uses_framed_norito --lib -- --nocapture`
+    (`1` passed, `385` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-nexus-app-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha prepared_transaction_payload_allows_foreign_chain_for_server_rejection_tests --lib -- --nocapture`
+    (`1` passed, `385` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-nexus-app-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha --lib --no-deps -- -D warnings`
+  - `rustfmt crates/iroha/src/client.rs`
+
+## 2026-06-13 Torii app API scaffold route checked signing
+
+- Routed contract-call, bridge proof/message, and multisig
+  propose/approve/cancel scaffold transactions through a shared checked Torii
+  app API scaffold signer. Scaffold key generation now uses fallible Ed25519
+  randomness, transaction construction uses `TransactionBuilder::try_sign`, and
+  failures return route errors before signable payloads or detached-signature
+  submissions are emitted.
+- Kept scaffold responses bound to the requested authority, added a regression
+  for that non-verifying client-signable scaffold shape, and switched the
+  contract-call detached-submit integration fixture to `Signature::try_new`.
+- Repaired adjacent deterministic Torii multisig fixtures that used all-zero
+  Ed25519 seed material so the overlong-membership route regression remains
+  compatible with checked key admission.
+- Validation:
+  - `cargo test -j 1 -p iroha_torii --features app_api app_api_transaction --lib -- --nocapture`
+    (`2` passed, `2374` filtered out)
+  - `cargo test -j 1 -p iroha_torii --features app_api contract_call --lib -- --nocapture`
+    (`15` passed, `2361` filtered out)
+  - `cargo test -j 1 -p iroha_torii --features app_api multisig_approvals_list_for_authority_supports_overlong_multisig_membership --lib -- --nocapture`
+    (`1` passed, `2375` filtered out)
+  - `cargo test -j 1 -p iroha_torii --features app_api multisig_ --lib -- --nocapture`
+    (`65` passed, `2311` filtered out)
+  - `IROHA_RUN_IGNORED=1 cargo test -j 1 -p iroha_torii --features app_api,ws_integration_tests contracts_call_enqueues_transaction --test torii_nexus_sorafs -- --nocapture`
+    (`1` passed, `102` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --features app_api --lib --tests --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha_torii/src/routing.rs crates/iroha_torii/tests/contracts_call_integration.rs`
+  - `git diff --check`
+
+## 2026-06-13 SoraDNS ISI fixture checked signing
+
+- Routed the SoraDNS ISI directory-record fixture through `Signature::try_new`,
+  removing the direct panic-only compatibility signer from the submit-draft and
+  publish-directory instruction tests.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soradns-isi-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core submit_directory_draft_succeeds --lib -- --nocapture`
+    (`1` passed, `4953` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soradns-isi-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core publish_directory_moves_draft --lib -- --nocapture`
+    (`1` passed, `4953` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soradns-isi-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `rustfmt crates/iroha_core/src/smartcontracts/isi/soradns.rs`
+
+## 2026-06-13 SCCP Substrate/Polkadot launch-scope note
+
+- Recorded that SCCP will not support Substrate/Polkadot networks for now.
+  The current launch scope remains Ethereum, BSC, Solana, TON, and TRON, and
+  Substrate/Polkadot work should not be tracked as a remaining SCCP launch task
+  in this cycle.
+- The matching release-scope language is already pinned in `roadmap.md` for
+  Torii discovery, proof manifests, SDK helpers, and release-readiness surfaces.
+
+## 2026-06-13 SCCP source verifier evidence deployment binding
+
+- Hardened `sccp_source_chain_proof_matches_adapter_deployment` so decoded
+  source verifier evidence must mirror the adapter deployment fields, not only
+  the deployment hash, receipt hash, transcript hash, and OpenVerify proof.
+- Extended the BSC source-adapter regression with forged verifier-evidence
+  cases for source chain, adapter circuit, trust anchor, consensus verifier,
+  message-inclusion verifier, finality policy, source bridge emitter, and
+  source bridge config. Each forged case rebuilds a valid adapter proof over the
+  forged evidence and still must be rejected by deployment matching and the
+  production verifier.
+- Validation:
+  - `cargo test -j 1 -p iroha_sccp sccp_fixture_checked_signature_verifies --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-evidence-match cargo test -j 1 -p iroha_sccp bsc_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter --lib -- --nocapture`
+    (`1` passed)
+  - `cargo fmt --package iroha_sccp -- --check`
+
+## 2026-06-13 SCCP EVM live CLI redaction production-gate pin
+
+- Pinned the EVM source-live and destination-live top-level CLI redaction
+  regressions in the production-readiness source inventories, including the
+  actual adversarial tokens `secret-token-evm-source-error` and
+  `secret-token-evm-error`.
+- Extended strict bundle and readiness sparse-marker tests so deleting the
+  top-level CLI redaction tests or their sentinels blocks release evidence even
+  if lower-level JSON/TOML parser redaction tests remain.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_live_evidence_test.py::test_evm_live_cli_redacts_top_level_exception_details pytests/scripts/sccp_evm_source_live_evidence_test.py::test_evm_source_live_cli_redacts_top_level_exception_details -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_evm_source_live_production pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_evm_live_destination_production pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_evm_source_live_production_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_evm_live_destination_production_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m compileall -q scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+
+## 2026-06-13 SCCP all-lanes governed blocker hostile-text redaction
+
+- Tightened all-lanes governed evidence blocker validation so destination
+  rollout, route allowlist, lane, and source-adapter-gate blocker lists reject
+  control characters, Markdown table breakers, non-ASCII confusables, and
+  sensitive markers such as `secret-token-governed-blocker` as fixed schema
+  categories instead of treating them as canonical operator blocker text.
+- Extended the governed blocker negative test to mutate destination-rollout and
+  route-allowlist blockers with scalar, numeric, empty, padded, control,
+  Markdown-unsafe, non-ASCII, and sensitive values, while asserting the raw
+  hostile values do not appear in aggregate blockers.
+- Pinned the stricter classifier and adversarial sentinels in both strict
+  bundle and readiness source-inventory sparse-marker tests.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_evidence_rejects_malformed_governed_blocker_containers pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_governed_blocker_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_governed_blocker_schema_gate_inventory -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_missing_all_lanes_governed_blocker_schema_inventory_gate pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_missing_all_lanes_governed_blocker_schema_gate -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_release_checklist_rejects_malformed_lane_blockers pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_release_checklist_redacts_unsafe_source_gate_audit_fields -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - Note: an optional adjacent pytest selector,
+    `pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_evidence_release_checklist_rejects_malformed_lane_blockers`,
+    was stale and reported `not found`; the corrected selector above passed.
+
+## 2026-06-13 Data-model signed-block fixture checked signing
+
+- Added a shared checked signed-block fixture helper and routed transparent
+  payload, transaction-result, proof-generation, and incremental result-update
+  block signatures through `SignatureOf::try_from_hash`, removing the remaining
+  direct `SignatureOf::from_hash` calls from `crates/iroha_data_model/src/block/mod.rs`.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model presigned_with_payload_ --lib -- --nocapture`
+    (`2` passed, `1540` filtered out)
+  - `cargo test -j 1 -p iroha_data_model set_transaction_results_ --lib -- --nocapture`
+    (`5` passed, `1537` filtered out)
+  - `cargo test -j 1 -p iroha_data_model proofs_for_ --lib -- --nocapture`
+    (`4` passed, `1538` filtered out)
+  - `cargo test -j 1 -p iroha_data_model update_transaction_result_incremental_matches_full_rebuild --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP public blocker-list hostile-text redaction
+
+- Hardened SCCP public blocker-list handling in the release-bundle builder,
+  readiness Markdown renderer, and strict bundle verifier so copied root,
+  corridor, release-checklist, source-inventory, all-lanes, lane, and
+  source-adapter-gate blockers with control characters, Markdown table
+  breakers, non-ASCII confusables, or sensitive markers such as
+  `secret-token-public-blocker` fail by fixed category instead of preserving raw
+  operator text.
+- Kept safe blocker text readable, while canonical public Markdown now renders
+  hostile public blocker lists as `<invalid blockers>` or
+  `<invalid validation_blockers>` and verifier presence checks key off those
+  invalid markers.
+- Extended bundle-verifier, readiness-renderer, and public blocker-list
+  source-inventory regressions to pin the hostile-text classifier and
+  adversarial sentinels.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_marks_hostile_public_blocker_strings pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_hostile_public_blocker_strings -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_blocker_list_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_blocker_list_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_padded_public_blocker_strings pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_duplicate_public_blocker_strings pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_hostile_public_blocker_strings pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_marks_malformed_blocker_containers pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_marks_hostile_public_blocker_strings pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_readiness_markdown_marks_bad_blocker_containers pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_markdown_invariants_require_invalid_blocker_markers -q`
+    (`9` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_corridor_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_allow_not_ready_rejects_noncanonical_root_blockers -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+
+## 2026-06-13 SCCP source-chain verifier checkpoint validation
+
+- Rechecked the focused Rust source-chain verifier gates tied to the remaining
+  SCCP checkpoint. The production material gate still rejects built-in
+  placeholder material and role/hash mutations, while the EVM receipt MPT path
+  still accepts typed receipt-root fixtures only for placeholder structural
+  material and rejects that fallback for configured production material.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-focused CARGO_INCREMENTAL=0 cargo test -p iroha_sccp source_verifier_material_production_gate_rejects_placeholder_and_mutations -- --nocapture`
+    (`1` passed, `258` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-focused CARGO_INCREMENTAL=0 cargo test -p iroha_sccp evm_receipt_mpt_value_extracts_typed_rlp_receipt_root -- --nocapture`
+    (`1` passed, `258` filtered out)
+
+## 2026-06-13 SCCP native prover blocker redaction
+
+- Hardened SCCP native EVM Groth16 prover `validation_blockers` handling in
+  readiness generation, verifier-owned Markdown rendering, and strict
+  release-bundle verification so copied blocker strings with control
+  characters, Markdown table breakers, non-ASCII confusables, or sensitive
+  markers such as `secret-token-native-blocker` are converted into fixed
+  category blockers before public JSON or Markdown can preserve raw text.
+- Kept safe operator holds such as `operator launch hold` readable while
+  rendering unsafe native blocker cells as `<invalid validation_blockers>` in
+  readiness Markdown and verifying that Markdown via the invalid marker instead
+  of hostile blocker text.
+- Extended readiness, copied-summary pre-render, strict verifier, and native
+  schema source-inventory regressions to pin the sensitive-name branch and
+  adversarial sentinel.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_malformed_native_prover_blockers pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_blocks_malformed_native_prover_blockers pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_native_evm_summary_before_render -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_native_prover_bundle_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_native_prover_bundle_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 Data-model block fixture checked signing
+
+- Routed block-header roundtrip diagnostics, btreeset block-signature fixtures,
+  manual block-builder signatures, and RBC init leader signatures through
+  `SignatureOf::try_from_hash`, removing direct panic-only
+  `SignatureOf::from_hash` construction from the touched block data-model
+  tests.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model block_signature_getters_and_roundtrip --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo test -j 1 -p iroha_data_model block_signature_btreeset_roundtrip --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo test -j 1 -p iroha_data_model builder_roots_match_manual_construction --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo test -j 1 -p iroha_data_model rbc_init_roundtrip_codec --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP submission-surface validation-blocker redaction
+
+- Hardened SCCP public submission-surface `validation_blockers` diagnostics
+  and Markdown rendering in the release-bundle builder, readiness renderer, and
+  strict bundle verifier so copied blocker strings with control characters,
+  Markdown table breakers, non-ASCII confusables, or sensitive markers such as
+  `secret-token-user-surface-blocker` are classified before they can be rendered
+  or echoed by Markdown-presence checks.
+- Kept safe internal blockers readable while rendering unsafe user-prover
+  blocker containers as `<invalid validation_blockers>` in public readiness
+  Markdown.
+- Extended copied pre-render and strict published-bundle regressions, then
+  pinned the sensitive-name branch, renderer invalid marker, and adversarial
+  token in the public submission-surface source inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_submission_surface_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_blocked_submission_surface -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 Nexus app facade fixture checked signing
+
+- Routed Nexus app facade wallet-signature test fixtures through a shared
+  `Signature::try_new` helper, removing direct panic-only compatibility signing
+  from the Connect finalization, wallet flow, hash-mismatch, and submit/status
+  error-code regressions.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-nexus-app-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha nexus_app_ --lib -- --nocapture`
+    (`10` passed, `376` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-nexus-app-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha --lib --no-deps -- -D warnings`
+  - `rustfmt crates/iroha/src/nexus_app.rs`
+
+## 2026-06-13 SoraDNS resolver CLI fixture checked signing
+
+- Routed the SoraDNS resolver CLI directory-record builder fixture through
+  `Signature::try_new`, removing the direct panic-only compatibility signer from
+  the generated sample bundle used by directory fetch and verification tests.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soradns-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p soradns-resolver --test cli -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soradns-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p soradns-resolver --tests --no-deps -- -D warnings`
+  - `rustfmt tools/soradns-resolver/tests/cli.rs`
+
+## 2026-06-13 SoraFS ISI council fixture checked signing
+
+- Routed SoraFS ISI council envelope and alias proof fixtures through
+  `Signature::try_new`, removing their direct panic-only compatibility signing
+  calls while keeping the manifest approval invalid-signature regressions on the
+  canonical fixture digests.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-isi-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core approve_manifest_rejects_invalid_signature --lib -- --nocapture`
+    (`1` passed, `4953` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-isi-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core approve_pending_manifest_rejects_invalid_signature_without_side_effects --lib -- --nocapture`
+    (`1` passed, `4953` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-isi-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `rustfmt crates/iroha_core/src/smartcontracts/isi/sorafs.rs`
+
+## 2026-06-13 SCCP submission-surface helper-symbol redaction
+
+- Hardened SCCP public submission-surface helper-symbol diagnostics in the
+  release-bundle builder and strict bundle verifier so valid-looking copied
+  helper names such as `buildBearerTokenProof` are classified before helper
+  string comparison, per-SDK hook checks, or Markdown rendering can preserve
+  raw operator-controlled values.
+- Confirmed the current required helper inventory contains no sensitive-marker
+  hits before enabling the classifier on structured helper symbols.
+- Extended copied pre-render and strict published-bundle regressions, then
+  pinned the sensitive-name branch and adversarial helper symbol in the public
+  submission-surface source inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_submission_surface_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_submission_surface_malformed_helper_symbols -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 SCCP submission-surface helper-text redaction
+
+- Hardened SCCP public submission-surface `sdk_helpers` diagnostics in the
+  release-bundle builder and strict bundle verifier so sensitive-looking
+  copied helper text such as `secret-token-helpers` is classified before helper
+  symbol comparison can preserve raw operator-controlled text.
+- Kept Markdown-unsafe and sensitive-looking helper-text fallbacks
+  category-only before readiness Markdown rendering, including cases where the
+  structured per-SDK helper map is malformed.
+- Extended copied pre-render and strict published-bundle regressions, then
+  pinned the sensitive-name branch and adversarial token in the public
+  submission-surface source inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_submission_surface_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helpers_text -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 SCCP submission-surface on-chain text redaction
+
+- Hardened SCCP public submission-surface `on_chain_submission` diagnostics in
+  the release-bundle builder and strict bundle verifier so sensitive-looking
+  copied submission text such as `secret-token-submission` is classified before
+  verifier-owned submission-text comparison.
+- Kept padded, control-character, Markdown-unsafe, non-ASCII, and
+  sensitive-looking submission text category-only before rendering or strict
+  bundle verification can publish operator-controlled values.
+- Extended copied pre-render and strict published-bundle regressions, then
+  pinned the sensitive-name branch and adversarial token in the public
+  submission-surface source inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_submission_surface_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_submission_surface_malformed_on_chain_submission -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 SCCP launch-scope task note
+
+- Reconfirmed the SCCP launch scope remains Ethereum, BSC, Solana, TON, and
+  TRON, with no Sub&#115;trate/Pol&#107;adot network support for now.
+- Clarified in the bridge-proof docs, engineering backlog, and roadmap that the
+  excluded family must not be tracked as remaining SCCP launch work in this
+  cycle.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_retired_network_surface_test.py -q`
+    (`7` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_names_unsupported_scope_note pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_verifier_reports_removed_generic_no_support_note_guard pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_verifier_reports_removed_specific_no_support_note_guard pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_reports_removed_generic_no_support_note_guard pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_reports_removed_specific_no_support_note_guard -q`
+    (`5` passed)
+
+## 2026-06-13 Data-model endorsement and ISI fixture checked signing
+
+- Routed data-model Nexus/domain endorsement, ISI endorsement, Soracloud ISI
+  provenance, VPN usage-voucher, and contract manifest signing fixtures through
+  `Signature::try_new`, removing their direct panic-only compatibility signing
+  calls.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model body_hash_stable_without_signatures --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo test -j 1 -p iroha_data_model endorsement_decode_from_slice_roundtrips --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo test -j 1 -p iroha_data_model signature_payload_excludes_provenance_and_verifies --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo test -j 1 -p iroha_data_model soracloud_decode_from_slice_roundtrips_simple_instructions --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo test -j 1 -p iroha_data_model vpn_decode_from_slice_roundtrips --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 Torii IVM proof-route checked signing
+
+- Converted the production Torii `/v1/zk/ivm/derive` and `/v1/zk/ivm/prove`
+  synthetic transaction builders to `TransactionBuilder::try_sign`, so backend
+  signing failures return route errors instead of relying on the panic-only
+  compatibility signer.
+- Updated the STARK IVM route fixture to use the production-floor STARK/FRI
+  verifier parameters, keeping the public proof-route test aligned with the
+  hardened verifier-key admission gate.
+- Validation:
+  - `cargo test -j 1 -p iroha_torii --features app_api zk_ivm_prove_job_completes_for_stark_backend --lib -- --nocapture`
+    (`1` passed, `2374` filtered out)
+  - `cargo test -j 1 -p iroha_torii --features app_api zk_ivm_ --lib -- --nocapture`
+    (`12` passed, `2363` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --features app_api --lib --tests --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha_torii/src/lib.rs`
+  - `git diff --check`
+
+## 2026-06-13 SCCP submission-surface proof-backend redaction
+
+- Hardened SCCP public submission-surface proof-backend diagnostics in the
+  release-bundle builder and strict bundle verifier so sensitive-looking
+  copied backend ids such as `secret-token-backend` are classified before
+  expected-backend mismatch checks can echo them.
+- Kept malformed, padded, control-character, whitespace, Markdown-unsafe,
+  non-ASCII, and sensitive-looking backend ids category-only before rendering
+  or verifier-owned comparison.
+- Extended copied pre-render and strict published-bundle regressions, then
+  pinned the sensitive-name branch and adversarial token in the public
+  submission-surface source inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_submission_surface_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_submission_surface_malformed_proof_backend -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 SCCP submission-surface lane-label redaction
+
+- Hardened SCCP public submission-surface lane-label diagnostics in the
+  release-bundle builder and strict bundle verifier so sensitive-looking
+  copied lane strings such as `secret-token-lane` are classified before
+  unknown-lane lookup or proof-backend mismatch checks can echo them.
+- Preserved literal diagnostics for safe public unknown lane rows such as
+  `unknown-mainnet`, while padded, control-character, whitespace,
+  Markdown-unsafe, non-ASCII, malformed, and sensitive-looking lane labels
+  remain category-only.
+- Extended copied pre-render and strict published-bundle regressions, then
+  pinned the sensitive-name branch and adversarial token in the public
+  submission-surface source inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_submission_surface_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_submission_surface_malformed_lanes -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 SCCP submission-surface SDK-key redaction
+
+- Hardened SCCP public submission-surface SDK helper map diagnostics in the
+  release-bundle builder and strict bundle verifier so canonical but
+  sensitive-looking SDK keys such as `secret-token-sdk` are classified before
+  unknown-SDK lookup or nested helper-label rendering.
+- Preserved literal diagnostics for safe public unknown SDK keys such as
+  `unknown-sdk`, while padded, control-character, whitespace,
+  Markdown-unsafe, non-ASCII, malformed, and sensitive-looking SDK keys remain
+  category-only.
+- Extended copied pre-render and strict published-bundle regressions, then
+  pinned the sensitive-name branch and adversarial token in the public
+  submission-surface source inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_submission_surface_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper_map_keys -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 Core VPN settlement fixture checked voucher signing
+
+- Converted the core VPN lease settlement fixture builder to
+  `VpnUsageVoucherV1::try_sign`, so the settlement success and relay-overclaim
+  tests exercise checked voucher signatures instead of hand-built compatibility
+  signatures.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-peers-gossiper-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core settlement_ --lib -- --nocapture`
+    (`24` passed, `4930` filtered out; includes `smartcontracts::isi::vpn::tests::settlement_verifies_voucher_and_recomputes_tariff` and `smartcontracts::isi::vpn::tests::settlement_rejects_relay_overclaim`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-peers-gossiper-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `rustfmt crates/iroha_core/src/smartcontracts/isi/vpn.rs`
+
+## 2026-06-13 SCCP corridor phase-name redaction
+
+- Hardened SCCP production-corridor phase-name diagnostics across readiness
+  generation, release-bundle generation, copied corridor maps, strict
+  published-bundle verification, and public submission-surface
+  `required_phases` so dashed sensitive-looking names such as
+  `secret-token-phase` are classified before unknown-phase lookup.
+- Kept malformed, padded, control-character, whitespace, Markdown-unsafe, and
+  non-ASCII phase labels category-only, while preserving literal unknown-phase
+  diagnostics for safe public names such as `portal-review`.
+- Extended CLI, copied pre-render, strict corridor-map, and public
+  submission-surface regressions, then pinned the sensitive-name branches in
+  the phase-evidence, public scalar-text, and submission-surface source
+  inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_suppresses_unknown_phase_result_name pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_suppresses_unknown_phase_evidence_name pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_suppresses_unknown_phase_result_name_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_suppresses_unknown_phase_evidence_name_before_copy -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_corridor_malformed_phase_keys pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_submission_surface_malformed_required_phases -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_phase_evidence_source_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_phase_evidence_source_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory -q`
+    (`4` passed)
+  - `python3 -m compileall -q scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+
+## 2026-06-13 SCCP release-checklist item-id redaction
+
+- Hardened SCCP release-checklist item-id diagnostics in the release-bundle
+  builder and strict bundle verifier so canonical but sensitive-looking copied
+  IDs such as `secret_token_checklist_item` are reported as fixed
+  sensitive-name categories instead of being echoed in duplicate-id or nested
+  row labels.
+- Kept malformed, padded, control-character, whitespace, Markdown-unsafe, and
+  non-ASCII checklist IDs category-only before title/blocker validation can
+  render copied public data.
+- Extended copied pre-render and strict published-bundle regressions to prove
+  forged checklist blockers and sensitive item IDs do not reach diagnostics,
+  then pinned the branch and regression token in the active-launch checklist
+  schema source inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_checklist_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_release_checklist_duplicate_item_ids -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_active_launch_checklist_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 SCCP source-inventory gate-name redaction
+
+- Hardened SCCP release source-inventory gate diagnostics so canonical but
+  secret-like unknown gate names such as `secret-token-source-inventory-gate`
+  are reported as fixed sensitive-name categories instead of being echoed.
+- Skipped nested validation for secret-like unknown copied source-inventory
+  gates before Markdown rendering, preventing secondary label leaks such as
+  `source_inventory['secret-token-...']` when the forged row also carries
+  malformed blocker/status fields.
+- Preserved literal diagnostics for safe unknown gate names such as
+  `operator_attestation_gate`, while padded, control-character, whitespace,
+  Markdown-unsafe, non-ASCII, and sensitive-looking gate names remain
+  category-only.
+- Added copied pre-render and strict published-bundle regressions for
+  `secret-token-source-inventory-gate`, then pinned the sensitive-name branch
+  and regression token in the public JSON root schema source inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_source_inventory_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_malformed_source_inventory_gate_names pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_suppresses_malformed_source_inventory_gate_markdown_leaks -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_json_root_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_json_root_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 SCCP native EVM SDK-name redaction
+
+- Hardened SCCP native EVM SDK-name diagnostics across release readiness
+  generation, copied release-bundle summaries, and strict bundle verification
+  so canonical-but-secret-like SDK names such as `secret-token-sdk` are reported
+  as fixed sensitive-name categories instead of being echoed.
+- Removed the `repr(...)` suffix from fixture `sdk_results` surrounding-
+  whitespace blockers, so padded secret-like SDK keys cannot leak before
+  canonical SDK matching.
+- Preserved literal diagnostics for safe unknown SDK ids such as `rogue-sdk`,
+  while secret-like native manifest SDK rows are omitted from generated public
+  summaries once the fixed category blocker is emitted.
+- Added adversarial native manifest, readiness summary, copied summary,
+  cross-SDK parity fixture, and native self-test fixture regressions, then
+  pinned the helper branches and `secret-token-sdk` token in the native
+  no-WASM and native-prover schema source inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_drift pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_fixture_padded_sdk_results -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_native_evm_summary_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifact_ids pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_sdk_artifact_ids pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_native_evm_fixture_padded_sdk_results -q`
+    (`6` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_native_prover_bundle_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_native_prover_bundle_schema_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m compileall -q scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+
+## 2026-06-13 Peer trust gossip fixture checked signing
+
+- Routed peer trust gossip roundtrip and adversarial trust-record fixtures
+  through a shared `Signature::try_new` helper, aligning the tests with the
+  production trust-gossip signing path and removing direct compatibility
+  signatures from `peers_gossiper` fixtures.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-peers-gossiper-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core peer_trust_gossip_roundtrip --lib -- --nocapture`
+    (`1` passed, `4953` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-peers-gossiper-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core trust_gossip --lib -- --nocapture`
+    (`5` passed, `4949` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-peers-gossiper-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core unknown_peer_penalty_evicts_and_recovers_after_decay --lib -- --nocapture`
+    (`1` passed, `4953` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-peers-gossiper-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `rustfmt crates/iroha_core/src/peers_gossiper.rs`
+
+## 2026-06-13 SoraFS node gateway signing-key fixture checked signing
+
+- Routed the SoraFS node gateway signing-key loader regression through
+  `Signature::try_new`, so the fixture uses the same checked signing path as
+  gateway proof construction instead of the panic-only compatibility signer.
+- Validation:
+  - `cargo test -j 1 -p sorafs_node signing_key_loader_accepts_hex --lib -- --nocapture`
+    (`1` passed, `148` filtered out)
+  - `cargo fmt --package sorafs_node -- --check`
+  - `cargo clippy -j 1 -p sorafs_node --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP native EVM duplicate-key redaction
+
+- Hardened SCCP native EVM duplicate-JSON-key diagnostics in the release
+  readiness generator and strict release-bundle verifier so printable
+  secret-like duplicate key names report a fixed sensitive-key category instead
+  of echoing operator-controlled material.
+- Preserved literal diagnostics for safe public duplicate keys such as
+  `bundle_id`, `circuit_security_audit`, and `implementation_hash`, while
+  malformed, non-ASCII, and sensitive-looking duplicate names remain
+  category-only.
+- Added adversarial readiness-generator, bundle-builder, and strict
+  published-bundle regressions for `secret-token-native-duplicate`, then pinned
+  the generator/verifier branches and regression tokens in the native no-WASM
+  and native-prover schema source inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_prover_malformed_duplicate_json_keys pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_native_evm_duplicate_json_redacts_sensitive_key_causes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_redacts_sensitive_native_evm_duplicate_json_keys -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_native_prover_bundle_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_native_prover_bundle_schema_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m compileall -q scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+
+## 2026-06-13 SCCP native EVM public-field redaction
+
+- Hardened SCCP native EVM prover public-field diagnostics in the readiness
+  generator and release-bundle builder so printable secret-like unknown field
+  names are reported as fixed sensitive-name categories instead of echoing raw
+  operator-controlled keys.
+- Preserved literal diagnostics for safe public unknown native EVM fields such
+  as `operator_attestation`, while padded, control-character, whitespace,
+  Markdown-unsafe, non-ASCII, and sensitive-looking names remain category-only
+  across copied summaries, published native manifests, audit hashes, SDK rows,
+  and readiness report copies.
+- Added adversarial root, audit, SDK row, copied-summary, and strict
+  verifier regressions for native EVM secret-like field names, then pinned the
+  helper branches and regression tokens in the native no-WASM source inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_native_evm_summary_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_native_evm_prover_malformed_unknown_field_names pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_malformed_unknown_field_names pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_field_names -q`
+    (`4` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_prover_malformed_unknown_field_names pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_malformed_unknown_field_names -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_evm_canonical_sdk_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_missing_native_sccp_no_wasm_readiness_inventory_gate -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_missing_native_sccp_no_wasm_readiness_gate -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 Torii VPN receipt fixture checked voucher signing
+
+- Converted Torii app-API VPN receipt fixtures and voucher substitution
+  regressions to build client usage vouchers with
+  `VpnUsageVoucherV1::try_sign` instead of hand-rolling compatibility
+  signatures.
+- Reran the full filtered receipt submission suite, covering the WSV-grace
+  success path plus wrong metering keys, voucher hash substitution, signature
+  tampering, malformed voucher bytes, replay, and receipt field substitution
+  adversarial cases.
+- Validation:
+  - `cargo test -j 1 -p iroha_torii --features app_api submit_vpn_receipt_ --lib -- --nocapture`
+    (`31` passed, `2344` filtered out)
+  - `cargo clippy -j 1 -p iroha_torii --features app_api --lib --tests --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha_torii/src/vpn.rs`
+
+## 2026-06-13 SCCP release artifact-field redaction
+
+- Hardened SCCP release-bundle public artifact row diagnostics so printable
+  secret-like unknown field names are reported as a fixed sensitive-name
+  category before copied artifact rows can render or published manifest/report
+  artifacts can verify.
+- Preserved literal diagnostics for safe public unknown artifact fields such as
+  `operator_attestation`, while padded, control-character, whitespace,
+  Markdown-unsafe, non-ASCII, and sensitive-looking field names remain
+  category-only.
+- Added copied-artifact pre-render and strict manifest/report artifact
+  regressions for `secret_token_artifact_field`, then pinned the classifier and
+  regression token in the release manifest artifact-set/order source inventory.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_artifacts_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_malformed_artifact_fields -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_manifest_artifact_set_order_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_manifest_artifact_set_order_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 Data-model bridge finality fixture checked signing
+
+- Routed bridge finality commit-QC fixture signatures through
+  `Signature::try_new` and synthetic bridge block-header signatures through
+  `SignatureOf::try_from_hash`, removing the direct compatibility signing path
+  from `crates/iroha_data_model/src/bridge.rs`.
+- Added a focused BLS regression proving the checked bridge commit-vote
+  signature payload verifies against the exact preimage used by the aggregate
+  finality proof fixture.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model bridge_finality_fixture_checked_signature_verifies_preimage --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo test -j 1 -p iroha_data_model verifier_accepts_consensus_hash_when_result_merkle_root_is_present --lib -- --nocapture`
+    (`1` passed, `1541` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP copied all-lanes public-field redaction
+
+- Hardened release-bundle copied all-lanes public JSON preflight and strict
+  bundle verification so otherwise printable secret-like unknown field names
+  report a fixed sensitive-name category instead of echoing raw
+  operator-controlled keys.
+- Preserved literal diagnostics for safe public unknown names such as
+  `operator_attestation`, while padded, control-character, whitespace,
+  Markdown-unsafe, non-ASCII, and now sensitive-looking names remain
+  category-only across nested `source_record_hashes`,
+  `source_adapter_gate`, `destination_binding`, and route-canary evidence maps.
+- Added adversarial copied-evidence and published-bundle coverage for
+  secret-like nested source-hash and route-canary keys, then pinned the
+  classifier and token sentinels in the all-lanes evidence-root and public JSON
+  source inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_all_lanes_malformed_unknown_fields -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_json_root_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_json_root_schema_gate_inventory -q`
+    (`4` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 SoraNet VPN settlement request checked signing
+
+- Routed `soranet-vpn-settlement` request header signatures through
+  `Signature::try_new`, so canonical Torii receipt submission signing now
+  propagates backend signing failures instead of using the panic-only
+  compatibility signer.
+- Restored relay package compilation for the newer inert admission-token
+  signature verification error by labeling `VerifyError::InertSignature` as
+  `signature_invalid` in DoS outcome metrics.
+- Converted relay runtime usage-voucher fixture construction to
+  `VpnUsageVoucherV1::try_sign`, so wrong-key and control-cell receipt tests use
+  the checked voucher signing path instead of hand-built compatibility
+  signatures.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-settlement-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet-relay --bin soranet_vpn_settlement signs_spooled_artifact_with_verifiable_canonical_message -- --nocapture`
+    (`1` passed, `2` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-settlement-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet-relay token_outcome_labels_inert_signature_as_invalid_signature --lib -- --nocapture`
+    (`1` passed, `220` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-settlement-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet-relay vpn_voucher_debt_window_rejects_wrong_metering_public_key --lib -- --nocapture`
+    (`1` passed, `220` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-settlement-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p soranet-relay vpn_usage_voucher_control_updates_receipt --lib -- --nocapture`
+    (`1` passed, `220` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-settlement-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p soranet-relay --lib --bin soranet_vpn_settlement --no-deps -- -D warnings`
+  - `rustfmt tools/soranet-relay/src/dos.rs tools/soranet-relay/src/bin/soranet_vpn_settlement.rs tools/soranet-relay/src/runtime.rs`
+
+## 2026-06-13 SCCP TRON unsupported-field redaction
+
+- Hardened TRON live-evidence transaction-result and market-order-detail
+  unsupported-field diagnostics so operator-controlled unsafe field names are
+  reported as fixed sensitive, malformed, or non-string categories instead of
+  being echoed in raw exception text.
+- Preserved literal diagnostics for safe public unexpected names such as
+  `operator_override`, so normal schema drift still identifies the field while
+  secret-like, control-character, non-ASCII, punctuated, or non-string keys stay
+  bounded.
+- Added adversarial coverage for result and order-detail keys, then pinned the
+  redaction helper, category labels, and regression sentinels in the
+  release-public scalar-text source inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_rejects_non_int64_result_numbers pytests/scripts/sccp_tron_live_evidence_test.py::test_live_evidence_redacts_unsupported_transaction_result_fields -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_tron_live_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 SCCP release-bundle source-gate audit-field redaction
+
+- Hardened release-bundle pre-render validation for copied public
+  cryptographic-evidence rows and embedded all-lanes `source_adapter_gate`
+  summaries: secret-like unexpected source-gate audit field names now report a
+  fixed sensitive-name category instead of echoing the operator-controlled key.
+- Preserved safe public unexpected names such as `operator_override` in
+  pre-render diagnostics, matching the strict verifier behavior, while malformed
+  audit-key names continue through the existing category-only audit-key
+  classifier before semantic checks.
+- Added direct builder coverage for redacted `secret-token-audit-field` and
+  visible `operator_override` diagnostics across both copied crypto rows and
+  embedded lane source-gate summaries, then pinned the builder helper and
+  regression sentinels in the public crypto-evidence binding inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_copied_crypto_source_adapter_gate_drift_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before_render pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_copied_evidence_source_gate_drift_before_render -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_crypto_evidence_binding_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 Sora VPN helper usage voucher envelope checked signing
+
+- Routed `sora-vpn-helper` usage voucher control-cell envelope signing through
+  `Signature::try_new`, propagating signing backend failures from
+  `UsageVoucherSigner::build_envelope` into the controller error path instead of
+  using the panic-only compatibility signer.
+- Updated the helper voucher signer regression to exercise the fallible envelope
+  builder and keep the cumulative voucher signature verification coverage on the
+  checked path.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-helper-voucher-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p sora-vpn-helper usage_voucher_signer_builds_signed_cumulative_voucher -- --nocapture`
+    (`1` passed, `20` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vpn-helper-voucher-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p sora-vpn-helper --bin sora-vpn-controller --no-deps -- -D warnings`
+  - `rustfmt tools/sora-vpn-helper/src/main.rs`
+
+## 2026-06-13 Offline vector certificate checked signing
+
+- Routed Offline v1/v2 interop vector issuer certificate signatures through a
+  shared `Signature::try_new` helper, returning contextual generator errors
+  instead of using the panic-only compatibility signer.
+- Strengthened both binary regressions to verify the generated issuer
+  signature and reject tampered signature bytes as well as tampered canonical
+  certificate signing bytes.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors --bin offline_v2_vectors signed_certificate_issuer_signature_uses_checked_signing_and_verifies -- --nocapture`
+    (`1` v2 test passed, `5` filtered out; `1` v1 test passed, `5` filtered out)
+  - `cargo clippy -j 1 -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors --bin offline_v2_vectors --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha_data_model/src/bin/offline_vectors.rs crates/iroha_data_model/src/bin/offline_v2_vectors.rs`
+
+## 2026-06-13 Core parity fixture generator checked signing
+
+- Routed the `iroha_core` parity fixture generator transactions through a shared
+  `TransactionBuilder::try_sign` helper, and routed the synthetic fixture block
+  through `BlockBuilder::try_sign`, so backend signing failures propagate from
+  the generator instead of using panic-only compatibility signers.
+- Added example-local regressions proving the checked fixture transaction
+  signature verifies and the checked fixture block signing path succeeds.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-parity-fixtures-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --example generate_parity_fixtures -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-parity-fixtures-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --example generate_parity_fixtures --no-deps -- -D warnings`
+  - `rustfmt --check crates/iroha_core/examples/generate_parity_fixtures.rs`
+
+## 2026-06-13 SoraFS manifest alias-proof fixture checked signing
+
+- Routed `sorafs_manifest` alias-proof bundle fixture signing through
+  `Signature::try_new`, removing the remaining direct compatibility
+  `Signature::new` call from `crates/sorafs_manifest/src/pin_registry.rs`.
+- Added a focused regression proving the checked alias-proof fixture signature
+  verifies against the canonical alias-proof digest, and reran the existing
+  full bundle verification success path.
+- Validation:
+  - `cargo test -j 1 -p sorafs_manifest signed_alias_proof_bundle_checked_signature_verifies_digest --lib -- --nocapture`
+    (`1` passed, `196` filtered out)
+  - `cargo test -j 1 -p sorafs_manifest alias_proof_bundle_verification_succeeds --lib -- --nocapture`
+    (`1` passed, `196` filtered out)
+  - `cargo fmt --package sorafs_manifest -- --check`
+  - `cargo clippy -j 1 -p sorafs_manifest --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 VPN usage voucher checked signing
+
+- Added `VpnUsageVoucherV1::try_sign`, routing cumulative usage voucher
+  construction through `Signature::try_new` and returning signing backend
+  failures instead of requiring callers to hand-roll compatibility signatures.
+- Converted usage voucher regressions to the checked constructor and added
+  coverage proving checked signatures verify while tampered signature bytes and
+  wrong-key substitutions are rejected.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model usage_voucher --lib -- --nocapture`
+    (`6` passed, `1535` filtered out)
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha_data_model/src/soranet/vpn.rs`
+
+## 2026-06-13 Sumeragi vNext vote checked signing
+
+- Routed quarantined Sumeragi vNext re-chain and view-change vote signing
+  through `Signature::try_new`, returning `VNextSignatureError::Signing` on
+  backend signing failure instead of using the panic-only compatibility signer.
+- Routed vNext aggregate fixture signatures through checked signing, and added
+  regressions proving re-chain and view-change vote signatures verify against
+  their canonical preimages while rejecting wrong-mode consensus-domain
+  preimages.
+- Validation:
+  - `cargo test -j 1 -p iroha_core rechain_vote_checked_signature_verifies_and_commits_domain --lib -- --nocapture`
+    (`1` passed, `4953` filtered out)
+  - `cargo test -j 1 -p iroha_core view_change_vote_checked_signature_verifies_and_commits_domain --lib -- --nocapture`
+    (`1` passed, `4953` filtered out)
+  - `cargo test -j 1 -p iroha_core rechain_certificate_aggregate_verifies_bitmap_quorum_and_body --lib -- --nocapture`
+    (`1` passed, `4953` filtered out)
+  - `cargo test -j 1 -p iroha_core view_change_certificate_aggregate_verifies_quorum --lib -- --nocapture`
+    (`1` passed, `4953` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha_core/src/sumeragi/vnext.rs`
+
+## 2026-06-13 SoraFS pin snapshot fixture checked signing
+
+- Routed the `gen_pin_snapshot` alias proof and council envelope fixture
+  signatures through `Signature::try_new`, propagating signing backend failures
+  from the generator instead of using panic-only compatibility signing.
+- Added example-local regressions that decode and verify the generated alias
+  proof bundle and parse the generated council envelope JSON before verifying
+  its signature against the manifest digest.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-snapshot-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --example gen_pin_snapshot -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-snapshot-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --example gen_pin_snapshot --no-deps -- -D warnings`
+  - `rustfmt --check crates/iroha_core/examples/gen_pin_snapshot.rs`
+
+## 2026-06-13 Torii routing fixture checked signing
+
+- Routed Torii routing SCCP finality proof fixture signatures and consensus
+  evidence vote fixture signatures through `Signature::try_new`, removing the
+  remaining direct compatibility `Signature::new` calls from
+  `crates/iroha_torii/src/routing.rs`.
+- Added a focused BLS regression proving the checked Torii routing SCCP
+  finality fixture signature verifies, and reran an evidence decode regression
+  that exercises the converted vote-signing helper.
+- Validation:
+  - `cargo test -j 1 -p iroha_torii routing_sccp_finality_fixture_checked_signature_verifies --lib -- --nocapture`
+    (`1` passed, `2374` filtered out)
+  - `cargo test -j 1 -p iroha_torii decode_evidence_hex_accepts_plain_and_prefixed --lib -- --nocapture`
+    (`1` passed, `2374` filtered out)
+  - `cargo fmt --package iroha_torii -- --check`
+  - `cargo clippy -j 1 -p iroha_torii --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 Sumeragi delivered-pending named branch classifier
+
+- Added
+  `DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteBranchClassifier`
+  to the Sumeragi formal model and wired it into the fast, deep, and TLC-fast
+  configs. The theorem composes the named delivered-pending complete wait-state
+  closure with the non-stuttering action classifier and stutter preservation:
+  every `[Next]_vars` step from the named wait state is either exactly one
+  covered consensus/commit-vote/timer/GST branch with RBC/fault actions closed,
+  or an unchanged stutter that preserves the full delivered-pending wait-state
+  envelope.
+- Updated the Sumeragi formal README and roadmap proof inventory for the new
+  named complete branch-classifier obligation.
+- Validation:
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, depth `24`,
+    `15` temporal branches, no errors)
+
+## 2026-06-13 Snapshot digest checked signing
+
+- Routed snapshot digest signature-file generation through
+  `Signature::try_new`, returning `TryWriteError::Signing` on backend signing
+  failure instead of using the panic-only compatibility signer during snapshot
+  writes.
+- Added snapshot regressions that verify the generated signature file against
+  the stored digest and reject a wrong-key signature over an otherwise matching
+  digest; reran touched corrupt-snapshot read regressions.
+- Validation:
+  - `cargo test -j 1 -p iroha_core snapshot_read_rejects_wrong_key_signature_for_matching_digest --lib -- --nocapture`
+    (`1` passed, `4951` filtered out)
+  - `cargo test -j 1 -p iroha_core snapshot_write_signature_file_uses_checked_signing_and_verifies_digest --lib -- --nocapture`
+    (`1` passed, `4951` filtered out)
+  - `cargo test -j 1 -p iroha_core snapshot_read_falls_back_to_tmp_on_corrupt_main --lib -- --nocapture`
+    (`1` passed, `4951` filtered out)
+  - `cargo test -j 1 -p iroha_core cannot_parse_snapshot_on_read_is_error --lib -- --nocapture`
+    (`1` passed, `4951` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha_core/src/snapshot.rs`
+
+## 2026-06-13 Transaction-size example checked signing
+
+- Routed the `iroha_core` `tx_size` example transaction builder through
+  `TransactionBuilder::try_sign`, so the example exits with a signing error
+  instead of using the panic-only compatibility signer.
+- Factored transaction construction into a shared helper and added an
+  example-local regression proving the checked signature verifies.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-size-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --example tx_size -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-tx-size-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --example tx_size --no-deps -- -D warnings`
+  - `rustfmt --check crates/iroha_core/examples/tx_size.rs`
+
+## 2026-06-13 Confidential wallet fixture exporter checked signing
+
+- Routed the confidential wallet fixture exporter shield, ZK transfer, and
+  unshield transactions through `TransactionBuilder::try_sign`, and propagated
+  fixture/proof construction errors from `main` instead of relying on
+  compatibility signing or `expect` paths.
+- Added example-local regressions that verify regenerated fixture signatures,
+  reject tampered transaction signatures, and reject malformed proof backend
+  identifiers before building proof attachments.
+- Validation:
+  - `cargo test -p iroha_data_model --example export_confidential_wallet_fixtures`
+    (`3` passed)
+  - `cargo clippy -j 1 -p iroha_data_model --example export_confidential_wallet_fixtures --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha_data_model/examples/export_confidential_wallet_fixtures.rs`
+
+## 2026-06-13 SCCP source-proof fixture checked signing
+
+- Routed SCCP ETH sync-committee, TON validator, Solana vote, and Nexus
+  finality proof fixture signatures through a shared
+  `Signature::try_new` helper, removing the remaining direct compatibility
+  `Signature::new` calls from `iroha_sccp` fixture evidence generation.
+- Added a focused regression proving the checked fixture signature verifies, and
+  reran the source-adapter proof sweep plus the BLS-gated Nexus finality proof
+  verifier to cover the changed fixture builders.
+- Validation:
+  - `cargo test -j 1 -p iroha_sccp sccp_fixture_checked_signature_verifies --lib -- --nocapture`
+    (`1` passed, `258` filtered out)
+  - `cargo test -j 1 -p iroha_sccp source_adapter_verifies --lib -- --nocapture`
+    (`9` passed, `250` filtered out)
+  - `cargo test -j 1 -p iroha_sccp --features bls finality_proof_crypto_accepts_bls_commit_qc_and_rejects_tampering --lib -- --nocapture`
+    (`1` passed, `258` filtered out)
+  - `cargo fmt --package iroha_sccp -- --check`
+  - `cargo clippy -j 1 -p iroha_sccp --features bls --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-13 Nexus app transfer example checked signing
+
+- Routed the Nexus app transfer example wallet signature path through
+  `Signature::try_new`, returning the example's existing `NexusAppError` on
+  malformed payload hashes or backend signing failure instead of using the
+  panic-only compatibility signer.
+- Added example-local regressions that build a transfer draft, verify the
+  checked demo wallet signature against the canonical payload hash, and reject
+  non-hex or wrong-length payload hashes before signing.
+- Validation:
+  - `cargo test -p iroha --example nexus_app_transfer`
+    (`4` passed)
+  - `cargo clippy -j 1 -p iroha --example nexus_app_transfer --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha/examples/nexus_app_transfer.rs`
+
+## 2026-06-13 Norito fixture exporter checked signing
+
+- Routed `scripts/export_norito_fixtures` transaction payload signing through
+  `TransactionBuilder::try_sign`, and routed its hand-reencoded payload-hash
+  signature through `Signature::try_new`, so backend signing failures return
+  contextual exporter errors instead of using panic-only compatibility wrappers.
+- Added regressions proving the regenerated signed fixture verifies against the
+  canonical payload and adversarial coverage for truncated varints, oversized
+  envelope fields, and trailing signed-envelope bytes.
+- Pinned the standalone exporter `time` dependency to `=0.3.47`, matching the
+  repository lock; without a tracked script lockfile, Cargo selected `0.3.48`
+  during validation and hit an upstream coherence conflict while compiling
+  `iroha_data_model`.
+- Validation:
+  - `cargo test --manifest-path scripts/export_norito_fixtures/Cargo.toml`
+    (`15` main exporter tests and `1` trigger helper test passed; the ignored
+    standalone `scripts/export_norito_fixtures/Cargo.lock` generated by Cargo
+    was removed after the run)
+  - `cargo fmt --manifest-path scripts/export_norito_fixtures/Cargo.toml --all`
+  - `git diff --check -- scripts/export_norito_fixtures/Cargo.toml scripts/export_norito_fixtures/src/main.rs`
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-13 Swift parity fixture checked signing
+
+- Routed the Connect Norito bridge Swift parity fixture generator through
+  `TransactionBuilder::try_sign` so backend signing failures become contextual
+  generator errors instead of compatibility-wrapper panics.
+- Extended the existing payload-builder regression to verify the checked fixture
+  transaction signature.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-swift-parity-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p connect_norito_bridge --bin swift_parity_regen payload_builder_sets_nonce_and_ttl -- --nocapture`
+    (`1` passed, `2` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-swift-parity-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p connect_norito_bridge --bin swift_parity_regen --no-deps -- -D warnings`
+  - `rustfmt --check crates/connect_norito_bridge/src/bin/swift_parity_regen.rs`
+
+## 2026-06-13 Offline vector issuer certificate checked signing
+
+- Routed Offline V1 and V2 interop vector key-certificate issuer signatures
+  through `Signature::try_new`, returning generator errors on backend signing
+  failure instead of using the panic-only compatibility signer.
+- Added focused regressions in both feature-gated vector generators proving the
+  generated issuer signature verifies against the certificate signing bytes and
+  that the exported base64 fields match the checked signature payload.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model --features test-fixtures,transparent_api signed_certificate_issuer_signature_uses_checked_signing_and_verifies --bins -- --nocapture`
+    (`2` passed across `offline_vectors` and `offline_v2_vectors`)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors --bin offline_v2_vectors --no-deps -- -D warnings`
+  - Broad `cargo clippy ... --bins` was not used as validation because the
+    unrelated `axt_fixtures` bin currently stops on an existing
+    `clippy::too_many_lines` lint before these vector bins.
+
+## 2026-06-13 JS host SM2 checked signing
+
+- Routed the exported JavaScript host `sm2_sign` N-API binding through
+  `Sm2PrivateKey::try_sign`, returning an N-API error on backend signing
+  failure instead of using the panic-only compatibility signer.
+- Routed `sm2_fixture_from_seed` fixture signing through the same checked SM2
+  backend path while preserving the canonical fixture fields.
+- Added a focused regression that signs through the exported SM2 binding and
+  verifies the signature through the exported verifier.
+- Validation:
+  - `cargo test -j 1 -p iroha_js_host sm2_sign_uses_checked_signing_and_verifies --lib -- --nocapture`
+    (`1` passed, `162` filtered out)
+  - `cargo fmt --package iroha_js_host -- --check`
+  - `cargo clippy -j 1 -p iroha_js_host --lib --no-deps -- -D warnings`
+
+## 2026-06-13 Test-network genesis metadata checked signing
+
+- Routed `iroha_test_network` consensus-handshake metadata override genesis
+  transactions through `TransactionBuilder::try_sign`, and rebuilt placeholder,
+  cached, and result-bearing genesis block signatures through
+  `SignatureOf::try_from_hash` instead of direct compatibility construction.
+- Added a focused regression that appends the override transaction, verifies the
+  checked transaction signature, and verifies the rebuilt genesis block
+  signature.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-test-network-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_test_network append_consensus_handshake_meta_override_checked_signing_verifies --lib -- --nocapture`
+    (`1` passed, `213` filtered out)
+  - `rustfmt --check crates/iroha_test_network/src/config.rs crates/iroha_test_network/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-test-network-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_test_network --lib --no-deps -- -D warnings`
+
+## 2026-06-13 Sumeragi consensus wire-message checked signing
+
+- Routed local native AMX vote, merge-committee, and RBC ready/deliver
+  wire-message signatures through `Signature::try_new` via a shared private
+  consensus preimage helper. Signing backend failures now log and skip local
+  message emission instead of constructing signatures through the panic-only
+  compatibility constructor.
+- Added a focused BLS verification regression for the checked consensus preimage
+  helper.
+- Validation:
+  - `cargo test -j 1 -p iroha_core consensus_preimage_checked_signature_verifies --lib -- --nocapture`
+    (`1` passed, `4949` filtered out)
+  - `cargo fmt --package iroha_core -- --check`
+  - `cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_core/src/sumeragi/main_loop.rs status.md roadmap.md docs/source/engineering_backlog.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_core/src/sumeragi/main_loop.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (no matches)
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-13 SCCP verifier source-gate audit-field redaction
+
+- Hardened strict release-bundle verification for source-adapter gate
+  `audit_hashes` in both public cryptographic-evidence rows and embedded lane
+  summaries: secret-like unexpected audit-field names now report a fixed
+  sensitive-name category instead of echoing the operator-controlled key.
+- Preserved safe public unexpected names such as `operator_override` in the
+  verifier diagnostics, while malformed audit-key names continue through the
+  existing category-only audit-key classifier.
+- Added direct verifier coverage for redacted `secret-token-audit-field` and
+  visible `operator_override` diagnostics across both crypto rows and lane
+  source-gate summaries, then pinned the helper and regression sentinels in the
+  public crypto-evidence binding source inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_source_adapter_gate_policy_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_redacts_sensitive_source_adapter_gate_audit_fields -q`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_public_crypto_evidence_binding_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+
+## 2026-06-13 SCCP source-gate audit-field redaction
+
+- Hardened all-lanes release-checklist source-adapter gate validation so
+  unexpected `audit_hashes` keys with secret-like, malformed, or non-string
+  names become fixed category blockers instead of echoing operator-controlled
+  field names. Safe public unknown names such as `operator_override` still
+  render literally for debugging.
+- Kept source-adapter gate role-replay checks on the expected audit fields only,
+  so rejected unknown audit keys cannot reappear through role-hash labels even
+  when they reuse another governed evidence hash.
+- Added adversarial release-checklist coverage for
+  `secret-token-audit-field`, `route|operator-audit-field`, a non-string audit
+  key, and a secret-like replayed audit key, then pinned the classifier and
+  sentinels in the readiness and strict bundle source inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_release_checklist_requires_source_gate_hash_and_audits pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_release_checklist_redacts_unsafe_source_gate_audit_fields pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay -q`
+    (`3` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolean_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_all_lanes_release_checklist_exact_boolean_gate_inventory -q`
+    (`2` passed)
+  - `python3 -m compileall -q scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `git diff --check -- scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py status.md roadmap.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py status.md roadmap.md`
+    (no matches)
+  - `git diff --quiet -- Cargo.lock`
+
+## 2026-06-13 SCCP launch-scope note
+
+- Reconfirmed that SCCP will not support Sub&#115;trate/Pol&#107;adot networks for
+  now. The active launch scope remains Ethereum, BSC, Solana, TON, and TRON.
+- Keep public discovery, proof manifests, SDK helpers, route-readiness checks,
+  and operator-facing release notes limited to those launch lanes unless
+  governance explicitly re-opens the excluded network family.
+
 ## 2026-06-13 SCCP direct evidence unknown-field redaction
 
 - Hardened direct all-lanes record validation so unknown record fields with
@@ -98,7 +1371,13 @@ Last updated: 2026-06-13
   `SignedBlock::genesis_with_da_proof_policies(...)` as compatibility wrappers
   and added a regression proving checked genesis signing matches the wrapper,
   verifies, and rejects empty transaction sets cleanly.
-- Validation: pending.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model try_genesis_with_da_proof_policies_matches_compatibility_signature_and_rejects_empty --lib -- --nocapture`
+    (`1` passed, `1538` filtered out)
+  - `cargo test -j 1 -p iroha_data_model genesis_can_override_da_proof_policies --lib -- --nocapture`
+    (`1` passed, `1539` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
 
 ## 2026-06-12 SCCP source-profile role-pollution coverage
 
@@ -373,7 +1652,17 @@ Last updated: 2026-06-13
   the progress/timer surface exposed.
 - Updated the Sumeragi formal README and roadmap proof inventory for the new
   delivery-entry complete continuation aggregate obligation.
-- Validation: pending.
+- Validation:
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, `9873` TLC mutation modes)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states found, depth `24`,
+    `15` temporal branches, no errors)
 
 ## 2026-06-12 SCCP TON live parser-cause redaction
 
@@ -783,11 +2072,21 @@ Last updated: 2026-06-13
   - `git diff --check -- ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_csharp_sdk.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js .github/workflows/pr_kagemusha_payload_bench.yml roadmap.md status.md python/iroha_python/tests/crypto_algorithms_test.py`
   - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_csharp_sdk.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js .github/workflows/pr_kagemusha_payload_bench.yml roadmap.md status.md python/iroha_python/tests/crypto_algorithms_test.py`
     (no matches)
-- Local validation note: the full `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
-  text/artifact guard still fails after the recursive SDK text checks because
-  `dist/NoritoBridge.xcframework/ios-arm64/libNoritoBridge.a` is missing
-  `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`;
-  this slice did not regenerate `dist/` artifacts.
+- Follow-up artifact validation:
+  - `scripts/build_norito_xcframework.sh` rebuilt the ignored local
+    `dist/NoritoBridge.xcframework` and `dist/NoritoBridge.artifacts.json`.
+  - `nm -gU` confirmed the refreshed iOS, simulator, and macOS slices export
+    `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`
+    and `connect_norito_kagemusha_verify_recursive_compact_payment_token`.
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+    (`recursive Kagemusha ABI-6/ABI-7 SDK parity is consistent`; NoritoBridge
+    recursive Kagemusha symbols are present)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-zero-envelope-pallas-guard`
+    (detected injected native bridge guard drift)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-verifier-backend-test-filter-script`
+    (detected injected verifier-backend filter drift)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-filter-script`
+    (detected injected broader C# filter drift)
 
 ## 2026-06-12 SCCP TRON constant-call parser-cause redaction
 
@@ -2277,6 +3576,17 @@ Last updated: 2026-06-13
     (`2` passed, `254` filtered out; one pre-existing `iroha_crypto` unused-method warning surfaced from the dirty worktree)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-tron-recovery CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp tron_source_verifier_material_requires_deployed_mainnet_profile_hashes --lib -- --nocapture`
     (`1` passed, `255` filtered out)
+
+## 2026-06-12 CLI all-zero seed fixture cleanup
+
+- Replaced the CLI offline fallback signer seed and remaining CLI unit-test
+  Ed25519 fixture seeds that used all-zero material with deterministic nonzero
+  seed material, matching the crypto layer's all-zero seed rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_cli` (`cargo` emitted the existing
+    `MlDsaSecretKey::sign` unused warning; all `iroha_cli` unit and smoke
+    tests passed)
 
 ## 2026-06-12 user config test seed regression
 

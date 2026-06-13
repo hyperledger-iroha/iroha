@@ -3584,6 +3584,13 @@ fn app_api_transaction_signing_error(context: &str, err: impl fmt::Display) -> E
 }
 
 #[cfg(feature = "app_api")]
+fn app_api_scaffold_key_error(context: &str, err: impl fmt::Display) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+        "failed to generate {context} scaffold key: {err}",
+    )))
+}
+
+#[cfg(feature = "app_api")]
 fn sign_app_api_transaction(
     builder: TransactionBuilder,
     private_key: &iroha_crypto::PrivateKey,
@@ -3592,6 +3599,18 @@ fn sign_app_api_transaction(
     builder
         .try_sign(private_key)
         .map_err(|err| app_api_transaction_signing_error(context, err))
+}
+
+#[cfg(feature = "app_api")]
+fn sign_app_api_scaffold_transaction(
+    builder: TransactionBuilder,
+    authority: AccountId,
+    context: &str,
+) -> Result<SignedTransaction> {
+    let scaffold_key = iroha_crypto::KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .map_err(|err| app_api_scaffold_key_error(context, err))?;
+    sign_app_api_transaction(builder, scaffold_key.private_key(), context)
+        .map(|tx| tx.with_authority(authority))
 }
 
 #[cfg(all(feature = "app_api", test))]
@@ -3619,6 +3638,33 @@ mod app_api_transaction_signing_tests {
         assert_eq!(tx.authority(), &authority);
         tx.verify_signature()
             .expect("checked signed transaction should verify");
+    }
+
+    #[test]
+    fn app_api_scaffold_transaction_preserves_requested_authority() {
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let requested_authority = AccountId::new(
+            KeyPair::from_seed(
+                b"iroha:torii:routing:test:app-api-scaffold-authority".to_vec(),
+                Algorithm::Ed25519,
+            )
+            .public_key()
+            .clone(),
+        );
+        let tx = sign_app_api_scaffold_transaction(
+            TransactionBuilder::new(chain_id, requested_authority.clone()).with_instructions([
+                Log::new(Level::INFO, "app-api scaffold transaction".to_owned()),
+            ]),
+            requested_authority.clone(),
+            "/test/app-api-scaffold",
+        )
+        .expect("checked scaffold signing should succeed");
+
+        assert_eq!(tx.authority(), &requested_authority);
+        tx.verify_signature()
+            .expect_err("scaffold signature is not meant to verify after restoring authority");
     }
 }
 
@@ -9888,6 +9934,14 @@ mod sccp_message_backend_tests {
         .expect("encode finality proof")
     }
 
+    fn checked_routing_fixture_signature(
+        keypair: &KeyPair,
+        message: &[u8],
+        context: &'static str,
+    ) -> Signature {
+        Signature::try_new(keypair.private_key(), message).expect(context)
+    }
+
     fn sample_signed_sccp_finality_proof_bytes(commitment_root: [u8; 32]) -> Vec<u8> {
         let keypairs = [
             KeyPair::from_seed(vec![1; 32], Algorithm::BlsNormal),
@@ -9925,7 +9979,13 @@ mod sccp_message_backend_tests {
         let message = iroha_sccp::nexus_commit_vote_preimage(&chain_id, &commit_qc);
         let signatures = keypairs
             .iter()
-            .map(|keypair| Signature::new(keypair.private_key(), &message))
+            .map(|keypair| {
+                checked_routing_fixture_signature(
+                    keypair,
+                    &message,
+                    "sign Torii routing SCCP finality fixture",
+                )
+            })
             .collect::<Vec<_>>();
         let signature_refs = signatures
             .iter()
@@ -9945,6 +10005,21 @@ mod sccp_message_backend_tests {
             commit_qc,
         })
         .expect("encode signed finality proof")
+    }
+
+    #[test]
+    fn routing_sccp_finality_fixture_checked_signature_verifies() {
+        let keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::BlsNormal);
+        let message = b"torii routing sccp finality fixture";
+        let signature = checked_routing_fixture_signature(
+            &keypair,
+            message,
+            "sign Torii routing SCCP fixture test payload",
+        );
+
+        signature
+            .verify(keypair.public_key(), message)
+            .expect("checked Torii routing SCCP fixture signature verifies");
     }
 
     fn sample_burn_bundle_for_domains(
@@ -15946,7 +16021,8 @@ mod evidence_submit_tests {
             bls_sig: Vec::new(),
         };
         let preimage = iroha_core::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = Signature::try_new(keypair.private_key(), &preimage)
+            .expect("sign Torii routing evidence fixture vote");
         let payload = signature.payload().to_vec();
         vote.bls_sig = payload;
         vote
@@ -19052,12 +19128,11 @@ async fn submit_contract_call_request(
         let signature_bytes = base64::engine::general_purpose::STANDARD
             .decode(signature_b64.as_bytes())
             .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-        let mut tx = builder
-            .sign(
-                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-                    .private_key(),
-            )
-            .with_authority(authority.clone().into());
+        let mut tx = sign_app_api_scaffold_transaction(
+            builder,
+            authority.clone().into(),
+            "contract call detached signature",
+        )?;
         let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
@@ -19092,11 +19167,7 @@ async fn submit_contract_call_request(
         });
     }
 
-    let scaffold_key =
-        iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-    let tx = builder
-        .sign(scaffold_key.private_key())
-        .with_authority(authority.into());
+    let tx = sign_app_api_scaffold_transaction(builder, authority.into(), "contract call")?;
     let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
     let signed_transaction_b64 =
         base64::engine::general_purpose::STANDARD.encode(norito::codec::Encode::encode(&tx));
@@ -19477,132 +19548,129 @@ pub async fn handle_post_bridge_proof_submit(
             instruction,
         ])));
 
-    let response =
-        if let Some(private_key) = private_key {
-            let tx = sign_app_api_transaction(builder, &private_key.0, "/v1/bridge/proofs/submit")?;
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                tx,
-                telemetry,
-                "/v1/bridge/proofs/submit",
-            )
-            .await?;
-            BridgeProofSubmitResponseDto {
-                ok: true,
-                submitted: true,
-                proof_kind: proof_kind.to_owned(),
-                backend,
-                counterparty_domain,
-                counterparty_chain: counterparty_chain.clone(),
-                manifest_hash_hex,
-                range_start_height,
-                range_end_height,
-                creation_time_ms,
-                tx_hash_hex: Some(tx_hash_hex),
-                transaction_scaffold_b64: None,
-                signed_transaction_b64: None,
-                signing_message_b64: None,
-            }
-        } else if public_key_hex.is_some() || signature_b64.is_some() {
-            let public_key_hex = public_key_hex
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-            let signature_b64 = signature_b64
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-            let public_key_bytes = hex::decode(public_key_hex)
-                .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let public_key = iroha_crypto::PublicKey::from_bytes(
-                iroha_crypto::Algorithm::Ed25519,
-                &public_key_bytes,
-            )
+    let response = if let Some(private_key) = private_key {
+        let tx = sign_app_api_transaction(builder, &private_key.0, "/v1/bridge/proofs/submit")?;
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        handle_transaction_with_metrics(
+            chain_id,
+            queue,
+            state,
+            tx,
+            telemetry,
+            "/v1/bridge/proofs/submit",
+        )
+        .await?;
+        BridgeProofSubmitResponseDto {
+            ok: true,
+            submitted: true,
+            proof_kind: proof_kind.to_owned(),
+            backend,
+            counterparty_domain,
+            counterparty_chain: counterparty_chain.clone(),
+            manifest_hash_hex,
+            range_start_height,
+            range_end_height,
+            creation_time_ms,
+            tx_hash_hex: Some(tx_hash_hex),
+            transaction_scaffold_b64: None,
+            signed_transaction_b64: None,
+            signing_message_b64: None,
+        }
+    } else if public_key_hex.is_some() || signature_b64.is_some() {
+        let public_key_hex = public_key_hex
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+        let signature_b64 = signature_b64
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+        let public_key_bytes = hex::decode(public_key_hex)
             .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let expected_authority = dm::AccountId::new(public_key.clone());
-            if authority != expected_authority {
-                return Err(conversion_error(
-                    "public_key_hex does not match authority".to_owned(),
-                ));
-            }
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(signature_b64.as_bytes())
-                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-            let mut tx = builder
-                .sign(
-                    iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-                        .private_key(),
-                )
-                .with_authority(authority.clone().into());
-            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
-            tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
+        let public_key = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            &public_key_bytes,
+        )
+        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+        let expected_authority = dm::AccountId::new(public_key.clone());
+        if authority != expected_authority {
+            return Err(conversion_error(
+                "public_key_hex does not match authority".to_owned(),
+            ));
+        }
+        let signature_bytes = base64::engine::general_purpose::STANDARD
+            .decode(signature_b64.as_bytes())
+            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let mut tx = sign_app_api_scaffold_transaction(
+            builder,
+            authority.clone().into(),
+            "bridge proof detached signature",
+        )?;
+        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
+        tx.set_signature(
+            iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
                     iroha_data_model::transaction::signed::TransactionPayload,
                 >::from_signature(signature),
-            ));
-            tx.verify_signature().map_err(|err| {
-                conversion_error(format!(
-                    "bridge proof detached signature verification failed: {err}"
-                ))
-            })?;
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                tx,
-                telemetry,
-                "/v1/bridge/proofs/submit",
-            )
-            .await?;
-            BridgeProofSubmitResponseDto {
-                ok: true,
-                submitted: true,
-                proof_kind: proof_kind.to_owned(),
-                backend,
-                counterparty_domain,
-                counterparty_chain: counterparty_chain.clone(),
-                manifest_hash_hex,
-                range_start_height,
-                range_end_height,
-                creation_time_ms,
-                tx_hash_hex: Some(tx_hash_hex),
-                transaction_scaffold_b64: None,
-                signed_transaction_b64: None,
-                signing_message_b64: None,
-            }
-        } else {
-            let scaffold_key =
-                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-            let tx = builder
-                .sign(scaffold_key.private_key())
-                .with_authority(authority.clone().into());
-            let signed_transaction_b64 = base64::engine::general_purpose::STANDARD
-                .encode(norito::codec::Encode::encode(&tx));
-            let signing_message_b64 = base64::engine::general_purpose::STANDARD
-                .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
-            BridgeProofSubmitResponseDto {
-                ok: true,
-                submitted: false,
-                proof_kind: proof_kind.to_owned(),
-                backend,
-                counterparty_domain,
-                counterparty_chain,
-                manifest_hash_hex,
-                range_start_height,
-                range_end_height,
-                creation_time_ms,
-                tx_hash_hex: None,
-                transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
-                signed_transaction_b64: Some(signed_transaction_b64),
-                signing_message_b64: Some(signing_message_b64),
-            }
-        };
+            ),
+        );
+        tx.verify_signature().map_err(|err| {
+            conversion_error(format!(
+                "bridge proof detached signature verification failed: {err}"
+            ))
+        })?;
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        handle_transaction_with_metrics(
+            chain_id,
+            queue,
+            state,
+            tx,
+            telemetry,
+            "/v1/bridge/proofs/submit",
+        )
+        .await?;
+        BridgeProofSubmitResponseDto {
+            ok: true,
+            submitted: true,
+            proof_kind: proof_kind.to_owned(),
+            backend,
+            counterparty_domain,
+            counterparty_chain: counterparty_chain.clone(),
+            manifest_hash_hex,
+            range_start_height,
+            range_end_height,
+            creation_time_ms,
+            tx_hash_hex: Some(tx_hash_hex),
+            transaction_scaffold_b64: None,
+            signed_transaction_b64: None,
+            signing_message_b64: None,
+        }
+    } else {
+        let tx =
+            sign_app_api_scaffold_transaction(builder, authority.clone().into(), "bridge proof")?;
+        let signed_transaction_b64 =
+            base64::engine::general_purpose::STANDARD.encode(norito::codec::Encode::encode(&tx));
+        let signing_message_b64 = base64::engine::general_purpose::STANDARD
+            .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
+        BridgeProofSubmitResponseDto {
+            ok: true,
+            submitted: false,
+            proof_kind: proof_kind.to_owned(),
+            backend,
+            counterparty_domain,
+            counterparty_chain,
+            manifest_hash_hex,
+            range_start_height,
+            range_end_height,
+            creation_time_ms,
+            tx_hash_hex: None,
+            transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
+            signed_transaction_b64: Some(signed_transaction_b64),
+            signing_message_b64: Some(signing_message_b64),
+        }
+    };
 
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
@@ -19730,150 +19798,147 @@ pub async fn handle_post_bridge_message_submit(
         .with_metadata(metadata_with_default_gas_asset(state.as_ref()))
         .with_executable(dm::Executable::Instructions(ConstVec::from(instructions)));
 
-    let response =
-        if let Some(private_key) = private_key {
-            let tx = sign_app_api_transaction(builder, &private_key.0, "/v1/bridge/messages")?;
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id.clone(),
-                queue.clone(),
-                state.clone(),
-                tx,
-                telemetry.clone(),
-                "/v1/bridge/messages",
-            )
-            .await?;
-            BridgeMessageSubmitResponseDto {
-                ok: true,
-                submitted: true,
-                message_kind: proof_kind.to_owned(),
-                message_id_hex,
-                backend,
-                counterparty_domain,
-                counterparty_chain: counterparty_chain.to_owned(),
-                manifest_hash_hex,
-                range_start_height,
-                range_end_height,
-                creation_time_ms,
-                receipt_lane,
-                receipt_direction,
-                settlement_contract_address: settlement_contract_address.clone(),
-                settlement_entrypoint: settlement_entrypoint.clone(),
-                settlement_route: settlement_route.clone(),
-                tx_hash_hex: Some(tx_hash_hex),
-                transaction_scaffold_b64: None,
-                signed_transaction_b64: None,
-                signing_message_b64: None,
-            }
-        } else if public_key_hex.is_some() || signature_b64.is_some() {
-            let public_key_hex = public_key_hex
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-            let signature_b64 = signature_b64
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-            let public_key_bytes = hex::decode(public_key_hex)
-                .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let public_key = iroha_crypto::PublicKey::from_bytes(
-                iroha_crypto::Algorithm::Ed25519,
-                &public_key_bytes,
-            )
+    let response = if let Some(private_key) = private_key {
+        let tx = sign_app_api_transaction(builder, &private_key.0, "/v1/bridge/messages")?;
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        handle_transaction_with_metrics(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            tx,
+            telemetry.clone(),
+            "/v1/bridge/messages",
+        )
+        .await?;
+        BridgeMessageSubmitResponseDto {
+            ok: true,
+            submitted: true,
+            message_kind: proof_kind.to_owned(),
+            message_id_hex,
+            backend,
+            counterparty_domain,
+            counterparty_chain: counterparty_chain.to_owned(),
+            manifest_hash_hex,
+            range_start_height,
+            range_end_height,
+            creation_time_ms,
+            receipt_lane,
+            receipt_direction,
+            settlement_contract_address: settlement_contract_address.clone(),
+            settlement_entrypoint: settlement_entrypoint.clone(),
+            settlement_route: settlement_route.clone(),
+            tx_hash_hex: Some(tx_hash_hex),
+            transaction_scaffold_b64: None,
+            signed_transaction_b64: None,
+            signing_message_b64: None,
+        }
+    } else if public_key_hex.is_some() || signature_b64.is_some() {
+        let public_key_hex = public_key_hex
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+        let signature_b64 = signature_b64
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+        let public_key_bytes = hex::decode(public_key_hex)
             .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let expected_authority = dm::AccountId::new(public_key.clone());
-            if authority != expected_authority {
-                return Err(conversion_error(
-                    "public_key_hex does not match authority".to_owned(),
-                ));
-            }
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(signature_b64.as_bytes())
-                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-            let mut tx = builder
-                .sign(
-                    iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-                        .private_key(),
-                )
-                .with_authority(authority.clone().into());
-            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
-            tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
+        let public_key = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            &public_key_bytes,
+        )
+        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+        let expected_authority = dm::AccountId::new(public_key.clone());
+        if authority != expected_authority {
+            return Err(conversion_error(
+                "public_key_hex does not match authority".to_owned(),
+            ));
+        }
+        let signature_bytes = base64::engine::general_purpose::STANDARD
+            .decode(signature_b64.as_bytes())
+            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let mut tx = sign_app_api_scaffold_transaction(
+            builder,
+            authority.clone().into(),
+            "bridge message detached signature",
+        )?;
+        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
+        tx.set_signature(
+            iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
                     iroha_data_model::transaction::signed::TransactionPayload,
                 >::from_signature(signature),
-            ));
-            tx.verify_signature().map_err(|err| {
-                conversion_error(format!(
-                    "bridge message detached signature verification failed: {err}"
-                ))
-            })?;
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id.clone(),
-                queue.clone(),
-                state.clone(),
-                tx,
-                telemetry.clone(),
-                "/v1/bridge/messages",
-            )
-            .await?;
-            BridgeMessageSubmitResponseDto {
-                ok: true,
-                submitted: true,
-                message_kind: proof_kind.to_owned(),
-                message_id_hex,
-                backend,
-                counterparty_domain,
-                counterparty_chain: counterparty_chain.to_owned(),
-                manifest_hash_hex,
-                range_start_height,
-                range_end_height,
-                creation_time_ms,
-                receipt_lane,
-                receipt_direction,
-                settlement_contract_address: settlement_contract_address.clone(),
-                settlement_entrypoint: settlement_entrypoint.clone(),
-                settlement_route: settlement_route.clone(),
-                tx_hash_hex: Some(tx_hash_hex),
-                transaction_scaffold_b64: None,
-                signed_transaction_b64: None,
-                signing_message_b64: None,
-            }
-        } else {
-            let scaffold_key =
-                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-            let tx = builder
-                .sign(scaffold_key.private_key())
-                .with_authority(authority.clone().into());
-            let signed_transaction_b64 = base64::engine::general_purpose::STANDARD
-                .encode(norito::codec::Encode::encode(&tx));
-            let signing_message_b64 = base64::engine::general_purpose::STANDARD
-                .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
-            BridgeMessageSubmitResponseDto {
-                ok: true,
-                submitted: false,
-                message_kind: proof_kind.to_owned(),
-                message_id_hex,
-                backend,
-                counterparty_domain,
-                counterparty_chain: counterparty_chain.to_owned(),
-                manifest_hash_hex,
-                range_start_height,
-                range_end_height,
-                creation_time_ms,
-                receipt_lane,
-                receipt_direction,
-                settlement_contract_address,
-                settlement_entrypoint,
-                settlement_route,
-                tx_hash_hex: None,
-                transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
-                signed_transaction_b64: Some(signed_transaction_b64),
-                signing_message_b64: Some(signing_message_b64),
-            }
-        };
+            ),
+        );
+        tx.verify_signature().map_err(|err| {
+            conversion_error(format!(
+                "bridge message detached signature verification failed: {err}"
+            ))
+        })?;
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        handle_transaction_with_metrics(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            tx,
+            telemetry.clone(),
+            "/v1/bridge/messages",
+        )
+        .await?;
+        BridgeMessageSubmitResponseDto {
+            ok: true,
+            submitted: true,
+            message_kind: proof_kind.to_owned(),
+            message_id_hex,
+            backend,
+            counterparty_domain,
+            counterparty_chain: counterparty_chain.to_owned(),
+            manifest_hash_hex,
+            range_start_height,
+            range_end_height,
+            creation_time_ms,
+            receipt_lane,
+            receipt_direction,
+            settlement_contract_address: settlement_contract_address.clone(),
+            settlement_entrypoint: settlement_entrypoint.clone(),
+            settlement_route: settlement_route.clone(),
+            tx_hash_hex: Some(tx_hash_hex),
+            transaction_scaffold_b64: None,
+            signed_transaction_b64: None,
+            signing_message_b64: None,
+        }
+    } else {
+        let tx =
+            sign_app_api_scaffold_transaction(builder, authority.clone().into(), "bridge message")?;
+        let signed_transaction_b64 =
+            base64::engine::general_purpose::STANDARD.encode(norito::codec::Encode::encode(&tx));
+        let signing_message_b64 = base64::engine::general_purpose::STANDARD
+            .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
+        BridgeMessageSubmitResponseDto {
+            ok: true,
+            submitted: false,
+            message_kind: proof_kind.to_owned(),
+            message_id_hex,
+            backend,
+            counterparty_domain,
+            counterparty_chain: counterparty_chain.to_owned(),
+            manifest_hash_hex,
+            range_start_height,
+            range_end_height,
+            creation_time_ms,
+            receipt_lane,
+            receipt_direction,
+            settlement_contract_address,
+            settlement_entrypoint,
+            settlement_route,
+            tx_hash_hex: None,
+            transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
+            signed_transaction_b64: Some(signed_transaction_b64),
+            signing_message_b64: Some(signing_message_b64),
+        }
+    };
 
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
@@ -23459,7 +23524,8 @@ mod multisig_selector_tests {
         let filler_members = (0..160_u16)
             .map(|seed| {
                 let mut material = [0_u8; 32];
-                material[..2].copy_from_slice(&seed.to_le_bytes());
+                material[0] = 0xA5;
+                material[1..3].copy_from_slice(&seed.to_le_bytes());
                 let key_pair =
                     KeyPair::from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519);
                 MultisigMember::new(key_pair.public_key().clone(), 1).expect("member")
@@ -23489,7 +23555,8 @@ mod multisig_selector_tests {
         let mut signatories = BTreeMap::from([(viewer_id.clone(), 1_u8)]);
         for seed in 0..160_u16 {
             let mut material = [0_u8; 32];
-            material[..2].copy_from_slice(&seed.to_le_bytes());
+            material[0] = 0xA5;
+            material[1..3].copy_from_slice(&seed.to_le_bytes());
             let key_pair = KeyPair::from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519);
             let _ = signatories.insert(dm::AccountId::new(key_pair.public_key().clone()), 1_u8);
         }
@@ -26563,12 +26630,11 @@ pub async fn handle_post_contract_call_multisig_propose(
         let signature_bytes = base64::engine::general_purpose::STANDARD
             .decode(signature_b64.as_bytes())
             .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-        let mut tx = builder
-            .sign(
-                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-                    .private_key(),
-            )
-            .with_authority(signer_account_id.clone().into());
+        let mut tx = sign_app_api_scaffold_transaction(
+            builder,
+            signer_account_id.clone().into(),
+            ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
+        )?;
         let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
@@ -26619,11 +26685,11 @@ pub async fn handle_post_contract_call_multisig_propose(
             signing_message_b64: None,
         }
     } else {
-        let scaffold_key =
-            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let tx = builder
-            .sign(scaffold_key.private_key())
-            .with_authority(signer_account_id.clone().into());
+        let tx = sign_app_api_scaffold_transaction(
+            builder,
+            signer_account_id.clone().into(),
+            ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
+        )?;
         let signing_message_b64 = base64::engine::general_purpose::STANDARD
             .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
         MultisigContractCallResponseDto {
@@ -26731,12 +26797,11 @@ pub async fn handle_post_contract_call_multisig_approve(
             let signature_bytes = base64::engine::general_purpose::STANDARD
                 .decode(signature_b64.as_bytes())
                 .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-            let mut tx = builder
-                .sign(
-                    iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-                        .private_key(),
-                )
-                .with_authority(signer_account_id.clone().into());
+            let mut tx = sign_app_api_scaffold_transaction(
+                builder,
+                signer_account_id.clone().into(),
+                ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
+            )?;
             let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
             tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -26770,11 +26835,11 @@ pub async fn handle_post_contract_call_multisig_approve(
                 signing_message_b64: None,
             }
         } else {
-            let scaffold_key =
-                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-            let tx = builder
-                .sign(scaffold_key.private_key())
-                .with_authority(signer_account_id.into());
+            let tx = sign_app_api_scaffold_transaction(
+                builder,
+                signer_account_id.into(),
+                ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
+            )?;
             let signing_message_b64 = base64::engine::general_purpose::STANDARD
                 .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
             MultisigContractCallResponseDto {
@@ -26917,12 +26982,11 @@ pub async fn handle_post_multisig_cancel(
         let signature_bytes = base64::engine::general_purpose::STANDARD
             .decode(signature_b64.as_bytes())
             .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-        let mut tx = builder
-            .sign(
-                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-                    .private_key(),
-            )
-            .with_authority(signer_account_id.clone().into());
+        let mut tx = sign_app_api_scaffold_transaction(
+            builder,
+            signer_account_id.clone().into(),
+            ENDPOINT_MULTISIG_CANCEL,
+        )?;
         let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
@@ -26976,11 +27040,11 @@ pub async fn handle_post_multisig_cancel(
             signing_message_b64: None,
         }
     } else {
-        let scaffold_key =
-            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let tx = builder
-            .sign(scaffold_key.private_key())
-            .with_authority(signer_account_id.into());
+        let tx = sign_app_api_scaffold_transaction(
+            builder,
+            signer_account_id.into(),
+            ENDPOINT_MULTISIG_CANCEL,
+        )?;
         let signing_message_b64 = base64::engine::general_purpose::STANDARD
             .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
         MultisigCancelResponseDto {
@@ -27082,12 +27146,11 @@ pub async fn handle_post_multisig_propose(
             let signature_bytes = base64::engine::general_purpose::STANDARD
                 .decode(signature_b64.as_bytes())
                 .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-            let mut tx = builder
-                .sign(
-                    iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-                        .private_key(),
-                )
-                .with_authority(signer_account_id.clone().into());
+            let mut tx = sign_app_api_scaffold_transaction(
+                builder,
+                signer_account_id.clone().into(),
+                ENDPOINT_MULTISIG_PROPOSE,
+            )?;
             let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
             tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -27136,11 +27199,11 @@ pub async fn handle_post_multisig_propose(
                 signing_message_b64: None,
             }
         } else {
-            let scaffold_key =
-                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-            let tx = builder
-                .sign(scaffold_key.private_key())
-                .with_authority(signer_account_id.into());
+            let tx = sign_app_api_scaffold_transaction(
+                builder,
+                signer_account_id.into(),
+                ENDPOINT_MULTISIG_PROPOSE,
+            )?;
             let signing_message_b64 = base64::engine::general_purpose::STANDARD
                 .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
             MultisigContractCallResponseDto {
@@ -27242,12 +27305,11 @@ pub async fn handle_post_multisig_approve(
             let signature_bytes = base64::engine::general_purpose::STANDARD
                 .decode(signature_b64.as_bytes())
                 .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-            let mut tx = builder
-                .sign(
-                    iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-                        .private_key(),
-                )
-                .with_authority(signer_account_id.clone().into());
+            let mut tx = sign_app_api_scaffold_transaction(
+                builder,
+                signer_account_id.clone().into(),
+                ENDPOINT_MULTISIG_APPROVE,
+            )?;
             let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
             tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -27281,11 +27343,11 @@ pub async fn handle_post_multisig_approve(
                 signing_message_b64: None,
             }
         } else {
-            let scaffold_key =
-                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-            let tx = builder
-                .sign(scaffold_key.private_key())
-                .with_authority(signer_account_id.into());
+            let tx = sign_app_api_scaffold_transaction(
+                builder,
+                signer_account_id.into(),
+                ENDPOINT_MULTISIG_APPROVE,
+            )?;
             let signing_message_b64 = base64::engine::general_purpose::STANDARD
                 .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
             MultisigContractCallResponseDto {
@@ -46784,7 +46846,7 @@ mod tx_query_integration_smoke {
 
         // Accounts and chain
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_b = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
+        let kp_b = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
         let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_b = dm::AccountId::new(kp_b.public_key().clone());
         // Pre-register the domain and the successful authority (account B).
