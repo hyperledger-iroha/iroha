@@ -413,7 +413,8 @@ fn sign_payload(payload: &[u8], signing_key: &Path) -> Result<SignatureEnvelope>
         )
     })?;
     let key_pair: KeyPair = private_key.clone().into();
-    let signature = Signature::new(key_pair.private_key(), payload);
+    let signature = Signature::try_new(key_pair.private_key(), payload)
+        .map_err(|err| eyre!("failed to sign SNNet-10 drill payload: {err}"))?;
     let (algorithm, public_bytes) = key_pair
         .public_key()
         .try_to_bytes()

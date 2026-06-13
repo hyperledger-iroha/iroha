@@ -119,7 +119,7 @@ pub fn run_i3_bench_suite(options: I3BenchOptions) -> Result<I3BenchReport, Box<
         return Err("sample size must be greater than zero".into());
     }
 
-    let fixtures = BenchFixtures::new();
+    let fixtures = BenchFixtures::new()?;
     let scenarios = vec![
         bench_fee(
             "fee_payer",
@@ -649,7 +649,7 @@ struct BenchFixtures {
 }
 
 impl BenchFixtures {
-    fn new() -> Self {
+    fn new() -> Result<Self, Box<dyn Error>> {
         let mut rng = ChaCha20Rng::from_seed([0x42; 32]);
         let fee_ledger = FeeLedger {
             payer: 1_000_000,
@@ -661,61 +661,78 @@ impl BenchFixtures {
             pending_unbond: 25_000,
             slashed: 0,
         };
-        let proofs = ProofFixtures::new(&mut rng);
+        let proofs = ProofFixtures::new(&mut rng)?;
         let scheduler = scheduler_fixtures(&mut rng);
         let endpoint = ProofEndpointFixture::new(&proofs);
 
-        Self {
+        Ok(Self {
             fee_ledger,
             stake_ledger,
             proofs,
             scheduler,
             endpoint,
-        }
+        })
     }
 }
 
 impl ProofFixtures {
-    fn new(rng: &mut ChaCha20Rng) -> Self {
+    fn new(rng: &mut ChaCha20Rng) -> Result<Self, Box<dyn Error>> {
         let commit_message = random_bytes(rng, 96);
         let attestation_msg = random_bytes(rng, 512);
         let bridge_msg = random_bytes(rng, 256);
 
-        let commit_signatures = (0..16)
+        let commit_signatures = (1_u8..=16)
             .map(|idx| {
                 let mut seed = [0_u8; 32];
                 seed[0] = idx;
-                let pair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
-                let signature = Signature::new(pair.private_key(), &commit_message);
-                ProofSignature {
-                    public_key: pair.public_key().clone(),
-                    signature,
-                    message: commit_message.clone(),
-                }
+                signed_proof(
+                    &checked_seed_keypair(seed.to_vec(), "I3 commit-certificate fixture keypair")?,
+                    &commit_message,
+                    "I3 commit-certificate fixture signature",
+                )
             })
-            .collect();
+            .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
 
-        let attestation_pair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
-        let bridge_pair = KeyPair::from_seed(vec![0xB4; 32], Algorithm::Ed25519);
+        let attestation_pair =
+            checked_seed_keypair(vec![0xA5; 32], "I3 attestation fixture keypair")?;
+        let bridge_pair = checked_seed_keypair(vec![0xB4; 32], "I3 bridge fixture keypair")?;
 
-        let attestation = ProofSignature {
-            public_key: attestation_pair.public_key().clone(),
-            signature: Signature::new(attestation_pair.private_key(), &attestation_msg),
-            message: attestation_msg,
-        };
-        let bridge = ProofSignature {
-            public_key: bridge_pair.public_key().clone(),
-            signature: Signature::new(bridge_pair.private_key(), &bridge_msg),
-            message: bridge_msg,
-        };
+        let attestation = signed_proof(
+            &attestation_pair,
+            &attestation_msg,
+            "I3 attestation fixture signature",
+        )?;
+        let bridge = signed_proof(&bridge_pair, &bridge_msg, "I3 bridge fixture signature")?;
 
-        Self {
+        Ok(Self {
             commit_message,
             commit_signatures,
             attestation,
             bridge,
-        }
+        })
     }
+}
+
+fn checked_seed_keypair(seed: Vec<u8>, context: &'static str) -> Result<KeyPair, Box<dyn Error>> {
+    KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+        .map_err(|err| format!("{context} generation failed: {err}").into())
+}
+
+fn signed_proof(
+    key_pair: &KeyPair,
+    message: &[u8],
+    context: &'static str,
+) -> Result<ProofSignature, Box<dyn Error>> {
+    let signature = Signature::try_new(key_pair.private_key(), message)
+        .map_err(|err| format!("{context} signing failed: {err}"))?;
+    signature
+        .verify(key_pair.public_key(), message)
+        .map_err(|err| format!("{context} verification failed: {err}"))?;
+    Ok(ProofSignature {
+        public_key: key_pair.public_key().clone(),
+        signature,
+        message: message.to_vec(),
+    })
 }
 
 fn random_bytes(rng: &mut ChaCha20Rng, len: usize) -> Vec<u8> {

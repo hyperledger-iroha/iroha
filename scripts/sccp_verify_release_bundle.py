@@ -3602,7 +3602,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         "scripts/sccp_ton_destination_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
+            "except (TypeError, ValueError):",
             'f"{label} must be base64 or base64url"',
+            "except (TypeError, ValueError, binascii.Error):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             'raise ValueError("account_status must be active") from None',
             'raise ValueError("last_transaction_lt must be a positive decimal") from None',
@@ -3785,10 +3787,13 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TRON destination verifier address metadata is invalid",
             "TRON destination verifier runtime bytecode metadata is invalid",
             'raise ValueError(f"{label} must be base64") from None',
+            "def decode_comment_base64(field: str, label: str) -> bytes | None:",
+            "def decode_base64(field: str, label: str) -> bytes | None:",
             "raise ValueError(f\"{label}: invalid TOML\") from None",
             "raise ValueError(f\"{label}:{line_number}: invalid string\") from None",
             "raise ValueError(f\"{label}:{line_number}: invalid array\") from None",
             "except (TypeError, ValueError, binascii.Error):",
+            "except (TypeError, ValueError):",
             "except (argparse.ArgumentTypeError, TypeError, ValueError):",
             "def _minimal_toml_duplicate_key_detail(",
             "duplicate key with sensitive name",
@@ -3828,6 +3833,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "route|operator-zk-section",
             "secret-token comment",
             "secret-token all-lanes base64",
+            "secret-token all-lanes hex TypeError detail",
+            "def test_all_lanes_solana_base64_callers_redact_typeerror_helper_causes",
+            "secret-token all-lanes {label} TypeError detail",
             "secret-token destination binding material",
             "secret-token {label} parser detail",
             "for exception_type in (TypeError, ValueError):",
@@ -3937,7 +3945,7 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "test_evm_source_json_rpc_redacts_transport_and_error_response_details",
             "secret-token-evm-source-error",
             "secret-token {target_method} parser detail",
-            "for exception_type in (TypeError, RuntimeError):",
+            "for exception_type in (TypeError, RuntimeError, ValueError):",
             "secret-token invalid EVM source JSON-RPC payload",
             "secret-token-source-bridge-runtime",
             'assert "secret-token" not in captured.err',
@@ -6988,6 +6996,10 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "ASCII_CONTROL_CHARACTER_PATTERN",
             "def _phase_output_failure_scan_line(",
             'unicodedata.category(character) != "Cf"',
+            "def _phase_diagnostic_fragment(",
+            'replace("|", "\\\\x7c")',
+            "_phase_diagnostic_fragment(fragment)",
+            "_phase_diagnostic_fragment(forbidden_marker)",
             "def _phase_block_forbidden_output_marker(",
             "def _phase_transcript_errors(",
             "evidence artifact is a dry-run transcript",
@@ -7069,6 +7081,10 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "ASCII_CONTROL_CHARACTER_PATTERN",
             "def _phase_output_failure_scan_line(",
             'unicodedata.category(character) != "Cf"',
+            "def _phase_diagnostic_fragment(",
+            'replace("|", "\\\\x7c")',
+            "_phase_diagnostic_fragment(fragment)",
+            "_phase_diagnostic_fragment(forbidden_marker)",
             "def _phase_block_forbidden_output_marker(",
             "def _phase_transcript_errors(",
             "evidence artifact cannot be read",
@@ -7379,6 +7395,8 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "def _native_evm_prover_summary_errors(",
             "def _native_evm_sdk_name_error(",
             "contains {issue} sdk with sensitive name",
+            "def _unexpected_source_adapter_gate_audit_field_error(",
+            "contains unexpected field with sensitive name",
             "def _native_evm_prover_binding_bundle_errors(",
             "native_evm_prover_bundle cannot be recomputed",
             "must be a canonical non-zero 32-byte hex value",
@@ -7413,6 +7431,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_bundle_rejects_native_evm_prover_malformed_duplicate_json_keys",
             "test_release_bundle_verifier_redacts_sensitive_native_evm_duplicate_json_keys",
             "secret-token-native-duplicate",
+            "secret-token-native-audit-field",
             "secret-token-native-blocker",
             "validation_blockers[0] contains sensitive name",
             "validation_blockers contains blocker with sensitive name",
@@ -8498,6 +8517,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _corridor_phase_key_blocker(",
             '"readiness report corridor phases"',
             '"readiness report corridor evidence_artifacts"',
+            "def _is_nonzero_hex32(value: Any) -> bool:",
+            "except (TypeError, ValueError):",
+            "def _solana_pubkey_field_errors(",
         ),
     ),
     (
@@ -8508,11 +8530,14 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):",
             "except (argparse.ArgumentTypeError, TypeError, ValueError):",
             'errors.append(f"{label} is invalid")',
+            "def decode_comment_base64(field: str, label: str) -> bytes | None:",
             "Solana ProgramData account is not canonical",
             "Solana Program account data base64 metadata",
             "Solana ProgramData metadata base64 metadata",
             "Solana ProgramData executable base64 metadata is invalid",
             'raise ValueError(f"{label} must be base64") from None',
+            "except (TypeError, ValueError):",
+            "def decode_base64(field: str, label: str) -> bytes | None:",
             "Solana route canary Program account data",
             "Solana route canary ProgramData metadata",
             "Solana route canary ProgramData executable is invalid",
@@ -8538,13 +8563,14 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise RuntimeError(f"{label} account data is invalid base64") from None',
             'raise ValueError(f"{label} must be base64") from None',
             "except (TypeError, ValueError, binascii.Error):",
-            "except (argparse.ArgumentTypeError, TypeError):",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
             "Solana live verifier program id metadata is invalid",
             "Solana live ProgramData address metadata is invalid",
             "Solana live verifier code hash metadata is invalid",
             "Solana ProgramData executable base64 metadata is invalid",
             "Solana Program account ProgramData address metadata is invalid",
             "def _cli_error_detail(",
+            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP Solana live evidence collection failed",
         ),
     ),
@@ -8564,6 +8590,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise RuntimeError("TON verifier account code_boc is invalid") from None',
             'raise ValueError("TON live code BoC base64 metadata is invalid") from None',
             "def _cli_error_detail(",
+            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP TON live evidence collection failed",
         ),
     ),
@@ -8601,6 +8628,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "witness seal proof is invalid",
             "transaction source proof is invalid",
             "def _cli_error_detail(",
+            "    except (\n        OSError,\n        RuntimeError,\n        TypeError,\n        ValueError,\n        argparse.ArgumentTypeError,\n    ) as exc:",
             "SCCP TRON live evidence collection failed",
         ),
     ),
@@ -8611,6 +8639,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "except (TypeError, ValueError):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _cli_error_detail(",
+            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP Ethereum source bridge evidence rendering failed",
         ),
     ),
@@ -8622,6 +8651,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "BSC network must be mainnet or testnet",
             "def _cli_error_detail(",
+            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP BSC source bridge evidence rendering failed",
         ),
     ),
@@ -8637,7 +8667,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise ValueError("target_domain must be ETH or BSC") from None',
             'raise ValueError("target_domain must be ETH or BSC for EVM route canaries") from None',
             "def _cli_error_detail(",
-            "except (OSError, TypeError, ValueError) as exc:",
+            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP EVM destination evidence rendering failed",
         ),
     ),
@@ -8660,6 +8690,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_evm_source_live_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
+            "except (TypeError, ValueError):",
             'raise ValueError(f"{label} metadata is invalid") from None',
             "deployment receipt transactionHash must be a non-zero bytes32",
             "deployment receipt contractAddress must be a non-zero 20-byte EVM address",
@@ -8667,6 +8698,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "JSON-RPC {method} returned duplicate JSON keys",
             "JSON-RPC {method} returned invalid JSON",
             "def _cli_error_detail(",
+            "    except (\n        OSError,\n        RuntimeError,\n        TypeError,\n        ValueError,\n        argparse.ArgumentTypeError,\n    ) as exc:",
             "SCCP EVM source live evidence collection failed",
         ),
     ),
@@ -8675,11 +8707,13 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         (
             'raise argparse.ArgumentTypeError("domain must have a canonical RPC chain id") from None',
             "domain must have a canonical EVM mainnet network id",
+            "except (TypeError, ValueError):",
             'raise ValueError(f"{label} metadata is invalid") from None',
             "generated EVM destination TOML arguments are invalid",
             "JSON-RPC {method} returned duplicate JSON keys",
             "JSON-RPC {method} returned invalid JSON",
             "def _cli_error_detail(",
+            "    except (\n        OSError,\n        RuntimeError,\n        TypeError,\n        ValueError,\n        argparse.ArgumentTypeError,\n    ) as exc:",
             "SCCP EVM live evidence collection failed",
         ),
     ),
@@ -8687,11 +8721,13 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_solana_destination_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
+            "except (TypeError, ValueError):",
             'raise argparse.ArgumentTypeError(f"{label} must be base64") from None',
             "except (TypeError, ValueError, binascii.Error):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             'raise ValueError(f"{label} metadata is invalid") from None',
             "def _cli_error_detail(",
+            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP Solana destination evidence rendering failed",
         ),
     ),
@@ -8699,7 +8735,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_solana_source_state_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
+            "except (TypeError, ValueError):",
             "def _cli_error_detail(",
+            "except (OSError, SystemExit, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP Solana source-state evidence rendering failed",
         ),
     ),
@@ -8707,13 +8745,16 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_ton_destination_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
+            "except (TypeError, ValueError):",
             'f"{label} must be base64 or base64url"',
+            "except (TypeError, ValueError, binascii.Error):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             'raise ValueError("account_status must be active") from None',
             'raise ValueError("last_transaction_lt must be a positive decimal") from None',
             'raise ValueError(f"--{output} requires --last-transaction-lt") from None',
             'raise ValueError(f"{label} metadata is invalid") from None',
             "def _cli_error_detail(",
+            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP TON destination evidence rendering failed",
         ),
     ),
@@ -8721,7 +8762,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_ton_source_state_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
+            "except (TypeError, ValueError):",
             "def _cli_error_detail(",
+            "except (OSError, SystemExit, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP TON source-state evidence rendering failed",
         ),
     ),
@@ -8729,8 +8772,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_tron_source_bridge_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
+            "except (TypeError, ValueError):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _cli_error_detail(",
+            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP TRON source bridge evidence rendering failed",
         ),
     ),
@@ -8738,12 +8783,15 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_release_bundle.py",
         (
             "def _cli_error_detail(",
+            "    except (\n        OSError,\n        RuntimeError,\n        TypeError,\n        ValueError,\n        argparse.ArgumentTypeError,\n    ) as exc:",
             "SCCP release bundle generation failed",
             "def _cryptographic_evidence_row_bundle_errors(",
             "route_canary_evidence_source must be a non-empty string",
             "def _source_adapter_gate_audit_key_error(",
             "def _submission_surface_row_bundle_errors(",
             "def _submission_surface_sdk_key_error(",
+            "def _is_canonical_solana_pubkey_text(value: Any) -> bool:",
+            "except (TypeError, ValueError):",
             "def _corridor_phase_names(",
             "def _corridor_phase_key_error(",
             "phase status must be passed or blocked",
@@ -8762,7 +8810,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             '"release_public_scalar_text_schema_gate"',
             "SCCP release public scalar-text schema source inventory",
             "def _cli_error_detail(",
+            "    except (\n        OSError,\n        RuntimeError,\n        TypeError,\n        ValueError,\n        argparse.ArgumentTypeError,\n    ) as exc:",
             "SCCP release readiness report generation failed",
+            "def _is_nonzero_hex32(value: Any) -> bool:",
+            "except (TypeError, ValueError):",
         ),
     ),
     (
@@ -8789,11 +8840,16 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_rejects_corridor_malformed_phase_keys",
             "secret-token-phase",
             "def test_release_bundle_cli_redacts_top_level_exception_details",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             "def test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_render",
             "def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render",
             "def test_release_bundle_rejects_malformed_copied_submission_surface_before_render",
             "def test_release_bundle_native_evm_duplicate_json_redacts_sensitive_key_causes",
             "secret-token-native-duplicate",
+            "def test_release_bundle_hex_predicates_redact_typeerror_parser_causes",
+            "secret-token bundle hex TypeError detail",
+            "def test_release_bundle_solana_pubkey_redacts_typeerror_parser_causes",
+            "secret-token bundle Solana pubkey TypeError detail",
             "assert exc.__suppress_context__ is True",
         ),
     ),
@@ -8805,18 +8861,22 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_all_lanes_redacts_ton_live_account_parser_failures",
             "def test_all_lanes_redacts_solana_live_base64_comment_failures",
             "def test_all_lanes_base64_helper_redacts_parser_causes",
+            "def test_all_lanes_hex_helpers_redact_typeerror_parser_causes",
             "def test_all_lanes_redacts_solana_route_canary_base64_comment_failures",
+            "def test_all_lanes_solana_base64_callers_redact_typeerror_helper_causes",
             "def test_all_lanes_redacts_tron_route_canary_address_parser_failures",
             "def test_all_lanes_redacts_solana_programdata_parser_failures",
             "Solana Program account data base64 metadata is invalid",
             "Solana route canary ProgramData metadata is invalid",
             "secret-token-metadata!",
             "secret-token all-lanes base64",
+            "secret-token all-lanes hex TypeError detail",
+            "secret-token all-lanes {label} TypeError detail",
             "secret-token-route-metadata!",
             "secret-token {label} program bytes",
             "metadata is invalid:",
             "def test_all_lanes_cli_redacts_top_level_exception_details",
-            "for exception_type in (RuntimeError, TypeError):",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
         ),
     ),
     (
@@ -8828,12 +8888,17 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_live_solana_account_data_redacts_base64_parser_causes",
             "def test_live_solana_metadata_base64_redacts_parser_causes",
             "def test_solana_live_cli_redacts_top_level_exception_details",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             "SCCP Solana live evidence collection failed",
             "JSON-RPC getAccountInfo returned duplicate JSON keys",
             "Solana live verifier program id metadata is invalid",
             "Solana ProgramData executable base64 metadata is invalid",
             "Solana Program account ProgramData address metadata is invalid",
-            "parser_exception_types = (module.argparse.ArgumentTypeError, TypeError)",
+            """parser_exception_types = (
+        module.argparse.ArgumentTypeError,
+        TypeError,
+        ValueError,
+    )""",
             "secret-token-solana-error",
             "secret-token invalid Solana JSON-RPC payload",
             "secret-token verifier_code_hash parser detail",
@@ -8856,7 +8921,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
             "def test_live_ton_evidence_redacts_code_boc_parser_failures",
             "def test_ton_live_cli_redacts_top_level_exception_details",
-            "for exception_type in (TypeError, ValueError):",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             "SCCP TON live evidence collection failed",
             "TON accountStates returned duplicate JSON keys",
             "TON live account address metadata is invalid",
@@ -8881,7 +8946,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_tron_api_rejects_duplicate_json_keys",
             "def test_tron_api_redacts_transport_and_error_response_details",
             "for exception_type in (TypeError, ValueError, RuntimeError):",
-            "for exception_type in (TypeError, ValueError):",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             "def test_tron_live_cli_redacts_top_level_exception_details",
             "SCCP TRON live evidence collection failed",
             "TRON API /wallet/getnowblock failed with HTTP 500",
@@ -8933,6 +8998,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-eth-source-file-path.hex",
             "def test_eth_cli_redacts_top_level_exception_details",
             "SCCP Ethereum source bridge evidence rendering failed",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -8948,6 +9014,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-bsc-source-network",
             "def test_bsc_cli_redacts_top_level_exception_details",
             "SCCP BSC source bridge evidence rendering failed",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -8965,7 +9032,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-evm-destination-file-path.hex",
             "def test_evm_destination_domain_wrappers_redact_nested_causes",
             "def test_evm_destination_cli_redacts_top_level_exception_details",
-            "for exception_type in (TypeError, ValueError):",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             "SCCP EVM destination evidence rendering failed",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
@@ -8978,7 +9045,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-evm-receipt-hex",
             "secret-token EVM receipt hex TypeError detail",
             "def test_receipt_cli_redacts_top_level_exception_details",
-            "for exception_type in (RuntimeError, TypeError):",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             "SCCP EVM receipt proof evidence collection failed",
             "JSON-RPC eth_chainId returned duplicate JSON keys",
             "JSON-RPC eth_getTransactionReceipt returned duplicate JSON keys",
@@ -8992,19 +9059,22 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_evm_source_live_evidence_test.py",
         (
             "def test_evm_source_live_cli_redacts_top_level_exception_details",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             "SCCP EVM source live evidence collection failed",
             "JSON-RPC eth_chainId returned duplicate JSON keys",
             "source bridge address metadata is invalid",
             "bridge address metadata is invalid",
             "test_evm_source_json_rpc_redacts_invalid_json_parser_details",
             "test_evm_source_live_redacts_receipt_field_parser_exception_causes",
+            "def test_evm_source_live_hex_parsers_redact_typeerror_parser_causes",
             "secret-token-evm-source-error",
             "secret-token invalid EVM source JSON-RPC payload",
             "secret-token-evm-source-live-hex",
+            "secret-token EVM source live hex TypeError detail",
             "0xsecret-token-source-bridge-runtime",
             "secret-token source bridge address parser detail",
             "secret-token {target_method} parser detail",
-            "for exception_type in (TypeError, RuntimeError):",
+            "for exception_type in (TypeError, RuntimeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -9013,12 +9083,15 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_evm_live_evidence_test.py",
         (
             "def test_evm_live_cli_redacts_top_level_exception_details",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             "SCCP EVM live evidence collection failed",
             "JSON-RPC eth_chainId returned duplicate JSON keys",
             "bridge address metadata is invalid",
             "test_evm_json_rpc_redacts_invalid_json_parser_details",
+            "def test_evm_live_hex_parsers_redact_typeerror_parser_causes",
             "secret-token-evm-error",
             "secret-token invalid EVM JSON-RPC payload",
+            "secret-token EVM live hex TypeError detail",
             "def test_live_evm_default_domain_lookups_redact_lookup_causes",
             "secret-token-evm-live-chain-id",
             "secret-token-evm-live-network-id",
@@ -9035,6 +9108,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_solana_destination_hex_parsers_redact_parser_causes",
             "secret-token-solana-fixed-hex",
             "secret-token-solana-program-hex",
+            "secret-token Solana destination hex TypeError detail",
             "def test_solana_destination_base64_parser_redacts_parser_causes",
             "secret-token-solana-destination-base64",
             "secret-token Solana destination base64 decoder detail",
@@ -9046,6 +9120,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "parser detail",
             "def test_solana_destination_cli_redacts_top_level_exception_details",
             "SCCP Solana destination evidence rendering failed",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -9055,8 +9130,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         (
             "def test_solana_source_hex_parser_redacts_parser_causes",
             "secret-token-solana-source-hex",
+            "secret-token Solana source hex TypeError detail",
             "def test_solana_source_cli_redacts_top_level_exception_details",
             "SCCP Solana source-state evidence rendering failed",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -9069,6 +9146,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-ton-destination-fixed-hex",
             "secret-token-ton-destination-code-hex",
             "secret-token-ton-destination-code-boc",
+            "secret-token TON destination hex TypeError detail",
+            "secret-token TON code BoC base64 TypeError detail",
             "secret-token-ton-destination-file-path",
             "secret-token-ton-destination-account-status",
             "secret-token-ton-destination-last-lt",
@@ -9079,6 +9158,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "parser detail",
             "def test_ton_destination_cli_redacts_top_level_exception_details",
             "SCCP TON destination evidence rendering failed",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -9088,8 +9168,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         (
             "def test_ton_source_hex_parser_redacts_parser_causes",
             "secret-token-ton-source-hex",
+            "secret-token TON source hex TypeError detail",
             "def test_ton_source_cli_redacts_top_level_exception_details",
             "SCCP TON source-state evidence rendering failed",
+            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -9102,9 +9184,11 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-tron-source-runtime",
             "secret-token-tron-source-file",
             "secret-token-tron-source-address",
+            "secret-token TRON source hex TypeError detail",
             "assert exc.__suppress_context__ is True",
             "def test_tron_source_cli_redacts_top_level_exception_details",
             "SCCP TRON source bridge evidence rendering failed",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
             'assert "secret-token" not in captured.err',
         ),
     ),
@@ -9114,6 +9198,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory",
             "def test_release_readiness_report_blocks_missing_release_public_scalar_text_schema_gate",
             "def test_release_readiness_report_cli_redacts_top_level_exception_details",
+            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "def test_release_readiness_hex_predicates_redact_typeerror_parser_causes",
+            "secret-token readiness hex TypeError detail",
         ),
     ),
 )
@@ -10794,7 +10881,7 @@ def _phase_transcript_errors(
                 errors.append(
                     "readiness report phase "
                     f"{phase} evidence artifact is missing expected "
-                    f"phase-block command: {fragment}"
+                    f"phase-block command: {_phase_diagnostic_fragment(fragment)}"
                 )
     success_fragments = PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase)
     if success_fragments is None:
@@ -10808,7 +10895,8 @@ def _phase_transcript_errors(
                 errors.append(
                     "readiness report phase "
                     f"{phase} evidence artifact is missing expected "
-                    f"phase-block success marker: {fragment}"
+                    "phase-block success marker: "
+                    f"{_phase_diagnostic_fragment(fragment)}"
                 )
     if phase_block is not None:
         forbidden_marker = _phase_block_forbidden_output_marker(phase, phase_block)
@@ -10816,7 +10904,7 @@ def _phase_transcript_errors(
             errors.append(
                 "readiness report phase "
                 f"{phase} evidence artifact contains forbidden phase-block "
-                f"failure marker: {forbidden_marker}"
+                f"failure marker: {_phase_diagnostic_fragment(forbidden_marker)}"
             )
     return errors
 
@@ -12710,6 +12798,25 @@ def _phase_output_failure_scan_line(line: str) -> str:
     )
 
 
+def _phase_diagnostic_fragment(fragment: str) -> str:
+    """Return a public-safe phase marker fragment for Markdown diagnostics."""
+
+    if (
+        fragment.strip() != fragment
+        or _path_control_character(fragment) is not None
+        or not fragment.isascii()
+        or _path_markdown_unsafe_character(fragment) is not None
+    ):
+        return (
+            repr(fragment)
+            .replace("|", "\\x7c")
+            .replace("`", "\\x60")
+            .replace("<", "\\x3c")
+            .replace(">", "\\x3e")
+        )
+    return fragment
+
+
 def _phase_block_forbidden_output_marker(phase: str, phase_block: str) -> str | None:
     for line in phase_block.splitlines():
         if _line_is_shell_xtrace_command(line):
@@ -13240,7 +13347,7 @@ def _is_nonzero_hex32(value: Any) -> bool:
         return False
     try:
         raw = bytes.fromhex(value[2:])
-    except ValueError:
+    except (TypeError, ValueError):
         return False
     return len(raw) == 32 and any(raw) and value == f"0x{raw.hex()}"
 
@@ -13250,7 +13357,7 @@ def _is_hex32(value: Any) -> bool:
         return False
     try:
         raw = bytes.fromhex(value[2:])
-    except ValueError:
+    except (TypeError, ValueError):
         return False
     return len(raw) == 32 and value == f"0x{raw.hex()}"
 
@@ -18408,7 +18515,7 @@ def _solana_pubkey_field_errors(
         return [f"{label} {field} must be a non-zero canonical base58 Solana address"]
     try:
         raw = _decode_solana_base58(value)
-    except ValueError:
+    except (TypeError, ValueError):
         return [f"{label} {field} must be a non-zero canonical base58 Solana address"]
     if len(raw) != 32 or not any(raw):
         return [f"{label} {field} must be a non-zero canonical base58 Solana address"]

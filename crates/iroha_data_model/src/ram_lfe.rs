@@ -312,6 +312,10 @@ mod tests {
 
     use super::*;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked RAM-LFE fixture keypair")
+    }
+
     fn receipt_payload() -> RamLfeExecutionReceiptPayload {
         RamLfeExecutionReceiptPayload {
             program_id: "email_retail".parse().expect("valid program id"),
@@ -333,10 +337,13 @@ mod tests {
         signer: &KeyPair,
         payload: RamLfeExecutionReceiptPayload,
     ) -> RamLfeExecutionReceipt {
+        let signature = SignatureOf::try_new(signer.private_key(), &payload)
+            .expect("sign checked RAM-LFE receipt fixture");
+        signature
+            .verify(signer.public_key(), &payload)
+            .expect("checked RAM-LFE receipt fixture verifies");
         RamLfeExecutionReceipt {
-            attestation: RamLfeReceiptAttestation::Signed(
-                SignatureOf::new(signer.private_key(), &payload).into(),
-            ),
+            attestation: RamLfeReceiptAttestation::Signed(signature.into()),
             payload,
         }
     }
@@ -358,15 +365,20 @@ mod tests {
         signer: &KeyPair,
         payload: RamLfeOutputOpeningPayload,
     ) -> RamLfeOutputOpening {
+        let signature = SignatureOf::try_new(signer.private_key(), &payload)
+            .expect("sign checked RAM-LFE output-opening fixture");
+        signature
+            .verify(signer.public_key(), &payload)
+            .expect("checked RAM-LFE output-opening fixture verifies");
         RamLfeOutputOpening {
-            signature: SignatureOf::new(signer.private_key(), &payload).into(),
+            signature: signature.into(),
             payload,
         }
     }
 
     #[test]
     fn signed_receipt_verifies_only_signed_attestation() {
-        let signer = KeyPair::random();
+        let signer = checked_random_keypair();
         let receipt = signed_receipt(&signer, receipt_payload());
 
         receipt
@@ -376,8 +388,8 @@ mod tests {
 
     #[test]
     fn signed_receipt_rejects_wrong_key_and_proof_attestation() {
-        let signer = KeyPair::random();
-        let wrong_signer = KeyPair::random();
+        let signer = checked_random_keypair();
+        let wrong_signer = checked_random_keypair();
         let payload = receipt_payload();
         let receipt = signed_receipt(&signer, payload.clone());
 
@@ -399,7 +411,7 @@ mod tests {
 
     #[test]
     fn signed_receipt_rejects_tampered_ciphertext_binding() {
-        let signer = KeyPair::random();
+        let signer = checked_random_keypair();
         let mut receipt = signed_receipt(&signer, receipt_payload());
         receipt.payload.output_ciphertext_hash = Hash::new(b"tampered-output-ciphertext");
 
@@ -412,7 +424,7 @@ mod tests {
     fn signed_receipt_rejects_mutation_of_security_bindings() {
         macro_rules! assert_rejected {
             ($label:literal, |$payload:ident| $body:block) => {{
-                let signer = KeyPair::random();
+                let signer = checked_random_keypair();
                 let mut receipt = signed_receipt(&signer, receipt_payload());
                 let $payload = &mut receipt.payload;
                 $body
@@ -464,8 +476,8 @@ mod tests {
 
     #[test]
     fn output_opening_rejects_wrong_key_and_tampered_payload() {
-        let signer = KeyPair::random();
-        let wrong_signer = KeyPair::random();
+        let signer = checked_random_keypair();
+        let wrong_signer = checked_random_keypair();
         let mut opening = signed_opening(&signer, opening_payload());
 
         opening
@@ -482,7 +494,7 @@ mod tests {
     fn output_opening_rejects_mutation_of_security_bindings() {
         macro_rules! assert_rejected {
             ($label:literal, |$payload:ident| $body:block) => {{
-                let signer = KeyPair::random();
+                let signer = checked_random_keypair();
                 let mut opening = signed_opening(&signer, opening_payload());
                 let $payload = &mut opening.payload;
                 $body

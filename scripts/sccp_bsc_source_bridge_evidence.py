@@ -1430,7 +1430,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_toml(args), end="")
         else:
             print(json.dumps(_json_summary(args), sort_keys=True, indent=2))
-    except (OSError, ValueError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP BSC source bridge evidence rendering failed",

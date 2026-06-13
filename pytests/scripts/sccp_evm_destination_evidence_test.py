@@ -55,7 +55,7 @@ def load_evidence_module():
 def test_evm_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
-    for exception_type in (TypeError, ValueError):
+    for exception_type in (RuntimeError, TypeError, ValueError):
 
         def fail_scope(_args, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")

@@ -2577,7 +2577,7 @@ def _is_nonzero_hex32(value: Any) -> bool:
         return False
     try:
         raw = bytes.fromhex(value[2:])
-    except ValueError:
+    except (TypeError, ValueError):
         return False
     return len(raw) == 32 and any(raw) and value == f"0x{raw.hex()}"
 
@@ -2587,7 +2587,7 @@ def _is_hex32(value: Any) -> bool:
         return False
     try:
         raw = bytes.fromhex(value[2:])
-    except ValueError:
+    except (TypeError, ValueError):
         return False
     return len(raw) == 32 and value == f"0x{raw.hex()}"
 
@@ -4424,6 +4424,25 @@ def _phase_output_failure_scan_line(line: str) -> str:
     )
 
 
+def _phase_diagnostic_fragment(fragment: str) -> str:
+    """Return a public-safe phase marker fragment for Markdown diagnostics."""
+
+    if (
+        fragment.strip() != fragment
+        or _path_control_character(fragment) is not None
+        or not fragment.isascii()
+        or _path_markdown_unsafe_character(fragment) is not None
+    ):
+        return (
+            repr(fragment)
+            .replace("|", "\\x7c")
+            .replace("`", "\\x60")
+            .replace("<", "\\x3c")
+            .replace(">", "\\x3e")
+        )
+    return fragment
+
+
 def _phase_block_forbidden_output_marker(phase: str, phase_block: str) -> str | None:
     for line in phase_block.splitlines():
         if _line_is_shell_xtrace_command(line):
@@ -4505,7 +4524,7 @@ def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
             if not _phase_block_has_command_fragment(phase, phase_block, fragment):
                 errors.append(
                     "evidence artifact is missing expected phase-block command: "
-                    f"{fragment}"
+                    f"{_phase_diagnostic_fragment(fragment)}"
                 )
     success_fragments = PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase)
     if success_fragments is None:
@@ -4515,14 +4534,14 @@ def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
             if not _phase_block_has_output_fragment(phase_block, fragment):
                 errors.append(
                     "evidence artifact is missing expected phase-block success marker: "
-                    f"{fragment}"
+                    f"{_phase_diagnostic_fragment(fragment)}"
                 )
     if phase_block is not None:
         forbidden_marker = _phase_block_forbidden_output_marker(phase, phase_block)
         if forbidden_marker is not None:
             errors.append(
                 "evidence artifact contains forbidden phase-block failure marker: "
-                f"{forbidden_marker}"
+                f"{_phase_diagnostic_fragment(forbidden_marker)}"
             )
     return errors
 
@@ -6893,7 +6912,13 @@ def main(argv: list[str] | None = None) -> int:
             phase_evidence_dir=args.phase_evidence_dir,
             native_evm_prover_bundle=args.native_evm_prover_bundle,
         )
-    except (OSError, RuntimeError, ValueError, argparse.ArgumentTypeError) as exc:
+    except (
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        argparse.ArgumentTypeError,
+    ) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP release readiness report generation failed",

@@ -7315,7 +7315,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.full_toml:
             sys.stdout.write(render_offline_full_toml(summary))
             return 0
-    except (OSError, RuntimeError, ValueError, argparse.ArgumentTypeError) as exc:
+    except (
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        argparse.ArgumentTypeError,
+    ) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP TRON live evidence collection failed",

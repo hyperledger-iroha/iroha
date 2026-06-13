@@ -345,29 +345,34 @@ def test_solana_json_rpc_redacts_transport_and_error_response_details():
 def test_solana_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_live_module()
 
-    def fail_collect(*_args, **_kwargs):
-        raise RuntimeError("secret-token /tmp/operator/private-path")
+    for exception_type in (RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module, "collect_live_evidence", fail_collect)
+        def fail_collect(*_args, exception_type=exception_type, **_kwargs):
+            raise exception_type("secret-token /tmp/operator/private-path")
 
-    try:
-        module.main(
-            [
-                "--rpc-url",
-                "https://solana.example.invalid",
-                "--verifier-program-id",
-                _default_program_id(module),
-            ]
-        )
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("Solana live CLI accepted top-level collection failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "collect_live_evidence", fail_collect)
+            try:
+                module.main(
+                    [
+                        "--rpc-url",
+                        "https://solana.example.invalid",
+                        "--verifier-program-id",
+                        _default_program_id(module),
+                    ]
+                )
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError(
+                    "Solana live CLI accepted top-level collection failure"
+                )
 
-    captured = capsys.readouterr()
-    assert "SCCP Solana live evidence collection failed" in captured.err
-    assert "secret-token" not in captured.err
-    assert "private-path" not in captured.err
+            captured = capsys.readouterr()
+            assert "SCCP Solana live evidence collection failed" in captured.err
+            assert "secret-token" not in captured.err
+            assert "private-path" not in captured.err
+            assert exception_type.__name__ not in captured.err
 
 
 def _live_route_canary_hash(
@@ -793,7 +798,11 @@ def test_live_solana_evidence_redacts_imported_parser_failures(monkeypatch):
 
         return build
 
-    parser_exception_types = (module.argparse.ArgumentTypeError, TypeError)
+    parser_exception_types = (
+        module.argparse.ArgumentTypeError,
+        TypeError,
+        ValueError,
+    )
     cases = (
         (
             "normalize_solana_program_id",

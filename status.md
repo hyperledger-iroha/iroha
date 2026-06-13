@@ -2,6 +2,533 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 SCCP phase diagnostics and active-lane bundle readiness
+
+- Kept corridor phase blocker Markdown visible when diagnostics include
+  whitespace-padded success markers or .NET filter fragments with Markdown
+  metacharacters, while preserving the fail-closed invalid-blocker renderer for
+  genuinely malformed public blocker data.
+- Preserved copied native EVM prover manifest-drift validation even when a
+  copied native summary also has schema errors, and restored the active-launch
+  release-bundle fixture by keeping future-lane source-adapter gate metadata
+  shape-complete without marking those future lanes production-ready.
+- Refreshed SCCP readiness/bundle source inventories for the phase diagnostic
+  display helper, the JavaScript native prover parser handoff marker, and the
+  EVM source-live `ValueError` redaction marker.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q`
+    (`369` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q`
+    (`634` passed)
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py javascript/iroha_js/src/sccp.js pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+
+## 2026-06-13 Data-model governance fixture checked signing
+
+- Routed governance parliament roster and enactment certificate fixtures through
+  checked random Ed25519 key generation.
+- Routed governance and parliament enactment certificate signatures through
+  `SignatureOf::try_new`, verifying each typed enactment payload signature
+  before Norito roundtrip assertions consume it.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model parliament_bodies_roundtrip --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo test -j 1 -p iroha_data_model enactment_certificate_roundtrip --lib -- --nocapture`
+    (`2` passed, `1543` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 xtask I3 bench checked proof fixtures
+
+- Routed I3 benchmark commit-certificate, attestation, and bridge proof fixture
+  key generation through `KeyPair::try_from_seed` with nonzero deterministic
+  Ed25519 seeds, and routed all fixture signatures through `Signature::try_new`.
+- Made I3 benchmark fixture construction fallible so keygen/signing failures
+  propagate from `run_i3_bench_suite`, and verified every generated fixture
+  signature before benchmark scenarios consume it.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-xtask-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p xtask i3_bench_suite -- --nocapture`
+    (`3` passed, `332` filtered out in `src/main.rs`; auxiliary xtask bins and
+    integration tests had `0` matched tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-xtask-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p xtask --all-targets --no-deps -- -D warnings`
+
+## 2026-06-13 Sumeragi main-loop RBC/QC checked signing
+
+- Added checked Sumeragi main-loop fixture helpers for raw payload and typed-hash
+  signatures, then routed RBC READY/DELIVER evidence, leader-signature mutation,
+  aggregate vote/QC, checkpoint, and telemetry fuzz fixtures through
+  `Signature::try_new` or `SignatureOf::try_from_hash`.
+- Kept the existing adversarial shape intact: wrong BLS-key cases still use a
+  wrong BLS key, and non-BLS leader-signature mutations now explicitly use
+  Ed25519 instead of the default random key constructor.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rbc-checked-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features bls,sumeragi-main-loop-tests payload_available_for_da_rejects_rbc_payload_with_forged_leader_signature --lib -- --nocapture`
+    (`1` passed, `7584` filtered out)
+  - `/tmp/iroha-codex-rbc-checked-signing/debug/deps/iroha_core-03124c46c6315244 forged_leader_signature --nocapture --test-threads=1`
+    (`7` passed, `7578` filtered out)
+  - `/tmp/iroha-codex-rbc-checked-signing/debug/deps/iroha_core-03124c46c6315244 bad_leader_signature --nocapture --test-threads=1`
+    (`2` passed, `7583` filtered out)
+  - `/tmp/iroha-codex-rbc-checked-signing/debug/deps/iroha_core-03124c46c6315244 invalid_or_malformed_chunk_shape --nocapture --test-threads=1`
+    (`3` passed, `7582` filtered out)
+  - Exact refreshed binary tests passed for
+    `handle_rbc_chunk_request_rejects_malformed_requests_and_session_metadata`,
+    `handle_rbc_init_rejects_invalid_leader_signature_without_caching_roster`,
+    `insert_seed_rbc_session_does_not_cache_unverified_leader_signature`,
+    `frontier_block_created_from_proposal_rejects_noncanonical_payload_hint_even_with_roster_hint`,
+    `fetch_pending_block_keeps_rbc_transport_rebuildable_when_da_enabled`,
+    `validate_checkpoint_roster_binds_chain_order`,
+    `handle_qc_uses_height_prf_seed`,
+    `handle_qc_uses_activation_height_mode_tag`, and
+    `validate_block_sync_qc_accepts_npos_rotated_signers_across_views`
+    (`1` passed for each)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rbc-checked-signing-telemetry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features bls,sumeragi-main-loop-tests,telemetry validate_qc_against_votes_fuzzes_mismatched_signers_and_tags_telemetry --lib -- --nocapture`
+    (`1` passed, `7774` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rbc-checked-signing-clippy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features bls,sumeragi-main-loop-tests --lib --tests --no-deps -- -D warnings`
+  - `rustfmt --check --edition 2024 crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `git diff --check -- crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+
+## 2026-06-13 SCCP Solana live parser ValueError redaction
+
+- Hardened Solana live summary validation so imported parser-helper
+  `ValueError`s for verifier program ids, ProgramData addresses,
+  verifier-code hashes, executable base64, and ProgramData account decoding
+  fail closed to fixed metadata blockers.
+- Extended the Solana live imported-parser adversarial regression to inject
+  `ValueError`, and pinned the multiline parser exception tuple plus updated
+  catch tuple in release-readiness and strict release-bundle inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_solana_live_evidence.py pytests/scripts/sccp_solana_live_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_solana_live_evidence_test.py -q -k 'redacts_imported_parser_failures'`
+    (`1` passed, `26` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory or sccp_source_material_role_validation_gate_inventory'`
+    (`2` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory or sccp_source_material_role_validation_inventory'`
+    (`3` passed, `631` deselected)
+
+## 2026-06-13 Data-model RAM-LFE fixture checked signing
+
+- Routed generic RAM-LFE receipt and output-opening fixtures through checked
+  random Ed25519 key generation plus `SignatureOf::try_new`.
+- Verified generated typed receipt/opening signatures before the wrong-key and
+  tamper regressions consume them.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model ram_lfe --lib -- --nocapture`
+    (`8` passed, `1537` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP EVM source-live receipt ValueError redaction
+
+- Hardened EVM source-live deployment receipt transaction-hash,
+  contract-address, and block-hash reparsing so helper `ValueError`s collapse
+  to the same fixed receipt-field blockers as existing `RuntimeError` and
+  `TypeError` failures.
+- Extended the adversarial receipt-field parser regression and pinned the
+  three-class loop in both release-readiness and strict release-bundle source
+  inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_evm_source_live_evidence_test.py -q -k 'redacts_receipt_field_parser_exception_causes'`
+    (`1` passed, `32` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory or sccp_source_material_role_validation_gate_inventory'`
+    (`2` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory or sccp_source_material_role_validation_inventory'`
+    (`3` passed, `631` deselected)
+
+## 2026-06-13 SCCP CLI ValueError redaction parity
+
+- Extended EVM live, EVM source-live, EVM receipt-proof, Solana live,
+  all-lanes validation, release-readiness, and release-bundle CLI top-level
+  redaction regressions to inject secret-bearing `ValueError`s alongside
+  `RuntimeError` and `TypeError`.
+- Updated the release public scalar-text inventory markers and sparse-removal
+  adversarial cases so dropping the `ValueError` coverage becomes a readiness
+  blocker.
+- Validation:
+  - `python3 -m compileall -q pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k 'cli_redacts_top_level_exception_details'`
+    (`7` passed, `1288` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory or sccp_source_material_role_validation_gate_inventory'`
+    (`2` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory or sccp_source_material_role_validation_inventory'`
+    (`3` passed, `631` deselected)
+
+## 2026-06-13 xtask rollout and SoraDNS checked signing
+
+- Routed SoraNet rollout capture signatures and SoraDNS release directory
+  builder signatures through `Signature::try_new`, returning command errors
+  with path-specific context on backend signing failure.
+- Routed their deterministic test fixture keypairs through
+  `KeyPair::try_from_seed` and verified the SoraDNS signing payload signature
+  in the focused xtask signing suite.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-xtask-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p xtask sign -- --nocapture`
+    (`17` passed, `318` filtered out in `src/main.rs`; auxiliary xtask bins and
+    integration tests had `0` matched tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-xtask-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p xtask --all-targets --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP all-lanes Solana base64 caller TypeError redaction
+
+- Hardened all-lanes Solana live ProgramData and route-canary base64 caller
+  wrappers so helper `TypeError`s fail closed to the existing invalid metadata
+  blockers instead of leaking parser details.
+- Added an adversarial helper-level `TypeError` regression and pinned the
+  caller markers plus payload marker in both release-readiness and strict
+  release-bundle inventories.
+- Extended TON/TRON live CLI top-level redaction coverage to include
+  `ValueError` alongside `RuntimeError` and `TypeError`.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_ton_live_evidence_test.py pytests/scripts/sccp_tron_live_evidence_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k 'solana_base64_callers_redact_typeerror or redacts_solana_live_base64_comment_failures or redacts_solana_route_canary_base64_comment_failures'`
+    (`3` passed, `165` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_ton_live_evidence_test.py pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'cli_redacts_top_level_exception_details'`
+    (`2` passed, `209` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory or sccp_source_material_role_validation_gate_inventory'`
+    (`2` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory or sccp_source_material_role_validation_inventory'`
+    (`3` passed, `631` deselected)
+
+## 2026-06-13 Data-model moderation reproducibility fixture checked signing
+
+- Routed SoraFS moderation reproducibility manifest test fixtures through
+  checked random Ed25519 key generation plus `SignatureOf::try_new`.
+- Verified each generated typed moderation body signature before manifest
+  validation consumes it, including the duplicate-signer regression fixture.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model sorafs::moderation --lib -- --nocapture`
+    (`6` passed, `1539` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP remaining CLI RuntimeError redaction
+
+- Hardened the remaining SCCP helper CLI boundaries that route through
+  `_cli_error_detail` so source-bridge, destination, and source-state
+  top-level `RuntimeError`s use the same fixed public diagnostics as existing
+  `TypeError` and `ValueError` failures.
+- Extended the ETH/BSC source bridge, EVM/Solana/TON destination,
+  Solana/TON source-state, and TRON source bridge CLI redaction regressions to
+  inject `RuntimeError`, and updated the release public scalar inventories to
+  pin the new catch and regression markers.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py scripts/sccp_evm_destination_evidence.py scripts/sccp_solana_destination_evidence.py scripts/sccp_solana_source_state_evidence.py scripts/sccp_ton_destination_evidence.py scripts/sccp_ton_source_state_evidence.py scripts/sccp_tron_source_bridge_evidence.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_solana_destination_evidence_test.py pytests/scripts/sccp_solana_source_state_evidence_test.py pytests/scripts/sccp_ton_destination_evidence_test.py pytests/scripts/sccp_ton_source_state_evidence_test.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_solana_destination_evidence_test.py pytests/scripts/sccp_solana_source_state_evidence_test.py pytests/scripts/sccp_ton_destination_evidence_test.py pytests/scripts/sccp_ton_source_state_evidence_test.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py -q -k 'cli_redacts_top_level_exception_details'`
+    (`8` passed, `243` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `368` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `632` deselected)
+
+## 2026-06-13 SCCP launch-scope exclusion note
+
+- SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now. The
+  current launch scope remains Ethereum, BSC, Solana, TON, and TRON; do not
+  track that excluded network family as remaining SCCP launch work in this
+  cycle.
+
+## 2026-06-13 SCCP Solana route-canary pubkey TypeError redaction
+
+- Hardened the release bundle builder and strict release verifier Solana
+  route-canary public-key checks so `_decode_solana_base58` helper `TypeError`s
+  fail closed as canonical base58-address blockers.
+- Added an adversarial regression with a secret-bearing Solana pubkey parser
+  `TypeError`, and pinned the helper markers plus payload marker in both
+  release-readiness and strict release-bundle public scalar inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'solana_pubkey_redacts_typeerror'`
+    (`1` passed, `633` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `368` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `632` deselected)
+
+## 2026-06-13 Data-model Taikai segment manifest fixture checked signing
+
+- Routed the Taikai segment signing manifest roundtrip fixture through checked
+  deterministic Ed25519 seed expansion plus `SignatureOf::try_new`.
+- Verified the generated typed segment-signing body signature before the Norito
+  encode/decode roundtrip.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model segment_signing_manifest_round_trips --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP release CLI TypeError redaction
+
+- Hardened the release bundle and release-readiness report CLI boundaries so
+  helper `TypeError`s use the same fixed public diagnostics as existing
+  secret-bearing runtime failures.
+- Extended both release CLI redaction regressions to inject `RuntimeError` and
+  `TypeError`, asserting secret paths and exception class names stay out of
+  stderr.
+- Pinned the top-level multiline catch fragments and exception-loop markers in
+  the release public scalar inventory.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_bundle_cli_redacts_top_level_exception_details or release_readiness_report_cli_redacts_top_level_exception_details'`
+    (`2` passed, `1000` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `368` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `631` deselected)
+
+## 2026-06-13 xtask release-tooling checked signing
+
+- Routed SoraNet testnet drill bundles, FastPQ bench manifests, Taikai anchor
+  bundles, and OpenAPI manifest signing through `Signature::try_new`, returning
+  contextual command errors on signing backend failure.
+- Extended the FastPQ manifest signer regression to verify the emitted
+  signature bytes against the derived Ed25519 public key.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-xtask-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p xtask sign -- --nocapture`
+    (`17` passed, `318` filtered out in `src/main.rs`; auxiliary xtask bins and
+    integration tests had `0` matched tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-xtask-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p xtask --all-targets --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP release verifier hex predicate TypeError redaction
+
+- Hardened release-readiness and strict bundle verifier `_is_nonzero_hex32` and
+  `_is_hex32` helpers so parser `TypeError`s fail closed as canonical hex
+  blockers instead of surfacing parser details.
+- Added adversarial readiness and bundle verifier regressions with
+  secret-bearing hex parser `TypeError`s, and pinned the helper markers plus
+  regression payloads in both public scalar source inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -q -k 'hex_predicates_redact_typeerror'`
+    (`2` passed, `1000` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `368` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `631` deselected)
+
+## 2026-06-13 SCCP EVM and TRON live CLI TypeError redaction
+
+- Hardened the EVM live, EVM source-live, and TRON live evidence CLI boundaries
+  so collection helper `TypeError`s use the same fixed public diagnostics as
+  existing secret-bearing runtime failures.
+- Extended the three live CLI redaction regressions to inject `RuntimeError` and
+  `TypeError`, asserting secret paths and exception class names stay out of
+  stderr.
+- Pinned the top-level multiline catch fragments and exception-loop markers in
+  both release-readiness and strict release-bundle public scalar inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_evm_live_evidence.py scripts/sccp_evm_source_live_evidence.py scripts/sccp_tron_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_tron_live_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_tron_live_evidence_test.py -q -k 'cli_redacts_top_level_exception_details'`
+    (`3` passed, `250` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `368` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `631` deselected)
+
+## 2026-06-13 SCCP all-lanes copied hex TypeError redaction
+
+- Hardened all-lanes canonical hex helpers so helper `TypeError`s collapse to
+  the existing malformed-value path instead of escaping parser details.
+- Added an adversarial all-lanes hex helper regression with a secret-bearing
+  `TypeError`, and pinned the catch tuple plus payload marker in both
+  release-readiness and strict release-bundle public scalar inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_all_lanes_evidence_test.py -q -k 'hex_helpers_redact_typeerror or base64_helper_redacts_parser_causes'`
+    (`2` passed, `165` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `630` deselected)
+
+## 2026-06-13 SCCP Solana and TON live CLI TypeError redaction
+
+- Hardened the Solana and TON live evidence CLI boundaries so collection helper
+  `TypeError`s use the same fixed public diagnostics as existing secret-bearing
+  runtime failures.
+- Extended both live CLI redaction regressions to inject `RuntimeError` and
+  `TypeError`, asserting secret paths and exception class names stay out of
+  stderr.
+- Pinned the top-level catch tuples and exception-loop markers in both
+  release-readiness and strict release-bundle public scalar inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_solana_live_evidence.py scripts/sccp_ton_live_evidence.py pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_ton_live_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_ton_live_evidence_test.py -q -k 'cli_redacts_top_level_exception_details'`
+    (`2` passed, `51` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `630` deselected)
+
+## 2026-06-13 Data-model query signature fixture checked signing
+
+- Routed `QuerySignature` decode/roundtrip fixtures through checked
+  deterministic Ed25519 key generation plus `SignatureOf::try_new`.
+- Verified the generated typed query payload signature before serializing the
+  `QuerySignature`, and switched the query `try_sign` parity fixture to checked
+  Ed25519 key generation.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model query_signature --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo test -j 1 -p iroha_data_model query_request_try_sign_matches_compatibility_sign --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `cargo fmt --package iroha_data_model -- --check`
+  - `cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-13 SCCP EVM live hex parser TypeError redaction
+
+- Hardened EVM source-live offline component hex, source-live JSON-RPC hex, EVM
+  live JSON-RPC hex, and EVM live copied scalar hex parsing so helper
+  `TypeError`s become fixed public parser diagnostics.
+- Added adversarial EVM live/source-live regressions with secret-bearing
+  `TypeError`s, and pinned the catch tuple plus payload markers in both
+  release-readiness and strict release-bundle public scalar inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py -q -k 'hex_parsers_redact_typeerror'`
+    (`2` passed, `66` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `630` deselected)
+
+## 2026-06-13 SCCP TRON source-bridge CLI TypeError redaction
+
+- Hardened the TRON source-bridge evidence CLI boundary so helper `TypeError`s
+  use the same fixed public diagnostic as secret-bearing value failures.
+- Extended the TRON source CLI redaction regression to inject both `TypeError`
+  and `ValueError`, asserting secret paths and exception class names stay out
+  of stderr.
+- Pinned the top-level catch tuple and exception-loop marker in both
+  release-readiness and strict release-bundle public scalar inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_tron_source_bridge_evidence.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_tron_source_bridge_evidence_test.py -q -k 'cli_redacts_top_level_exception_details'`
+    (`1` passed, `83` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `630` deselected)
+
+## 2026-06-13 SCCP TON direct CLI TypeError redaction
+
+- Hardened the TON destination and source-state evidence CLI boundaries so
+  helper `TypeError`s use the same fixed public diagnostic as existing
+  secret-bearing top-level failures.
+- Extended the TON direct CLI redaction regressions to inject `TypeError`
+  alongside the existing failure classes while asserting secret paths and
+  exception class names stay out of stderr.
+- Pinned the top-level catch tuples and exception-loop markers in both
+  release-readiness and strict release-bundle public scalar inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_ton_destination_evidence.py scripts/sccp_ton_source_state_evidence.py pytests/scripts/sccp_ton_destination_evidence_test.py pytests/scripts/sccp_ton_source_state_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_ton_destination_evidence_test.py pytests/scripts/sccp_ton_source_state_evidence_test.py -q -k 'cli_redacts_top_level_exception_details'`
+    (`2` passed, `45` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `630` deselected)
+
+## 2026-06-13 SCCP TRON source-bridge parser TypeError redaction
+
+- Hardened TRON source-bridge fixed-width hex, runtime bytecode hex, and
+  hex-form address parsers so helper `TypeError`s become fixed public
+  `must be hex` diagnostics.
+- Added an adversarial direct-parser regression with a secret-bearing
+  `TypeError`, and pinned the catch tuple plus payload marker in both
+  release-readiness and strict release-bundle public scalar inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_tron_source_bridge_evidence.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_tron_source_bridge_evidence_test.py -q -k 'direct_parsers_redact'`
+    (`2` passed, `82` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `630` deselected)
+
+## 2026-06-13 SCCP Solana direct CLI TypeError redaction
+
+- Hardened the Solana destination and source-state evidence CLI boundaries so
+  helper `TypeError`s use the same fixed public diagnostic as existing
+  secret-bearing top-level failures.
+- Extended the Solana direct CLI redaction regressions to inject `TypeError`
+  alongside the existing failure classes while asserting secret paths and
+  exception class names stay out of stderr.
+- Pinned the top-level catch tuples and exception-loop markers in both
+  release-readiness and strict release-bundle public scalar inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_solana_destination_evidence.py scripts/sccp_solana_source_state_evidence.py pytests/scripts/sccp_solana_destination_evidence_test.py pytests/scripts/sccp_solana_source_state_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_solana_destination_evidence_test.py pytests/scripts/sccp_solana_source_state_evidence_test.py -q -k 'cli_redacts_top_level_exception_details'`
+    (`2` passed, `41` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `630` deselected)
+
+## 2026-06-13 SCCP TON direct parser TypeError redaction
+
+- Hardened the TON source-state fixed-width hex parser, TON destination
+  fixed-width/code-BoC hex parsers, and TON code-BoC base64/url decoder path so
+  helper `TypeError`s become fixed public parser diagnostics.
+- Added adversarial source and destination regressions with secret-bearing
+  `TypeError`s, and pinned the catch tuple plus payload markers in both
+  release-readiness and strict release-bundle public scalar inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_ton_source_state_evidence.py pytests/scripts/sccp_ton_source_state_evidence_test.py scripts/sccp_ton_destination_evidence.py pytests/scripts/sccp_ton_destination_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_ton_source_state_evidence_test.py pytests/scripts/sccp_ton_destination_evidence_test.py -q -k 'hex_parser or direct_parsers_redact or code_boc_base64_redacts_typeerror'`
+    (`7` passed, `40` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `630` deselected)
+
+## 2026-06-13 SCCP EVM-family source CLI TypeError redaction
+
+- Hardened the ETH and BSC source-bridge evidence CLI boundaries so helper
+  `TypeError`s use the same fixed public diagnostic as secret-bearing value
+  failures.
+- Extended the ETH and BSC source CLI redaction regressions to inject both
+  `TypeError` and `ValueError`, asserting secret paths and exception class names
+  stay out of stderr.
+- Pinned the top-level catch tuple and exception-loop marker in both
+  release-readiness and strict release-bundle public scalar inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py -q -k 'cli_redacts_top_level_exception_details'`
+    (`2` passed, `53` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `630` deselected)
+
+## 2026-06-13 SCCP Solana direct parser TypeError redaction
+
+- Hardened the Solana source-state fixed-width hex parser and Solana
+  destination fixed-width/program-byte hex parsers so helper `TypeError`s
+  become fixed public `must be hex` diagnostics.
+- Added adversarial source and destination parser regressions with
+  secret-bearing `TypeError`s, and pinned the catch tuple plus payload markers
+  in both release-readiness and strict release-bundle public scalar inventories.
+- Validation:
+  - `python3 -m compileall -q scripts/sccp_solana_source_state_evidence.py pytests/scripts/sccp_solana_source_state_evidence_test.py scripts/sccp_solana_destination_evidence.py pytests/scripts/sccp_solana_destination_evidence_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_solana_source_state_evidence_test.py pytests/scripts/sccp_solana_destination_evidence_test.py -q -k 'hex_parser'`
+    (`6` passed, `37` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -q -k 'release_public_scalar_text_schema_gate_inventory'`
+    (`1` passed, `367` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'release_public_scalar_text_schema_inventory'`
+    (`2` passed, `630` deselected)
+
+## 2026-06-13 Torii offline v2 issuer fixture checked signing
+
+- Routed offline v2 issuer test fixture key generation through
+  `KeyPair::try_from_seed` and attestation receipt fixture signing through
+  `Signature::try_new`.
+- Added a wrong-verifier attestation receipt regression while keeping the
+  certificate-key canonicalization, receipt-required, body-auth, lineage, and
+  redemption coverage on checked fixture material.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-offline-v2-signing CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --lib offline_v2_issuer::tests:: -- --nocapture`
+    (`16` passed, `2398` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-offline-v2-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --no-deps -- -D warnings`
+
 ## 2026-06-13 SCCP EVM source-bridge hex TypeError redaction
 
 - Hardened the ETH and BSC source-bridge fixed-width and runtime-bytecode hex
@@ -753,9 +1280,8 @@ Last updated: 2026-06-13
   formal model as an aggregate over the already wired RBC state/evidence
   provenance proofs, local state/evidence classifiers, delivered-entry
   classifier, corrupted-entry classifier, and corrupted-repair exit classifier.
-- Kept the fast, deep, and TLC-fast configs on those constituent obligations
-  directly instead of adding duplicate solver-heavy temporal aliases for the
-  aggregate body.
+- Wired the fast, deep, and TLC-fast configs to check the aggregate theorem
+  alongside those constituent obligations.
 - Updated the Sumeragi formal README and roadmap proof inventory to describe
   the aggregate composition.
 - Validation:
@@ -764,12 +1290,17 @@ Last updated: 2026-06-13
     `10379` documented modes, `500` TLC fast modes, and `9873` TLC mutation
     modes wired consistently)
   - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
   - With Homebrew OpenJDK 21 on `JAVA_HOME`/`PATH`,
     `target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-rbc-progress-aggregate typecheck docs/formal/sumeragi/Sumeragi.tla`
     passes (`EXITCODE: OK`).
-  - The TLC fast rerun was not completed in this turn because another active
-    agent session was already running `Sumeragi_tlc_fast.cfg` against a shared
-    Sumeragi TLC metadata directory.
+  - With Homebrew OpenJDK 21 on `JAVA_HOME`/`PATH`, an isolated TLC fast run
+    against `docs/formal/sumeragi/Sumeragi_tlc_fast.cfg` with metadata in
+    `target/tlc/sumeragi-fast-rbc-progress-clean-20260613105257` passed
+    (`7799` states generated, `2338` distinct states found, `0` states left on
+    queue, depth `24`, `15` temporal branches, no errors, `06h 23min`).
 
 ## 2026-06-13 Recursive spend JVM guard validation
 

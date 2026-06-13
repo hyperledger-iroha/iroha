@@ -10173,7 +10173,8 @@ fn sign_manifest_payload(
         )
     })?;
     let key_pair: KeyPair = private_key.clone().into();
-    let signature = Signature::new(key_pair.private_key(), payload);
+    let signature = Signature::try_new(key_pair.private_key(), payload)
+        .map_err(|err| format!("failed to sign OpenAPI manifest payload: {err}"))?;
     let (algorithm, public_bytes) = key_pair
         .public_key()
         .try_to_bytes()

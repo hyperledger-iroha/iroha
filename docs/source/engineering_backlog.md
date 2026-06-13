@@ -5136,7 +5136,21 @@ redistributable schemas, and official trust/revocation bundles.
     test/restored state construction uses nonzero deterministic seed material
     under the all-zero seed admission policy; client query request body assembly
     now uses `QueryRequestWithAuthority::try_sign` and returns a contextual
-    `QueryError` before HTTP dispatch on backend signing failure; client
+    `QueryError` before HTTP dispatch on backend signing failure; data-model
+    `QuerySignature` roundtrip fixtures now use checked Ed25519 key generation
+    plus `SignatureOf::try_new`, verifying typed query payload signatures before
+    serialization; data-model Taikai segment signing manifest fixtures now use
+    checked seeded Ed25519 key generation plus `SignatureOf::try_new`, verifying
+    typed body signatures before Norito roundtrip; data-model moderation
+    reproducibility manifest fixtures now use checked random Ed25519 key
+    generation plus `SignatureOf::try_new`, verifying typed body signatures
+    before validation consumes them; data-model RAM-LFE receipt and
+    output-opening fixtures now use checked random Ed25519 key generation plus
+    `SignatureOf::try_new`, verifying typed signatures before wrong-key and
+    tamper regressions consume them; data-model governance parliament roster and
+    enactment certificate fixtures now use checked random Ed25519 key generation
+    plus `SignatureOf::try_new`, verifying typed enactment signatures before
+    Norito roundtrips consume them; client
     transaction build/sign helpers now use `TransactionBuilder::try_sign` and
     return contextual `eyre` errors from fallible construction/submission paths
     while retaining compatibility wrappers for existing infallible callers;
@@ -5311,16 +5325,35 @@ redistributable schemas, and official trust/revocation bundles.
     seeded Ed25519 key generation plus `Signature::try_new`, with wrong-verifier
     receipt, stale/replay/tampered body proof, multisig, certificate
     usage-limit, signed-balance tamper, and refill lineage coverage on checked
-    fixtures; native AMX BLS vote fixtures now use checked seeded/random key
-    generation plus `Signature::try_new`, verifying each vote preimage
-    signature before aggregate-QC ordering and rejection regressions consume it;
-    Sumeragi vote-verifier checked BLS batch fixtures now use non-zero
-    deterministic seed material accepted by `KeyPair::try_from_seed`, with
-    wrong-validator, non-BLS public-key, pending-block, block-sync/QC,
-    payload-availability, and P2P topology helper regressions rerun on checked
-    Sumeragi fixture signatures;
-    JDG SDN seals and committee attestation fixtures now use checked random key
-    generation, `SignatureOf::try_from_hash`, and `Signature::try_new`,
+    fixtures; Torii offline v2 issuer fixtures now route local seeded Ed25519
+    material through `KeyPair::try_from_seed` and attestation receipts through
+    `Signature::try_new`, with wrong-verifier and certificate-key
+    canonicalization regressions covering the receipt path; xtask SoraNet
+    testnet drill bundle, FastPQ bench manifest, Taikai anchor bundle, and
+    OpenAPI manifest signers now propagate `Signature::try_new` failures with
+    command context, with the signing-focused xtask suite verifying the
+    generated signature envelopes; xtask SoraNet rollout capture and SoraDNS
+    release directory signers now use `Signature::try_new`, checked seeded
+    fixture keypairs, and focused signature-verification regressions; xtask I3
+    benchmark proof fixtures now use nonzero checked Ed25519 seed material,
+    `Signature::try_new`, and immediate signature verification before benchmark
+    scenarios consume commit-certificate, attestation, or bridge proofs; native AMX BLS vote
+	fixtures now use checked seeded/random key
+	generation plus `Signature::try_new`, verifying each vote preimage
+	signature before aggregate-QC ordering and rejection regressions consume it;
+	Sumeragi vote-verifier checked BLS batch fixtures now use non-zero
+	deterministic seed material accepted by `KeyPair::try_from_seed`, with
+	wrong-validator, non-BLS public-key, pending-block, block-sync/QC,
+	payload-availability, and P2P topology helper regressions rerun on checked
+	Sumeragi fixture signatures; Sumeragi main-loop RBC/QC fixtures now share
+	checked `Signature::try_new` and `SignatureOf::try_from_hash` helpers for
+	READY/DELIVER evidence, leader-signature mutations, aggregate vote/QC,
+	checkpoint, and telemetry fuzz fixtures, with forged-leader, malformed-shape,
+	invalid INIT/seed/frontier, NPoS rotated-signer, and mismatched-signer
+	regressions rerun under `sumeragi-main-loop-tests` and the gated telemetry
+	fuzz case rerun under `telemetry`;
+	JDG SDN seals and committee attestation fixtures now use checked random key
+	generation, `SignatureOf::try_from_hash`, and `Signature::try_new`,
     verifying fixture signatures before SDN, simple-threshold, and BLS aggregate guard
     regressions consume them; data-model JDG SDN commitment fixtures now also
     use checked random key generation plus `SignatureOf::try_from_hash`,

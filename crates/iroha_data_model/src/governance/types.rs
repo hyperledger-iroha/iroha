@@ -919,6 +919,14 @@ mod tests {
     use super::*;
     use crate::{AccountId, DomainId};
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked governance fixture keypair")
+    }
+
+    fn checked_account_id() -> AccountId {
+        AccountId::new(checked_random_keypair().public_key().clone())
+    }
+
     #[test]
     fn contract_hash_roundtrips_hex() {
         let raw = [0xAAu8; 32];
@@ -1091,11 +1099,8 @@ mod tests {
         use std::collections::BTreeMap;
 
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let members = vec![
-            AccountId::new(KeyPair::random().public_key().clone()),
-            AccountId::new(KeyPair::random().public_key().clone()),
-        ];
-        let alternates = vec![AccountId::new(KeyPair::random().public_key().clone())];
+        let members = vec![checked_account_id(), checked_account_id()];
+        let alternates = vec![checked_account_id()];
 
         let roster = ParliamentRoster {
             body: ParliamentBody::RulesCommittee,
@@ -1152,7 +1157,7 @@ mod tests {
     #[test]
     fn governance_enactment_certificate_roundtrip() {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let signer = AccountId::new(keypair.public_key().clone());
         let payload = GovernanceEnactment {
             referendum_id: ProposalId([0x10; 32]),
@@ -1162,7 +1167,11 @@ mod tests {
                 upper: 18,
             },
         };
-        let signature = SignatureOf::new(keypair.private_key(), &payload);
+        let signature = SignatureOf::try_new(keypair.private_key(), &payload)
+            .expect("sign checked governance enactment fixture");
+        signature
+            .verify(keypair.public_key(), &payload)
+            .expect("checked governance enactment fixture verifies");
         let cert = GovernanceEnactmentCertificate {
             payload,
             signatures: GovernanceEnactmentSignatureSet {
@@ -1184,7 +1193,7 @@ mod tests {
     #[test]
     fn parliament_enactment_certificate_roundtrip() {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let signer = AccountId::new(keypair.public_key().clone());
         let payload = ParliamentEnactment {
             preimage_hash: [0x33; 32],
@@ -1193,7 +1202,11 @@ mod tests {
                 upper: 28,
             },
         };
-        let signature = SignatureOf::new(keypair.private_key(), &payload);
+        let signature = SignatureOf::try_new(keypair.private_key(), &payload)
+            .expect("sign checked parliament enactment fixture");
+        signature
+            .verify(keypair.public_key(), &payload)
+            .expect("checked parliament enactment fixture verifies");
         let cert = ParliamentEnactmentCertificate {
             payload,
             signatures: ParliamentEnactmentSignatureSet {

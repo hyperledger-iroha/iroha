@@ -57,39 +57,42 @@ def ton_args(module):
 def test_ton_source_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
-    def fail_validate(_args):
-        raise SystemExit("secret-token /tmp/operator/private-path")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module, "_validate_ton_source_evidence_args", fail_validate)
+        def fail_validate(_args, exception_type=exception_type):
+            raise exception_type("secret-token /tmp/operator/private-path")
 
-    try:
-        module.main(
-            [
-                "--source-trust-anchor-hash",
-                "0x" + "44" * 32,
-                "--consensus-verifier-hash",
-                "0x" + "55" * 32,
-                "--message-inclusion-verifier-hash",
-                "0x" + "66" * 32,
-                "--source-state-verifier-hash",
-                "0x" + "77" * 32,
-                "--finality-policy-hash",
-                "0x" + "88" * 32,
-                "--adapter-verifier-vk-hash",
-                "0x" + TON_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR,
-                "--deployment-receipt-hash",
-                "0x" + "aa" * 32,
-            ]
-        )
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("TON source CLI accepted top-level render failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "_validate_ton_source_evidence_args", fail_validate)
+            try:
+                module.main(
+                    [
+                        "--source-trust-anchor-hash",
+                        "0x" + "44" * 32,
+                        "--consensus-verifier-hash",
+                        "0x" + "55" * 32,
+                        "--message-inclusion-verifier-hash",
+                        "0x" + "66" * 32,
+                        "--source-state-verifier-hash",
+                        "0x" + "77" * 32,
+                        "--finality-policy-hash",
+                        "0x" + "88" * 32,
+                        "--adapter-verifier-vk-hash",
+                        "0x" + TON_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR,
+                        "--deployment-receipt-hash",
+                        "0x" + "aa" * 32,
+                    ]
+                )
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError("TON source CLI accepted top-level render failure")
 
-    captured = capsys.readouterr()
-    assert "SCCP TON source-state evidence rendering failed" in captured.err
-    assert "secret-token" not in captured.err
-    assert "private-path" not in captured.err
+            captured = capsys.readouterr()
+            assert "SCCP TON source-state evidence rendering failed" in captured.err
+            assert "secret-token" not in captured.err
+            assert "private-path" not in captured.err
+            assert exception_type.__name__ not in captured.err
 
 
 def test_ton_hex_parser_rejects_zero_and_wrong_width():
@@ -155,6 +158,33 @@ def test_ton_source_hex_parser_redacts_parser_causes():
         assert exc.__suppress_context__ is True
     else:
         raise AssertionError("invalid TON source-state hex was accepted")
+
+
+def test_ton_source_hex_parser_redacts_typeerror_parser_causes(monkeypatch):
+    module = load_evidence_module()
+
+    class SecretBytes:
+        @staticmethod
+        def fromhex(_text):
+            raise TypeError("secret-token TON source hex TypeError detail")
+
+    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+
+    try:
+        module.parse_hex_bytes(
+            "0x" + "11" * 32,
+            label="source state verifier hash",
+            byte_length=32,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "source state verifier hash must be hex"
+        assert "secret-token" not in rendered
+        assert "TypeError" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("TON source-state parser TypeError was accepted")
 
 
 def test_ton_source_domain_parser_requires_canonical_ascii_decimal():

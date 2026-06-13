@@ -918,7 +918,7 @@ def _hex_bytes(value: Any, *, byte_length: int) -> bytes | None:
         return None
     try:
         return bytes.fromhex(text)
-    except ValueError:
+    except (TypeError, ValueError):
         return None
 
 
@@ -941,7 +941,7 @@ def _exact_hex_bytes(value: Any, *, byte_length: int) -> bytes | None:
         return None
     try:
         return bytes.fromhex(text)
-    except ValueError:
+    except (TypeError, ValueError):
         return None
 
 
@@ -3648,7 +3648,7 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
             return None
         try:
             return _decode_canonical_base64(value, label=label)
-        except ValueError:
+        except (TypeError, ValueError):
             errors.append(f"{label} is invalid")
             return None
 
@@ -5744,7 +5744,7 @@ def _check_solana_route_canary_live_program_evidence(
             return None
         try:
             return _decode_canonical_base64(value, label=label)
-        except ValueError:
+        except (TypeError, ValueError):
             errors.append(f"{label} is invalid")
             return None
 

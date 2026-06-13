@@ -684,27 +684,30 @@ def test_tron_api_redacts_exception_causes():
 def test_tron_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_live_module()
 
-    def fail_collect(_args):
-        raise RuntimeError("secret-token /tmp/operator/private-path")
+    for exception_type in (RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module, "collect_live_evidence", fail_collect)
+        def fail_collect(_args, exception_type=exception_type):
+            raise exception_type("secret-token /tmp/operator/private-path")
 
-    try:
-        module.main(
-            [
-                "--source-bridge-address",
-                module.tron_base58check_from_address20(TRON_TEST_BRIDGE20),
-            ]
-        )
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("TRON live CLI accepted top-level collection failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "collect_live_evidence", fail_collect)
+            try:
+                module.main(
+                    [
+                        "--source-bridge-address",
+                        module.tron_base58check_from_address20(TRON_TEST_BRIDGE20),
+                    ]
+                )
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError("TRON live CLI accepted top-level collection failure")
 
-    captured = capsys.readouterr()
-    assert "SCCP TRON live evidence collection failed" in captured.err
-    assert "secret-token" not in captured.err
-    assert "private-path" not in captured.err
+            captured = capsys.readouterr()
+            assert "SCCP TRON live evidence collection failed" in captured.err
+            assert "secret-token" not in captured.err
+            assert "private-path" not in captured.err
+            assert exception_type.__name__ not in captured.err
 
 
 def test_tron_api_key_is_runtime_exact_ascii(tmp_path):

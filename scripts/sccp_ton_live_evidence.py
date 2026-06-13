@@ -737,7 +737,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_toml(args, live), end="")
         else:
             print(json.dumps(_summary(args, live), sort_keys=True, indent=2))
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP TON live evidence collection failed",

@@ -83,31 +83,36 @@ class OversizedErrorBody:
 def test_evm_source_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_live_module()
 
-    def fail_collect(_args):
-        raise RuntimeError("secret-token /tmp/operator/private-path")
+    for exception_type in (RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module, "collect_live_evidence", fail_collect)
+        def fail_collect(_args, exception_type=exception_type):
+            raise exception_type("secret-token /tmp/operator/private-path")
 
-    try:
-        module.main(
-            [
-                "--rpc-url",
-                "https://evm.example.invalid",
-                "--domain",
-                "eth",
-                "--bridge-address",
-                "0x" + "11" * 20,
-            ]
-        )
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("EVM source live CLI accepted top-level collection failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "collect_live_evidence", fail_collect)
+            try:
+                module.main(
+                    [
+                        "--rpc-url",
+                        "https://evm.example.invalid",
+                        "--domain",
+                        "eth",
+                        "--bridge-address",
+                        "0x" + "11" * 20,
+                    ]
+                )
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError(
+                    "EVM source live CLI accepted top-level collection failure"
+                )
 
-    captured = capsys.readouterr()
-    assert "SCCP EVM source live evidence collection failed" in captured.err
-    assert "secret-token" not in captured.err
-    assert "private-path" not in captured.err
+            captured = capsys.readouterr()
+            assert "SCCP EVM source live evidence collection failed" in captured.err
+            assert "secret-token" not in captured.err
+            assert "private-path" not in captured.err
+            assert exception_type.__name__ not in captured.err
 
 
 def fake_opener_for(
@@ -591,6 +596,44 @@ def test_evm_source_live_numeric_parsers_require_canonical_decimal():
         "deployment_receipt_block_receipts_root_verified": True,
     }
     assert module._source_bridge_deployment_receipt_is_verified(source_bridge) is False
+
+
+def test_evm_source_live_hex_parsers_redact_typeerror_parser_causes(monkeypatch):
+    module = load_live_module()
+
+    class SecretBytes:
+        @staticmethod
+        def fromhex(_text):
+            raise TypeError("secret-token EVM source live hex TypeError detail")
+
+    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+
+    try:
+        module._parse_hex32("0x" + "11" * 32, label="component hash")
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "component hash must be hex"
+        assert "secret-token" not in rendered
+        assert "TypeError" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("EVM source live component parser TypeError was accepted")
+
+    try:
+        module._rpc_hex_data("0x6000", method="eth_getCode source bridge")
+    except RuntimeError as exc:
+        rendered = str(exc)
+        assert (
+            rendered
+            == "eth_getCode source bridge returned non-canonical lowercase 0x hex data"
+        )
+        assert "secret-token" not in rendered
+        assert "TypeError" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("EVM source live RPC hex parser TypeError was accepted")
 
 
 def test_evm_source_live_block_tag_parser_rejects_unstable_or_noncanonical_tags():
@@ -1225,7 +1268,7 @@ def test_evm_source_live_redacts_receipt_field_parser_exception_causes(monkeypat
     )
 
     for target_method, expected_message in cases:
-        for exception_type in (TypeError, RuntimeError):
+        for exception_type in (TypeError, RuntimeError, ValueError):
             fake = fake_opener_for(module)
 
             def fail_target_receipt_field(

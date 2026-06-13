@@ -1541,7 +1541,7 @@ fn sign_vote_for_view_with_seed(
         .find(|kp| kp.public_key() == peer.public_key())
         .expect("matching keypair for signer");
     let preimage = super::vote_preimage(chain, mode_tag, vote);
-    let sig = Signature::new(kp.private_key(), &preimage);
+    let sig = checked_signature(kp.private_key(), &preimage);
     vote.bls_sig = sig.payload().to_vec();
 }
 
@@ -24662,8 +24662,8 @@ async fn fetch_pending_block_keeps_rbc_transport_rebuildable_when_da_enabled() {
             .is_none(),
         "RBC INIT rebuild must reject non-canonical payload bytes even when their hash matches"
     );
-    let wrong_key = KeyPair::random();
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block_clone.hash());
+    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block_clone.hash());
     let mut wrong_signed_block = block_clone.clone();
     wrong_signed_block
         .replace_signatures(BTreeSet::from([BlockSignature::new(
@@ -82062,7 +82062,7 @@ fn validate_checkpoint_roster_binds_chain_order() {
         bls_sig: Vec::new(),
     };
     let preimage = super::vote_preimage(&chain, PERMISSIONED_TAG, &vote);
-    let signature = Signature::new(kp.private_key(), &preimage);
+    let signature = checked_signature(kp.private_key(), &preimage);
     let bls_aggregate_signature =
         iroha_crypto::bls_normal_aggregate_signatures(&[signature.payload()])
             .expect("single-signature aggregate succeeds");
@@ -125890,7 +125890,7 @@ fn resign_qc_for_actor(
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("matching keypair for signer");
-        let sig = Signature::new(kp.private_key(), &preimage);
+        let sig = checked_signature(kp.private_key(), &preimage);
         signatures.push(sig.payload().to_vec());
     }
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -132621,7 +132621,7 @@ async fn handle_qc_uses_height_prf_seed() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("matching keypair for signer");
-        let sig = Signature::new(kp.private_key(), &preimage);
+        let sig = checked_signature(kp.private_key(), &preimage);
         signatures.push(sig.payload().to_vec());
     }
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -132772,7 +132772,7 @@ async fn handle_qc_uses_activation_height_mode_tag() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("matching keypair for signer");
-        let sig = Signature::new(kp.private_key(), &preimage);
+        let sig = checked_signature(kp.private_key(), &preimage);
         signatures.push(sig.payload().to_vec());
     }
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -166352,7 +166352,7 @@ fn validate_block_sync_qc_accepts_npos_rotated_signers_across_views() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("matching keypair for signer");
-        let sig = Signature::new(kp.private_key(), &preimage);
+        let sig = checked_signature(kp.private_key(), &preimage);
         signatures.push(sig.payload().to_vec());
     }
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -169181,7 +169181,7 @@ fn validate_qc_against_votes_fuzzes_mismatched_signers_and_tags_telemetry() {
                 bls_sig: Vec::new(),
             };
             let preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote);
-            let sig = Signature::new(kp.private_key(), &preimage);
+            let sig = checked_signature(kp.private_key(), &preimage);
             vote.bls_sig = sig.payload().to_vec();
             vote_log.insert(vote_log_key_for_vote(&vote), vote);
         }

@@ -359,29 +359,32 @@ def test_live_ton_account_states_redacts_transport_and_error_response_details():
 def test_ton_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_live_module()
 
-    def fail_collect(*_args, **_kwargs):
-        raise RuntimeError("secret-token /tmp/operator/private-path")
+    for exception_type in (RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module, "collect_live_evidence", fail_collect)
+        def fail_collect(*_args, exception_type=exception_type, **_kwargs):
+            raise exception_type("secret-token /tmp/operator/private-path")
 
-    try:
-        module.main(
-            [
-                "--api-url",
-                "https://toncenter.example",
-                "--verifier-contract-address",
-                TON_VERIFIER_CONTRACT_ADDRESS,
-            ]
-        )
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("TON live CLI accepted top-level collection failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "collect_live_evidence", fail_collect)
+            try:
+                module.main(
+                    [
+                        "--api-url",
+                        "https://toncenter.example",
+                        "--verifier-contract-address",
+                        TON_VERIFIER_CONTRACT_ADDRESS,
+                    ]
+                )
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError("TON live CLI accepted top-level collection failure")
 
-    captured = capsys.readouterr()
-    assert "SCCP TON live evidence collection failed" in captured.err
-    assert "secret-token" not in captured.err
-    assert "private-path" not in captured.err
+            captured = capsys.readouterr()
+            assert "SCCP TON live evidence collection failed" in captured.err
+            assert "secret-token" not in captured.err
+            assert "private-path" not in captured.err
+            assert exception_type.__name__ not in captured.err
 
 
 def test_live_ton_last_transaction_lt_requires_canonical_ascii_decimal():

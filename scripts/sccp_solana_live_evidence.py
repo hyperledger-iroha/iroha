@@ -381,21 +381,21 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
             str(live.get("verifier_program_id", "")),
             label="verifier program id",
         )
-    except (argparse.ArgumentTypeError, TypeError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError("Solana live verifier program id metadata is invalid") from None
     try:
         programdata_address = evidence.normalize_solana_program_id(
             str(live.get("programdata_address", "")),
             label="programdata address",
         )
-    except (argparse.ArgumentTypeError, TypeError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError("Solana live ProgramData address metadata is invalid") from None
     try:
         verifier_code_hash = _parse_hex32(
             str(live.get("verifier_code_hash", "")),
             label="verifier_code_hash",
         )
-    except (argparse.ArgumentTypeError, TypeError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError("Solana live verifier code hash metadata is invalid") from None
     if programdata_address == program_id:
         raise ValueError("Solana verifier ProgramData account must differ from program id")
@@ -412,7 +412,7 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
             executable_base64,
             label="Solana ProgramData executable base64 metadata",
         )
-    except (argparse.ArgumentTypeError, TypeError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError("Solana ProgramData executable base64 metadata is invalid") from None
     derived_code_hash = evidence.solana_verifier_program_code_hash(program_bytes)
     if derived_code_hash != verifier_code_hash:
@@ -483,7 +483,7 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
             programdata_address,
             label="programdata address",
         )
-    except (argparse.ArgumentTypeError, TypeError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError(
             "Solana Program account ProgramData address metadata is invalid"
         ) from None
@@ -926,7 +926,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_toml(args, live), end="")
         else:
             print(json.dumps(_summary(args, live), sort_keys=True, indent=2))
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP Solana live evidence collection failed",
