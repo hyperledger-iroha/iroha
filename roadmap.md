@@ -45,6 +45,13 @@ and completed history lives in [`status.md`](./status.md).
   bundles, record bundles, proof attachments, verifier records, and lineage
   witnesses at construction time; keep this fail-fast contract for wallet
   request assembly instead of relying on later encode or native dispatch errors.
+- Confidential-v2 JVM/Android proof assembly now has typed transfer and
+  unshield witness/request codecs for the production native bridge. Keep wallet
+  integrations on these builders instead of raw witness bytes so canonical
+  u128 values, fixed 32-byte fields, bounded commitment trees, duplicate
+  input rejection, transfer/unshield shape separation, exact verifier
+  references, public-input schema constants, and the native Norito witness
+  alignment padding remain pinned by SDK and Rust golden-vector tests.
 - Kagemusha C# SDK validation remains a Windows-machine follow-up because this
   macOS host does not have `dotnet` installed. On Windows, install or select a
   .NET 8 SDK, run the standalone C# Kagemusha guard

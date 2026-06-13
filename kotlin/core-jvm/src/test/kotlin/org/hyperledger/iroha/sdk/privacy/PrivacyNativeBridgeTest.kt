@@ -145,6 +145,129 @@ class PrivacyNativeBridgeTest {
     }
 
     @Test
+    fun typedConfidentialWitnessBuildersEncodeNativeReadyRequests() {
+        val transferWitness = sampleTransferWitness()
+        val transferWitnessArchive = PrivacyConfidentialWitnessCodecs.encodeTransferWitness(transferWitness)
+        assertTrue(PrivacyNativeBridge.isValidPrivacyNoritoArchive(transferWitnessArchive))
+        assertFalse(PrivacyNativeBridge.hasPrivacyNoritoSchema(transferWitnessArchive, 0x52))
+
+        val transferRequest =
+            PrivacyConfidentialWitnessCodecs.buildConfidentialTransferProofRequestV1(transferWitness)
+        assertTrue(PrivacyNativeBridge.isValidPrivacyNoritoArchive(transferRequest))
+        assertTrue(PrivacyNativeBridge.hasPrivacyNoritoSchema(transferRequest, 0x52))
+        assertTrue(PrivacyNativeBridge.hasNonEmptyPrivacyNoritoPayload(transferRequest))
+        val transferOutput = PrivacyNativeBridge.call(
+            label = "build proof",
+            requestArchive = transferRequest,
+            nativeCall = { request ->
+                assertTrue(request.contentEquals(transferRequest))
+                privacyNoritoFrameWithPayload(0x42)
+            },
+            bridgeAvailable = true,
+        )
+        assertTrue(transferOutput.contentEquals(privacyNoritoFrameWithPayload(0x42)))
+
+        val verifyRequest =
+            PrivacyConfidentialWitnessCodecs.buildConfidentialTransferVerifyRequestV1(byteArrayOf(1, 2, 3))
+        assertTrue(PrivacyNativeBridge.hasPrivacyNoritoSchema(verifyRequest, 0x52))
+        val verifyOutput = PrivacyNativeBridge.call(
+            label = "verify proof",
+            requestArchive = verifyRequest,
+            nativeCall = { request ->
+                assertTrue(request.contentEquals(verifyRequest))
+                privacyNoritoFrameWithPayload(0x56)
+            },
+            bridgeAvailable = true,
+        )
+        assertTrue(verifyOutput.contentEquals(privacyNoritoFrameWithPayload(0x56)))
+
+        val unshieldRequest =
+            PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldProofRequestV1(sampleUnshieldWitness())
+        assertTrue(PrivacyNativeBridge.isValidPrivacyNoritoArchive(unshieldRequest))
+        assertTrue(PrivacyNativeBridge.hasPrivacyNoritoSchema(unshieldRequest, 0x52))
+        assertTrue(PrivacyNativeBridge.hasNonEmptyPrivacyNoritoPayload(unshieldRequest))
+    }
+
+    @Test
+    fun typedConfidentialWitnessBuildersRejectAmbiguousShapes() {
+        val transferWitness = sampleTransferWitness()
+        val unshieldWitness = sampleUnshieldWitness()
+
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyConfidentialWitnessCodecs.buildConfidentialTransferProofRequestV1(
+                transferWitness,
+                "halo2-ipa-pasta:confidential_unshield_v3",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyConfidentialWitnessCodecs.buildConfidentialTransferVerifyRequestV1(ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyConfidentialWitnessCodecs.encodeTransferWitness(
+                PrivacyConfidentialWitnessV1(
+                    chainId = transferWitness.chainId,
+                    assetDefinitionId = transferWitness.assetDefinitionId,
+                    spendKey = transferWitness.spendKey,
+                    treeCommitments = transferWitness.treeCommitments,
+                    inputs = transferWitness.inputs,
+                    transferOutputs = emptyList(),
+                    unshieldChange = emptyList(),
+                    publicAmount = "0",
+                    rootHint = transferWitness.rootHint,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyConfidentialWitnessCodecs.encodeUnshieldWitness(
+                PrivacyConfidentialWitnessV1(
+                    chainId = unshieldWitness.chainId,
+                    assetDefinitionId = unshieldWitness.assetDefinitionId,
+                    spendKey = unshieldWitness.spendKey,
+                    treeCommitments = unshieldWitness.treeCommitments,
+                    inputs = unshieldWitness.inputs,
+                    transferOutputs = transferWitness.transferOutputs,
+                    unshieldChange = emptyList(),
+                    publicAmount = "0",
+                    rootHint = unshieldWitness.rootHint,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyConfidentialWitnessV1(
+                chainId = transferWitness.chainId,
+                assetDefinitionId = transferWitness.assetDefinitionId,
+                spendKey = transferWitness.spendKey,
+                treeCommitments = transferWitness.treeCommitments,
+                inputs = transferWitness.inputs + transferWitness.inputs.first(),
+                transferOutputs = transferWitness.transferOutputs,
+                unshieldChange = emptyList(),
+                publicAmount = "0",
+                rootHint = transferWitness.rootHint,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyConfidentialWitnessV1(
+                chainId = transferWitness.chainId,
+                assetDefinitionId = transferWitness.assetDefinitionId,
+                spendKey = transferWitness.spendKey,
+                treeCommitments = transferWitness.treeCommitments,
+                inputs = listOf(
+                    PrivacyConfidentialNoteWitnessV1(
+                        amount = "7",
+                        rho = repeated(0x22, 32),
+                        diversifier = repeated(0x33, 32),
+                        leafIndex = 1,
+                    ),
+                ),
+                transferOutputs = transferWitness.transferOutputs,
+                unshieldChange = emptyList(),
+                publicAmount = "0",
+                rootHint = transferWitness.rootHint,
+            )
+        }
+    }
+
+    @Test
     fun nativeAvailabilityProbeArchiveIsStableAndDefensive() {
         val first = PrivacyNativeBridge.privacyNativeAvailabilityProbeArchive()
         val second = PrivacyNativeBridge.privacyNativeAvailabilityProbeArchive()
@@ -1005,4 +1128,57 @@ class PrivacyNativeBridgeTest {
         privacyNoritoFrameWithSchemaOverride(0x52, 6, 0x42),
         privacyNoritoFrameWithSchemaOverride(0x52, 21, 0x56),
     )
+
+    private fun sampleTransferWitness(): PrivacyConfidentialWitnessV1 =
+        PrivacyConfidentialWitnessV1(
+            chainId = "809574f5-fee7-5e69-bfcf-52451e42d50f",
+            assetDefinitionId = "xor#universal",
+            spendKey = repeated(0x11, 32),
+            treeCommitments = listOf(repeated(0x10, 32)),
+            inputs = listOf(
+                PrivacyConfidentialNoteWitnessV1(
+                    amount = "7",
+                    rho = repeated(0x22, 32),
+                    diversifier = repeated(0x33, 32),
+                    leafIndex = 0,
+                ),
+            ),
+            transferOutputs = listOf(
+                PrivacyConfidentialTransferOutputWitnessV1(
+                    amount = "7",
+                    rho = repeated(0x44, 32),
+                    ownerTag = repeated(0x55, 32),
+                ),
+            ),
+            unshieldChange = emptyList(),
+            publicAmount = "0",
+            rootHint = repeated(0x66, 32),
+        )
+
+    private fun sampleUnshieldWitness(): PrivacyConfidentialWitnessV1 =
+        PrivacyConfidentialWitnessV1(
+            chainId = "809574f5-fee7-5e69-bfcf-52451e42d50f",
+            assetDefinitionId = "xor#universal",
+            spendKey = repeated(0x71, 32),
+            treeCommitments = listOf(repeated(0x72, 32)),
+            inputs = listOf(
+                PrivacyConfidentialNoteWitnessV1(
+                    amount = "9",
+                    rho = repeated(0x73, 32),
+                    diversifier = repeated(0x74, 32),
+                    leafIndex = 0,
+                ),
+            ),
+            transferOutputs = emptyList(),
+            unshieldChange = listOf(
+                PrivacyConfidentialUnshieldChangeWitnessV1(
+                    amount = "4",
+                    rho = repeated(0x75, 32),
+                ),
+            ),
+            publicAmount = "5",
+            rootHint = repeated(0x76, 32),
+        )
+
+    private fun repeated(value: Int, count: Int): ByteArray = ByteArray(count) { value.toByte() }
 }

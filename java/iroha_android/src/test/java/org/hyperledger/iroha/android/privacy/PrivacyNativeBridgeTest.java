@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.privacy;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 public final class PrivacyNativeBridgeTest {
@@ -12,6 +13,8 @@ public final class PrivacyNativeBridgeTest {
     reportsFailClosedPrivacyCapabilities();
     rejectsEmptyRequestsBeforeNativeDispatch();
     rejectsInvalidProofRequestComponentsBeforeNativeDispatch();
+    typedConfidentialWitnessBuildersEncodeNativeReadyRequests();
+    typedConfidentialWitnessBuildersRejectAmbiguousShapes();
     nativeAvailabilityProbeArchiveIsStableAndDefensive();
     nativeProbeRequiresAbiAndAllPrivacySymbols();
     rejectsNullAndEmptyNativeOutputs();
@@ -218,6 +221,114 @@ public final class PrivacyNativeBridgeTest {
             "public-inputs".getBytes(java.nio.charset.StandardCharsets.UTF_8),
             new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2 + 1],
             new byte[0]));
+  }
+
+  private static void typedConfidentialWitnessBuildersEncodeNativeReadyRequests() {
+    final PrivacyConfidentialWitness.WitnessV1 transferWitness = sampleTransferWitness();
+    final byte[] transferWitnessArchive =
+        PrivacyConfidentialWitness.encodeTransferWitness(transferWitness);
+    assert PrivacyNativeBridge.isValidPrivacyNoritoArchive(transferWitnessArchive);
+    assert !PrivacyNativeBridge.hasPrivacyNoritoSchema(transferWitnessArchive, 0x52);
+
+    final byte[] transferRequest =
+        PrivacyConfidentialWitness.buildConfidentialTransferProofRequestV1(transferWitness);
+    assert PrivacyNativeBridge.isValidPrivacyNoritoArchive(transferRequest);
+    assert PrivacyNativeBridge.hasPrivacyNoritoSchema(transferRequest, 0x52);
+    assert PrivacyNativeBridge.hasNonEmptyPrivacyNoritoPayload(transferRequest);
+    final byte[] transferOutput =
+        PrivacyNativeBridge.call(
+            "build proof",
+            transferRequest,
+            request -> {
+              assert Arrays.equals(request, transferRequest);
+              return privacyNoritoFrameWithPayload(0x42);
+            },
+            true);
+    assert Arrays.equals(transferOutput, privacyNoritoFrameWithPayload(0x42));
+
+    final byte[] verifyRequest =
+        PrivacyConfidentialWitness.buildConfidentialTransferVerifyRequestV1(new byte[] {1, 2, 3});
+    assert PrivacyNativeBridge.hasPrivacyNoritoSchema(verifyRequest, 0x52);
+    final byte[] verifyOutput =
+        PrivacyNativeBridge.call(
+            "verify proof",
+            verifyRequest,
+            request -> {
+              assert Arrays.equals(request, verifyRequest);
+              return privacyNoritoFrameWithPayload(0x56);
+            },
+            true);
+    assert Arrays.equals(verifyOutput, privacyNoritoFrameWithPayload(0x56));
+
+    final byte[] unshieldRequest =
+        PrivacyConfidentialWitness.buildConfidentialUnshieldProofRequestV1(sampleUnshieldWitness());
+    assert PrivacyNativeBridge.isValidPrivacyNoritoArchive(unshieldRequest);
+    assert PrivacyNativeBridge.hasPrivacyNoritoSchema(unshieldRequest, 0x52);
+    assert PrivacyNativeBridge.hasNonEmptyPrivacyNoritoPayload(unshieldRequest);
+  }
+
+  private static void typedConfidentialWitnessBuildersRejectAmbiguousShapes() {
+    final PrivacyConfidentialWitness.WitnessV1 transferWitness = sampleTransferWitness();
+    final PrivacyConfidentialWitness.WitnessV1 unshieldWitness = sampleUnshieldWitness();
+
+    assertThrows(
+        () ->
+            PrivacyConfidentialWitness.buildConfidentialTransferProofRequestV1(
+                transferWitness, "halo2-ipa-pasta:confidential_unshield_v3"));
+    assertThrows(
+        () -> PrivacyConfidentialWitness.buildConfidentialTransferVerifyRequestV1(new byte[0]));
+    assertThrows(
+        () ->
+            PrivacyConfidentialWitness.encodeTransferWitness(
+                new PrivacyConfidentialWitness.WitnessV1(
+                    transferWitness.chainId(),
+                    transferWitness.assetDefinitionId(),
+                    transferWitness.spendKey(),
+                    transferWitness.treeCommitments(),
+                    transferWitness.inputs(),
+                    Collections.emptyList(),
+                    Collections.emptyList(),
+                    "0",
+                    transferWitness.rootHint())));
+    assertThrows(
+        () ->
+            PrivacyConfidentialWitness.encodeUnshieldWitness(
+                new PrivacyConfidentialWitness.WitnessV1(
+                    unshieldWitness.chainId(),
+                    unshieldWitness.assetDefinitionId(),
+                    unshieldWitness.spendKey(),
+                    unshieldWitness.treeCommitments(),
+                    unshieldWitness.inputs(),
+                    transferWitness.transferOutputs(),
+                    Collections.emptyList(),
+                    "0",
+                    unshieldWitness.rootHint())));
+    assertThrows(
+        () ->
+            new PrivacyConfidentialWitness.WitnessV1(
+                transferWitness.chainId(),
+                transferWitness.assetDefinitionId(),
+                transferWitness.spendKey(),
+                transferWitness.treeCommitments(),
+                Arrays.asList(transferWitness.inputs().get(0), transferWitness.inputs().get(0)),
+                transferWitness.transferOutputs(),
+                Collections.emptyList(),
+                "0",
+                transferWitness.rootHint()));
+    assertThrows(
+        () ->
+            new PrivacyConfidentialWitness.WitnessV1(
+                transferWitness.chainId(),
+                transferWitness.assetDefinitionId(),
+                transferWitness.spendKey(),
+                transferWitness.treeCommitments(),
+                Collections.singletonList(
+                    new PrivacyConfidentialWitness.NoteWitnessV1(
+                        "7", repeated(0x22, 32), repeated(0x33, 32), 1L)),
+                transferWitness.transferOutputs(),
+                Collections.emptyList(),
+                "0",
+                transferWitness.rootHint()));
   }
 
   private static void nativeAvailabilityProbeArchiveIsStableAndDefensive() {
@@ -992,5 +1103,44 @@ public final class PrivacyNativeBridgeTest {
       privacyNoritoFrameWithSchemaOverride(0x52, 6, 0x42),
       privacyNoritoFrameWithSchemaOverride(0x52, 21, 0x56)
     };
+  }
+
+  private static PrivacyConfidentialWitness.WitnessV1 sampleTransferWitness() {
+    return new PrivacyConfidentialWitness.WitnessV1(
+        "809574f5-fee7-5e69-bfcf-52451e42d50f",
+        "xor#universal",
+        repeated(0x11, 32),
+        Collections.singletonList(repeated(0x10, 32)),
+        Collections.singletonList(
+            new PrivacyConfidentialWitness.NoteWitnessV1(
+                "7", repeated(0x22, 32), repeated(0x33, 32), 0L)),
+        Collections.singletonList(
+            new PrivacyConfidentialWitness.TransferOutputWitnessV1(
+                "7", repeated(0x44, 32), repeated(0x55, 32))),
+        Collections.emptyList(),
+        "0",
+        repeated(0x66, 32));
+  }
+
+  private static PrivacyConfidentialWitness.WitnessV1 sampleUnshieldWitness() {
+    return new PrivacyConfidentialWitness.WitnessV1(
+        "809574f5-fee7-5e69-bfcf-52451e42d50f",
+        "xor#universal",
+        repeated(0x71, 32),
+        Collections.singletonList(repeated(0x72, 32)),
+        Collections.singletonList(
+            new PrivacyConfidentialWitness.NoteWitnessV1(
+                "9", repeated(0x73, 32), repeated(0x74, 32), 0L)),
+        Collections.emptyList(),
+        Collections.singletonList(
+            new PrivacyConfidentialWitness.UnshieldChangeWitnessV1("4", repeated(0x75, 32))),
+        "5",
+        repeated(0x76, 32));
+  }
+
+  private static byte[] repeated(final int value, final int count) {
+    final byte[] out = new byte[count];
+    Arrays.fill(out, (byte) value);
+    return out;
   }
 }

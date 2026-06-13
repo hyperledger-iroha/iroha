@@ -173913,3 +173913,23 @@ Last updated: 2026-06-13
 - Focused validation passed:
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Typed Confidential Witness Request Codecs
+
+- Added Kotlin/JVM and Java Android typed confidential-v2 witness builders for
+  production transfer and unshield proving, covering note inputs, transfer
+  outputs, unshield change outputs, verifier references, public-input schemas,
+  and proof/verify request archive construction.
+- The builders validate canonical u128 amounts, 32-byte secret/scalar fields,
+  nonempty bounded commitment trees, one-or-two input notes, duplicate leaf/rho
+  rejection, transfer/unshield shape separation, and exact production verifier
+  catalog references before request dispatch.
+- Padded the private witness Norito archive with the native decoder's required
+  8-byte payload-alignment gap and added a Rust bridge golden-vector test that
+  decodes the SDK-produced witness bytes into
+  `PrivacyConfidentialWitnessV1`.
+- Focused validation passed:
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled privacy_production --lib`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `cargo fmt --all --check`

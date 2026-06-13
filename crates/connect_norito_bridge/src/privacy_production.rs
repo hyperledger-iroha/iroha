@@ -689,6 +689,8 @@ pub(crate) mod test_fixtures {
 
 #[cfg(test)]
 mod tests {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+
     use super::test_fixtures::{
         encode_witness, overflowing_unshield_witness, valid_transfer_witness,
         valid_unshield_witness,
@@ -739,6 +741,73 @@ mod tests {
         );
         assert!(result.proof.is_empty());
         assert!(!result.verified);
+    }
+
+    fn sdk_transfer_witness_contract_fixture() -> PrivacyConfidentialWitnessV1 {
+        PrivacyConfidentialWitnessV1 {
+            chain_id: "809574f5-fee7-5e69-bfcf-52451e42d50f".to_owned(),
+            asset_definition_id: "xor#universal".to_owned(),
+            spend_key: vec![0x11; 32],
+            tree_commitments: vec![vec![0x10; 32]],
+            inputs: vec![PrivacyConfidentialNoteWitnessV1 {
+                amount: 7,
+                rho: vec![0x22; 32],
+                diversifier: vec![0x33; 32],
+                leaf_index: 0,
+            }],
+            transfer_outputs: vec![PrivacyConfidentialTransferOutputWitnessV1 {
+                amount: 7,
+                rho: vec![0x44; 32],
+                owner_tag: vec![0x55; 32],
+            }],
+            unshield_change: Vec::new(),
+            public_amount: 0,
+            root_hint: vec![0x66; 32],
+        }
+    }
+
+    fn sdk_transfer_witness_contract_archive() -> Vec<u8> {
+        let sdk_archive_base64 = "TlJUMAAAfsqLqoiuWPS/Oqqw1+q/rAC2AQAAAAAAAB8kbLx8YYiUAgAAAAAAAAAAJSQ4MDk1NzRmNS1mZWU3LTVlNjktYmZjZi01MjQ1MWU0MmQ1MGYODXhvciN1bml2ZXJzYWwoIAAAAAAAAAARERERERERERERERERERERERERERERERERERERERERETEBAAAAAAAAACggAAAAAAAAABAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQdQEAAAAAAAAAbBAHAAAAAAAAAAAAAAAAAAAAKCAAAAAAAAAAIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIoIAAAAAAAAAAzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMwgAAAAAAAAAAGwBAAAAAAAAAGMQBwAAAAAAAAAAAAAAAAAAACggAAAAAAAAAEREREREREREREREREREREREREREREREREREREREREREKCAAAAAAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVUIAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAACggAAAAAAAAAGZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZm";
+        BASE64_STANDARD
+            .decode(sdk_archive_base64)
+            .expect("SDK golden witness archive base64 decodes")
+    }
+
+    #[test]
+    fn confidential_witness_schema_path_matches_sdk_contract() {
+        assert_eq!(
+            <PrivacyConfidentialWitnessV1 as norito::NoritoSerialize>::schema_hash(),
+            norito::core::schema_hash_for_name(
+                "connect_norito_bridge::privacy_production::PrivacyConfidentialWitnessV1",
+            ),
+        );
+    }
+
+    #[test]
+    fn sdk_confidential_witness_archive_decodes_to_native_contract() {
+        let sdk_archive = sdk_transfer_witness_contract_archive();
+        let native_archive = encode_witness(&sdk_transfer_witness_contract_fixture());
+        assert_eq!(sdk_archive, native_archive);
+
+        let witness = privacy_decode_witness(&sdk_archive).expect("SDK witness decodes natively");
+
+        assert_eq!(witness.chain_id, "809574f5-fee7-5e69-bfcf-52451e42d50f");
+        assert_eq!(witness.asset_definition_id, "xor#universal");
+        assert_eq!(witness.spend_key, vec![0x11; 32]);
+        assert_eq!(witness.tree_commitments, vec![vec![0x10; 32]]);
+        assert_eq!(witness.inputs.len(), 1);
+        assert_eq!(witness.inputs[0].amount, 7);
+        assert_eq!(witness.inputs[0].rho, vec![0x22; 32]);
+        assert_eq!(witness.inputs[0].diversifier, vec![0x33; 32]);
+        assert_eq!(witness.inputs[0].leaf_index, 0);
+        assert_eq!(witness.transfer_outputs.len(), 1);
+        assert_eq!(witness.transfer_outputs[0].amount, 7);
+        assert_eq!(witness.transfer_outputs[0].rho, vec![0x44; 32]);
+        assert_eq!(witness.transfer_outputs[0].owner_tag, vec![0x55; 32]);
+        assert!(witness.unshield_change.is_empty());
+        assert_eq!(witness.public_amount, 0);
+        assert_eq!(witness.root_hint, vec![0x66; 32]);
+        privacy_validate_transfer_witness_shape(&witness).expect("SDK witness shape is accepted");
     }
 
     #[test]
