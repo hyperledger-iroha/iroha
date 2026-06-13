@@ -292,6 +292,35 @@ def _read_validated_chain(path: Path, errors: list[str]) -> tuple[bytes | None, 
     return data, hashlib.sha256(data).hexdigest()
 
 
+def _set_private_directory_permissions(path: Path, label: str) -> list[str]:
+    try:
+        dir_fd = os.open(path, device_lab._directory_open_flags())
+    except OSError:
+        return [f"{label} permissions could not be set"]
+    try:
+        try:
+            directory_stat = os.fstat(dir_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        try:
+            os.fchmod(dir_fd, 0o700)
+        except OSError:
+            return [f"{label} permissions could not be set"]
+        try:
+            directory_stat = os.fstat(dir_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        if stat.S_IMODE(directory_stat.st_mode) != 0o700:
+            return [f"{label} permissions must be 0700"]
+    finally:
+        os.close(dir_fd)
+    return []
+
+
 def _load_harness_result(path: Path, errors: list[str]) -> dict[str, Any] | None:
     result = device_lab._load_json(path, "attestation harness result", errors)
     if result is None:
@@ -468,12 +497,20 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
     errors = device_lab.validate_summary_output_path(path, label)
     if errors:
         return errors
+    permission_errors = _set_private_directory_permissions(
+        path.parent,
+        f"{label} parent directory",
+    )
+    if permission_errors:
+        return permission_errors
     try:
         parent_stat = path.parent.lstat()
     except OSError:
         return [f"{label} parent directory metadata could not be read"]
     if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
         return [f"{label} parent directory could not be synced"]
+    if stat.S_IMODE(parent_stat.st_mode) != 0o700:
+        return [f"{label} parent directory permissions must be 0700"]
     parent_identity = device_lab._file_identity(parent_stat)
     try:
         text = _json_dumps(payload)
@@ -499,6 +536,7 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
         ) as handle:
             tmp_path = Path(handle.name)
             tmp_identity = device_lab._file_identity(os.fstat(handle.fileno()))
+            os.fchmod(handle.fileno(), 0o600)
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -533,6 +571,8 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
         expected_stat = path.lstat()
     except (FileNotFoundError, OSError):
         return [f"{label} write verification failed"]
+    if stat.S_IMODE(expected_stat.st_mode) != 0o600:
+        return [f"{label} permissions must be 0600"]
     readback = device_lab._load_json(path, label, errors)
     if errors:
         return errors
@@ -544,6 +584,14 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
         return [f"{label} write verification failed"]
     if (final_stat.st_dev, final_stat.st_ino) != (expected_stat.st_dev, expected_stat.st_ino):
         return [f"{label} changed while being read"]
+    try:
+        final_parent_stat = path.parent.lstat()
+    except OSError:
+        return [f"{label} parent directory metadata could not be read"]
+    if device_lab._file_identity(final_parent_stat) != parent_identity:
+        return [f"{label} parent directory changed before sync"]
+    if stat.S_IMODE(final_parent_stat.st_mode) != 0o700:
+        return [f"{label} parent directory permissions must be 0700"]
     return []
 
 

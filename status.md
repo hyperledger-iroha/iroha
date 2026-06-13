@@ -1307,6 +1307,531 @@ Last updated: 2026-06-13
   - `python3 -m pytest pytests/scripts/sccp_ton_live_evidence_test.py pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py -q -k 'redacts or parser_failures or parser_exception or cli_redacts_top_level_exception_details'`
     (`21` passed, `100` deselected)
 
+## 2026-06-13 Kagemusha Android JNI and Pixel 6 Clean-APK Evidence
+
+- Fixed the Kotlin recursive-spend JNI surface by making the Pallas archive
+  builder native declarations static, then added a JavaScript parity guard so
+  the Kotlin native declarations cannot drift back to companion-instance JNI
+  symbols.
+- Rebuilt the Android `connect_norito_bridge` native libraries for `arm64-v8a`
+  and `x86_64`, and verified both rebuilt libraries export
+  `nativeBuildPallasOpenEnvelopesArchive` and
+  `nativeBuildPreviousProofOpenEnvelopesArchive`.
+- Clean-rebuilt the offline wallet lab app before physical capture after a
+  stale release APK exceeded the signed-slot APK cap. The clean release APK is
+  48,970,816 bytes with SHA-256
+  `8e3d98976a79d2e4bfbe7c49f7e467261e3932bb9521ca108f18ca2118b4f092`,
+  which is under the 64 MiB offline wallet APK limit.
+- Installed the clean APK and test APK on attached Pixel 6 device
+  `19181FDF600918`, ran
+  `KagemushaDeviceLabArtifactExportTest`, and pulled raw physical slot
+  `google-pixel-6-6a-physical-1781366495605`.
+- Assembled and validated signed Pixel 6 evidence under
+  `target/kagemusha-android-device-lab-live-pixel6-clean-apk-20260613` using a
+  runtime-only local Ed25519 signer in `target/kagemusha-android-lab-keys`; the
+  supplied public key digest is
+  `f9edf0c241bc3a0ce51e51bb21b099e1798c23c7e5dd8f38f0673df925041e03`.
+- The production-readiness rollup now accepts the clean Pixel 6 / 6a slot and
+  no longer reports `android_trusted_signer_missing` when that local verifier
+  key is supplied. Remaining blockers are `lineage_proof_evidence_missing`,
+  `compact_key_evidence_missing`, and
+  `android_device_lab_standard_matrix_missing` for Pixel 7/7 Pro, Pixel 8/8a/8
+  Pro, Pixel Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24. A real
+  release still needs durable trusted signer material, not the runtime-only
+  local key.
+- Validation passed:
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha Kotlin recursive spend JNI declarations stay static|Kagemusha native bridge surfaces stay in sync"`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk ./gradlew :client-android:buildNativeLibs --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk ./gradlew :offline-wallet-lab-app:clean :offline-wallet-lab-app:assembleRelease :offline-wallet-lab-app:assembleReleaseAndroidTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk ANDROID_SERIAL=19181FDF600918 ./gradlew :offline-wallet-lab-app:installRelease :offline-wallet-lab-app:installReleaseAndroidTest --console=plain`
+  - `adb -s 19181FDF600918 shell am instrument -w -e class org.hyperledger.iroha.android.offline.KagemushaDeviceLabArtifactExportTest org.hyperledger.iroha.sdk.offline.wallet.lab.test/androidx.test.runner.AndroidJUnitRunner`
+  - `python3 scripts/kagemusha_pull_android_device_lab_raw_slot.py --serial 19181FDF600918 --run-as-package org.hyperledger.iroha.sdk.offline.wallet.lab --out-root target/kagemusha-android-raw-live-clean-apk --summary-out target/kagemusha-android-raw-pull-summary-live-clean-apk.json`
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-live-pixel6-clean-apk-20260613 --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-verifying.pem --json-out target/kagemusha-android-device-lab-live-pixel6-clean-apk-20260613-validation.json`
+  - `python3 scripts/kagemusha_production_readiness.py --device-lab-root target/kagemusha-android-device-lab-live-pixel6-clean-apk-20260613 --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-verifying.pem --summary-out target/kagemusha-production-readiness-live-pixel6-clean-apk-20260613.json`
+
+## 2026-06-13 Mobile Transport Inspector Attestation Runner Coverage
+
+- Wired the focused JVM SDK runner to execute the Kotlin/JVM URLConnection
+  transport executor tests plus Android Java URLConnection transport,
+  pending-queue inspector, and attestation verifier tests.
+- Extended the SDK parity inventory, workflow path filters, CI
+  negative-control list, and JavaScript parity meta-test so 404 empty-body
+  handling, injected executor usage, URLConnection timeout/default constructor
+  interop, modern pending-envelope inspection, queued transaction hash
+  reporting, StrongBox/TEE policy, attestation challenge matching, and
+  trust-anchor requirements cannot drift silently.
+- Updated the roadmap JVM runner section to include mobile transport,
+  inspector, and attestation verifier coverage.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-transport-inspector-attestation-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.client.transport.UrlConnectionTransportExecutorTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.tools.PendingQueueInspectorTests,org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifierTests ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --tests org.hyperledger.iroha.android.client.transport.UrlConnectionTransportExecutorTests --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+
+## 2026-06-13 Mobile Connect Runner Coverage
+
+- Wired the focused JVM SDK runner to execute Kotlin/JVM Connect crypto,
+  envelope, sequence, and wallet-request tests plus Android Java Connect
+  envelope/sequence, retry, queue-journal, error-classifier, and wallet-request
+  tests.
+- Extended the SDK parity inventory, workflow path filters, CI
+  negative-control list, and JavaScript parity meta-test so low-order X25519
+  rejection, canonical I105 approve preimages, exact Ed25519 result algorithms,
+  negative/high-bit sequence rejection, shared relay-auth hashes,
+  deterministic retry backoff, queue expiry/size pruning, and Connect error
+  classification cannot drift silently.
+- Updated the roadmap JVM runner section to include mobile Connect coverage.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-connect-runner-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.connect.ConnectCryptoTest --tests org.hyperledger.iroha.sdk.connect.ConnectEnvelopeCodecTest --tests org.hyperledger.iroha.sdk.connect.ConnectSequenceTest --tests org.hyperledger.iroha.sdk.connect.ConnectWalletRequestTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.connect.ConnectEnvelopeCodecTest,org.hyperledger.iroha.android.connect.ConnectRetryPolicyTests,org.hyperledger.iroha.android.connect.ConnectQueueJournalTests,org.hyperledger.iroha.android.connect.ConnectErrorTests ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --tests org.hyperledger.iroha.android.connect.ConnectWalletRequestTests --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+
+## 2026-06-13 Kotlin Norito Framing Runner Coverage
+
+- Wired the focused JVM SDK runner to execute Kotlin/JVM Norito header layout
+  flag tests and Norito columnar golden/adversarial tests.
+- Extended the SDK parity inventory, workflow path filters, CI
+  negative-control list, and JavaScript parity meta-test so reserved header
+  flags, unsupported field-bitset combinations, malformed columnar presence
+  bits, invalid UTF-8, bad AoS optional tags, and trailing columnar bytes cannot
+  drift silently.
+- Updated the roadmap JVM runner section to include Norito header/columnar
+  framing coverage.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-norito-framing-runner-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.norito.NoritoHeaderTest --tests org.hyperledger.iroha.sdk.norito.NoritoColumnarTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+
+## 2026-06-13 Mobile Account Address Canonical Runner Coverage
+
+- Wired the focused JVM SDK runner to execute Kotlin/JVM AccountAddress/I105
+  canonical tests and the Android Java account-address compliance harness.
+- Extended the SDK parity inventory, workflow path filters, CI
+  negative-control list, and JavaScript parity meta-test so mixed-width I105,
+  shared address vectors, curve alias strictness, and curve registry coverage
+  cannot drift silently.
+- Updated the roadmap JVM runner section to include full mobile
+  AccountAddress/I105 canonical coverage.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-account-address-canonical-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.address.AccountAddressTest --tests org.hyperledger.iroha.sdk.address.I105CanonicalTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.address.AccountAddressTests ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+
+## 2026-06-13 Mobile Transaction Norito Runner Coverage
+
+- Wired the focused JVM SDK runner to execute Kotlin/JVM transaction payload,
+  transfer/register wire-payload parity, Norito codec, and transaction fixture
+  parity tests.
+- Expanded the Android Java harness lane to execute Norito codec, transfer and
+  set-primary-alias wire payload, account-literal hard-cut, transaction fixture
+  manifest, signed-transaction hash, transaction builder offline envelope, and
+  offline signing envelope codec tests.
+- Extended the SDK parity inventory, workflow path filters, CI
+  negative-control list, and JavaScript parity meta-test so transaction/Norito
+  runner coverage cannot drift silently.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-transaction-norito-runner-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.TransactionPayloadTest --tests org.hyperledger.iroha.sdk.core.model.instructions.RegisterAccountWirePayloadEncoderParityTest --tests org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoderParityTest --tests org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapterParityTest --tests org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.tx.TransactionBuilderOfflineEnvelopeTests,org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests,org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests,org.hyperledger.iroha.android.tx.SignedTransactionHasherTests,org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelopeCodecTests,org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests,org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests,org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoderTests ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --tests org.hyperledger.iroha.android.model.instructions.SetPrimaryAccountAliasWirePayloadEncoderTests --tests org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests --tests org.hyperledger.iroha.android.tx.TransactionPayloadFixturesTests --tests org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+
+## 2026-06-13 Android Offline Transfer Persistence Runner Coverage
+
+- Wired the focused JVM SDK runner to execute Android Java offline QR stream,
+  offline audit logger, encrypted offline journal, directory/file/journal-backed
+  pending transaction queue, and HTTP transport queue replay tests.
+- Extended the SDK parity inventory, workflow path filters, CI
+  negative-control list, and JavaScript parity meta-test so Android offline
+  transfer persistence coverage cannot drift silently.
+- Updated the roadmap JVM runner section to include Android offline QR,
+  journal/audit, and pending-queue replay coverage.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-offline-transfer-persistence-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineAuditLoggerTest,org.hyperledger.iroha.android.offline.OfflineJournalTest,org.hyperledger.iroha.android.offline.OfflineQrStreamTest,org.hyperledger.iroha.android.client.ClientConfigOfflineQueueTests,org.hyperledger.iroha.android.client.HttpClientTransportOfflineQueueTests,org.hyperledger.iroha.android.client.HttpClientTransportPendingQueueTests,org.hyperledger.iroha.android.client.queue.DirectoryPendingTransactionQueueTests,org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueueTests,org.hyperledger.iroha.android.client.queue.OfflineJournalPendingTransactionQueueTest ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+
+## 2026-06-13 Kotlin Offline Cash Settlement Runner Coverage
+
+- Wired the focused JVM SDK runner to execute Kotlin offline cash codec tests
+  and byte-exact offline settlement proof parity tests.
+- Extended the SDK parity inventory, workflow path filters, CI
+  negative-control list, and JavaScript parity meta-test so canonical amount,
+  idempotency-key, redeem commitment, and Rust fixture proof parity coverage
+  cannot drift silently.
+- Updated the roadmap JVM runner section to include the Offline Cash
+  codec/settlement-proof parity surface.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-settlement-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineCashCodecTest --tests org.hyperledger.iroha.sdk.offline.OfflineSettlementProofsParityTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+
+## 2026-06-13 Mobile Offline Readiness Runner Coverage
+
+- Wired the focused JVM SDK runner to execute Kotlin/JVM Offline and Offline
+  V2 readiness client tests plus the Android Java Offline Torii client and
+  direct Offline JSON parser harness tests.
+- Extended the SDK parity inventory, workflow path filters, CI
+  negative-control list, and JavaScript parity meta-test so ABI-7
+  `offline_kagemusha_abi7*` readiness alias coverage cannot drift silently.
+- Updated the roadmap to record that mobile offline readiness parsing is pinned
+  in the focused JVM lane.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest --console=plain`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.OfflineToriiClientTests,org.hyperledger.iroha.android.offline.OfflineJsonParserTest ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+
+## 2026-06-13 Mobile Confidential Note Runner Coverage
+
+- Wired the focused JVM SDK runner to execute the Kotlin/JVM and Android Java
+  `ConfidentialEncryptedPayload` model tests and confidential-v2 note contract
+  tests.
+- Extended the Kagemusha SDK parity source inventory, workflow path filters,
+  CI negative-control list, and JavaScript parity meta-test so mobile
+  confidential note vector/adversarial coverage cannot drift silently.
+- Updated the roadmap to record that encrypted-payload and confidential-note
+  mobile coverage is pinned in the focused JVM lane.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-confidential-note-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+
+## 2026-06-13 ZK Torii Parser Shape Coverage
+
+- Added explicit Kotlin/JVM and Android Java regressions proving
+  `/v1/zk/merkle-path` parser duplicate keys fail before last-value-wins
+  behavior can alter top-level counters or nested path commitments.
+- Extended the Kagemusha SDK parity guard, workflow negative-control command
+  list, and JavaScript parity meta-test so mobile ZK Torii parser-shape
+  coverage for numeric strings, overflow, duplicate keys, and inconsistent
+  Merkle path shapes cannot drift silently.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-torii-parser-shape-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --console=plain`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `git diff --check`
+
+## 2026-06-13 ZK Merkle Provider Runner Coverage
+
+- Added Kotlin/JVM and Android Java adversarial coverage for
+  Torii-backed ZK asset Merkle path providers so short, long, and reordered
+  node responses are rejected before wallet use.
+- Wired the focused JVM SDK runner to execute the Torii confidential asset
+  client and ZK Merkle path tests on both Kotlin/JVM and the Android Java
+  harness.
+- Extended the SDK parity inventory, workflow paths, CI negative-control list,
+  and JavaScript parity meta-test so the mobile ZK Merkle provider coverage
+  cannot drift silently.
+- Updated the roadmap to treat Torii-backed Merkle path acquisition as covered
+  for non-C# SDKs; the remaining non-C# SDK blocker is audited localnet
+  coverage.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-merkle-provider-adversarial-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `git diff --check`
+
+## 2026-06-13 Kagemusha Android raw-puller private summary outputs
+
+- Hardened `scripts/kagemusha_pull_android_device_lab_raw_slot.py` so raw
+  `latest-slot.txt` and raw-pull summary outputs explicitly force their
+  temporary files to `0600` and reject final opened-file readback if the
+  promoted outputs are not still `0600`.
+- Added permissive-tempfile and post-replace chmod regressions for both raw
+  output writers, plus dedicated CI negative controls, workflow entries, and JS
+  meta-test coverage.
+- Production readiness remains blocked by the external release evidence gaps:
+  missing Reserved-lineage proof evidence, missing ABI-7 recursive compact-key
+  evidence, no available trusted Android signer public key for the current
+  Pixel 6/6a slot, and the incomplete standard Android device-family matrix.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_latest_writer_installs_private_permissions scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_latest_writer_rejects_permissive_mode_after_replace scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_summary_installs_private_permissions scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_summary_rejects_permissive_mode_after_replace`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-private-permissions`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-private-permissions`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"`
+
+## 2026-06-13 Kagemusha readiness-summary output private permissions
+
+- Hardened `scripts/kagemusha_production_readiness.py` so
+  `--summary-out` writes force the fsynced temporary readiness summary file to
+  `0600` before atomic promotion.
+- Final readiness-summary readback now rejects a promoted `--summary-out` file
+  unless the opened file identity still has private `0600` permissions.
+- Added permissive-umask and post-replace chmod regressions, CI negative
+  control coverage, workflow/meta-test wiring, and docs/roadmap notes for the
+  summary output permission invariant.
+- Production readiness remains blocked by the external release evidence gaps:
+  missing Reserved-lineage proof evidence, missing ABI-7 recursive compact-key
+  evidence, no available trusted Android signer public key for the current
+  Pixel 6/6a slot, and the incomplete standard Android device-family matrix.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_installs_private_file_permissions scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_permissive_mode_after_replace scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_readback_mismatch scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_readback_failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-private-permissions`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-13 Kagemusha non-C# Pallas builder README parity
+
+- Documented the native Pallas open-envelope archive builder helpers across
+  Swift, Kotlin/JVM, Android Java, JavaScript/Node, and Python SDK READMEs,
+  including current-hop record-bundle builders, previous recursive proof
+  builders, native availability gates, and the requirement that SDKs keep the
+  resulting archives opaque.
+- Updated the central offline Kagemusha design doc with the same non-C# builder
+  surface and the C# Windows-machine follow-up boundary.
+- Extended the SDK parity guard, CI negative-control inventory, and JavaScript
+  parity meta-test so README and central-doc drift for the Pallas builder
+  surface is caught.
+- Added Kotlin/JVM and Java Android recursive-spend facade tests for malformed,
+  empty-payload, and oversized inputs to both Pallas builder helpers, pinning
+  the distinct `recordBundleArchive` and `previousBundleArchive` error
+  boundaries before native dispatch.
+- Added the missing Python oversized-input regression for both Pallas builder
+  helpers, and extended the parity guard so Swift, JavaScript, Python,
+  Kotlin/JVM, and Java Android all keep current-hop and previous-proof builder
+  malformed, empty-payload, and oversized input coverage pinned.
+- Expanded Python and JavaScript native-output regressions so both Pallas
+  builder helpers reject invalid native archives and empty native Norito
+  payloads, with parity guard coverage for the exact current-hop and
+  previous-proof builder paths.
+- Pinned the Java Android and Kotlin/JVM native-output validator labels used by
+  the Pallas builder helpers, so invalid builder outputs keep distinct
+  `build Pallas open envelopes` / `build previous proof open envelopes` error
+  boundaries in tests and parity.
+- Added the matching C# Pallas builder wrapper work to the Windows-machine TODO
+  list instead of implementing that SDK surface on this host.
+- Validation passed:
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-pallas-builder-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-pallas-builder-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-pallas-builder-input-guards`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-input-guards`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-native-output-guards`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha Pallas open-envelope JS builders probe availability and validate native output" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/kagemusha_test.py -k test_recursive_kagemusha_helpers_reject_oversized_inputs_before_copy_and_native`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/kagemusha_test.py -k "malformed_native_outputs or empty_payload_native_outputs"`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest --console=plain` (from `kotlin/`)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest --console=plain` (from `java/iroha_android/`)
+  - `KAGEMUSHA_RECURSIVE_SPEND_PYTHON_VENV=/tmp/iroha-kagemusha-python-sdk-venv ci/check_kagemusha_recursive_spend_python_sdk.sh` (`990` passed, then focused Kagemusha selection `5` passed / `117` deselected)
+
+## 2026-06-13 Kagemusha release-bundle output private permissions
+
+- Hardened `scripts/kagemusha_release_bundle.py` so release-bundle manifests
+  are written through a temporary file forced to `0600` before fsync and atomic
+  promotion.
+- Final release-bundle output readback now rejects a promoted `--out` file
+  unless the opened file identity still has private `0600` permissions.
+- Added a permissive-umask regression, CI negative control, workflow entry, JS
+  meta-test coverage, and docs/roadmap notes so removing the output permission
+  hardening is caught.
+- Production readiness remains blocked by the external release evidence gaps:
+  missing Reserved-lineage proof evidence, missing ABI-7 recursive compact-key
+  evidence, no available trusted Android signer public key for the current
+  Pixel 6/6a slot, and the incomplete standard Android device-family matrix.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_installs_private_file_permissions scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_rejects_readback_mismatch scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_rejects_readback_failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-private-permissions`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"`
+
+## 2026-06-13 Kagemusha JS/Python Pallas envelope builders
+
+- Exposed deterministic ABI-7 Pallas open-envelope archive builders through
+  `iroha_js_host`/`iroha_js` and `iroha_python_rs`/`iroha_python`, covering both
+  current-hop record bundles and previous recursive proof bundles.
+- Added JS browser stubs, package-root exports, TypeScript declarations,
+  Python root exports, runtime validation tests, and parity/meta-test guards so
+  malformed, empty, oversized, or empty-payload Norito archives fail before
+  native dispatch and malformed native outputs are rejected.
+- Validation passed:
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test javascript/iroha_js/test/crypto.browser.test.js`
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `PYTHONPATH=python/iroha_python/src /opt/homebrew/bin/python3.11 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/kagemusha_test.py`
+  - `cargo check -p iroha_js_host -p iroha_python_rs`
+
+## 2026-06-13 Kagemusha staged-finalizer private publish outputs
+
+- Hardened `scripts/kagemusha_finalize_lineage_proof_staged_run.py` and
+  `scripts/kagemusha_finalize_recursive_compact_key_staged_run.py` so the
+  staged finalizers create or tighten their published artifact directories,
+  temporary finalizer parents, and inner stage directories to `0700`.
+- Copied staged lineage/compact artifacts, proof or generator logs, and evidence
+  JSON files are now chmodded to `0600` before fsync and promotion, and the mode
+  is verified before the existing readback/digest checks run.
+- Added permissive-umask publish regressions for both finalizers, adjusted the
+  publish-directory swap tests to exercise the final fsync identity check after
+  the new pre-publish chmods, and added CI negative controls plus JS meta-test
+  coverage so removing the finalizer chmod calls is rejected.
+- Refreshed `dist/kagemusha-production-readiness.json`; production readiness
+  remains blocked by missing Reserved-lineage proof evidence, missing ABI-7
+  recursive compact key evidence, no available trusted Android signer public
+  key for the current Pixel 6/6a slot, and the incomplete standard Android
+  device-family matrix.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_publish_outputs_private_permissions scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_publish_outputs_private_permissions scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_rejects_publish_directory_identity_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_rejects_publish_directory_identity_swap`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-private-permissions`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-private-permissions`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha staged finalizer negative controls pin private output permissions"`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha staged finalizer negative controls"`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+  - `rg -n '^(<{7}|={7}|>{7})' .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py status.md` (no matches)
+  - `python3 scripts/kagemusha_production_readiness.py --summary-out dist/kagemusha-production-readiness.json` (expected blocked summary)
+
+## 2026-06-13 Kagemusha direct evidence-helper private outputs
+
+- Hardened `scripts/kagemusha_lineage_proof_evidence.py` and
+  `scripts/kagemusha_recursive_compact_key_evidence.py` so direct production
+  evidence generation creates or tightens helper-controlled output parents to
+  `0700`.
+- Validation scratch files under `--artifact-dir` and final
+  `lineage-proof-evidence.json` / `recursive-compact-key-evidence.json`
+  outputs are now forced to `0600` and verified after atomic replacement.
+- Added permissive-umask regressions for direct evidence writes and validation
+  scratch files, plus production-readiness negative controls and JS meta-test
+  coverage so removing the private-permission calls is rejected.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_write_evidence_installs_private_permissions scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_validate_evidence_document_installs_private_scratch_permissions scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_write_evidence_rejects_parent_directory_identity_swap_before_sync scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_write_evidence_installs_private_permissions scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_validate_evidence_document_installs_private_scratch_permissions scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_write_evidence_rejects_parent_directory_identity_swap_before_sync`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-private-permissions`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-private-permissions`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha evidence helper negative controls"`
+
+## 2026-06-13 Kagemusha staged-runner private outputs
+
+- Hardened `scripts/kagemusha_run_lineage_proof_staged.py` and
+  `scripts/kagemusha_run_recursive_compact_keygen_staged.py` so the detached
+  Reserved-lineage proof and ABI-7 compact-key staged runners create or tighten
+  the staged root, `artifacts`, and `artifacts/kagemusha` directories to
+  `0700`.
+- Staged child logs, execution reports, run reports, exit markers, and the
+  lineage elapsed-time sidecar are now forced to `0600` and verified before the
+  runner accepts them. The log installer also fixes a permissive-umask
+  temporary child log before moving it into place.
+- Added permissive-umask regressions for atomic metadata writes, child-log
+  install, and staged directory creation, plus a production-readiness negative
+  control for each runner and workflow/meta-test coverage so removing the
+  private-permission calls is rejected.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_run_lineage_proof_staged.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m py_compile scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_atomic_write_installs_private_file scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_log_install_installs_private_file scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_creates_private_staging_outputs`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_atomic_write_installs_private_file scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_log_install_installs_private_file scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_creates_private_staging_outputs`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-private-permissions`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-private-permissions`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha staged runner negative controls"`
+
+## 2026-06-13 Kagemusha Android signed-slot private evidence permissions
+
+- Hardened the Android signed-slot assembler so pre-existing device-lab roots,
+  staging directories, published slot directories, and copied source artifacts
+  are forced to private host permissions before publication (`0700` directories,
+  `0600` files).
+- Hardened the signed-evidence helper's atomic JSON/text writers so
+  `slot.json`, `sha256sum.txt`, and `evidence/signed-evidence.json` are written
+  as `0600` files under private output directories and verified after write.
+- Hardened the attestation-report writer so `attestation/report.json` is written
+  as `0600` under a private output parent and verified before success.
+- Added a permissive-umask regression that pre-creates the device-lab root as
+  `0777`, builds a signed production slot, and asserts every published
+  directory/file mode is private. Added a matching attestation-report writer
+  regression plus CI negative controls and workflow meta-test coverage so
+  removing the private-permissions calls is rejected.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_android_attestation_report.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_installs_private_permissions`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_attestation_report_writer_installs_private_permissions scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_attestation_report_writer_rejects_parent_directory_identity_swap_before_sync`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-private-permissions`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-private-permissions`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"`
+
 ## 2026-06-13 SCCP phase diagnostics and active-lane bundle readiness
 
 - Kept corridor phase blocker Markdown visible when diagnostics include
@@ -1871,6 +2396,18 @@ Last updated: 2026-06-13
 - Hardened RBC chunk-store full-scan recovery so session-shaped main and temp
   files that cannot be read fail recovery consistently with direct session
   loads instead of being logged and skipped.
+- Hardened RBC chunk-store cleanup so disabled persistence, corrupt/invalid
+  persisted-session rejection, and stale temp-session discard now return an I/O
+  error when the session artifact cannot be removed, leaving the artifact
+  visible for operator repair instead of reporting successful recovery.
+- Hardened explicit RBC chunk-store session removal so stale-session pruning
+  deletes both the main persisted snapshot and any crash-recovery temp snapshot;
+  temp cleanup is attempted first so an unremovable temp artifact does not hide
+  the main snapshot from operator repair or restart recovery.
+- Hardened RBC session TTL pruning so runtime/status state is cleared only
+  after the configured chunk store can be inspected and the matching persisted
+  snapshot artifacts are removed; failed persisted cleanup now leaves stale
+  status and persisted-session markers visible for retry.
 - Hardened RBC status temp-store recovery so read-only persisted snapshot
   inspection returns an empty snapshot on unpromotable temp files and runtime
   `Handle::configure` marks persistence unavailable instead of seeding
@@ -1885,6 +2422,9 @@ Last updated: 2026-06-13
   version `1`, match the requested alias namespace/name, carry a 32-byte
   manifest digest encoded as hex, use a non-inverted window, and include an
   update timestamp before it can influence the next TRM hint.
+- Hardened Taikai TRM lineage lock acquisition so lock timestamp writes,
+  stale-lock metadata inspection, and stale-lock removal errors fail closed; a
+  stale lock is reclaimed only after the lock artifact is removed successfully.
 - Hardened Taikai TRM lineage state writes by syncing the temporary file before
   rename and syncing the parent directory after promotion, so a successful
   lineage update no longer depends on temp-only filesystem state.
@@ -1898,12 +2438,45 @@ Last updated: 2026-06-13
   filename/body mismatches, or invalid operator signatures reject recovery/load
   instead of being skipped. Receipt-log open now also fails closed if seeding
   the replay cursor from recovered receipts cannot be persisted.
+- Hardened Torii DA runtime receipt-log fallback so non-durable in-memory logs
+  cannot acknowledge ingest appends or recover duplicate receipts; fallback
+  objects remain available for diagnostics/tests, but production
+  acknowledgements require durable receipt files.
+- Hardened Torii DA replay cursor and receipt-log mutex handling so poisoned
+  runtime state no longer panics Torii: receipt appends, duplicate receipt
+  recovery, and cursor recording fail closed, while read-only snapshots log and
+  return an empty view.
+- Hardened Torii DA receipt insertion so same-sequence receipts only dedupe when
+  the full signed receipt evidence matches; a different receipt body with the
+  same manifest hash now returns an explicit conflict instead of being treated
+  as an idempotent duplicate.
+- Hardened Torii DA receipt listing so receipt-shaped non-file artifacts are
+  rejected explicitly before decode, matching durable receipt-log recovery.
 - Applied the same unique-temp, synced-write, and post-link directory sync path
   to Taikai envelope/index/SSM/TRM artifact installation, including the TRM
   lineage state temp writer.
-- Hardened Taikai anchor request-capture handling so an existing capture must
-  be a file with matching payload bytes, and collection fails closed if the
-  governance/audit request payload cannot be recorded before upload.
+- Hardened Taikai temp artifact cleanup so failed lineage writes, artifact temp
+  writes, and failed hard-link installs surface cleanup failures instead of
+  silently leaving unremovable temp paths behind.
+- Hardened Torii DA spool artifact temp cleanup for receipts, manifests, PDP
+  commitments, DA commitment records/schedules, and pin intents so failed
+  temp writes or hard-link installs surface cleanup failures instead of
+  silently leaving unremovable temp paths behind.
+- Hardened Torii DA spool batch execution so panicking persistence actions are
+  converted into action-level error reports and handler-visible rejections
+  instead of unwinding through synchronous or worker-backed ingest paths.
+- Hardened Taikai anchor request-capture handling so the governance/audit
+  payload is installed through a synced temp file, no-overwrite hard link, and
+  parent directory sync before upload; an existing capture must be a file with
+  matching payload bytes, and collection fails closed if the capture cannot be
+  recorded.
+- Hardened Taikai anchor sentinel handling so successful uploads are only
+  marked complete after a synced temp-file write, atomic rename, and parent
+  directory sync; non-file sentinel artifacts now fail collection instead of
+  suppressing pending uploads.
+- Hardened Taikai anchor batch processing so anchor-service delivery failures
+  return an error and leave the upload pending for retry instead of reporting a
+  logged-only successful batch.
 - Hardened core DA receipt spool cleanup observability: stale-receipt pruning
   now returns a structured report for scanned, removed, invalid, read-failed,
   entry-failed, remove-failed, and unreadable-spool cases, and the proposal path
@@ -1945,6 +2518,10 @@ Last updated: 2026-06-13
   non-regular production-shaped manifest artifacts fail manifest guard cache
   refresh instead of being omitted from the stamp and leaving stale manifest
   lookup results in place.
+- Hardened Sumeragi DA and manifest spool cache stamps so production-shaped
+  artifact bytes are hashed into the cache fingerprint and modified-time lookup
+  failures fail cache refresh, preventing same-size/same-timestamp local
+  artifact replacement from reusing stale decoded bundles or manifest digests.
 - Hardened DA proposal preflight so commitment, receipt, and pin-intent spool
   loader/planner errors keep DA work visible to an otherwise idle leader,
   forcing proposal assembly to surface the fail-closed error instead of
@@ -1976,6 +2553,9 @@ Last updated: 2026-06-13
   persisted session keys while preserving unrelated valid entries.
 - Added adversarial Taikai TRM lineage coverage for unsupported persisted
   versions, alias mismatches, malformed manifest digests, and inverted windows.
+- Added adversarial Taikai TRM lineage lock coverage proving unremovable stale
+  lock artifacts reject guard acquisition and remain visible for operator
+  repair.
 - Hardened Taikai anchor collection so production-shaped envelope artifacts
   fail closed on malformed artifact ids, missing required index/SSM companions,
   corrupt required index JSON, and corrupt optional lineage hints instead of
@@ -2025,6 +2605,12 @@ Last updated: 2026-06-13
   capture paths, stale request-capture files with mismatched payload bytes,
   malformed artifact ids, missing required companions, corrupt index JSON, and
   corrupt lineage hints.
+- Added adversarial Taikai anchor coverage for durable idempotent request
+  captures, post-upload sentinel persistence failures, and preexisting non-file
+  sentinel artifacts.
+- Added adversarial Taikai anchor coverage for anchor-service delivery failures
+  that must not create the anchored sentinel or remove the upload from the
+  pending set.
 - Added adversarial Torii DA manifest/PDP lookup coverage for malformed
   ticket-bearing filenames and artifact-shaped directories alongside duplicate,
   body-mismatch, and invalid-body checks.
@@ -2034,10 +2620,23 @@ Last updated: 2026-06-13
 - Added same-process concurrent writer coverage for DA receipt and Taikai
   envelope artifact persistence, verifying exact-byte idempotent convergence
   and no leftover temp artifacts.
+- Added adversarial Taikai temp cleanup coverage for unremovable temp artifact
+  paths and hard-link install failures that must leave the temp path visible for
+  operator repair.
+- Added adversarial Torii DA temp cleanup coverage for unremovable temp
+  artifact paths and hard-link install failures, covering the shared helper
+  used by durable receipts, manifests, PDP commitments, commitment records,
+  commitment schedules, and pin intents.
+- Added adversarial DA spool batch coverage for panicking persistence actions
+  in synchronous and worker-backed execution, including rejection-response
+  mapping.
 - Added durable receipt listing and receipt-log recovery coverage for corrupt
   entries, sequence-rebound signatures, filename/body mismatches,
   filename/ticket mismatches, receipt-shaped directories, same-manifest
   conflicting duplicate receipts, and replay-cursor seed persistence failures.
+- Added append-time and response-mapping coverage for same-manifest
+  receipt-evidence conflicts, including the dedicated receipt-conflict metrics
+  label.
 - Hardened DA replay-cursor startup so stale, conflicting, or corrupt temp
   snapshots that should be discarded now fail recovery when cleanup fails,
   keeping leftover temp artifacts visible for operator repair instead of
@@ -2072,6 +2671,9 @@ Last updated: 2026-06-13
   malformed UTF-8 manifest names are treated as non-production and surface as
   missing manifests. Added broken-symlink manifest artifact coverage for
   metadata-read failures during cache scans.
+- Added adversarial Sumeragi spool-stamp coverage proving entries with the
+  same name, length, and timestamp but different content hashes produce
+  distinct cache fingerprints.
 - Added helper-level RBC chunk-store coverage for non-UTF-8 session and
   temp-session snapshot names, preserving ignore behavior for unrelated
   non-UTF-8 files.
@@ -2079,6 +2681,22 @@ Last updated: 2026-06-13
   reject recovery instead of being skipped.
 - Added RBC chunk-store full-scan coverage proving unreadable session-shaped
   main and temp files reject recovery instead of being skipped.
+- Added adversarial RBC chunk-store cleanup coverage for disabled stores with
+  unremovable session paths, unremovable corrupt/invalid session snapshots, and
+  unremovable stale temp snapshots in both direct and scan-based recovery.
+- Added adversarial RBC chunk-store explicit-removal coverage proving main and
+  temp snapshots are both deleted, and that an unremovable temp artifact leaves
+  the main snapshot visible.
+- Added actor-level RBC session TTL coverage proving an unremovable persisted
+  temp snapshot blocks stale-status pruning and preserves the persisted-session
+  retry marker.
+- Added direct core DA proof verifier adversarial coverage for missing header
+  commitment hashes, block-height drift, out-of-bounds index tampering,
+  commitment payload replacement, Merkle sibling tampering, and lane-policy
+  rejection.
+- Added Torii DA lock-poison coverage proving replay cursor recording and
+  receipt-log append/duplicate recovery fail closed after poisoned mutexes,
+  while read-only cursor/receipt views do not panic.
 - Added adversarial manifest guard coverage proving matching manifest bytes
   under missing, short, extra-field, or width-mismatched filename tuples are
   ignored and still surface as missing manifests on strict lanes.
@@ -2089,6 +2707,9 @@ Last updated: 2026-06-13
 - Focused validation passed:
   - `cargo test -p iroha_core --lib shard_cursor -- --nocapture`
   - `cargo test -p iroha_core --lib rbc_store -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests rbc_session_ttl_ -- --nocapture`
+  - `cargo test -p iroha_core --lib remove_ -- --nocapture`
+  - `cargo test -p iroha_core --lib proofs -- --nocapture`
   - `cargo test -p iroha_core --lib scan_entries_rejects_unreadable -- --nocapture`
   - `cargo test -p iroha_core --lib rbc_status -- --nocapture`
   - `cargo test -p iroha_core --lib commitments -- --nocapture`
@@ -2115,9 +2736,12 @@ Last updated: 2026-06-13
   - `cargo test -p iroha_core --features sumeragi-main-loop-tests internal_proposal_work -- --nocapture`
   - `cargo test -p iroha_core --features sumeragi-main-loop-tests da_spool_cache_hits_on_repeated_load -- --nocapture`
   - `cargo test -p iroha_core --features sumeragi-main-loop-tests da_spool_stamp_rejects_uninspectable_shaped_artifact -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests spool_stamp -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests cache_hits_on_repeated -- --nocapture`
   - `cargo test -p iroha_core --features sumeragi-main-loop-tests da_spool_file_name -- --nocapture`
   - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_spool_scan_rejects_uninspectable_shaped_artifact -- --nocapture`
   - `cargo test -p iroha_core --lib refresh_proposal_routing_from_state -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_processing -- --nocapture`
   - `cargo test -p iroha_torii taikai_anchor_collection -- --nocapture`
   - `cargo test -p iroha_torii artifact_file_name --lib -- --nocapture`
   - `cargo test -p iroha_torii taikai_envelope_file_name --features app_api -- --nocapture`
@@ -2126,6 +2750,10 @@ Last updated: 2026-06-13
   - `cargo test -p iroha_torii manifest_response_ -- --nocapture`
   - `cargo test -p iroha_torii load_da_receipts -- --nocapture`
   - `cargo test -p iroha_torii da_receipt_log_rejects -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_in_memory_append_fails_closed -- --nocapture`
+  - `cargo test -p iroha_torii lock_poison -- --nocapture`
+  - `cargo test -p iroha_torii temp_artifact -- --nocapture`
+  - `cargo test -p iroha_torii da_spool -- --nocapture`
   - `cargo test -p iroha_torii replay_cursor_store --features app_api -- --nocapture`
   - `cargo test -p iroha_torii replay_cursor_store_open_rejects_orphan_corrupt_temp_snapshot -- --nocapture`
   - `cargo test -p iroha_torii replay_cursor_store_open_rejects_unremovable_corrupt_temp_snapshot -- --nocapture`
@@ -2133,11 +2761,15 @@ Last updated: 2026-06-13
   - `cargo test -p iroha_torii load_da_receipts --features app_api -- --nocapture`
   - `cargo test -p iroha_torii da_receipt_log --features app_api -- --nocapture`
   - `cargo test -p iroha_torii taikai_trm_lineage --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_trm_lineage -- --nocapture`
   - `cargo test -p iroha_torii taikai_anchor_collection --features app_api -- --nocapture`
   - `cargo test -p iroha_torii taikai_anchor_processing_generates_payload_and_sentinel --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii temp_cleanup -- --nocapture`
   - `cargo test -p iroha_torii converges_under_same_process_writers --features app_api -- --nocapture`
   - `cargo test -p iroha_torii persist_ --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii persist_ -- --nocapture`
   - `cargo test -p iroha_torii taikai_ --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_ -- --nocapture`
   - `cargo fmt --all --check`
 
 ## 2026-06-13 Core zk-stark fixture failure fixes

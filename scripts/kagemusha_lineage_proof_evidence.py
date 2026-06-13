@@ -333,12 +333,18 @@ def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> 
     except ValueError:
         return ["lineage proof evidence validation file is not strict JSON"]
     try:
-        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError:
         return ["--artifact-dir could not be created for evidence validation"]
     post_create_dir_errors = validate_artifact_dir_path(artifact_dir)
     if post_create_dir_errors:
         return post_create_dir_errors
+    permission_errors = _set_private_directory_permissions(
+        artifact_dir,
+        "--artifact-dir",
+    )
+    if permission_errors:
+        return permission_errors
     path: Path | None = None
     tmp_identity: tuple[int, int] | None = None
     try:
@@ -352,6 +358,7 @@ def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> 
         ) as handle:
             path = Path(handle.name)
             tmp_identity = _validation_temp_identity(handle, path)
+            os.fchmod(handle.fileno(), 0o600)
             handle.write(evidence_text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -490,7 +497,7 @@ def preflight_output_path(path: Path, label: str) -> list[str]:
         return output_ancestor_errors
     if not parent_exists:
         try:
-            parent.mkdir(parents=True, exist_ok=True)
+            parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         except OSError:
             return [f"{label} parent directory could not be created"]
     parent_exists, parent_errors = _validate_output_parent(
@@ -564,6 +571,35 @@ def _directory_open_flags() -> int:
     return flags
 
 
+def _set_private_directory_permissions(path: Path, label: str) -> list[str]:
+    try:
+        dir_fd = os.open(path, _directory_open_flags())
+    except OSError:
+        return [f"{label} permissions could not be set"]
+    try:
+        try:
+            directory_stat = os.fstat(dir_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        try:
+            os.fchmod(dir_fd, 0o700)
+        except OSError:
+            return [f"{label} permissions could not be set"]
+        try:
+            directory_stat = os.fstat(dir_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        if stat.S_IMODE(directory_stat.st_mode) != 0o700:
+            return [f"{label} permissions must be 0700"]
+    finally:
+        os.close(dir_fd)
+    return []
+
+
 def _sync_output_parent(
     parent: Path,
     label: str,
@@ -603,9 +639,12 @@ def validate_output_path(path: Path, label: str) -> list[str]:
         return parent_errors
     if not parent_exists:
         try:
-            parent.mkdir(parents=True, exist_ok=True)
+            parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         except OSError:
             return [f"{label} parent directory could not be created"]
+    permission_errors = _set_private_directory_permissions(parent, f"{label} parent")
+    if permission_errors:
+        return permission_errors
     return preflight_output_path(path, label)
 
 
@@ -696,6 +735,7 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
         ) as handle:
             tmp_path = Path(handle.name)
             tmp_identity = _file_identity(os.fstat(handle.fileno()))
+            os.fchmod(handle.fileno(), 0o600)
             handle.write(evidence_text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -726,6 +766,8 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
         expected_stat = path.lstat()
     except (FileNotFoundError, OSError):
         return ["--out write verification failed"]
+    if stat.S_IMODE(expected_stat.st_mode) != 0o600:
+        return ["--out permissions must be 0600"]
     readback_text, readback_errors = _read_output_text(
         path,
         expected_stat,

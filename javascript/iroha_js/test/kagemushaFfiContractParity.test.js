@@ -52,6 +52,11 @@ const REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS = Object.freeze([
   "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
 ]);
 
+const REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_METHODS = Object.freeze([
+  "kagemushaBuildPallasOpenEnvelopesArchive",
+  "kagemushaBuildPreviousProofOpenEnvelopesArchive",
+]);
+
 const REQUIRED_PYTHON_NATIVE_METHODS = Object.freeze([
   "kagemusha_recursive_spend_init",
   "kagemusha_recursive_spend_append",
@@ -572,6 +577,8 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "redeemSpend",
       "nativeTransitionProfileInit",
       "nativeTransitionProfileAppend",
+      "nativeBuildPallasOpenEnvelopesArchive",
+      "nativeBuildPreviousProofOpenEnvelopesArchive",
     ],
     "Kotlin JVM SDK",
   );
@@ -597,6 +604,34 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
     ],
     "C# SDK",
   );
+});
+
+test("Kagemusha Kotlin recursive spend JNI declarations stay static", () => {
+  const kotlinRecursive = source(
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+  );
+  const nativeMethods = [
+    "nativeBridgeAbiVersion",
+    "nativeInitSpend",
+    "nativeAppendSpend",
+    "nativeTransitionProfileInit",
+    "nativeTransitionProfileAppend",
+    "nativeLineageAppendBoundary",
+    "nativeLineageWitnessFromInitResult",
+    "nativeLineageWitnessAppendResult",
+    "nativeVerifySpend",
+    "nativeRedeemSpend",
+    "nativeBuildPallasOpenEnvelopesArchive",
+    "nativeBuildPreviousProofOpenEnvelopesArchive",
+  ];
+
+  for (const method of nativeMethods) {
+    assert.match(
+      kotlinRecursive,
+      new RegExp(`@JvmStatic\\s*\\n\\s*private external fun ${method}\\s*\\(`, "u"),
+      `Kotlin recursive spend ${method} must bind to the outer-class JNI symbol`,
+    );
+  }
 });
 
 test("Kagemusha mobile compact-token native output guards require Norito archives", () => {
@@ -2090,6 +2125,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
       "is_kagemusha_recursive_compact_payment_token_prover_available",
       "is_kagemusha_recursive_compact_payment_token_verifier_available",
+      "is_kagemusha_pallas_open_envelope_builder_available",
       "is_kagemusha_recursive_spend_compact_payment_token_projection_available",
       "is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available",
       "_RECURSIVE_COMPACT_TOKEN_METHOD",
@@ -2097,6 +2133,10 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       '"_with_records_and_pallas_open_envelopes"',
       "_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD",
       '"kagemusha_verify_recursive_compact_payment_token"',
+      "_PALLAS_OPEN_ENVELOPE_BUILDER_METHOD",
+      '"kagemusha_build_pallas_open_envelopes_archive"',
+      "_PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD",
+      '"kagemusha_build_previous_proof_open_envelopes_archive"',
       "_RECURSIVE_SPEND_COMPACT_TOKEN_FROM_BUNDLE_METHOD",
       '"kagemusha_recursive_spend_compact_payment_token_from_bundle"',
       "_RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_METHOD",
@@ -2105,9 +2145,14 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       '"kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"',
       "globals()[_RECURSIVE_COMPACT_TOKEN_METHOD]",
       "globals()[_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD]",
+      "globals()[_PALLAS_OPEN_ENVELOPE_BUILDER_METHOD]",
+      "globals()[_PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD]",
       "globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_FROM_BUNDLE_METHOD]",
       "globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_METHOD]",
       '("archive", "norito", "probe")',
+      "Kagemusha Pallas open-envelope builders require native bridge ABI 7",
+      '_norito_archive_bytes_named(record_bundle_archive, "record_bundle_archive")',
+      '"previous_bundle_archive"',
       '_assert_kagemusha_norito_archive(compact_token, "compact_token_archive")',
       '_archive_bytes_named(',
       "recursive_compact_verifier_keys_archive,",
@@ -2124,6 +2169,9 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     [
       "is_kagemusha_recursive_compact_payment_token_prover_available",
       "is_kagemusha_recursive_compact_payment_token_verifier_available",
+      "is_kagemusha_pallas_open_envelope_builder_available",
+      "kagemusha_build_pallas_open_envelopes_archive",
+      "kagemusha_build_previous_proof_open_envelopes_archive",
       "kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
       "kagemusha_verify_recursive_compact_payment_token",
     ],
@@ -2137,6 +2185,11 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       "compact_token_archive must contain a non-empty Norito payload",
       "recursive_compact_key_artifacts_archive must be a valid Norito archive",
       "recursive_compact_verifier_keys_archive must be a valid Norito archive",
+      "previous_bundle_archive must be a valid Norito archive",
+      "previous_bundle_archive must contain a non-empty Norito payload",
+      "is_kagemusha_pallas_open_envelope_builder_available",
+      "kagemusha_build_pallas_open_envelopes_archive",
+      "kagemusha_build_previous_proof_open_envelopes_archive",
       "Kagemusha recursive compact proof unavailable",
       "Kagemusha recursive compact verifier unavailable",
       "recursive spend compact Kagemusha payment-token projection requires native bridge ABI 7",
@@ -2151,9 +2204,13 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     source("python/iroha_python/iroha_python_rs/src/lib.rs"),
     [
       ...REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS.map((name) => `name = "${name}"`),
+      'name = "kagemusha_build_pallas_open_envelopes_archive"',
+      'name = "kagemusha_build_previous_proof_open_envelopes_archive"',
       'name = "kagemusha_verify_recursive_spend_compact_payment_token_projection"',
       'name = "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"',
       "is_kagemusha_recursive_compact_unavailable_error",
+      "kagemusha_pallas_open_envelopes_from_record_bundle",
+      "kagemusha_recursive_previous_proof_open_envelope_metadata",
       "kagemusha_recursive_spend_compact_projection_verifier_python_rejects_malformed_inputs",
       "sentinel-spoofed recursive compact token must reject",
     ],
@@ -2433,12 +2490,17 @@ test("Kagemusha JavaScript record-backed native builders stay in parity", () => 
     source("crates/iroha_js_host/src/lib.rs"),
     [
       ...REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS.map((name) => `js_name = "${name}"`),
+      ...REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_METHODS.map((name) => `js_name = "${name}"`),
       "prove_verified_kagemusha_compact_payment_token_from_record_bundle",
       "prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive",
+      "kagemusha_pallas_open_envelopes_from_record_bundle",
+      "kagemusha_recursive_previous_proof_open_envelope_metadata",
+      "kagemusha-recursive-spend-hop-open-v1-{hop_index}",
+      "kagemusha-recursive-spend-previous-open-v1",
       "KAGEMUSHA_FOLDED_CIRCUIT_ID",
       "KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID",
     ],
-    "Node record-backed Kagemusha prover exports",
+    "Node record-backed Kagemusha prover and Pallas builder exports",
   );
 
   for (const relative of ["javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"]) {
@@ -2447,19 +2509,28 @@ test("Kagemusha JavaScript record-backed native builders stay in parity", () => 
       [
         "isKagemushaCompactPaymentTokenNativeAvailable",
         "isKagemushaRecursiveAggregationProofBundleNativeAvailable",
+        "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable",
         ...REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS,
+        ...REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_METHODS,
         'typeof native.kagemushaProveVerifiedCompactPaymentTokenWithRecords !== "function"',
+        'typeof native.kagemushaBuildPallasOpenEnvelopesArchive !== "function"',
+        'typeof native.kagemushaBuildPreviousProofOpenEnvelopesArchive !== "function"',
         "native.kagemushaProveVerifiedCompactPaymentTokenWithRecords(",
         "native.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(",
+        "native.kagemushaBuildPallasOpenEnvelopesArchive(",
+        "native.kagemushaBuildPreviousProofOpenEnvelopesArchive(",
         "toOwnedKagemushaArchiveBuffer",
         'const recordBundle = toOwnedKagemushaArchiveBuffer(',
         'const pallasOpenEnvelopes = toOwnedKagemushaArchiveBuffer(',
+        'const previousBundle = toOwnedKagemushaArchiveBuffer(',
         '"recordBundleArchive"',
         '"pallasOpenEnvelopesArchive"',
+        '"previousBundleArchive"',
         "Kagemusha compact payment-token prover requires native bridge ABI 6",
         "Kagemusha recursive aggregation proof-bundle prover requires native bridge ABI 6",
+        "Kagemusha Pallas open-envelope builders require native bridge ABI 7",
       ],
-      `${relative} record-backed Kagemusha wrappers`,
+      `${relative} record-backed Kagemusha and Pallas builder wrappers`,
     );
   }
   for (const relative of ["javascript/iroha_js/src/crypto.browser.js", "javascript/iroha_js/dist/crypto.browser.js"]) {
@@ -2468,17 +2539,25 @@ test("Kagemusha JavaScript record-backed native builders stay in parity", () => 
       [
         "isKagemushaCompactPaymentTokenNativeAvailable",
         "isKagemushaRecursiveAggregationProofBundleNativeAvailable",
+        "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable",
         ...REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS,
+        ...REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_METHODS,
         'unsupported("kagemushaProveVerifiedCompactPaymentTokenWithRecords")',
+        'unsupported("kagemushaBuildPallasOpenEnvelopesArchive")',
+        'unsupported("kagemushaBuildPreviousProofOpenEnvelopesArchive")',
       ],
-      `${relative} record-backed Kagemusha browser stubs`,
+      `${relative} record-backed Kagemusha and Pallas builder browser stubs`,
     );
   }
   for (const relative of ["javascript/iroha_js/src/index.js", "javascript/iroha_js/dist/index.js"]) {
     assertContainsAll(
       source(relative),
-      REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS,
-      `${relative} record-backed Kagemusha exports`,
+      [
+        "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable",
+        ...REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS,
+        ...REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_METHODS,
+      ],
+      `${relative} record-backed Kagemusha and Pallas builder exports`,
     );
   }
   assertContainsAll(
@@ -2486,39 +2565,49 @@ test("Kagemusha JavaScript record-backed native builders stay in parity", () => 
     [
       "isKagemushaCompactPaymentTokenNativeAvailable(): boolean",
       "isKagemushaRecursiveAggregationProofBundleNativeAvailable(): boolean",
+      "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(): boolean",
       "kagemushaProveVerifiedCompactPaymentTokenWithRecords(",
       "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(",
+      "kagemushaBuildPallasOpenEnvelopesArchive(",
+      "kagemushaBuildPreviousProofOpenEnvelopesArchive(",
     ],
-    "JavaScript record-backed Kagemusha TypeScript declarations",
+    "JavaScript record-backed Kagemusha and Pallas builder TypeScript declarations",
   );
   assertContainsAll(
     source("javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"),
     [
       "Kagemusha record-backed JS builders probe availability and validate native output",
+      "Kagemusha Pallas open-envelope JS builders probe availability and validate native output",
       "recordBundleArchive must be a valid Norito archive",
+      "previousBundleArchive must be a valid Norito archive",
       "pallasOpenEnvelopesArchive must contain a non-empty Norito payload",
       "returned invalid Norito archive",
       "returned empty Norito payload",
+      "Kagemusha Pallas open-envelope builders require native bridge ABI 7",
     ],
-    "JavaScript record-backed Kagemusha runtime tests",
+    "JavaScript record-backed Kagemusha and Pallas builder runtime tests",
   );
   assertContainsAll(
     source("javascript/iroha_js/test/crypto.browser.test.js"),
     [
       "browser build must not expose native compact-token prover",
       "browser build must not expose native recursive aggregation prover",
+      "browser build must not expose native Pallas open-envelope builders",
       ...REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS,
+      ...REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_METHODS,
     ],
-    "JavaScript record-backed Kagemusha browser tests",
+    "JavaScript record-backed Kagemusha and Pallas builder browser tests",
   );
   assertContainsAll(
     source("javascript/iroha_js/test/package_dist.test.js"),
     [
       "isKagemushaCompactPaymentTokenNativeAvailable",
       "isKagemushaRecursiveAggregationProofBundleNativeAvailable",
+      "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable",
       ...REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS,
+      ...REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_METHODS,
     ],
-    "JavaScript package record-backed Kagemusha exports",
+    "JavaScript package record-backed Kagemusha and Pallas builder exports",
   );
 });
 
@@ -3068,7 +3157,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-source-zero-sha256-placeholders",
     "--negative-control-android-device-lab-raw-puller-blank-serial",
     "--negative-control-android-device-lab-raw-puller-entry-cap",
+    "--negative-control-android-device-lab-raw-puller-summary-private-permissions",
+    "--negative-control-android-device-lab-raw-puller-latest-write-private-permissions",
     "--negative-control-android-device-lab-raw-puller-private-permissions",
+    "--negative-control-android-device-lab-attestation-report-writer-private-permissions",
+    "--negative-control-android-device-lab-slot-assembler-private-permissions",
     "--negative-control-android-device-lab-slot-assembler-source-identity-fallback",
     "--negative-control-release-bundle-evidence-inventory-schema",
     "--negative-control-release-bundle-evidence-inventory-keysets",
@@ -3079,6 +3172,8 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-release-bundle-android-signed-evidence-identity-drift",
     "--negative-control-release-bundle-android-slot-identity-drift",
     "--negative-control-release-bundle-manifest-android-signed-evidence-identity-binding",
+    "--negative-control-kagemusha-readiness-summary-output-private-permissions",
+    "--negative-control-release-bundle-output-private-permissions",
   ];
 
   assertWorkflowRunsNegativeControlModes(
@@ -3193,9 +3288,29 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android raw puller tar entry cap",
     ],
     [
+      "--negative-control-android-device-lab-raw-puller-summary-private-permissions",
+      /raw pull summary output permissions must be 0600[\s\S]*?raw pull summary output may be world-readable/u,
+      "Android raw puller summary private permissions",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-latest-write-private-permissions",
+      /raw latest-slot output permissions must be 0600[\s\S]*?raw latest-slot output may be world-readable/u,
+      "Android raw puller latest-slot private permissions",
+    ],
+    [
       "--negative-control-android-device-lab-raw-puller-private-permissions",
       /os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(output\.fileno\(\), 0o600\)[\s\S]*?output\.fileno\(\)/u,
       "Android raw puller private extracted-artifact permissions",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-report-writer-private-permissions",
+      /kagemusha_android_attestation_report\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(handle\.fileno\(\), 0o600\)[\s\S]*?handle\.fileno\(\)/u,
+      "Android attestation report writer private permissions",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-private-permissions",
+      /kagemusha_android_device_lab_slot\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(out\.fileno\(\), 0o600\)[\s\S]*?out\.fileno\(\)[\s\S]*?sign_android_device_lab_evidence\.py[\s\S]*?os\.fchmod\(handle\.fileno\(\), 0o600\)[\s\S]*?handle\.fileno\(\)/u,
+      "Android slot assembler private published-artifact permissions",
     ],
     [
       "--negative-control-android-device-lab-slot-assembler-source-identity-fallback",
@@ -3272,6 +3387,16 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       /"compact_key_generator_log"[\s\S]*?"compactKeyGeneratorLogDisabled"/u,
       "Kagemusha release bundle compact generator log inventory",
     ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-private-permissions",
+      /kagemusha_production_readiness\.py[\s\S]*?os\.fchmod\(handle\.fileno\(\), 0o600\)[\s\S]*?handle\.fileno\(\)/u,
+      "Kagemusha readiness summary output private permissions",
+    ],
+    [
+      "--negative-control-release-bundle-output-private-permissions",
+      /kagemusha_release_bundle\.py[\s\S]*?os\.fchmod\(handle\.fileno\(\), 0o600\)[\s\S]*?handle\.fileno\(\)/u,
+      "Kagemusha release bundle output private permissions",
+    ],
   ];
   for (const [mode, mutationPattern, label] of branchSpecs) {
     const branch = readinessBranch(mode);
@@ -3330,6 +3455,150 @@ test("Kagemusha staged finalizer negative controls pin execution-report log bind
     const branch = readinessBranch(mode);
     assert.match(branch, /run_negative_control\(/u, `${label} negative control must use the shared runner`);
     assert.match(branch, mutationPattern, `${label} negative control must mutate the guarded source text`);
+  }
+});
+
+test("Kagemusha staged runner negative controls pin private output permissions", () => {
+  const readiness = source("ci/check_kagemusha_production_readiness.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const expectedModes = [
+    "--negative-control-lineage-proof-staged-runner-private-permissions",
+    "--negative-control-compact-key-staged-runner-private-permissions",
+  ];
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_production_readiness.sh",
+    expectedModes,
+    "Kagemusha staged runner private-permissions guard",
+  );
+  for (const mode of expectedModes) {
+    assert.ok(
+      readiness.includes(`ci/check_kagemusha_production_readiness.sh ${mode}`),
+      `production readiness workflow requirements must include ${mode}`,
+    );
+    assert.ok(readiness.includes(`if mode == "${mode}":`), `production readiness guard must implement ${mode}`);
+  }
+
+  const branchSpecs = [
+    [
+      "--negative-control-lineage-proof-staged-runner-private-permissions",
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(file_fd, 0o600\)[\s\S]*?os\.fstat\(file_fd\)[\s\S]*?os\.fchmod\(handle\.fileno\(\), 0o600\)[\s\S]*?handle\.fileno\(\)[\s\S]*?os\.fchmod\(log_handle\.fileno\(\), 0o600\)[\s\S]*?log_handle\.fileno\(\)/u,
+      "lineage staged runner private-permissions",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-private-permissions",
+      /kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(file_fd, 0o600\)[\s\S]*?os\.fstat\(file_fd\)[\s\S]*?os\.fchmod\(handle\.fileno\(\), 0o600\)[\s\S]*?handle\.fileno\(\)[\s\S]*?os\.fchmod\(log_handle\.fileno\(\), 0o600\)[\s\S]*?log_handle\.fileno\(\)/u,
+      "compact staged runner private-permissions",
+    ],
+  ];
+  for (const [mode, mutationPattern, label] of branchSpecs) {
+    const start = readiness.indexOf(`if mode == "${mode}":`);
+    assert.notEqual(start, -1, `missing ${label} branch`);
+    const end = readiness.indexOf("\nif mode ==", start + 1);
+    const branch = readiness.slice(start, end === -1 ? readiness.length : end);
+    assert.match(branch, /run_negative_control\(/u, `${label} negative control must use the shared runner`);
+    assert.match(
+      branch,
+      mutationPattern,
+      `${label} negative control must mutate directory, atomic-file, and child-log chmod calls`,
+    );
+  }
+});
+
+test("Kagemusha staged finalizer negative controls pin private output permissions", () => {
+  const readiness = source("ci/check_kagemusha_production_readiness.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const expectedModes = [
+    "--negative-control-lineage-proof-finalizer-private-permissions",
+    "--negative-control-compact-key-finalizer-private-permissions",
+  ];
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_production_readiness.sh",
+    expectedModes,
+    "Kagemusha staged finalizer private-permissions guard",
+  );
+  for (const mode of expectedModes) {
+    assert.ok(
+      readiness.includes(`ci/check_kagemusha_production_readiness.sh ${mode}`),
+      `production readiness workflow requirements must include ${mode}`,
+    );
+    assert.ok(readiness.includes(`if mode == "${mode}":`), `production readiness guard must implement ${mode}`);
+  }
+
+  const branchSpecs = [
+    [
+      "--negative-control-lineage-proof-finalizer-private-permissions",
+      /kagemusha_finalize_lineage_proof_staged_run\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(dst\.fileno\(\), 0o600\)[\s\S]*?dst\.fileno\(\)/u,
+      "lineage staged finalizer private-permissions",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-private-permissions",
+      /kagemusha_finalize_recursive_compact_key_staged_run\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(dst\.fileno\(\), 0o600\)[\s\S]*?dst\.fileno\(\)/u,
+      "compact staged finalizer private-permissions",
+    ],
+  ];
+  for (const [mode, mutationPattern, label] of branchSpecs) {
+    const start = readiness.indexOf(`if mode == "${mode}":`);
+    assert.notEqual(start, -1, `missing ${label} branch`);
+    const end = readiness.indexOf("\nif mode ==", start + 1);
+    const branch = readiness.slice(start, end === -1 ? readiness.length : end);
+    assert.match(branch, /run_negative_control\(/u, `${label} negative control must use the shared runner`);
+    assert.match(
+      branch,
+      mutationPattern,
+      `${label} negative control must mutate directory and copied-file chmod calls`,
+    );
+  }
+});
+
+test("Kagemusha evidence helper negative controls pin private output permissions", () => {
+  const readiness = source("ci/check_kagemusha_production_readiness.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const expectedModes = [
+    "--negative-control-lineage-proof-helper-output-private-permissions",
+    "--negative-control-compact-key-helper-output-private-permissions",
+  ];
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_production_readiness.sh",
+    expectedModes,
+    "Kagemusha evidence helper private-permissions guard",
+  );
+  for (const mode of expectedModes) {
+    assert.ok(
+      readiness.includes(`ci/check_kagemusha_production_readiness.sh ${mode}`),
+      `production readiness workflow requirements must include ${mode}`,
+    );
+    assert.ok(readiness.includes(`if mode == "${mode}":`), `production readiness guard must implement ${mode}`);
+  }
+
+  const branchSpecs = [
+    [
+      "--negative-control-lineage-proof-helper-output-private-permissions",
+      /kagemusha_lineage_proof_evidence\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(handle\.fileno\(\), 0o600\)[\s\S]*?handle\.fileno\(\)/u,
+      "lineage evidence helper private-permissions",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-private-permissions",
+      /kagemusha_recursive_compact_key_evidence\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(handle\.fileno\(\), 0o600\)[\s\S]*?handle\.fileno\(\)/u,
+      "compact evidence helper private-permissions",
+    ],
+  ];
+  for (const [mode, mutationPattern, label] of branchSpecs) {
+    const start = readiness.indexOf(`if mode == "${mode}":`);
+    assert.notEqual(start, -1, `missing ${label} branch`);
+    const end = readiness.indexOf("\nif mode ==", start + 1);
+    const branch = readiness.slice(start, end === -1 ? readiness.length : end);
+    assert.match(branch, /run_negative_control\(/u, `${label} negative control must use the shared runner`);
+    assert.match(
+      branch,
+      mutationPattern,
+      `${label} negative control must mutate directory and file chmod calls`,
+    );
   }
 });
 
@@ -4564,13 +4833,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-lineage-witness-append-availability-probe",
     "--negative-control-android-lineage-witness-availability-probe",
     "--negative-control-android-lineage-witness-append-availability-probe",
+    "--negative-control-jvm-pallas-builder-input-guards",
+    "--negative-control-non-csharp-pallas-builder-input-guards",
+    "--negative-control-non-csharp-pallas-builder-native-output-guards",
     "--negative-control-js-lineage-readonly-declarations",
     "--negative-control-sdk-archive-input-copy",
     "--negative-control-sdk-lineage-proving-key-copy",
     "--negative-control-sdk-helper-surface",
     "--negative-control-sdk-readme-boundary",
     "--negative-control-sdk-readme-proof-chain-accumulator",
+    "--negative-control-sdk-readme-pallas-builder-surface",
     "--negative-control-offline-doc-native-owned-accumulator-boundary",
+    "--negative-control-offline-doc-pallas-builder-surface",
     "--negative-control-offline-doc-instruction-transaction-surface",
     "--negative-control-sdk-proof-chain-accumulator-input",
     "--negative-control-sdk-accumulator-digest-inputs",
@@ -4688,6 +4962,17 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-recursive-compact-shape-classifier",
     "--negative-control-mobile-recursive-spend-native-output-headers",
     "--negative-control-mobile-privacy-production-gate-exactness",
+    "--negative-control-mobile-zk-merkle-provider-adversarial-coverage",
+    "--negative-control-mobile-zk-torii-parser-shape-coverage",
+    "--negative-control-mobile-confidential-note-coverage",
+    "--negative-control-mobile-offline-readiness-coverage",
+    "--negative-control-kotlin-offline-cash-settlement-coverage",
+    "--negative-control-android-offline-transfer-persistence-coverage",
+    "--negative-control-mobile-transaction-norito-runner-coverage",
+    "--negative-control-kotlin-norito-framing-runner-coverage",
+    "--negative-control-mobile-account-address-canonical-coverage",
+    "--negative-control-mobile-connect-runner-coverage",
+    "--negative-control-mobile-transport-inspector-attestation-coverage",
     "--negative-control-jvm-offline-note-v2-decoder-placeholder",
     "--negative-control-jvm-offline-note-v2-instruction-wrapper",
     "--negative-control-jvm-offline-note-v2-instruction-decoder",
@@ -6450,7 +6735,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const mobilePrivacyProductionGateBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-privacy-production-gate-exactness":'),
-    guard.indexOf('if mode == "--negative-control-jvm-sdk-android-harness-script":'),
+    guard.indexOf('if mode == "--negative-control-mobile-zk-merkle-provider-adversarial-coverage":'),
   );
   assert.match(
     mobilePrivacyProductionGateBranch,
@@ -6476,6 +6761,325 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     mobilePrivacyProductionGateBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "mobile privacy production-gate negative control must not unconditionally pass after run_checks",
+  );
+  const mobileZkMerkleProviderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-zk-merkle-provider-adversarial-coverage":'),
+    guard.indexOf('if mode == "--negative-control-mobile-zk-torii-parser-shape-coverage":'),
+  );
+  assert.match(
+    mobileZkMerkleProviderBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile ZK Merkle provider negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobileZkMerkleProviderBranch,
+    /toriiProviderRejectsPathCountDriftAndReorderedNodeResponses[\s\S]*?toriiProviderAllowsPathCountDriftAndReorderedNodeResponses/u,
+    "mobile ZK Merkle provider negative control must mutate adversarial test coverage",
+  );
+  assert.match(
+    mobileZkMerkleProviderBranch,
+    /Kotlin ZK Merkle Torii provider adversarial tests[\s\S]*?Android Java ZK Merkle Torii provider adversarial tests/u,
+    "mobile ZK Merkle provider negative control must require both mobile adversarial labels",
+  );
+  assert.match(
+    mobileZkMerkleProviderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: mobile ZK Merkle provider adversarial coverage drift was not detected"\s*\)/u,
+    "mobile ZK Merkle provider negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobileZkMerkleProviderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile ZK Merkle provider negative control must not unconditionally pass after run_checks",
+  );
+  const mobileZkToriiParserBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-zk-torii-parser-shape-coverage":'),
+    guard.indexOf('if mode == "--negative-control-mobile-confidential-note-coverage":'),
+  );
+  assert.match(
+    mobileZkToriiParserBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile ZK Torii parser shape negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobileZkToriiParserBranch,
+    /rootsAndMerklePathsRejectOverflowDuplicateKeysAndInconsistentShape[\s\S]*?rootsAndMerklePathsAllowOverflowDuplicateKeysAndInconsistentShape[\s\S]*?merklePathParserRejectsDuplicateKeysBeforeLastValueWins[\s\S]*?merklePathParserAllowsDuplicateKeysBeforeLastValueWins/u,
+    "mobile ZK Torii parser shape negative control must mutate parser shape coverage",
+  );
+  assert.match(
+    mobileZkToriiParserBranch,
+    /Kotlin ZK Torii parser shape tests[\s\S]*?Android Java ZK Torii parser shape tests/u,
+    "mobile ZK Torii parser shape negative control must require both mobile parser labels",
+  );
+  assert.match(
+    mobileZkToriiParserBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile ZK Torii parser shape coverage drift was not detected"\)/u,
+    "mobile ZK Torii parser shape negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobileZkToriiParserBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile ZK Torii parser shape negative control must not unconditionally pass after run_checks",
+  );
+  const mobileConfidentialNoteBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-confidential-note-coverage":'),
+    guard.indexOf('if mode == "--negative-control-mobile-offline-readiness-coverage":'),
+  );
+  assert.match(
+    mobileConfidentialNoteBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile confidential note negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobileConfidentialNoteBranch,
+    /confidentialEncryptedPayloadIsStrictAndDefensive[\s\S]*?confidentialEncryptedPayloadAllowsAmbiguousInputs[\s\S]*?derivesRustConfidentialV2Vectors[\s\S]*?derivesDriftedConfidentialV2Vectors[\s\S]*?encryptsAndDecryptsPlaintextContract[\s\S]*?encryptsAndDecryptsDriftedPlaintextContract/u,
+    "mobile confidential note negative control must mutate payload and note coverage",
+  );
+  assert.match(
+    mobileConfidentialNoteBranch,
+    /Kotlin confidential encrypted payload tests[\s\S]*?Android Java confidential encrypted payload tests[\s\S]*?Kotlin confidential note contract tests[\s\S]*?Android Java confidential note contract tests/u,
+    "mobile confidential note negative control must require both mobile payload and note labels",
+  );
+  assert.match(
+    mobileConfidentialNoteBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile confidential note coverage drift was not detected"\)/u,
+    "mobile confidential note negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobileConfidentialNoteBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile confidential note negative control must not unconditionally pass after run_checks",
+  );
+  const mobileOfflineReadinessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-offline-readiness-coverage":'),
+    guard.indexOf('if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":'),
+  );
+  assert.match(
+    mobileOfflineReadinessBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile offline readiness negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobileOfflineReadinessBranch,
+    /readinessRejectsMalformedPresentAliasValues[\s\S]*?readinessAllowsMalformedPresentAliasValues[\s\S]*?v2ReadinessUsesCanonicalGetPathAndParsesResponse[\s\S]*?v2ReadinessUsesNoncanonicalGetPathAndParsesResponse[\s\S]*?rejectsOfflineV2ReadinessMalformedAbi7Aliases[\s\S]*?allowsOfflineV2ReadinessMalformedAbi7Aliases/u,
+    "mobile offline readiness negative control must mutate client and parser coverage",
+  );
+  assert.match(
+    mobileOfflineReadinessBranch,
+    /Kotlin Offline readiness client tests[\s\S]*?Kotlin Offline V2 readiness client tests[\s\S]*?Android Java Offline Torii readiness client tests[\s\S]*?Android Java Offline readiness parser tests/u,
+    "mobile offline readiness negative control must require all mobile readiness labels",
+  );
+  assert.match(
+    mobileOfflineReadinessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile offline readiness coverage drift was not detected"\)/u,
+    "mobile offline readiness negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobileOfflineReadinessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile offline readiness negative control must not unconditionally pass after run_checks",
+  );
+  const kotlinOfflineCashSettlementBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":'),
+    guard.indexOf('if mode == "--negative-control-android-offline-transfer-persistence-coverage":'),
+  );
+  assert.match(
+    kotlinOfflineCashSettlementBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Kotlin offline cash settlement negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    kotlinOfflineCashSettlementBranch,
+    /redeemRequestCommitmentHexMatchesExpected[\s\S]*?redeemRequestCommitmentHexAllowsDrift[\s\S]*?redeemProofsMatchRustFixtures[\s\S]*?redeemProofsAllowRustFixtureDrift/u,
+    "Kotlin offline cash settlement negative control must mutate codec and fixture coverage",
+  );
+  assert.match(
+    kotlinOfflineCashSettlementBranch,
+    /Kotlin offline cash codec tests[\s\S]*?Kotlin offline settlement proof fixture parity tests/u,
+    "Kotlin offline cash settlement negative control must require both Kotlin coverage labels",
+  );
+  assert.match(
+    kotlinOfflineCashSettlementBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Kotlin offline cash settlement coverage drift was not detected"\)/u,
+    "Kotlin offline cash settlement negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    kotlinOfflineCashSettlementBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Kotlin offline cash settlement negative control must not unconditionally pass after run_checks",
+  );
+  const androidOfflineTransferPersistenceBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-android-offline-transfer-persistence-coverage":'),
+    guard.indexOf('if mode == "--negative-control-mobile-transaction-norito-runner-coverage":'),
+  );
+  assert.match(
+    androidOfflineTransferPersistenceBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Android offline transfer persistence negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    androidOfflineTransferPersistenceBranch,
+    /recoversMissingChunk[\s\S]*?allowsMissingChunkLoss[\s\S]*?duplicatePendingRejected[\s\S]*?duplicatePendingAllowed[\s\S]*?queuesFailedSubmissionAndEmitsTelemetry[\s\S]*?dropsFailedSubmissionAndTelemetry/u,
+    "Android offline transfer persistence negative control must mutate QR, journal, and pending queue coverage",
+  );
+  assert.match(
+    androidOfflineTransferPersistenceBranch,
+    /Android offline QR stream tests[\s\S]*?Android offline journal tests[\s\S]*?Android HTTP transport pending queue replay tests/u,
+    "Android offline transfer persistence negative control must require QR, journal, and queue labels",
+  );
+  assert.match(
+    androidOfflineTransferPersistenceBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Android offline transfer persistence coverage drift was not detected"\)/u,
+    "Android offline transfer persistence negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    androidOfflineTransferPersistenceBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Android offline transfer persistence negative control must not unconditionally pass after run_checks",
+  );
+  const mobileTransactionNoritoBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-transaction-norito-runner-coverage":'),
+    guard.indexOf('if mode == "--negative-control-kotlin-norito-framing-runner-coverage":'),
+  );
+  assert.match(
+    mobileTransactionNoritoBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile transaction/Norito negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobileTransactionNoritoBranch,
+    /codec supports instructions and wire payload variants[\s\S]*?codec supports unframed instruction variants[\s\S]*?signed transaction decoder rejects adversarial envelopes[\s\S]*?signed transaction decoder allows adversarial envelopes[\s\S]*?javaCodecRejectsMalformedSignedTransactions[\s\S]*?javaCodecAllowsMalformedSignedTransactions[\s\S]*?fixtureLoaderRejectsWireInstructionArguments[\s\S]*?fixtureLoaderAllowsWireInstructionArguments[\s\S]*?hashIgnoresExportedKeyBundle[\s\S]*?hashIncludesExportedKeyBundle[\s\S]*?roundTripWithExportedKey[\s\S]*?dropsExportedKey/u,
+    "mobile transaction/Norito negative control must mutate codec, fixture, hash, and envelope coverage",
+  );
+  assert.match(
+    mobileTransactionNoritoBranch,
+    /Kotlin Norito Java codec parity tests[\s\S]*?Kotlin transaction fixture parity tests[\s\S]*?Android Norito codec adapter tests[\s\S]*?Android transaction payload fixture tests[\s\S]*?Android signed transaction hasher tests[\s\S]*?Android offline signing envelope codec tests/u,
+    "mobile transaction/Norito negative control must require all transaction/Norito labels",
+  );
+  assert.match(
+    mobileTransactionNoritoBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile transaction\/Norito coverage drift was not detected"\)/u,
+    "mobile transaction/Norito negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobileTransactionNoritoBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile transaction/Norito negative control must not unconditionally pass after run_checks",
+  );
+  const kotlinNoritoFramingBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-kotlin-norito-framing-runner-coverage":'),
+    guard.indexOf('if mode == "--negative-control-mobile-account-address-canonical-coverage":'),
+  );
+  assert.match(
+    kotlinNoritoFramingBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Kotlin Norito framing negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    kotlinNoritoFramingBranch,
+    /decode rejects reserved layout flags[\s\S]*?decode permits reserved layout flags[\s\S]*?decode rejects field bitset without required flags[\s\S]*?decode permits field bitset without required flags[\s\S]*?optional string columnar matches Rust golden and rejects malformed payloads[\s\S]*?optional string columnar permits malformed payloads[\s\S]*?optional u32 columnar matches Rust golden and rejects malformed AoS[\s\S]*?optional u32 columnar permits malformed AoS[\s\S]*?bytes bool columnar and adaptive layouts match Rust goldens[\s\S]*?bytes bool columnar accepts trailing flags/u,
+    "Kotlin Norito framing negative control must mutate header and columnar coverage",
+  );
+  assert.match(
+    kotlinNoritoFramingBranch,
+    /Kotlin Norito header layout flag tests[\s\S]*?Kotlin Norito columnar golden\/adversarial tests/u,
+    "Kotlin Norito framing negative control must require both Norito labels",
+  );
+  assert.match(
+    kotlinNoritoFramingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Kotlin Norito framing coverage drift was not detected"\)/u,
+    "Kotlin Norito framing negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    kotlinNoritoFramingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Kotlin Norito framing negative control must not unconditionally pass after run_checks",
+  );
+  const mobileAccountAddressBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-account-address-canonical-coverage":'),
+    guard.indexOf('if mode == "--negative-control-mobile-connect-runner-coverage":'),
+  );
+  assert.match(
+    mobileAccountAddressBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile account address negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobileAccountAddressBranch,
+    /mixedI105LiteralRoundTripsToOriginalCanonicalPayload[\s\S]*?mixedI105LiteralAllowsCanonicalDrift[\s\S]*?rejectsNonCanonicalFullwidthKanaPayload[\s\S]*?allowsNonCanonicalFullwidthKanaPayload[\s\S]*?fromAccountRejectsBlankOrPaddedCurveAlgorithmAliases[\s\S]*?fromAccountAllowsBlankOrPaddedCurveAlgorithmAliases[\s\S]*?fromAccount produces same I105 for known key[\s\S]*?fromAccount permits I105 drift for known key[\s\S]*?complianceFixtureSuite[\s\S]*?skipsComplianceFixtureSuite[\s\S]*?i105RejectsFullwidthSentinel[\s\S]*?i105AllowsFullwidthSentinel[\s\S]*?curveAlgorithmAliasesRejectBlankAndPaddedLabels[\s\S]*?curveAlgorithmAliasesAllowBlankAndPaddedLabels/u,
+    "mobile account address negative control must mutate Kotlin and Android account canonical coverage",
+  );
+  assert.match(
+    mobileAccountAddressBranch,
+    /Kotlin AccountAddress canonical tests[\s\S]*?Kotlin I105 canonical SPKI tests[\s\S]*?Android AccountAddress compliance tests/u,
+    "mobile account address negative control must require all account address labels",
+  );
+  assert.match(
+    mobileAccountAddressBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\s*\(\s*"negative control failed: mobile account address canonical coverage drift was not detected"\s*\)/u,
+    "mobile account address negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobileAccountAddressBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile account address negative control must not unconditionally pass after run_checks",
+  );
+  const mobileConnectBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-connect-runner-coverage":'),
+    guard.indexOf('if mode == "--negative-control-mobile-transport-inspector-attestation-coverage":'),
+  );
+  assert.match(
+    mobileConnectBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile Connect negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobileConnectBranch,
+    /deriveDirectionKeysRejectsLowOrderPeerPublicKey[\s\S]*?deriveDirectionKeysAllowsLowOrderPeerPublicKey[\s\S]*?buildApprovePreimageRejectsDomainQualifiedAccountAlias[\s\S]*?buildApprovePreimageAllowsDomainQualifiedAccountAlias[\s\S]*?signResultOkAcceptsExactEd25519Algorithm[\s\S]*?signResultOkAcceptsLooseEd25519Algorithm[\s\S]*?negativeSequenceRejectedAcrossConnectSurfaces[\s\S]*?negativeSequenceAcceptedAcrossConnectSurfaces[\s\S]*?relayAuthHashMatchesSharedFixture[\s\S]*?relayAuthHashDriftsFromSharedFixture[\s\S]*?decodeLiveSignRequestRawFixture[\s\S]*?skipLiveSignRequestRawFixture[\s\S]*?pruneExpiredRecords[\s\S]*?retainExpiredRecords[\s\S]*?testQueueOverflow[\s\S]*?queueOverflowCheckSkipped/u,
+    "mobile Connect negative control must mutate Kotlin and Android Connect coverage",
+  );
+  assert.match(
+    mobileConnectBranch,
+    /Kotlin Connect crypto tests[\s\S]*?Kotlin Connect envelope codec tests[\s\S]*?Kotlin Connect sequence tests[\s\S]*?Kotlin Connect wallet request tests[\s\S]*?Android Connect envelope\/sequence tests[\s\S]*?Android Connect queue journal tests[\s\S]*?Android Connect retry policy tests[\s\S]*?Android Connect error classifier tests[\s\S]*?Android Connect wallet request tests/u,
+    "mobile Connect negative control must require all Connect labels",
+  );
+  assert.match(
+    mobileConnectBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile Connect runner coverage drift was not detected"\)/u,
+    "mobile Connect negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobileConnectBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile Connect negative control must not unconditionally pass after run_checks",
+  );
+  const mobileTransportInspectorAttestationBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-transport-inspector-attestation-coverage":'),
+    guard.indexOf('if mode == "--negative-control-jvm-sdk-android-harness-script":'),
+  );
+  assert.match(
+    mobileTransportInspectorAttestationBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile transport/inspector/attestation negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobileTransportInspectorAttestationBranch,
+    /executeRunsOnSuppliedAsyncExecutor[\s\S]*?executeMayUseCommonPool[\s\S]*?executeReturns404WithEmptyBodyWhenServerSendsNoContent[\s\S]*?executeReturns404WithoutEmptyBodyAssertion[\s\S]*?inspectModernEntries[\s\S]*?skipModernPendingQueueEntries[\s\S]*?strongBoxAttestationPasses[\s\S]*?skipStrongBoxAttestationPasses[\s\S]*?challengeMismatchFails[\s\S]*?challengeMismatchPasses[\s\S]*?builderRequiresTrustAnchor[\s\S]*?builderAllowsMissingTrustAnchor/u,
+    "mobile transport/inspector/attestation negative control must mutate transport, inspector, and attestation coverage",
+  );
+  assert.match(
+    mobileTransportInspectorAttestationBranch,
+    /Kotlin URLConnection transport executor tests[\s\S]*?Android URLConnection transport executor tests[\s\S]*?Android pending queue inspector tests[\s\S]*?Android attestation verifier tests/u,
+    "mobile transport/inspector/attestation negative control must require all labels",
+  );
+  assert.match(
+    mobileTransportInspectorAttestationBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\s*\(\s*"negative control failed: mobile transport\/inspector\/attestation coverage drift was not detected"\s*\)/u,
+    "mobile transport/inspector/attestation negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobileTransportInspectorAttestationBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile transport/inspector/attestation negative control must not unconditionally pass after run_checks",
   );
   const csharpArchiveCopyBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-csharp-archive-copy":'),

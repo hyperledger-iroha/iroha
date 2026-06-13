@@ -20,6 +20,7 @@ public final class ZkAssetMerklePathTests {
     localProviderComputesAndVerifiesCurrentFrontierPath();
     localProviderRejectsAmbiguousOrMismatchedFrontiers();
     toriiProviderFetchesAndValidatesNodeEndpointPaths();
+    toriiProviderRejectsPathCountDriftAndReorderedNodeResponses();
     toriiProviderRejectsMismatchedNodeCommitment();
     toriiProviderRejectsNonVerifyingNodePath();
     pathAccessorsReturnDefensiveCopies();
@@ -103,6 +104,64 @@ public final class ZkAssetMerklePathTests {
         : "path must verify";
   }
 
+  private static void toriiProviderRejectsPathCountDriftAndReorderedNodeResponses() {
+    final List<byte[]> commitments = List.of(scalarBytes(1), scalarBytes(2));
+    final byte[] root = computeRoot(commitments);
+    final LocalZkAssetMerklePathProvider localProvider =
+        new LocalZkAssetMerklePathProvider(List.of(root), commitments);
+    final ZkAssetMerklePath firstPath =
+        localProvider.getMerklePathForCommitment("usd#bank", commitments.get(0)).join();
+    final ZkAssetMerklePath secondPath =
+        localProvider.getMerklePathForCommitment("usd#bank", commitments.get(1)).join();
+
+    final ToriiZkAssetMerklePathProvider shortProvider =
+        toriiProviderWithResponse(
+            merklePathResponse(
+                root,
+                List.of(new MerklePathResponseEntry(commitments.get(0), firstPath))));
+    try {
+      shortProvider.getMerklePaths("usd#bank", commitments).join();
+      throw new AssertionError("expected short path response rejection");
+    } catch (final CompletionException expected) {
+      assert expected.getCause() instanceof IllegalArgumentException : "wrong error type";
+      assert expected.getCause().getMessage().contains("Torii returned 1 Merkle paths for 2 commitments")
+          : "wrong message";
+    }
+
+    final ToriiZkAssetMerklePathProvider longProvider =
+        toriiProviderWithResponse(
+            merklePathResponse(
+                root,
+                List.of(
+                    new MerklePathResponseEntry(commitments.get(0), firstPath),
+                    new MerklePathResponseEntry(commitments.get(1), secondPath),
+                    new MerklePathResponseEntry(commitments.get(0), firstPath))));
+    try {
+      longProvider.getMerklePaths("usd#bank", commitments).join();
+      throw new AssertionError("expected long path response rejection");
+    } catch (final CompletionException expected) {
+      assert expected.getCause() instanceof IllegalArgumentException : "wrong error type";
+      assert expected.getCause().getMessage().contains("Torii returned 3 Merkle paths for 2 commitments")
+          : "wrong message";
+    }
+
+    final ToriiZkAssetMerklePathProvider reorderedProvider =
+        toriiProviderWithResponse(
+            merklePathResponse(
+                root,
+                List.of(
+                    new MerklePathResponseEntry(commitments.get(1), secondPath),
+                    new MerklePathResponseEntry(commitments.get(0), firstPath))));
+    try {
+      reorderedProvider.getMerklePaths("usd#bank", commitments).join();
+      throw new AssertionError("expected reordered path response rejection");
+    } catch (final CompletionException expected) {
+      assert expected.getCause() instanceof IllegalArgumentException : "wrong error type";
+      assert expected.getCause().getMessage().contains("commitment mismatch at index 0")
+          : "wrong message";
+    }
+  }
+
   private static void toriiProviderRejectsMismatchedNodeCommitment() {
     final byte[] requested = scalarBytes(1);
     final byte[] root = computeRoot(List.of(requested));
@@ -181,6 +240,15 @@ public final class ZkAssetMerklePathTests {
     return ZkRootsResponse.encodeHex(bytes);
   }
 
+  private static ToriiZkAssetMerklePathProvider toriiProviderWithResponse(final String responseBody) {
+    final ConfidentialAssetToriiClient client =
+        ConfidentialAssetToriiClient.builder()
+            .executor(new CapturingExecutor(responseBody))
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    return new ToriiZkAssetMerklePathProvider(client);
+  }
+
   private static String merklePathResponse(
       final byte[] root, final byte[] commitment, final ZkAssetMerklePath path) {
     return merklePathResponse(root, commitment, path, path.siblings());
@@ -191,33 +259,39 @@ public final class ZkAssetMerklePathTests {
       final byte[] commitment,
       final ZkAssetMerklePath path,
       final List<byte[]> siblingsOverride) {
-    final String siblings = quotedHexList(siblingsOverride);
-    final String directions = directionList(path.directions());
-    final String witnessNodes = quotedHexList(path.siblings());
+    return merklePathResponse(root, List.of(new MerklePathResponseEntry(commitment, path, siblingsOverride)));
+  }
+
+  private static String merklePathResponse(
+      final byte[] root, final List<MerklePathResponseEntry> entries) {
+    final int treeDepth = entries.isEmpty() ? 0 : entries.get(0).path.siblings().size();
+    final ArrayList<String> paths = new ArrayList<>(entries.size());
+    for (final MerklePathResponseEntry entry : entries) {
+      final String siblings = quotedHexList(entry.siblings);
+      final String directions = directionList(entry.path.directions());
+      final String witnessNodes = quotedHexList(entry.path.siblings());
+      paths.add(
+          """
+                  {
+                    "commitment": "%s",
+                    "leaf_index": %d,
+                    "siblings": [%s],
+                    "directions": [%s],
+                    "witness_nodes": [%s],
+                    "root": "%s"
+                  }
+              """
+              .formatted(hex(entry.commitment), entry.path.leafIndex(), siblings, directions, witnessNodes, hex(root)));
+    }
     return """
             {
               "root": "%s",
               "frontier_len": 2,
               "tree_depth": %d,
-              "paths": [{
-                "commitment": "%s",
-                "leaf_index": %d,
-                "siblings": [%s],
-                "directions": [%s],
-                "witness_nodes": [%s],
-                "root": "%s"
-              }]
+              "paths": [%s]
             }
         """
-        .formatted(
-            hex(root),
-            path.siblings().size(),
-            hex(commitment),
-            path.leafIndex(),
-            siblings,
-            directions,
-            witnessNodes,
-            hex(root));
+        .formatted(hex(root), treeDepth, String.join(",", paths));
   }
 
   private static String quotedHexList(final List<byte[]> values) {
@@ -242,6 +316,23 @@ public final class ZkAssetMerklePathTests {
       throw new AssertionError("expected IllegalArgumentException");
     } catch (final IllegalArgumentException expected) {
       // Expected path.
+    }
+  }
+
+  private static final class MerklePathResponseEntry {
+    private final byte[] commitment;
+    private final ZkAssetMerklePath path;
+    private final List<byte[]> siblings;
+
+    private MerklePathResponseEntry(final byte[] commitment, final ZkAssetMerklePath path) {
+      this(commitment, path, path.siblings());
+    }
+
+    private MerklePathResponseEntry(
+        final byte[] commitment, final ZkAssetMerklePath path, final List<byte[]> siblings) {
+      this.commitment = commitment.clone();
+      this.path = path;
+      this.siblings = new ArrayList<>(siblings);
     }
   }
 

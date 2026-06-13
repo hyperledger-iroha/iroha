@@ -213,6 +213,48 @@ class ConfidentialAssetToriiClientTest {
     }
 
     @Test
+    fun merklePathParserRejectsDuplicateKeysBeforeLastValueWins() {
+        val commitment = "02".repeat(32)
+        val sibling = "00".repeat(32)
+        val root = "03".repeat(32)
+        val otherRoot = "04".repeat(32)
+
+        assertFailsWith<IllegalStateException> {
+            ZkMerklePathResponse.parse(
+                """
+                {
+                  "root": "$root",
+                  "frontier_len": 3,
+                  "frontier_len": 1,
+                  "tree_depth": 1,
+                  "paths": []
+                }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            ZkMerklePathResponse.parse(
+                """
+                {
+                  "root": "$root",
+                  "frontier_len": 3,
+                  "tree_depth": 1,
+                  "paths": [{
+                    "commitment": "$commitment",
+                    "commitment": "$otherRoot",
+                    "leaf_index": 0,
+                    "siblings": ["$sibling"],
+                    "directions": [0],
+                    "witness_nodes": ["$root"],
+                    "root": "$root"
+                  }]
+                }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+    }
+
+    @Test
     fun nonSuccessResponsesSurfaceOfflineToriiException() {
         val client = ConfidentialAssetToriiClient.builder()
             .executor(CapturingExecutor("""{"error":"not ready"}""", status = 503, message = "Unavailable"))

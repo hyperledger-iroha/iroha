@@ -65,11 +65,14 @@ use tokio::{fs as async_fs, sync::Mutex as AsyncMutex};
 
 use crate::da::taikai;
 use crate::da::taikai::taikai_ingest;
-use crate::da::taikai::taikai_ingest::{AnchorSender, collect_pending_uploads, process_batch};
+use crate::da::taikai::taikai_ingest::{
+    AnchorSendError, AnchorSender, collect_pending_uploads, process_batch,
+};
 use crate::da::taikai::{
     TAIKAI_ANCHOR_REQUEST_PREFIX, TAIKAI_ANCHOR_REQUEST_SUFFIX, TAIKAI_ANCHOR_SENTINEL_PREFIX,
     TAIKAI_ANCHOR_SENTINEL_SUFFIX, TAIKAI_SPOOL_SUBDIR, TAIKAI_TRM_LINEAGE_PREFIX,
-    TAIKAI_TRM_LINEAGE_SUFFIX,
+    TAIKAI_TRM_LINEAGE_SUFFIX, TAIKAI_TRM_LOCK_PREFIX, TAIKAI_TRM_LOCK_STALE_SECS,
+    TAIKAI_TRM_LOCK_SUFFIX,
 };
 use crate::da::{
     DaReceiptLog, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpooler, ReplayCursorStore,
@@ -186,6 +189,73 @@ async fn da_spooler_executes_batch_before_ack() {
     assert_eq!(report.actions().len(), 1);
     assert_eq!(report.actions()[0].kind(), "test_artifact");
     assert!(report.actions()[0].error().is_none());
+}
+
+#[test]
+fn da_spool_batch_reports_action_panic_as_error() {
+    let marker = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut batch = DaSpoolBatch::new();
+    batch.push(DaSpoolAction::new(
+        "manifest",
+        || -> Result<DaSpoolActionOutput, String> {
+            panic!("panic during DA spool action");
+        },
+    ));
+    let marker_for_action = Arc::clone(&marker);
+    batch.push(DaSpoolAction::new("receipt_log", move || {
+        marker_for_action.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(DaSpoolActionOutput::None)
+    }));
+
+    let report = batch.execute_sync();
+
+    assert_eq!(marker.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(report.actions().len(), 2);
+    assert_eq!(report.actions()[0].kind(), "manifest");
+    let error = report.actions()[0]
+        .error()
+        .expect("panic must be reported as an action error");
+    assert!(
+        error.contains("panicked") && error.contains("panic during DA spool action"),
+        "unexpected panic report: {error}"
+    );
+    assert_eq!(report.actions()[1].kind(), "receipt_log");
+    assert!(report.actions()[1].error().is_none());
+
+    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
+        .expect("panic report must fail closed");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn da_spooler_reports_action_panic_before_ack() {
+    let spooler = DaSpooler::spawn(
+        NonZeroUsize::new(4).expect("non-zero queue"),
+        NonZeroUsize::new(2).expect("non-zero batch"),
+        crate::routing::MaybeTelemetry::disabled(),
+    );
+    let mut batch = DaSpoolBatch::new();
+    batch.push(DaSpoolAction::new(
+        "pdp_commitment",
+        || -> Result<DaSpoolActionOutput, String> {
+            std::panic::panic_any(1234_u64);
+        },
+    ));
+
+    let report = spooler.submit(batch).await;
+
+    assert_eq!(report.actions().len(), 1);
+    assert_eq!(report.actions()[0].kind(), "pdp_commitment");
+    let error = report.actions()[0]
+        .error()
+        .expect("panic must be reported before acknowledgement");
+    assert!(
+        error.contains("panicked") && error.contains("non-string panic payload"),
+        "unexpected panic report: {error}"
+    );
+    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
+        .expect("panic report must fail closed");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[test]
@@ -1498,12 +1568,62 @@ impl AnchorSender for MockAnchorSender {
         endpoint: &Url,
         body: String,
         api_token: Option<&str>,
-    ) -> Result<(), reqwest::Error> {
+    ) -> Result<(), AnchorSendError> {
         self.calls
             .lock()
             .await
             .push((endpoint.clone(), body, api_token.map(str::to_owned)));
         Ok(())
+    }
+}
+
+struct BlockingSentinelAnchorSender {
+    calls: AsyncMutex<Vec<(Url, String, Option<String>)>>,
+    sentinel_path: PathBuf,
+}
+
+#[async_trait]
+impl AnchorSender for BlockingSentinelAnchorSender {
+    async fn send(
+        &self,
+        endpoint: &Url,
+        body: String,
+        api_token: Option<&str>,
+    ) -> Result<(), AnchorSendError> {
+        {
+            self.calls
+                .lock()
+                .await
+                .push((endpoint.clone(), body, api_token.map(str::to_owned)));
+        }
+        async_fs::create_dir(&self.sentinel_path)
+            .await
+            .expect("block sentinel path");
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct FailingAnchorSender {
+    calls: AsyncMutex<Vec<(Url, String, Option<String>)>>,
+}
+
+#[async_trait]
+impl AnchorSender for FailingAnchorSender {
+    async fn send(
+        &self,
+        endpoint: &Url,
+        body: String,
+        api_token: Option<&str>,
+    ) -> Result<(), AnchorSendError> {
+        self.calls
+            .lock()
+            .await
+            .push((endpoint.clone(), body, api_token.map(str::to_owned)));
+        Err(Box::new(std::io::Error::new(
+            ErrorKind::ConnectionRefused,
+            "anchor service unavailable",
+        )))
     }
 }
 
@@ -1621,6 +1741,27 @@ async fn taikai_anchor_processing_generates_payload_and_sentinel() {
         Some(BASE64.encode(&trm_bytes)).as_deref()
     );
     assert_eq!(payload.get("lineage_hint"), Some(&lineage_value));
+    let request_capture = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
+    ));
+    let capture_contents = async_fs::read_to_string(&request_capture)
+        .await
+        .expect("request capture after collection");
+    assert_eq!(capture_contents, pending[0].body());
+    assert!(
+        temp_artifact_names(&spool_dir).is_empty(),
+        "request capture persistence should not leave temporary artifacts"
+    );
+
+    let pending_again = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("collect pending idempotently");
+    assert_eq!(pending_again.len(), 1);
+    assert_eq!(pending_again[0].body(), pending[0].body());
+    assert!(
+        temp_artifact_names(&spool_dir).is_empty(),
+        "idempotent request capture persistence should not leave temporary artifacts"
+    );
 
     let sender = MockAnchorSender::default();
     process_batch(&spool_dir, &anchor_cfg, &sender)
@@ -1637,9 +1778,6 @@ async fn taikai_anchor_processing_generates_payload_and_sentinel() {
         "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
     ));
     assert!(async_fs::metadata(&sentinel).await.is_ok());
-    let request_capture = spool_dir.join(format!(
-        "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
-    ));
     let capture_contents = async_fs::read_to_string(&request_capture)
         .await
         .expect("request capture");
@@ -1649,6 +1787,111 @@ async fn taikai_anchor_processing_generates_payload_and_sentinel() {
         .await
         .expect("collect after upload");
     assert!(pending_after.is_empty());
+}
+
+#[tokio::test]
+async fn taikai_anchor_processing_reports_anchor_delivery_failure() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let sentinel = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+    ));
+
+    let anchor_cfg = DaTaikaiAnchor {
+        endpoint: Url::parse("http://localhost/anchor").unwrap(),
+        api_token: None,
+        poll_interval: Duration::from_secs(5),
+    };
+    let sender = FailingAnchorSender::default();
+
+    let err = process_batch(&spool_dir, &anchor_cfg, &sender)
+        .await
+        .expect_err("anchor delivery failure should fail batch processing");
+
+    assert!(
+        err.contains("failed to deliver Taikai envelope"),
+        "unexpected process error: {err}"
+    );
+    assert!(
+        err.contains(base_id),
+        "delivery error should identify affected artifact: {err}"
+    );
+    assert!(
+        err.contains("anchor service unavailable"),
+        "delivery error should retain sender error context: {err}"
+    );
+    assert_eq!(sender.calls.lock().await.len(), 1);
+    assert!(
+        async_fs::metadata(&sentinel).await.is_err(),
+        "failed delivery must not mark the upload as anchored"
+    );
+
+    let pending_after = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("collect after failed delivery");
+    assert_eq!(pending_after.len(), 1);
+    assert_eq!(pending_after[0].base_id(), base_id);
+}
+
+#[tokio::test]
+async fn taikai_anchor_processing_rejects_unpersistable_sentinel_after_upload() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let sentinel = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+    ));
+
+    let anchor_cfg = DaTaikaiAnchor {
+        endpoint: Url::parse("http://localhost/anchor").unwrap(),
+        api_token: None,
+        poll_interval: Duration::from_secs(5),
+    };
+    let sender = BlockingSentinelAnchorSender {
+        calls: AsyncMutex::new(Vec::new()),
+        sentinel_path: sentinel.clone(),
+    };
+
+    let err = process_batch(&spool_dir, &anchor_cfg, &sender)
+        .await
+        .expect_err("blocked sentinel should fail batch processing");
+
+    assert!(
+        err.contains("failed to persist Taikai anchor sentinel"),
+        "unexpected process error: {err}"
+    );
+    assert!(
+        err.contains(&sentinel.display().to_string()),
+        "error should identify blocked sentinel path: {err}"
+    );
+    assert_eq!(sender.calls.lock().await.len(), 1);
+    assert!(
+        async_fs::metadata(&sentinel)
+            .await
+            .expect("sentinel path metadata")
+            .is_dir(),
+        "test sender should leave a directory at the sentinel path"
+    );
+    assert!(
+        temp_artifact_names(&spool_dir).is_empty(),
+        "failed sentinel persistence should clean up temporary artifacts"
+    );
+
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("non-file sentinel must reject later anchor collection"),
+        Err(err) => err,
+    };
+    assert!(
+        err.contains("is not a regular file"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(&sentinel.display().to_string()),
+        "error should identify non-file sentinel path: {err}"
+    );
 }
 
 #[tokio::test]
@@ -1691,6 +1934,34 @@ async fn taikai_anchor_collection_rejects_malformed_base_id() {
     assert!(
         err.contains(base_id),
         "error should identify malformed base id: {err}"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_collection_rejects_non_file_sentinel() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let sentinel = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+    ));
+    async_fs::create_dir(&sentinel)
+        .await
+        .expect("create sentinel directory");
+
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("non-file sentinel must reject anchor collection"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.contains("is not a regular file"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(&sentinel.display().to_string()),
+        "error should identify non-file sentinel path: {err}"
     );
 }
 
@@ -1885,6 +2156,22 @@ fn taikai_lineage_state_path(spool_dir: &Path) -> PathBuf {
         .expect("lineage state path")
 }
 
+fn taikai_lock_path(spool_dir: &Path) -> PathBuf {
+    fs::read_dir(spool_dir.join(TAIKAI_SPOOL_SUBDIR))
+        .expect("read taikai spool")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(TAIKAI_TRM_LOCK_PREFIX)
+                        && name.ends_with(TAIKAI_TRM_LOCK_SUFFIX)
+                })
+        })
+        .expect("Taikai TRM lock path")
+}
+
 fn mutate_taikai_lineage_state(spool_dir: &Path, mutate: impl FnOnce(&mut Value)) {
     let path = taikai_lineage_state_path(spool_dir);
     let contents = fs::read_to_string(&path).expect("read lineage state");
@@ -1974,6 +2261,66 @@ fn taikai_trm_lineage_guard_rejects_inverted_window() {
             map.insert("window_end_sequence".into(), Value::from(10));
         },
         "window_start_sequence exceeds window_end_sequence",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn taikai_trm_lineage_guard_rejects_unremovable_stale_lock() {
+    use std::{os::unix::fs::PermissionsExt as _, time::SystemTime};
+
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path();
+    let alias = sample_trm_manifest().alias_binding;
+    let guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+        .expect("guard")
+        .expect("enabled");
+    let lock_path = taikai_lock_path(spool_dir);
+    drop(guard);
+
+    fs::write(&lock_path, b"0\n").expect("seed stale lock");
+    let stale_at = SystemTime::now() - Duration::from_secs(TAIKAI_TRM_LOCK_STALE_SECS + 1);
+    let stale_times = std::fs::FileTimes::new()
+        .set_accessed(stale_at)
+        .set_modified(stale_at);
+    fs::File::options()
+        .read(true)
+        .open(&lock_path)
+        .expect("open stale lock")
+        .set_times(stale_times)
+        .expect("age stale lock");
+    let base_dir = spool_dir.join(TAIKAI_SPOOL_SUBDIR);
+    let mut permissions = fs::metadata(&base_dir)
+        .expect("read Taikai spool permissions")
+        .permissions();
+    permissions.set_mode(0o500);
+    fs::set_permissions(&base_dir, permissions).expect("make Taikai spool unwritable");
+
+    let err = match taikai_ingest::TrmLineageGuard::new(spool_dir, &alias) {
+        Ok(_) => panic!("unremovable stale lock must reject lineage guard acquisition"),
+        Err(err) => err,
+    };
+    let mut permissions = fs::metadata(&base_dir)
+        .expect("read Taikai spool permissions")
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&base_dir, permissions).expect("restore Taikai spool permissions");
+
+    assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        err.1
+            .contains("failed to remove stale Taikai routing manifest lock"),
+        "unexpected stale lock error: {:?}",
+        err
+    );
+    assert!(
+        err.1.contains(&lock_path.display().to_string()),
+        "stale lock error should include path: {:?}",
+        err
+    );
+    assert!(
+        lock_path.exists(),
+        "failed cleanup should leave stale lock visible for operator repair"
     );
 }
 
@@ -3576,7 +3923,7 @@ fn load_da_receipts_rejects_receipt_shaped_directory() {
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
-        err.to_string().contains("failed to load DA receipt"),
+        err.to_string().contains("is not a regular file"),
         "unexpected receipt load error: {err}"
     );
 }
@@ -3649,6 +3996,22 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
         "duplicate receipt must not create another durable receipt file"
     );
 
+    let mut receipt_conflict = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xD1);
+    receipt_conflict.manifest_hash = receipt.manifest_hash;
+    let unsigned =
+        persistence::unsigned_receipt_bytes(&receipt_conflict, 1).expect("unsigned bytes");
+    receipt_conflict.operator_signature = Signature::new(signer.private_key(), &unsigned);
+    assert!(matches!(
+        log.append(lane_epoch, 1, receipt_conflict, test_fingerprint(0xD1))
+            .unwrap(),
+        ReceiptInsertOutcome::ReceiptConflict { .. }
+    ));
+    assert_eq!(
+        receipt_file_count(temp_dir.path()),
+        1,
+        "receipt-evidence conflict must not create another durable receipt file"
+    );
+
     let conflict = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 2);
     assert!(matches!(
         log.append(lane_epoch, 1, conflict, test_fingerprint(2))
@@ -3693,6 +4056,18 @@ fn da_receipt_log_in_memory_append_fails_closed() {
     assert!(
         log.receipts_for(lane_epoch).is_empty(),
         "failed in-memory append must not update receipt-log memory"
+    );
+    assert!(
+        cursor_store.highest_sequences().is_empty(),
+        "failed in-memory append must not advance replay cursors"
+    );
+
+    let err = log
+        .receipt_for_duplicate(lane_epoch, 1, test_fingerprint(0xA1))
+        .expect_err("in-memory duplicate lookup must fail closed");
+    assert!(
+        format!("{err:?}").contains("not durable"),
+        "unexpected in-memory duplicate lookup error: {err:?}"
     );
 }
 
@@ -5342,6 +5717,14 @@ fn record_da_receipt_metrics_tracks_outcomes_and_cursor() {
             path: std::path::PathBuf::new(),
         },
     );
+    record_da_receipt_metrics(
+        &telemetry,
+        lane_epoch,
+        5,
+        &ReceiptInsertOutcome::ReceiptConflict {
+            path: std::path::PathBuf::new(),
+        },
+    );
 
     let stored = metrics
         .torii_da_receipts_total
@@ -5354,6 +5737,15 @@ fn record_da_receipt_metrics_tracks_outcomes_and_cursor() {
         .with_label_values(&["duplicate", "7", "3"])
         .get();
     assert_eq!(duplicate, 1, "duplicate counter should increment");
+
+    let receipt_conflict = metrics
+        .torii_da_receipts_total
+        .with_label_values(&["receipt_conflict", "7", "3"])
+        .get();
+    assert_eq!(
+        receipt_conflict, 1,
+        "receipt conflict counter should increment"
+    );
 
     let cursor = metrics
         .torii_da_receipt_highest_sequence
@@ -5396,6 +5788,23 @@ fn da_spool_rejection_response_rejects_stale_receipt_outcome() {
     let report = batch.execute_sync();
     let response = da_spool_rejection_response(&report, ResponseFormat::Json)
         .expect("stale receipt must produce a conflict response");
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[test]
+fn da_spool_rejection_response_rejects_receipt_conflict_outcome() {
+    let mut batch = DaSpoolBatch::new();
+    batch.push(DaSpoolAction::new("receipt_log", || {
+        Ok(DaSpoolActionOutput::ReceiptOutcome(
+            ReceiptInsertOutcome::ReceiptConflict {
+                path: PathBuf::from("receipt.norito"),
+            },
+        ))
+    }));
+    let report = batch.execute_sync();
+    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
+        .expect("receipt conflict must produce a conflict response");
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }

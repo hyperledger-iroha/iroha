@@ -1872,6 +1872,25 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.lineageAppendBoundary(oversizedArchive)
         }
 
+        assertIllegalArgumentContains("recordBundleArchive must be a valid Norito archive") {
+            KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(malformedArchive)
+        }
+        assertIllegalArgumentContains("recordBundleArchive must contain a non-empty Norito payload") {
+            KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(emptyPayloadArchive)
+        }
+        assertIllegalArgumentContains("recordBundleArchive must not exceed") {
+            KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(oversizedArchive)
+        }
+        assertIllegalArgumentContains("previousBundleArchive must be a valid Norito archive") {
+            KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(malformedArchive)
+        }
+        assertIllegalArgumentContains("previousBundleArchive must contain a non-empty Norito payload") {
+            KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(emptyPayloadArchive)
+        }
+        assertIllegalArgumentContains("previousBundleArchive must not exceed") {
+            KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(oversizedArchive)
+        }
+
         assertIllegalArgumentContains("requestArchive must be a valid Norito archive") {
             KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
                 malformedArchive,
@@ -2102,6 +2121,16 @@ class KagemushaRecursiveSpendProverTest {
             )
         }
         assertTrue(malformed.message.orEmpty().contains("native redeem returned invalid Norito archive"))
+        val malformedPallasBuilder = assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
+                byteArrayOf(0x01, 0x02),
+                "build Pallas open envelopes",
+            )
+        }
+        assertTrue(
+            malformedPallasBuilder.message.orEmpty()
+                .contains("native build Pallas open envelopes returned invalid Norito archive"),
+        )
 
         val compressed = kagemushaNoritoFrameWithPayload(0x4b)
         compressed[22] = 1
@@ -2129,6 +2158,16 @@ class KagemushaRecursiveSpendProverTest {
             )
         }
         assertTrue(emptyPayload.message.orEmpty().contains("native redeem returned empty Norito payload"))
+        val emptyPreviousProofBuilderPayload = assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
+                kagemushaNoritoFrame(0x4c),
+                "build previous proof open envelopes",
+            )
+        }
+        assertTrue(
+            emptyPreviousProofBuilderPayload.message.orEmpty()
+                .contains("native build previous proof open envelopes returned empty Norito payload"),
+        )
 
         val output = kagemushaNoritoFrameWithPayload(0x4b)
         assertTrue(

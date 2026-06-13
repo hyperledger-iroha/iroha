@@ -971,10 +971,12 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         private external fun nativeRedeemSpend(requestArchive: ByteArray): ByteArray?
 
+        @JvmStatic
         private external fun nativeBuildPallasOpenEnvelopesArchive(
             recordBundleArchive: ByteArray,
         ): ByteArray?
 
+        @JvmStatic
         private external fun nativeBuildPreviousProofOpenEnvelopesArchive(
             previousBundleArchive: ByteArray,
         ): ByteArray?

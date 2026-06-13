@@ -54,6 +54,7 @@ import {
   encodeKagemushaRecursiveSpendRedeemRequest,
   encodeKagemushaRecursiveSpendVerifyRequest,
   isKagemushaCompactPaymentTokenNativeAvailable,
+  isKagemushaPallasOpenEnvelopeBuilderNativeAvailable,
   isKagemushaRecursiveAggregationProofBundleNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable,
@@ -66,6 +67,8 @@ import {
   isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId,
   isSupportedKagemushaRecursiveSpendAppendProofTransition,
   isSupportedKagemushaRecursiveSpendPreviousProofCircuitId,
+  kagemushaBuildPallasOpenEnvelopesArchive,
+  kagemushaBuildPreviousProofOpenEnvelopesArchive,
   kagemushaProveVerifiedCompactPaymentTokenWithRecords,
   kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes,
   kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes,
@@ -541,6 +544,14 @@ test("Kagemusha recursive spend helpers reject empty request archives before nat
       /recordBundleArchive must not be empty/,
     );
     assert.throws(
+      () => kagemushaBuildPallasOpenEnvelopesArchive(Buffer.alloc(0)),
+      /recordBundleArchive must not be empty/,
+    );
+    assert.throws(
+      () => kagemushaBuildPreviousProofOpenEnvelopesArchive(Buffer.alloc(0)),
+      /previousBundleArchive must not be empty/,
+    );
+    assert.throws(
       () =>
         kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
           Buffer.alloc(0),
@@ -702,6 +713,14 @@ test("Kagemusha recursive spend helpers reject oversized request archives before
     /recordBundleArchive must not exceed/,
   );
   assert.throws(
+    () => kagemushaBuildPallasOpenEnvelopesArchive(oversizedArchive),
+    /recordBundleArchive must not exceed/,
+  );
+  assert.throws(
+    () => kagemushaBuildPreviousProofOpenEnvelopesArchive(oversizedArchive),
+    /previousBundleArchive must not exceed/,
+  );
+  assert.throws(
     () =>
       kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
         oversizedArchive,
@@ -828,6 +847,14 @@ test("Kagemusha recursive spend helpers reject malformed Norito request archives
     /recordBundleArchive must be a valid Norito archive/,
   );
   assert.throws(
+    () => kagemushaBuildPallasOpenEnvelopesArchive(Buffer.from([1])),
+    /recordBundleArchive must be a valid Norito archive/,
+  );
+  assert.throws(
+    () => kagemushaBuildPreviousProofOpenEnvelopesArchive(Buffer.from([1])),
+    /previousBundleArchive must be a valid Norito archive/,
+  );
+  assert.throws(
     () =>
       kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
         Buffer.from([1]),
@@ -897,6 +924,14 @@ test("Kagemusha recursive spend helpers reject empty-payload Norito request arch
   assert.throws(
     () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(kagemushaNoritoFrame(0xd5)),
     /recordBundleArchive must contain a non-empty Norito payload/,
+  );
+  assert.throws(
+    () => kagemushaBuildPallasOpenEnvelopesArchive(kagemushaNoritoFrame(0xda)),
+    /recordBundleArchive must contain a non-empty Norito payload/,
+  );
+  assert.throws(
+    () => kagemushaBuildPreviousProofOpenEnvelopesArchive(kagemushaNoritoFrame(0xdb)),
+    /previousBundleArchive must contain a non-empty Norito payload/,
   );
   assert.throws(
     () =>
@@ -2214,6 +2249,106 @@ test("Kagemusha record-backed JS builders probe availability and validate native
             pallasOpenEnvelopes,
           ),
         /native kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes returned empty Norito payload/,
+      );
+    },
+  );
+});
+
+test("Kagemusha Pallas open-envelope JS builders probe availability and validate native output", () => {
+  const recordBundle = kagemushaInputArchive(0xe4);
+  const previousBundle = kagemushaInputArchive(0xe5);
+  const binding = {
+    connectNoritoBridgeAbiVersion() {
+      return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+    },
+    kagemushaBuildPallasOpenEnvelopesArchive(record) {
+      rejectMalformedProbe("pallas-builder", record);
+      return kagemushaNoritoFrameWithPayload(0xe6);
+    },
+    kagemushaBuildPreviousProofOpenEnvelopesArchive(previous) {
+      rejectMalformedProbe("previous-proof-builder", previous);
+      return kagemushaNoritoFrameWithPayload(0xe7);
+    },
+  };
+
+  withNativeBinding(binding, () => {
+    assert.equal(isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(), true);
+    assert.deepEqual(
+      kagemushaBuildPallasOpenEnvelopesArchive(recordBundle),
+      kagemushaNoritoFrameWithPayload(0xe6),
+    );
+    assert.deepEqual(
+      kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundle),
+      kagemushaNoritoFrameWithPayload(0xe7),
+    );
+  });
+
+  withNativeBinding(
+    {
+      ...binding,
+      connectNoritoBridgeAbiVersion() {
+        return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION - 1;
+      },
+    },
+    () => {
+      assert.equal(isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(), false);
+      assert.throws(
+        () => kagemushaBuildPallasOpenEnvelopesArchive(recordBundle),
+        /Kagemusha Pallas open-envelope builders require native bridge ABI 7/,
+      );
+      assert.throws(
+        () => kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundle),
+        /Kagemusha Pallas open-envelope builders require native bridge ABI 7/,
+      );
+    },
+  );
+
+  withNativeBinding(
+    {
+      ...binding,
+      kagemushaBuildPallasOpenEnvelopesArchive(record) {
+        rejectMalformedProbe("pallas-builder", record);
+        return Buffer.from([1]);
+      },
+      kagemushaBuildPreviousProofOpenEnvelopesArchive(previous) {
+        rejectMalformedProbe("previous-proof-builder", previous);
+        return Buffer.from([1]);
+      },
+    },
+    () => {
+      assert.equal(isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(), true);
+      assert.throws(
+        () => kagemushaBuildPallasOpenEnvelopesArchive(recordBundle),
+        /native kagemushaBuildPallasOpenEnvelopesArchive returned invalid Norito archive/,
+      );
+      assert.throws(
+        () => kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundle),
+        /native kagemushaBuildPreviousProofOpenEnvelopesArchive returned invalid Norito archive/,
+      );
+    },
+  );
+
+  withNativeBinding(
+    {
+      ...binding,
+      kagemushaBuildPallasOpenEnvelopesArchive(record) {
+        rejectMalformedProbe("pallas-builder", record);
+        return kagemushaNoritoFrame(0xe8);
+      },
+      kagemushaBuildPreviousProofOpenEnvelopesArchive(previous) {
+        rejectMalformedProbe("previous-proof-builder", previous);
+        return kagemushaNoritoFrame(0xe9);
+      },
+    },
+    () => {
+      assert.equal(isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(), true);
+      assert.throws(
+        () => kagemushaBuildPallasOpenEnvelopesArchive(recordBundle),
+        /native kagemushaBuildPallasOpenEnvelopesArchive returned empty Norito payload/,
+      );
+      assert.throws(
+        () => kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundle),
+        /native kagemushaBuildPreviousProofOpenEnvelopesArchive returned empty Norito payload/,
       );
     },
   );

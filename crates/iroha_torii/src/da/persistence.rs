@@ -9,7 +9,7 @@ use std::{
     io::{ErrorKind, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -170,7 +170,13 @@ impl ReplayCursorStore {
 
     /// Access the known highest sequences for seeding the replay cache.
     pub fn highest_sequences(&self) -> Vec<(LaneEpoch, u64)> {
-        let guard = self.inner.lock().expect("mutex poisoned");
+        let guard = match self.lock_state() {
+            Ok(guard) => guard,
+            Err(err) => {
+                warn!(?err, "failed to read DA replay cursor snapshot from memory");
+                return Vec::new();
+            }
+        };
         guard
             .highest
             .iter()
@@ -182,7 +188,7 @@ impl ReplayCursorStore {
     pub fn record(&self, lane_epoch: LaneEpoch, sequence: u64) -> eyre::Result<()> {
         use std::collections::hash_map::Entry;
 
-        let mut guard = self.inner.lock().expect("mutex poisoned");
+        let mut guard = self.lock_state()?;
         let previous = match guard.highest.entry(lane_epoch) {
             Entry::Occupied(mut entry) => {
                 if *entry.get() >= sequence {
@@ -210,6 +216,12 @@ impl ReplayCursorStore {
             return Err(err);
         }
         Ok(())
+    }
+
+    fn lock_state(&self) -> eyre::Result<MutexGuard<'_, ReplayCursorState>> {
+        self.inner
+            .lock()
+            .map_err(|_| eyre!("DA replay cursor state mutex poisoned"))
     }
 
     fn persist_snapshot(&self, snapshot: &CursorSnapshot) -> eyre::Result<()> {
@@ -464,6 +476,11 @@ pub enum ReceiptInsertOutcome {
         /// Manifest hash observed in the new receipt.
         observed: BlobDigest,
     },
+    /// Receipt reused a sequence number with different signed receipt evidence.
+    ReceiptConflict {
+        /// Path of the existing receipt file.
+        path: PathBuf,
+    },
     /// Sequence regressed relative to the latest stored entry.
     StaleSequence {
         /// Highest sequence currently recorded for the lane/epoch.
@@ -478,6 +495,8 @@ struct ReceiptMeta {
     path: PathBuf,
     receipt: DaIngestReceipt,
 }
+
+type ReceiptIndex = BTreeMap<LaneEpoch, BTreeMap<u64, ReceiptMeta>>;
 
 pub(super) fn unsigned_receipt_bytes(
     receipt: &DaIngestReceipt,
@@ -511,7 +530,7 @@ pub struct DaReceiptLog {
     dir: PathBuf,
     cursor_store: Arc<ReplayCursorStore>,
     signer_public_key: PublicKey,
-    index: Arc<Mutex<BTreeMap<LaneEpoch, BTreeMap<u64, ReceiptMeta>>>>,
+    index: Arc<Mutex<ReceiptIndex>>,
 }
 
 impl DaReceiptLog {
@@ -542,10 +561,11 @@ impl DaReceiptLog {
         })
     }
 
-    /// Construct an in-memory receipt log (no on-disk persistence).
+    /// Construct a non-durable in-memory receipt log.
     ///
-    /// This is only suitable for tests and diagnostics. Production ingest appends
-    /// require a durable receipt file before the request can be acknowledged.
+    /// This is suitable for tests, diagnostics, and the runtime fallback used when the durable
+    /// receipt directory cannot be opened. Appends fail closed because production ingest requires a
+    /// durable receipt file before a request can be acknowledged.
     pub fn in_memory(cursor_store: Arc<ReplayCursorStore>, signer_public_key: PublicKey) -> Self {
         Self {
             dir: PathBuf::new(),
@@ -579,12 +599,17 @@ impl DaReceiptLog {
         verify_receipt_signature(&receipt, sequence, &self.signer_public_key)
             .wrap_err("DA receipt signature verification failed")?;
         let manifest_hash = receipt.manifest_hash;
-        let mut guard = self.index.lock().expect("receipt index mutex poisoned");
+        let mut guard = self.lock_index()?;
         let lane_index = guard.entry(lane_epoch).or_default();
 
         if let Some(existing) = lane_index.get(&sequence) {
-            if existing.manifest_hash == manifest_hash {
+            if existing.receipt == receipt {
                 return Ok(ReceiptInsertOutcome::Duplicate {
+                    path: existing.path.clone(),
+                });
+            }
+            if existing.manifest_hash == manifest_hash {
+                return Ok(ReceiptInsertOutcome::ReceiptConflict {
                     path: existing.path.clone(),
                 });
             }
@@ -623,8 +648,11 @@ impl DaReceiptLog {
         Ok(ReceiptInsertOutcome::Stored { cursor_advanced })
     }
 
-    /// Return a previously persisted receipt for an idempotent ingest retry.
-    pub(crate) fn durable_receipt_for_duplicate(
+    /// Return a logged durable receipt for an idempotent ingest retry.
+    ///
+    /// The receipt is reloaded from disk before returning it so duplicate acknowledgements do not
+    /// rely on process-local state.
+    pub(crate) fn receipt_for_duplicate(
         &self,
         lane_epoch: LaneEpoch,
         sequence: u64,
@@ -637,7 +665,7 @@ impl DaReceiptLog {
         }
 
         let (path, receipt) = {
-            let guard = self.index.lock().expect("receipt index mutex poisoned");
+            let guard = self.lock_index()?;
             let Some(meta) = guard
                 .get(&lane_epoch)
                 .and_then(|entries| entries.get(&sequence))
@@ -671,7 +699,13 @@ impl DaReceiptLog {
 
     /// Load receipts for a `(lane, epoch)` window in sequence order.
     pub fn receipts_for(&self, lane_epoch: LaneEpoch) -> Vec<DaReceiptLogEntry> {
-        let guard = self.index.lock().expect("receipt index mutex poisoned");
+        let guard = match self.lock_index() {
+            Ok(guard) => guard,
+            Err(err) => {
+                warn!(?err, ?lane_epoch, "failed to read DA receipt log entries");
+                return Vec::new();
+            }
+        };
         let Some(entries) = guard.get(&lane_epoch) else {
             return Vec::new();
         };
@@ -691,11 +725,8 @@ impl DaReceiptLog {
     fn load_existing(
         dir: &Path,
         signer_public_key: &PublicKey,
-    ) -> eyre::Result<(
-        BTreeMap<LaneEpoch, BTreeMap<u64, ReceiptMeta>>,
-        BTreeMap<LaneEpoch, u64>,
-    )> {
-        let mut index: BTreeMap<LaneEpoch, BTreeMap<u64, ReceiptMeta>> = BTreeMap::new();
+    ) -> eyre::Result<(ReceiptIndex, BTreeMap<LaneEpoch, u64>)> {
+        let mut index: ReceiptIndex = BTreeMap::new();
         let mut highest: BTreeMap<LaneEpoch, u64> = BTreeMap::new();
 
         if !dir.exists() {
@@ -767,6 +798,12 @@ impl DaReceiptLog {
         }
 
         Ok((index, highest))
+    }
+
+    fn lock_index(&self) -> eyre::Result<MutexGuard<'_, ReceiptIndex>> {
+        self.index
+            .lock()
+            .map_err(|_| eyre!("DA receipt log index mutex poisoned"))
     }
 
     fn write_receipt_file(
@@ -957,7 +994,7 @@ fn install_artifact_without_overwrite(
             remove_result
         }
         Err(err) => {
-            let _ = fs::remove_file(tmp_path);
+            remove_temp_artifact(tmp_path)?;
             Err(err)
         }
     }
@@ -991,7 +1028,169 @@ fn remove_temp_artifact(tmp_path: &Path) -> std::io::Result<()> {
     match fs::remove_file(tmp_path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err),
+        Err(err) => Err(std::io::Error::new(
+            err.kind(),
+            format!(
+                "failed to remove DA temp artifact {}: {err}",
+                tmp_path.display()
+            ),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod temp_artifact_tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use iroha_crypto::KeyPair;
+    use tempfile::tempdir;
+
+    use super::*;
+
+    fn poison_replay_cursor_store(store: &ReplayCursorStore) {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = store.inner.lock().expect("initial cursor lock");
+            panic!("poison DA replay cursor mutex");
+        }));
+        assert!(result.is_err(), "poisoning panic should be caught");
+    }
+
+    fn poison_receipt_log(log: &DaReceiptLog) {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = log.index.lock().expect("initial receipt-log lock");
+            panic!("poison DA receipt log mutex");
+        }));
+        assert!(result.is_err(), "poisoning panic should be caught");
+    }
+
+    fn test_fingerprint(seed: u8) -> ReplayFingerprint {
+        ReplayFingerprint::from_hash_bytes(&[seed; blake3::OUT_LEN])
+    }
+
+    fn test_receipt(
+        signer: &KeyPair,
+        lane_id: LaneId,
+        epoch: u64,
+        sequence: u64,
+        seed: u8,
+    ) -> DaIngestReceipt {
+        let mut receipt = DaIngestReceipt {
+            client_blob_id: BlobDigest::new([seed; 32]),
+            lane_id,
+            epoch,
+            blob_hash: BlobDigest::new([seed.wrapping_add(1); 32]),
+            chunk_root: BlobDigest::new([seed.wrapping_add(2); 32]),
+            manifest_hash: BlobDigest::new([seed.wrapping_add(3); 32]),
+            storage_ticket: StorageTicketId::new([seed.wrapping_add(4); 32]),
+            pdp_commitment: Some(vec![seed]),
+            stripe_layout: DaStripeLayout::default(),
+            queued_at_unix: 1234,
+            rent_quote: DaRentQuote::default(),
+            operator_signature: Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER),
+        };
+        let unsigned = unsigned_receipt_bytes(&receipt, sequence).expect("test receipt encodes");
+        receipt.operator_signature = Signature::new(signer.private_key(), &unsigned);
+        receipt
+    }
+
+    #[test]
+    fn da_temp_artifact_cleanup_reports_unremovable_path() {
+        let dir = tempdir().expect("tempdir");
+        let tmp_path = dir.path().join(".da.tmp");
+        fs::create_dir(&tmp_path).expect("block temp cleanup");
+
+        let err = remove_temp_artifact(&tmp_path).expect_err("directory cleanup should fail");
+
+        assert!(
+            err.to_string()
+                .contains("failed to remove DA temp artifact"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            tmp_path.is_dir(),
+            "failed cleanup should leave temp path visible for operator repair"
+        );
+    }
+
+    #[test]
+    fn da_install_artifact_reports_temp_cleanup_failure_after_link_error() {
+        let dir = tempdir().expect("tempdir");
+        let tmp_path = dir.path().join(".da.tmp");
+        let target_path = dir.path().join("da-target.norito");
+        fs::create_dir(&tmp_path).expect("block temp cleanup");
+
+        let err =
+            install_artifact_without_overwrite(&tmp_path, &target_path, b"expected", "DA artifact")
+                .expect_err("directory temp artifact should fail cleanup");
+
+        assert!(
+            err.to_string()
+                .contains("failed to remove DA temp artifact"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            tmp_path.is_dir(),
+            "failed cleanup should leave temp path visible for operator repair"
+        );
+        assert!(
+            !target_path.exists(),
+            "failed hard-link install must not create the target artifact"
+        );
+    }
+
+    #[test]
+    fn da_replay_cursor_lock_poison_fails_closed() {
+        let store = ReplayCursorStore::in_memory();
+        poison_replay_cursor_store(&store);
+
+        assert!(
+            store.highest_sequences().is_empty(),
+            "poisoned cursor snapshots should not panic or expose stale state"
+        );
+        let err = store
+            .record(LaneEpoch::new(LaneId::new(3), 9), 42)
+            .expect_err("poisoned cursor store must reject sequence recording");
+        assert!(
+            format!("{err:?}").contains("poisoned"),
+            "unexpected cursor poison error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn da_receipt_log_lock_poison_fails_closed() {
+        let dir = tempdir().expect("tempdir");
+        let cursor_store =
+            Arc::new(ReplayCursorStore::empty(dir.path().join("cursors")).expect("cursor store"));
+        let signer = KeyPair::random();
+        let log = DaReceiptLog::open(
+            dir.path().join("receipts"),
+            cursor_store,
+            signer.public_key().clone(),
+        )
+        .expect("receipt log");
+        let lane_epoch = LaneEpoch::new(LaneId::new(4), 10);
+        poison_receipt_log(&log);
+
+        assert!(
+            log.receipts_for(lane_epoch).is_empty(),
+            "poisoned receipt-log reads should not panic"
+        );
+        let err = log
+            .receipt_for_duplicate(lane_epoch, 1, test_fingerprint(0xA1))
+            .expect_err("poisoned receipt log must reject duplicate recovery");
+        assert!(
+            format!("{err:?}").contains("poisoned"),
+            "unexpected duplicate-recovery poison error: {err:?}"
+        );
+
+        let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xA1);
+        let err = log
+            .append(lane_epoch, 1, receipt, test_fingerprint(0xA1))
+            .expect_err("poisoned receipt log must reject ingest acknowledgement");
+        assert!(
+            format!("{err:?}").contains("poisoned"),
+            "unexpected append poison error: {err:?}"
+        );
     }
 }
 
@@ -1037,7 +1236,7 @@ pub(super) fn persist_da_receipt(
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
-            let _ = fs::remove_file(&tmp_path);
+            remove_temp_artifact(&tmp_path)?;
             return Err(err);
         }
     }
@@ -1065,10 +1264,17 @@ pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDa
     let mut by_key: BTreeMap<(u32, u64, u64), usize> = BTreeMap::new();
     for entry in fs::read_dir(spool_dir)? {
         let entry = entry?;
-        let path = entry.path();
-        if !artifact_path_matches(&path, RECEIPT_FILE_PREFIX)? {
+        let file_name = entry.file_name();
+        let Some(name) = artifact_file_name(&file_name, RECEIPT_FILE_PREFIX)? else {
             continue;
+        };
+        if !entry.file_type()?.is_file() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("DA receipt artifact `{name}` is not a regular file"),
+            ));
         }
+        let path = entry.path();
         let stored = DaReceiptLog::decode_receipt(&path).map_err(|err| {
             std::io::Error::new(
                 ErrorKind::InvalidData,
@@ -1528,7 +1734,7 @@ pub(super) fn persist_manifest_for_sorafs(
     match write_temp_artifact(&tmp_path, manifest_bytes) {
         Ok(()) => {}
         Err(err) => {
-            let _ = fs::remove_file(&tmp_path);
+            remove_temp_artifact(&tmp_path)?;
             return Err(err);
         }
     }
@@ -1592,7 +1798,7 @@ pub(super) fn persist_pdp_commitment(
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
-            let _ = fs::remove_file(&tmp_path);
+            remove_temp_artifact(&tmp_path)?;
             return Err(err);
         }
     }
@@ -1656,7 +1862,7 @@ pub(super) fn persist_da_commitment_record(
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
-            let _ = fs::remove_file(&tmp_path);
+            remove_temp_artifact(&tmp_path)?;
             return Err(err);
         }
     }
@@ -1747,7 +1953,7 @@ pub(super) fn persist_da_commitment_schedule_entry(
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
-            let _ = fs::remove_file(&tmp_path);
+            remove_temp_artifact(&tmp_path)?;
             return Err(err);
         }
     }
@@ -1811,7 +2017,7 @@ pub(super) fn persist_da_pin_intent(
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
-            let _ = fs::remove_file(&tmp_path);
+            remove_temp_artifact(&tmp_path)?;
             return Err(err);
         }
     }

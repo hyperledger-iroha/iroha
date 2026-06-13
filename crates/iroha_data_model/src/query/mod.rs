@@ -79,7 +79,8 @@ mod signature_tests {
         let key_pair =
             iroha_crypto::KeyPair::try_from_seed(vec![0x51; 32], iroha_crypto::Algorithm::Ed25519)
                 .expect("generate checked query signature fixture keypair");
-        let authority = AccountId::new(key_pair.public_key().clone());
+        let public_key: PublicKey = key_pair.public_key().clone();
+        let authority = AccountId::new(public_key);
 
         let cursor = ForwardCursor {
             query: "cursor-1".to_owned(),

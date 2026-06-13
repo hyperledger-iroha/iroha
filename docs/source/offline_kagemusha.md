@@ -604,6 +604,11 @@ paths, and binds each digest to the opened file identity. Telemetry,
 transcript, report, log, and certificate-chain artifacts keep the 16 MiB cap;
 the offline wallet APK path is capped separately at 64 MiB so arm64 JNI proof
 bridge builds fit without relaxing the smaller evidence artifacts.
+After rebuilding Android native bridge artifacts, run a clean lab-app package
+build before capture; stale APK package outputs can retain discarded signing or
+padding bytes and exceed the 64 MiB cap even when the current central-directory
+entries are under the limit. Device evidence must be captured from the same
+clean APK whose SHA-256 is copied into the signed slot.
 Post-preflight regular-file swaps still fail closed. The Android device-lab root validator
 also rejects secret-looking, control-character, parent-segment, and
 backslash-bearing root paths before root metadata reads or slot discovery, and
@@ -792,11 +797,14 @@ directory, it reopens the published file through the identity-bound artifact
 reader and byte-compares it against the staged source so post-install drift
 fails before the final evidence check, then syncs the captured published
 artifact-directory identity so directory swaps before final fsync fail closed.
-Its temporary staging cleanup also revalidates the captured temp-parent identity
-before removing anything. Rollback cleanup after copy, verification, or publish
-errors also unlinks only paths whose current file identity still matches the
-identity captured immediately after install, so a swapped published artifact is
-reported as a cleanup failure instead of being removed.
+It creates or tightens the published artifact directory, finalizer temporary
+parent, and inner stage directory to `0700`, and it chmods each copied staged
+file to `0600` before fsyncing and promoting it. Its temporary staging cleanup
+also revalidates the captured temp-parent identity before removing anything.
+Rollback cleanup after copy, verification, or publish errors also unlinks only
+paths whose current file identity still matches the identity captured
+immediately after install, so a swapped published artifact is reported as a
+cleanup failure instead of being removed.
 The staged runner first runs the canonical init and append
 `iroha app zk kagemusha lineage-key-artifacts` commands from the staged root so
 the relative `artifacts/kagemusha/...` outputs match the release contract, then
@@ -808,7 +816,11 @@ execution-report SHA-256 of the child log. The keygen and
 proof children write combined stdout/stderr directly to their temporary staged
 log files, and those logs are flushed and fsynced after each child exits so a
 supervisor interruption does not make child output depend on a Python-owned
-pipe. Each temporary child log is installed only after syncing the captured
+pipe. The runner also creates or tightens its staged root, `artifacts`
+directory, and `artifacts/kagemusha` directory to `0700`, and writes staged
+child logs, execution reports, run reports, elapsed-time files, and exit
+markers as `0600` files before accepting them. Each temporary child log is
+installed only after syncing the captured
 output-parent identity, so parent-directory swaps before log fsync fail closed.
 Staged execution-report and run-report command fields are exact non-empty
 strings; values with surrounding whitespace, control characters, or
@@ -864,7 +876,10 @@ the key-generation command: it runs the canonical
 staged root, gives the child process direct ownership of the temporary
 `recursive-compact-key-artifacts.log` stdout/stderr target, flushes and fsyncs
 that log after child exit, installs it only after syncing the captured
-output-parent identity, preserves the real keygen exit code in
+output-parent identity, creates or tightens its staged root, `artifacts`
+directory, and `artifacts/kagemusha` directory to `0700`, writes staged
+generator logs, execution reports, run reports, and exit markers as `0600`
+files before accepting them, preserves the real keygen exit code in
 `<staged-exit-file>`, writes a closed-schema
 `recursive-compact-key-execution.json` with the canonical command, phase, exit
 code, elapsed seconds, generator-log byte count, and execution-report SHA-256
@@ -899,8 +914,10 @@ published key artifact, generator log, and evidence JSON after the final
 install and compares the identity-bound readback against the staged bytes before
 success is reported, then syncs the captured published artifact-directory
 identity so directory swaps before final fsync fail closed. Its temporary
-staging cleanup also revalidates the captured temp-parent identity before
-removing anything. Marker failures are
+staging directories are forced to `0700`, and each staged key artifact,
+generator log, and evidence JSON copy is forced to `0600` before promotion.
+Cleanup also revalidates the captured temp-parent identity before removing
+anything. Marker failures are
 reported with control-character and secret-looking marker values redacted
 before success-only command, timestamp, or run-report checks. Staged run-report
 duplicate or unexpected JSON field diagnostics also redact control-character
@@ -1075,7 +1092,9 @@ artifact-dir traversal or metadata reads.
 The readiness summary writer enforces a 16 MiB `--summary-out` cap before
 temporary-file creation, during final opened-file readback, and reports
 identity-checked temporary-file cleanup failures after write or post-stage
-output-validation errors. The release-bundle writer applies the same
+output-validation errors. It also forces the fsynced summary temporary file to
+`0600` and rejects final opened-file readback unless the promoted
+`--summary-out` file still has private `0600` permissions. The release-bundle writer applies the same
 identity-bound cleanup before accepting or reporting `--out` artifacts. The lineage and compact-key
 evidence helpers also enforce the readiness evidence JSON byte caps
 before creating `--out` temporary files and again while reading back the opened
@@ -1089,7 +1108,9 @@ cleanup.
 The release-bundle writer applies the same pattern to its manifest output with
 a 16 MiB cap before temporary-file creation and during final opened-file
 readback, and reports temporary-file cleanup failures after write or post-stage
-output-validation errors as structured blockers. Its bundle-relative path
+output-validation errors as structured blockers. It also forces the fsynced
+manifest temporary file to `0600` and rejects final opened-file readback unless
+the promoted `--out` file still has private `0600` permissions. Its bundle-relative path
 calculator also rejects secret-looking or control-character evidence and
 bundle-root strings before resolving paths for the release inventory, rejects
 parent-segment aliases and backslash-bearing evidence paths before they can
@@ -1109,6 +1130,13 @@ The Android device-lab summary writer, Android signed-evidence helper, and
 signed-slot assembler JSON metadata writer also report identity-checked
 temporary-file cleanup failures after write or post-stage output-validation
 errors instead of swallowing failed cleanup.
+The signed-slot assembler, attestation-report writer, and signed-evidence
+helper also force the published device-lab root, report output parent, staging
+directories, slot subdirectories, copied artifacts, `attestation/report.json`,
+`slot.json`, `sha256sum.txt`, and `evidence/signed-evidence.json` to private
+host permissions (`0700` for directories and `0600` for files), then verify
+those modes after write/publish so signed production evidence does not depend
+on the operator shell's umask.
 Direct Android device-lab scanner path preflights reject control-character
 roots, slot paths, JSON artifact paths, trusted signer public keys, and
 `--json-out` destinations before metadata reads, key loading, JSON parsing, or
@@ -1267,6 +1295,10 @@ The Android raw puller and signed-slot assembler now also report temporary
 staging directory removal failures and block success when the original staging
 directory cannot be removed; identity-swapped staging directories are still
 preserved instead of removed.
+The signed-slot assembler tightens pre-existing device-lab roots and all staged
+or published slot directories to `0700`, installs copied source artifacts and
+generated JSON/manifest/signature evidence as `0600`, and verifies those modes
+after write/publish before returning success.
 Raw partial-install cleanup also reports removal failures, so a failed install
 cannot hide an unremoved partially-created slot directory.
 The raw puller also redacts control-character or secret-looking unexpected
@@ -1284,8 +1316,9 @@ compressed archive streams fail before extraction, and caps the total raw tar
 entry count so empty-directory flooding cannot exhaust host-side staging before
 slot validation. The local raw output root is tightened to `0700`, and extracted
 raw artifact directories are forced to `0700` and files to `0600` before
-installation, so evidence confidentiality does not depend on the host process
-umask.
+installation. Raw `latest-slot.txt` and raw-pull summary outputs are likewise
+forced to `0600` and verified during final opened-file readback, so evidence
+confidentiality does not depend on the host process umask.
 All of these release-output writers also fail closed if the parent-directory
 sync after atomic replacement fails, so a release/readiness artifact is not
 accepted as durable when the directory entry cannot be fsynced. The readiness
@@ -1294,6 +1327,9 @@ before that fsync, so a replaced output cannot be accepted after its target
 directory has been exchanged. The staged lineage and compact-key finalizers use
 the same identity discipline for rollback cleanup: failed publish paths are
 removed only while their publish-time identity is still present.
+They also force published artifact directories and finalizer temporary staging
+directories to `0700`, and force every copied/published lineage, compact-key,
+log, and evidence JSON file to `0600` before final readback.
 Both staged finalizers also reject noncanonical or future-dated
 `--generated-at-utc` values during preflight, before temporary publish staging
 or artifact copying starts.
@@ -1316,10 +1352,15 @@ The checked-in ABI-6 manifest and both Kagemusha evidence JSON files use the
 same fail-closed size policy before JSON decoding.
 Both helpers create missing output parents only after these preflights,
 classify `--out` parents with `lstat()` before any `Path.is_dir()` preflight,
-and recheck created output parents before direct helper preflight returns. After
-atomic replacement, both helper outputs revalidate final path shape, capture the
-output `lstat()` identity, read back through the opened regular file, and reject
-post-replace symlink or regular-file swaps as `--out changed while being read`.
+recheck created output parents before direct helper preflight returns, and
+force the helper-controlled output parent to `0700`. Validation scratch files
+under `--artifact-dir` and final `lineage-proof-evidence.json` /
+`recursive-compact-key-evidence.json` writes are forced to `0600` and verified,
+so direct evidence generation does not depend on the operator shell's umask.
+After atomic replacement, both helper outputs revalidate final path shape,
+capture the output `lstat()` identity, read back through the opened regular
+file, and reject post-replace symlink or regular-file swaps as `--out changed
+while being read`.
 Input and output corridor resolution failures return structured `--proof-log
 parent`, `--out parent`, or `--artifact-dir` blockers instead of raw resolver
 errors. The shared evidence builder also rejects secret-looking
@@ -2144,7 +2185,16 @@ append-opening-preflight, append-boundary, scalar-projection, and
 previous/resulting accumulator digests); SDKs must not derive, supply, or patch
 accumulator state themselves. Append validation also rejects a stale cached
 `previous_recursive_proof.public_inputs_hash` before accepting the new append
-state. The CI benchmark
+state. Swift, Kotlin/JVM, Java Android, JavaScript/Node, and Python expose
+current-hop and previous-proof Pallas open-envelope archive builders
+(`buildPallasOpenEnvelopesArchive`,
+`buildPreviousProofOpenEnvelopesArchive`,
+`kagemushaBuildPallasOpenEnvelopesArchive`, and
+`kagemusha_build_pallas_open_envelopes_archive`) so wallet code asks native
+code to derive those archives from the record bundle or previous recursive
+bundle. SDKs should treat the generated archives as native-owned opaque Norito
+bytes. C# remains a Windows-machine TODO for matching wrapper coverage. The CI
+benchmark
 `kagemusha_recursive_spend_payload_bytes` records constant fixture archives for
 1, 2, 3, 5, 8, 13, 21, 34, 55, and 64 hops when the proof payload is fixed at
 256 bytes; production proof bytes can change the absolute number, but the

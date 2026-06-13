@@ -77,6 +77,58 @@ class ZkAssetMerklePathTest {
     }
 
     @Test
+    fun toriiProviderRejectsPathCountDriftAndReorderedNodeResponses() {
+        val commitments = listOf(scalarBytes(1), scalarBytes(2))
+        val root = computeRoot(commitments)
+        val localProvider = LocalZkAssetMerklePathProvider(listOf(root), commitments)
+        val firstPath = localProvider.getMerklePathForCommitment("usd#bank", commitments[0]).join()
+        val secondPath = localProvider.getMerklePathForCommitment("usd#bank", commitments[1]).join()
+
+        val shortProvider = toriiProviderWithResponse(
+            merklePathResponse(
+                root,
+                listOf(MerklePathResponseEntry(commitments[0], firstPath)),
+            ),
+        )
+        val shortError = assertFailsWith<CompletionException> {
+            shortProvider.getMerklePaths("usd#bank", commitments).join()
+        }.cause
+        require(shortError is IllegalArgumentException)
+        require(shortError.message?.contains("Torii returned 1 Merkle paths for 2 commitments") == true)
+
+        val longProvider = toriiProviderWithResponse(
+            merklePathResponse(
+                root,
+                listOf(
+                    MerklePathResponseEntry(commitments[0], firstPath),
+                    MerklePathResponseEntry(commitments[1], secondPath),
+                    MerklePathResponseEntry(commitments[0], firstPath),
+                ),
+            ),
+        )
+        val longError = assertFailsWith<CompletionException> {
+            longProvider.getMerklePaths("usd#bank", commitments).join()
+        }.cause
+        require(longError is IllegalArgumentException)
+        require(longError.message?.contains("Torii returned 3 Merkle paths for 2 commitments") == true)
+
+        val reorderedProvider = toriiProviderWithResponse(
+            merklePathResponse(
+                root,
+                listOf(
+                    MerklePathResponseEntry(commitments[1], secondPath),
+                    MerklePathResponseEntry(commitments[0], firstPath),
+                ),
+            ),
+        )
+        val reorderedError = assertFailsWith<CompletionException> {
+            reorderedProvider.getMerklePaths("usd#bank", commitments).join()
+        }.cause
+        require(reorderedError is IllegalArgumentException)
+        require(reorderedError.message?.contains("commitment mismatch at index 0") == true)
+    }
+
+    @Test
     fun toriiProviderRejectsMismatchedNodeCommitment() {
         val requested = scalarBytes(1)
         val root = computeRoot(listOf(requested))
@@ -148,23 +200,48 @@ class ZkAssetMerklePathTest {
         commitment: ByteArray,
         path: ZkAssetMerklePath,
         siblingsOverride: List<ByteArray> = path.siblings,
+    ): String = merklePathResponse(root, listOf(MerklePathResponseEntry(commitment, path, siblingsOverride)))
+
+    private fun toriiProviderWithResponse(responseBody: String): ToriiZkAssetMerklePathProvider {
+        val client = ConfidentialAssetToriiClient.builder()
+            .executor(CapturingExecutor(responseBody))
+            .baseUri(URI.create("https://example.com"))
+            .build()
+        return ToriiZkAssetMerklePathProvider(client)
+    }
+
+    private data class MerklePathResponseEntry(
+        val commitment: ByteArray,
+        val path: ZkAssetMerklePath,
+        val siblings: List<ByteArray> = path.siblings,
+    )
+
+    private fun merklePathResponse(
+        root: ByteArray,
+        entries: List<MerklePathResponseEntry>,
     ): String {
-        val siblings = siblingsOverride.joinToString(",") { """"${hex(it)}"""" }
-        val directions = path.directions.joinToString(",") { (it.toInt() and 0xff).toString() }
-        val witnessNodes = path.siblings.joinToString(",") { """"${hex(it)}"""" }
+        val treeDepth = entries.firstOrNull()?.path?.siblings?.size ?: 0
+        val paths = entries.joinToString(",") { entry ->
+            val siblings = entry.siblings.joinToString(",") { """"${hex(it)}"""" }
+            val directions = entry.path.directions.joinToString(",") { (it.toInt() and 0xff).toString() }
+            val witnessNodes = entry.path.siblings.joinToString(",") { """"${hex(it)}"""" }
+            """
+                {
+                  "commitment": "${hex(entry.commitment)}",
+                  "leaf_index": ${entry.path.leafIndex},
+                  "siblings": [$siblings],
+                  "directions": [$directions],
+                  "witness_nodes": [$witnessNodes],
+                  "root": "${hex(root)}"
+                }
+            """.trimIndent()
+        }
         return """
             {
               "root": "${hex(root)}",
               "frontier_len": 2,
-              "tree_depth": ${path.siblings.size},
-              "paths": [{
-                "commitment": "${hex(commitment)}",
-                "leaf_index": ${path.leafIndex},
-                "siblings": [$siblings],
-                "directions": [$directions],
-                "witness_nodes": [$witnessNodes],
-                "root": "${hex(root)}"
-              }]
+              "tree_depth": $treeDepth,
+              "paths": [$paths]
             }
         """.trimIndent()
     }

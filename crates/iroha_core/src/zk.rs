@@ -25147,6 +25147,40 @@ mod kagemusha_recursive_keygen_shape_tests {
 
     const KEYGEN_SHAPE_TEST_STACK_BYTES: usize = 128 * 1024 * 1024;
 
+    #[test]
+    fn recursive_verifier_default_is_keygen_placeholder() {
+        let verifier = pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+            4,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::default();
+        assert!(verifier.round_accumulators.is_empty());
+        assert!(verifier.generator_folds.is_empty());
+        assert!(verifier.final_msm.msm.term_muls.is_empty());
+        assert!(verifier.final_msm.msm.sum_adds.is_empty());
+
+        let one_hop = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+            4,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::default();
+        assert!(one_hop.verifier.round_accumulators.is_empty());
+        assert!(one_hop.verifier.generator_folds.is_empty());
+
+        let append = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+            4,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::default();
+        assert!(
+            append
+                .previous_recursive_proof_verifier
+                .round_accumulators
+                .is_empty()
+        );
+        assert!(append.current_hop_verifier.generator_folds.is_empty());
+    }
+
     fn assert_verifying_keys_match<Full, Shape, FullBuilder, ShapeBuilder>(
         full: FullBuilder,
         shape: ShapeBuilder,
@@ -67145,17 +67179,15 @@ mod pasta_tiny {
         for NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>
     {
         fn default() -> Self {
+            Self::keygen_placeholder()
+        }
+    }
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>
+    {
+        fn keygen_placeholder() -> Self {
             let rounds = ipa_power_of_two_rounds(LEN).unwrap_or(0);
-            let mut layer_len = LEN;
-            let mut generator_folds = Vec::with_capacity(rounds);
-            for _ in 0..rounds {
-                let half = layer_len / 2;
-                generator_folds.push(vec![
-                    NonNativeVestaIpaGeneratorFoldSharedTableNativeScalar::default();
-                    half
-                ]);
-                layer_len = half;
-            }
             Self {
                 transcript_header_projection: Scalar::from(0),
                 transcript_round_projections: vec![Scalar::from(0); rounds],
@@ -67165,21 +67197,24 @@ mod pasta_tiny {
                 transcript_binding_digest: Scalar::from(0),
                 transcript_round_states: vec![Scalar::from(0); rounds + 1],
                 b_reduction: Box::new(NativePastaFpIpaBVectorReduction::default()),
-                round_accumulators: vec![
-                    NonNativeVestaIpaRoundAccumulatorSharedTableNativeScalar::default();
-                    rounds
-                ],
-                generator_folds,
-                final_msm: Box::new(
-                    NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar::default(),
-                ),
+                round_accumulators: Vec::new(),
+                generator_folds: Vec::new(),
+                final_msm: Box::new(NonNativeVestaIpaFinalWindowedMsmSharedTableNativeScalar {
+                    msm: Box::new(NonNativeVestaAffineWindowedMsmSharedTableNativeScalar {
+                        term_muls: Vec::new(),
+                        sum_adds: Vec::new(),
+                    }),
+                }),
             }
         }
-    }
 
-    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize>
-        NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>
-    {
+        fn is_keygen_placeholder(&self) -> bool {
+            self.round_accumulators.is_empty()
+                && self.generator_folds.is_empty()
+                && self.final_msm.msm.term_muls.is_empty()
+                && self.final_msm.msm.sum_adds.is_empty()
+        }
+
         /// Build an honest multi-round shared-table IPA verifier composition witness.
         ///
         /// # Errors
@@ -67932,6 +67967,13 @@ mod pasta_tiny {
             config: Self::Config,
             mut layouter: impl Layouter<Scalar>,
         ) -> Result<(), PlonkError> {
+            if self.is_keygen_placeholder() {
+                return synthesize_non_native_vesta_ipa_verifier_shared_table_native_scalar_keygen_shape::<
+                    LEN,
+                    WINDOWS,
+                    WINDOW_BITS,
+                >(config, layouter);
+            }
             if !nested_vec_lengths_match(&self.b_reduction.vectors, &config.b_reduction.vectors)
                 || self.b_reduction.challenges.len() != config.b_reduction.challenges.len()
                 || self.b_reduction.challenge_inverses.len()
@@ -71214,7 +71256,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                         &params,
                         normalized.as_str(),
                         vk_box,
-                        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape::<
                             $len,
                             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
                             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
@@ -71237,7 +71279,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                         &params,
                         normalized.as_str(),
                         vk_box,
-                        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+                        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape::<
                             $len,
                             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
                             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
@@ -71332,7 +71374,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                         &params,
                         normalized.as_str(),
                         vk_box,
-                        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape::<
                             $len,
                             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
                             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
@@ -71355,7 +71397,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                         &params,
                         normalized.as_str(),
                         vk_box,
-                        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+                        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape::<
                             $len,
                             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
                             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,

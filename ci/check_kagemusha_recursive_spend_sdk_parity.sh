@@ -99,6 +99,16 @@ REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS = (
     *REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS,
 )
 
+REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_METHODS = (
+    "kagemushaBuildPallasOpenEnvelopesArchive",
+    "kagemushaBuildPreviousProofOpenEnvelopesArchive",
+)
+
+REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_PUBLIC_EXPORTS = (
+    "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable",
+    *REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_METHODS,
+)
+
 REQUIRED_LINEAGE_KEY_ARTIFACT_JS_PUBLIC_EXPORTS = (
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND",
     "isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen",
@@ -129,6 +139,16 @@ REQUIRED_PYTHON_NATIVE_METHODS = (
 REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS = (
     "kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
     "kagemusha_verify_recursive_compact_payment_token",
+)
+
+REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_PYTHON_METHODS = (
+    "kagemusha_build_pallas_open_envelopes_archive",
+    "kagemusha_build_previous_proof_open_envelopes_archive",
+)
+
+REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_PYTHON_PUBLIC_METHODS = (
+    "is_kagemusha_pallas_open_envelope_builder_available",
+    *REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_PYTHON_METHODS,
 )
 
 REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS = (
@@ -398,7 +418,24 @@ SOURCE_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift",
     "IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift",
+    "fixtures/account/address_vectors.json",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountIdLiteral.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/PublicKeyCodec.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectCrypto.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectDirection.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectEnvelopeCodec.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectFrameCodec.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectJournalException.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectJournalRecord.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectProtocolException.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectQueueJournal.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectRetryPolicy.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectWalletRequest.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectError.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectErrorCategory.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectErrors.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectQueueError.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/AccountAliasJsonParser.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/CanonicalRequestSigner.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractJsonParser.java",
@@ -406,84 +443,298 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/RamLfeJsonParser.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoder.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptVerifier.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ConfidentialAssetToriiClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/HttpClientTransport.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/StreamingTransportExecutor.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportExecutor.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportRequest.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportResponse.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportStreamResponse.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/UrlConnectionTransportExecutor.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/DirectoryPendingTransactionQueue.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueue.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/OfflineJournalPendingTransactionQueue.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/PendingTransactionQueue.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkMerklePathJson.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkMerklePathRequest.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkMerklePathResponse.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkRootsJson.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkRootsRequest.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkRootsResponse.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeyAttestation.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationResult.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerificationException.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifier.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/SigningAlgorithm.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/Executable.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/InstructionBox.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/JsonValue.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/TransactionPayload.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoder.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ConfidentialEncryptedPayload.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/SetPrimaryAccountAliasWirePayloadEncoder.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/TransferWirePayloadEncoder.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtils.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyRecordDescription.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyStatus.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/NoritoCodecAdapter.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/NoritoException.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/NoritoJavaCodecAdapter.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/SignedTransactionEncoder.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineAuditEntry.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineAuditLogger.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycle.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournal.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournalEntry.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournalException.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournalKey.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReadiness.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineQrStream.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineToriiException.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineV2Readiness.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/VerifyingKeyBoxCodec.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteCommitment.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteCrypto.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteDecryption.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteEncryption.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteNullifier.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteOpening.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteScalars.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteTags.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialOwnerTag.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/LocalZkAssetMerklePathProvider.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PastaPoseidonNodeHasher.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ToriiZkAssetMerklePathProvider.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ZkAssetMerkleHasher.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ZkAssetMerklePath.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ZkAssetMerklePathProvider.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/SignedTransaction.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/SignedTransactionHasher.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/TransactionBuilder.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelope.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeAdapter.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeCodec.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tools/PendingQueueInspector.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/BscMainnetSccp.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/BscSccpProver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpMessageProofBundles.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SolanaSccpProver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SourceSccpProofs.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TronSccpProver.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountIdLiteralTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ClientConfigOfflineQueueTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/CanonicalRequestSignerTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ConfidentialAssetToriiClientTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportOfflineQueueTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportPendingQueueTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoderTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/DirectoryPendingTransactionQueueTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueueTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/OfflineJournalPendingTransactionQueueTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClientTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/transport/UrlConnectionTransportExecutorTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectEnvelopeCodecTest.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectErrorTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectQueueJournalTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectRetryPolicyTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectWalletRequestTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifierTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/crypto/SigningAlgorithmTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/AccountLiteralHardCutTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoderTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/SetPrimaryAccountAliasWirePayloadEncoderTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/TransferWirePayloadEncoderTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ZkAssetInstructionsTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/norito/NoritoCodecAdapterTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineAuditLoggerTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycleTest.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJournalTest.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJsonParserTest.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineQrStreamTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/ZkAssetMerklePathTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/SignedTransactionHasherTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderOfflineEnvelopeTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionFixtureManifestTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtureTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtures.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixturesTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeCodecTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tools/PendingQueueInspectorTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SourceSccpProofsTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java",
+    "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
+    "java/iroha_android/src/test/resources/transaction_payloads.json",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountIdLiteral.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddress.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddressErrorCode.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddressException.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddressFormat.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/CurveSupportConfig.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/PublicKeyCodec.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AccountAliasJsonParser.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/CanonicalRequestSigner.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ContractJsonParser.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierJsonParser.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/RamLfeJsonParser.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ConfidentialAssetToriiClient.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptCanonicalEncoder.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptVerifier.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ZkMerklePath.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ZkRoots.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamClient.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/StreamingTransportExecutor.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportExecutor.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportRequest.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportResponse.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportStreamResponse.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/UrlConnectionTransportExecutor.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectCiphertext.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectCrypto.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectDirection.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectEnvelopeCodec.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectFrameCodec.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectJournalException.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectJournalRecord.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectProtocolException.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectQueueJournal.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectRetryPolicy.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectRole.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectWalletRequest.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/Executable.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/InstructionBox.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/JsonValue.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/TransactionPayload.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoder.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterAccountWirePayloadEncoder.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/TransferWirePayloadEncoder.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructions.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/VerifyingKeyInstructionUtils.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyRecordDescription.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyStatus.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/SigningAlgorithm.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/CRC64.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoAoS.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoColumnar.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoHeader.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/Varint.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycle.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineReadiness.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineSettlementProofs.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineToriiException.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineV2Readiness.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/VerifyingKeyBoxCodec.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SccpMessageProofBundles.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SolanaSccpProver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashes.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePath.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/SignedTransaction.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/SignedTransactionHasher.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/TransactionBuilder.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/NoritoCodecAdapter.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/NoritoException.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/NoritoJavaCodecAdapter.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/SignedTransactionEncoder.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/offline/OfflineSigningEnvelope.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/offline/OfflineSigningEnvelopeAdapter.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/offline/OfflineSigningEnvelopeCodec.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountIdLiteralTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountAddressTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/I105CanonicalTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/CanonicalRequestSignerTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/ConfidentialAssetToriiClientTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientV2ReadinessTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamClientTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/transport/UrlConnectionTransportExecutorTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectCryptoTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectEnvelopeCodecTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectSequenceTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectWalletRequestTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/TransactionPayloadTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoderParityTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterAccountWirePayloadEncoderParityTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/TransferWirePayloadEncoderParityTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructionsTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/VerifyingKeyInstructionBuildersTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTagTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyRecordDescriptionTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyStatusTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/crypto/SigningAlgorithmTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashCodecTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineSettlementProofsParityTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
+    "kotlin/core-jvm/src/test/resources/offline/redeem_proof_fixtures.json",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoColumnarTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoHeaderTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ConfidentialNoteTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePathTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/AndroidFixtureSupport.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/NoritoJavaCodecAdapterParityTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/TransactionFixtureParityTest.kt",
     "javascript/iroha_js/src/address.js",
     "javascript/iroha_js/dist/address.js",
     "javascript/iroha_js/src/canonicalRequest.js",
@@ -758,6 +1009,18 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-lineage-witness-append-availability-probe",
     ),
     (
+        "JVM/Android Pallas builder input guard negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-pallas-builder-input-guards",
+    ),
+    (
+        "non-C# Pallas builder input guard negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-input-guards",
+    ),
+    (
+        "non-C# Pallas builder native output negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-native-output-guards",
+    ),
+    (
         "JavaScript lineage key artifact readonly declarations negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-lineage-readonly-declarations",
     ),
@@ -782,8 +1045,16 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-proof-chain-accumulator",
     ),
     (
+        "SDK README Pallas open-envelope builder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-pallas-builder-surface",
+    ),
+    (
         "offline Kagemusha doc accumulator boundary negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-native-owned-accumulator-boundary",
+    ),
+    (
+        "offline Kagemusha doc Pallas builder surface negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-pallas-builder-surface",
     ),
     (
         "offline Kagemusha doc instruction transaction surface negative control",
@@ -1252,6 +1523,50 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Mobile privacy production-gate exactness negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness",
+    ),
+    (
+        "Mobile ZK Merkle provider adversarial coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-merkle-provider-adversarial-coverage",
+    ),
+    (
+        "Mobile ZK Torii parser shape coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-torii-parser-shape-coverage",
+    ),
+    (
+        "Mobile confidential note coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-confidential-note-coverage",
+    ),
+    (
+        "Mobile offline readiness coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage",
+    ),
+    (
+        "Kotlin offline cash settlement coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-settlement-coverage",
+    ),
+    (
+        "Android offline transfer persistence coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-offline-transfer-persistence-coverage",
+    ),
+    (
+        "Mobile transaction Norito runner coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-transaction-norito-runner-coverage",
+    ),
+    (
+        "Kotlin Norito framing runner coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-norito-framing-runner-coverage",
+    ),
+    (
+        "Mobile account address canonical coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-account-address-canonical-coverage",
+    ),
+    (
+        "Mobile Connect runner coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-connect-runner-coverage",
+    ),
+    (
+        "Mobile transport inspector attestation coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-transport-inspector-attestation-coverage",
     ),
     (
         "JVM Offline Note V2 decoder placeholder negative control",
@@ -2819,26 +3134,38 @@ def check_recursive_compact_surface(texts, errors):
         texts,
         wrapper,
         REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS
+        + REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_PYTHON_PUBLIC_METHODS
         + (
+            "_PALLAS_OPEN_ENVELOPE_BUILDER_METHOD",
+            "_PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD",
+            '"kagemusha_build_pallas_open_envelopes_archive"',
+            '"kagemusha_build_previous_proof_open_envelopes_archive"',
             "_RECURSIVE_COMPACT_TOKEN_METHOD",
             '"kagemusha_prove_verified_recursive_compact_payment_token"',
             '"_with_records_and_pallas_open_envelopes"',
             "_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD",
             '"kagemusha_verify_recursive_compact_payment_token"',
+            "globals()[_PALLAS_OPEN_ENVELOPE_BUILDER_METHOD]",
+            "globals()[_PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD]",
             "globals()[_RECURSIVE_COMPACT_TOKEN_METHOD]",
             "globals()[_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD]",
             "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7",
             '"kagemusha-recursive-compact-v1"',
             "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
             "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
+            "def is_kagemusha_pallas_open_envelope_builder_available",
             "def is_kagemusha_recursive_compact_unavailable",
+            "Kagemusha Pallas open-envelope builders require native bridge ABI 7",
+            "with Pallas builder symbols",
             "native bridge ABI 7 with compact prover and verifier symbols",
             "native bridge ABI 7 with the compact verifier symbol",
             '("archive", "norito", "probe")',
+            '_norito_archive_bytes_named(record_bundle_archive, "record_bundle_archive")',
+            '_norito_archive_bytes_named(\n        previous_bundle_archive,\n        "previous_bundle_archive"',
             '_assert_kagemusha_norito_archive(compact_token, "compact_token_archive")',
             "returned non-boolean result",
         ),
-        "Python recursive compact verifier surface",
+        "Python recursive compact verifier and Pallas builder surface",
         errors,
     )
     wrapper_text = texts[wrapper]
@@ -2865,19 +3192,47 @@ def check_recursive_compact_surface(texts, errors):
         "Python recursive compact verifier availability probes must pass compact-token and verifier-key probe archives",
         errors,
     )
+    require(
+        re.search(
+            r"_probe_native_archive_method\(\s*module,\s*_PALLAS_OPEN_ENVELOPE_BUILDER_METHOD,\s*"
+            r"_MALFORMED_NATIVE_PROBE_ARCHIVE,\s*\)",
+            wrapper_text,
+        )
+        is not None,
+        "Python Pallas open-envelope builder availability probe must pass a record-bundle probe archive",
+        errors,
+    )
+    require(
+        re.search(
+            r"_probe_native_archive_method\(\s*module,\s*_PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD,\s*"
+            r"_MALFORMED_NATIVE_PROBE_ARCHIVE,\s*\)",
+            wrapper_text,
+        )
+        is not None,
+        "Python previous-proof open-envelope builder availability probe must pass a previous-bundle probe archive",
+        errors,
+    )
     require_contains(
         texts,
         init,
         REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS
-        + REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS,
-        "Python package recursive compact re-exports",
+        + REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS
+        + REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_PYTHON_PUBLIC_METHODS,
+        "Python package recursive compact and Pallas builder re-exports",
         errors,
     )
     require_contains(
         texts,
         host,
         [f'name = "{name}"' for name in REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS]
+        + [f'name = "{name}"' for name in REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_PYTHON_METHODS]
         + [
+            "kagemusha_pallas_open_envelopes_from_record_bundle",
+            "kagemusha_recursive_previous_proof_open_envelope_metadata",
+            "kagemusha-recursive-spend-hop-open-v1-{hop_index}",
+            "kagemusha-recursive-spend-previous-open-v1",
+            "failed to encode Kagemusha Pallas open-envelope archive",
+            "failed to encode Kagemusha previous proof open-envelope archive",
             "preverify_kagemusha_recursive_compact_payment_token",
             "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
             "Kagemusha recursive compact Pallas open-envelope archive",
@@ -2894,7 +3249,7 @@ def check_recursive_compact_surface(texts, errors):
             "sentinel-spoofed recursive compact token must reject",
             "circuit id `forged::",
         ],
-        "Python PyO3 recursive compact exports",
+        "Python PyO3 recursive compact and Pallas builder exports",
         errors,
     )
     require_regex(
@@ -2906,7 +3261,10 @@ def check_recursive_compact_surface(texts, errors):
         "Python PyO3 recursive compact unavailable classifier",
         errors,
     )
-    for name in REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS:
+    for name in (
+        REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS
+        + REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_PYTHON_METHODS
+    ):
         require_regex(
             texts,
             host,
@@ -2926,6 +3284,11 @@ def check_recursive_compact_surface(texts, errors):
             "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
             "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
             "is_kagemusha_recursive_compact_unavailable",
+            "is_kagemusha_pallas_open_envelope_builder_available",
+            "kagemusha_build_pallas_open_envelopes_archive",
+            "kagemusha_build_previous_proof_open_envelopes_archive",
+            "previous_bundle_archive must be a valid Norito archive",
+            "previous_bundle_archive must contain a non-empty Norito payload",
             "Kagemusha recursive compact proof unavailable",
             "Kagemusha recursive compact verifier unavailable",
             "returned non-boolean result",
@@ -3699,15 +4062,22 @@ def check_record_backed_javascript_surface(texts, errors):
         texts,
         "crates/iroha_js_host/src/lib.rs",
         [f'js_name = "{name}"' for name in REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS]
+        + [f'js_name = "{name}"' for name in REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_METHODS]
         + [
             "prove_verified_kagemusha_compact_payment_token_from_record_bundle",
             "prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive",
+            "kagemusha_pallas_open_envelopes_from_record_bundle",
+            "kagemusha_recursive_previous_proof_open_envelope_metadata",
+            "kagemusha-recursive-spend-hop-open-v1-{hop_index}",
+            "kagemusha-recursive-spend-previous-open-v1",
             "KAGEMUSHA_FOLDED_CIRCUIT_ID",
             "KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID",
             "serialize Kagemusha compact payment-token archive",
             "serialize Kagemusha recursive aggregation proof-bundle archive",
+            "serialize Kagemusha Pallas open-envelope archive",
+            "serialize Kagemusha previous proof open-envelope archive",
         ],
-        "Node record-backed Kagemusha prover exports",
+        "Node record-backed Kagemusha prover and Pallas builder exports",
         errors,
     )
 
@@ -3719,21 +4089,31 @@ def check_record_backed_javascript_surface(texts, errors):
             texts,
             relative,
             REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS
+            + REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_PUBLIC_EXPORTS
             + (
                 'typeof native.kagemushaProveVerifiedCompactPaymentTokenWithRecords !== "function"',
+                'typeof native.kagemushaBuildPallasOpenEnvelopesArchive !== "function"',
+                'typeof native.kagemushaBuildPreviousProofOpenEnvelopesArchive !== "function"',
                 "native.kagemushaProveVerifiedCompactPaymentTokenWithRecords(",
                 "native.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(",
+                "native.kagemushaBuildPallasOpenEnvelopesArchive(",
+                "native.kagemushaBuildPreviousProofOpenEnvelopesArchive(",
                 "toOwnedKagemushaArchiveBuffer",
                 'const recordBundle = toOwnedKagemushaArchiveBuffer(',
                 'const pallasOpenEnvelopes = toOwnedKagemushaArchiveBuffer(',
+                'const previousBundle = toOwnedKagemushaArchiveBuffer(',
                 '"recordBundleArchive"',
                 '"pallasOpenEnvelopesArchive"',
+                '"previousBundleArchive"',
                 "Kagemusha compact payment-token prover requires native bridge ABI 6 with compact-token prover symbol",
                 "Kagemusha recursive aggregation proof-bundle prover requires native bridge ABI 6 with recursive aggregation prover symbol",
+                "Kagemusha Pallas open-envelope builders require native bridge ABI 7 with Pallas builder symbols",
                 "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
                 "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
+                "kagemushaBuildPallasOpenEnvelopesArchive",
+                "kagemushaBuildPreviousProofOpenEnvelopesArchive",
             ),
-            "JavaScript record-backed Kagemusha prover wrappers",
+            "JavaScript record-backed Kagemusha prover and Pallas builder wrappers",
             errors,
         )
     for relative in (
@@ -3744,20 +4124,24 @@ def check_record_backed_javascript_surface(texts, errors):
             texts,
             relative,
             REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS
+            + REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_PUBLIC_EXPORTS
             + (
                 "return false;",
                 'unsupported("kagemushaProveVerifiedCompactPaymentTokenWithRecords")',
                 'unsupported(\n    "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes"',
+                'unsupported("kagemushaBuildPallasOpenEnvelopesArchive")',
+                'unsupported("kagemushaBuildPreviousProofOpenEnvelopesArchive")',
             ),
-            "JavaScript browser record-backed Kagemusha stubs",
+            "JavaScript browser record-backed Kagemusha and Pallas builder stubs",
             errors,
         )
     for relative in ("javascript/iroha_js/src/index.js", "javascript/iroha_js/dist/index.js"):
         require_contains(
             texts,
             relative,
-            REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS,
-            f"{relative} record-backed Kagemusha re-exports",
+            REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS
+            + REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_PUBLIC_EXPORTS,
+            f"{relative} record-backed Kagemusha and Pallas builder re-exports",
             errors,
         )
     require_contains(
@@ -3766,10 +4150,13 @@ def check_record_backed_javascript_surface(texts, errors):
         (
             "isKagemushaCompactPaymentTokenNativeAvailable(): boolean",
             "isKagemushaRecursiveAggregationProofBundleNativeAvailable(): boolean",
+            "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(): boolean",
             "kagemushaProveVerifiedCompactPaymentTokenWithRecords(",
             "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(",
+            "kagemushaBuildPallasOpenEnvelopesArchive(",
+            "kagemushaBuildPreviousProofOpenEnvelopesArchive(",
         ),
-        "JavaScript record-backed Kagemusha TypeScript declarations",
+        "JavaScript record-backed Kagemusha and Pallas builder TypeScript declarations",
         errors,
     )
     require_contains(
@@ -3777,32 +4164,43 @@ def check_record_backed_javascript_surface(texts, errors):
         "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
         (
             "Kagemusha record-backed JS builders probe availability and validate native output",
+            "Kagemusha Pallas open-envelope JS builders probe availability and validate native output",
             "isKagemushaCompactPaymentTokenNativeAvailable",
             "isKagemushaRecursiveAggregationProofBundleNativeAvailable",
+            "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable",
             "recordBundleArchive must be a valid Norito archive",
+            "previousBundleArchive must be a valid Norito archive",
             "pallasOpenEnvelopesArchive must contain a non-empty Norito payload",
             "returned invalid Norito archive",
             "returned empty Norito payload",
+            "native kagemushaBuildPallasOpenEnvelopesArchive returned invalid Norito archive",
+            "native kagemushaBuildPreviousProofOpenEnvelopesArchive returned invalid Norito archive",
+            "native kagemushaBuildPallasOpenEnvelopesArchive returned empty Norito payload",
+            "native kagemushaBuildPreviousProofOpenEnvelopesArchive returned empty Norito payload",
+            "Kagemusha Pallas open-envelope builders require native bridge ABI 7",
         ),
-        "JavaScript record-backed Kagemusha runtime tests",
+        "JavaScript record-backed Kagemusha and Pallas builder runtime tests",
         errors,
     )
     require_contains(
         texts,
         "javascript/iroha_js/test/crypto.browser.test.js",
         REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS
+        + REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_PUBLIC_EXPORTS
         + (
             "browser build must not expose native compact-token prover",
             "browser build must not expose native recursive aggregation prover",
+            "browser build must not expose native Pallas open-envelope builders",
         ),
-        "JavaScript browser record-backed Kagemusha tests",
+        "JavaScript browser record-backed Kagemusha and Pallas builder tests",
         errors,
     )
     require_contains(
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
-        REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS,
-        "JavaScript package record-backed Kagemusha exports",
+        REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS
+        + REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_JS_PUBLIC_EXPORTS,
+        "JavaScript package record-backed Kagemusha and Pallas builder exports",
         errors,
     )
 
@@ -3924,9 +4322,23 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
     )
     for test_class in (
         "org.hyperledger.iroha.sdk.address.AccountIdLiteralTest",
+        "org.hyperledger.iroha.sdk.address.AccountAddressTest",
+        "org.hyperledger.iroha.sdk.address.I105CanonicalTest",
         "org.hyperledger.iroha.sdk.client.CanonicalRequestSignerTest",
+        "org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest",
+        "org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest",
+        "org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest",
         "org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClientTest",
+        "org.hyperledger.iroha.sdk.client.transport.UrlConnectionTransportExecutorTest",
+        "org.hyperledger.iroha.sdk.connect.ConnectCryptoTest",
+        "org.hyperledger.iroha.sdk.connect.ConnectEnvelopeCodecTest",
+        "org.hyperledger.iroha.sdk.connect.ConnectSequenceTest",
+        "org.hyperledger.iroha.sdk.connect.ConnectWalletRequestTest",
+        "org.hyperledger.iroha.sdk.core.model.TransactionPayloadTest",
         "org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.RegisterAccountWirePayloadEncoderParityTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoderParityTest",
+        "org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest",
         "org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest",
         "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest",
         "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest",
@@ -3935,10 +4347,18 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest",
         "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest",
         "org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest",
+        "org.hyperledger.iroha.sdk.offline.OfflineCashCodecTest",
         "org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest",
+        "org.hyperledger.iroha.sdk.offline.OfflineSettlementProofsParityTest",
         "org.hyperledger.iroha.sdk.offline.OfflineNoteTest",
         "org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test",
+        "org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest",
         "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest",
+        "org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest",
+        "org.hyperledger.iroha.sdk.norito.NoritoHeaderTest",
+        "org.hyperledger.iroha.sdk.norito.NoritoColumnarTest",
+        "org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapterParityTest",
+        "org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest",
     ):
         require(
             f"--tests {test_class}" in script,
@@ -3960,12 +4380,42 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
             "org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest,"
             "org.hyperledger.iroha.android.offline.OfflineNoteV2Test,"
             "org.hyperledger.iroha.android.offline.OfflineNoteTest,"
+            "org.hyperledger.iroha.android.offline.OfflineJsonParserTest,"
+            "org.hyperledger.iroha.android.offline.OfflineAuditLoggerTest,"
+            "org.hyperledger.iroha.android.offline.OfflineJournalTest,"
+            "org.hyperledger.iroha.android.offline.OfflineQrStreamTest,"
+            "org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,"
             "org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,"
+            "org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests,"
             "org.hyperledger.iroha.android.tx.TransactionBuilderTests,"
+            "org.hyperledger.iroha.android.tx.TransactionBuilderOfflineEnvelopeTests,"
+            "org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests,"
+            "org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests,"
+            "org.hyperledger.iroha.android.tx.SignedTransactionHasherTests,"
+            "org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelopeCodecTests,"
+            "org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests,"
+            "org.hyperledger.iroha.android.connect.ConnectEnvelopeCodecTest,"
+            "org.hyperledger.iroha.android.connect.ConnectRetryPolicyTests,"
+            "org.hyperledger.iroha.android.connect.ConnectQueueJournalTests,"
+            "org.hyperledger.iroha.android.connect.ConnectErrorTests,"
+            "org.hyperledger.iroha.android.tools.PendingQueueInspectorTests,"
+            "org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifierTests,"
             "org.hyperledger.iroha.android.address.AccountIdLiteralTests,"
+            "org.hyperledger.iroha.android.address.AccountAddressTests,"
             "org.hyperledger.iroha.android.client.CanonicalRequestSignerTests,"
+            "org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,"
+            "org.hyperledger.iroha.android.client.OfflineToriiClientTests,"
+            "org.hyperledger.iroha.android.client.ClientConfigOfflineQueueTests,"
+            "org.hyperledger.iroha.android.client.HttpClientTransportOfflineQueueTests,"
+            "org.hyperledger.iroha.android.client.HttpClientTransportPendingQueueTests,"
+            "org.hyperledger.iroha.android.client.queue.DirectoryPendingTransactionQueueTests,"
+            "org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueueTests,"
+            "org.hyperledger.iroha.android.client.queue.OfflineJournalPendingTransactionQueueTest,"
             "org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests,"
+            "org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests,"
             "org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests,"
+            "org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoderTests,"
+            "org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest,"
             "org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests,"
             "org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests"
         )
@@ -3984,6 +4434,19 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "Kagemusha JVM SDK script must run Android signing algorithm exactness tests",
         errors,
     )
+    for test_class in (
+        "org.hyperledger.iroha.android.model.instructions.SetPrimaryAccountAliasWirePayloadEncoderTests",
+        "org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests",
+        "org.hyperledger.iroha.android.tx.TransactionPayloadFixturesTests",
+        "org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests",
+        "org.hyperledger.iroha.android.client.transport.UrlConnectionTransportExecutorTests",
+        "org.hyperledger.iroha.android.connect.ConnectWalletRequestTests",
+    ):
+        require(
+            f"--tests {test_class}" in script,
+            f"Kagemusha JVM SDK script must run {test_class}",
+            errors,
+        )
 
 
 def check_mobile_privacy_production_gate_exactness(texts, errors):
@@ -4098,6 +4561,1658 @@ def check_mobile_privacy_production_gate_exactness(texts, errors):
             "production ready mismatch",
         ),
         "Swift privacy production-gate exactness tests",
+        errors,
+    )
+
+
+def check_mobile_zk_merkle_provider_adversarial_coverage(texts, errors):
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePath.kt",
+            "Kotlin ZK Merkle Torii provider",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ToriiZkAssetMerklePathProvider.java",
+            "Android Java ZK Merkle Torii provider",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "getZkAssetMerklePaths",
+                "Torii returned",
+                "Merkle paths for",
+                "commitment mismatch at index",
+                "Torii Merkle path does not verify at index",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePathTest.kt",
+            "Kotlin ZK Merkle Torii provider adversarial tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/ZkAssetMerklePathTests.java",
+            "Android Java ZK Merkle Torii provider adversarial tests",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "toriiProviderRejectsPathCountDriftAndReorderedNodeResponses",
+                "Torii returned 1 Merkle paths for 2 commitments",
+                "Torii returned 3 Merkle paths for 2 commitments",
+                "commitment mismatch at index 0",
+                'getMerklePaths("usd#bank", commitments)',
+            ),
+            label,
+            errors,
+        )
+
+
+def check_mobile_zk_torii_parser_shape_coverage(texts, errors):
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/ConfidentialAssetToriiClientTest.kt",
+            "Kotlin ZK Torii parser shape tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ConfidentialAssetToriiClientTests.java",
+            "Android Java ZK Torii parser shape tests",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "rootsAndMerklePathsRejectNumericStrings",
+                "rootsAndMerklePathsRejectOverflowDuplicateKeysAndInconsistentShape",
+                "merklePathParserRejectsDuplicateKeysBeforeLastValueWins",
+                "height",
+                "2147483648",
+                '"frontier_len": 2147483648',
+                '"frontier_len": 3',
+                '"frontier_len": 1',
+                '"commitment"',
+                '"directions": ["0"]',
+                "witness_nodes",
+            ),
+            label,
+            errors,
+        )
+
+
+def check_mobile_confidential_note_coverage(texts, errors):
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructions.kt",
+        (
+            "class ConfidentialEncryptedPayload",
+            "const val VERSION_V1: Int = 1",
+            "const val MAX_CIPHERTEXT_BYTES: Int = 64 * 1024",
+            "ephemeralPublicKey must not be low-order",
+            "confidential encrypted payload has trailing bytes",
+        ),
+        "Kotlin confidential encrypted payload envelope",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ConfidentialEncryptedPayload.java",
+        (
+            "public final class ConfidentialEncryptedPayload",
+            "public static final int VERSION_V1 = 1",
+            "public static final int MAX_CIPHERTEXT_BYTES = 64 * 1024",
+            "ephemeralPublicKey must not be low-order",
+            "confidential encrypted payload has trailing bytes",
+        ),
+        "Android Java confidential encrypted payload envelope",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt",
+        (
+            "class ConfidentialNoteOpening",
+            "object ConfidentialOwnerTag",
+            "object ConfidentialNoteCommitment",
+            "object ConfidentialNoteNullifier",
+            "object ConfidentialNoteTags",
+            "object ConfidentialNoteEncryption",
+            "object ConfidentialNoteDecryption",
+            "fun decryptNoteWithOwnerTag(",
+            "ConfidentialEncryptedPayload(",
+            "X25519Agreement",
+            "HKDFBytesGenerator",
+            "ChaCha20Poly1305",
+            "confidential note ownerTag does not match expectedOwnerTag",
+        ),
+        "Kotlin confidential note crypto surface",
+        errors,
+    )
+    for relative, label in (
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteOpening.java",
+            "Android Java confidential note opening",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialOwnerTag.java",
+            "Android Java confidential owner tag",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteCommitment.java",
+            "Android Java confidential note commitment",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteNullifier.java",
+            "Android Java confidential note nullifier",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteTags.java",
+            "Android Java confidential note tags",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteEncryption.java",
+            "Android Java confidential note encryption",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteDecryption.java",
+            "Android Java confidential note decryption",
+        ),
+    ):
+        require_contains(texts, relative, ("public final class",), label, errors)
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteCrypto.java",
+        (
+            "ConfidentialEncryptedPayload",
+            "X25519Agreement",
+            "HKDFBytesGenerator",
+            "ChaCha20Poly1305",
+            "decryptNote(",
+            "confidential note ownerTag does not match expectedOwnerTag",
+        ),
+        "Android Java confidential note crypto core",
+        errors,
+    )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructionsTest.kt",
+            "Kotlin confidential encrypted payload tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ZkAssetInstructionsTest.java",
+            "Android Java confidential encrypted payload tests",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "confidentialEncryptedPayloadIsStrictAndDefensive",
+                "confidentialEncryptedPayloadMatchesRustWireFixture",
+                "ConfidentialEncryptedPayload.VERSION_V1",
+                "ConfidentialEncryptedPayload.MAX_CIPHERTEXT_BYTES + 1",
+                "ConfidentialEncryptedPayload.fromWireBytes",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructionsTest.kt",
+        (
+            "ephemeralPublicKey = ByteArray(32).also { it[0] = 1 }",
+            "serialized + byteArrayOf(0)",
+        ),
+        "Kotlin confidential encrypted payload adversarial cases",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ZkAssetInstructionsTest.java",
+        (
+            "nonZeroLowOrder",
+            "concat(serialized, new byte[] {0})",
+        ),
+        "Android Java confidential encrypted payload adversarial cases",
+        errors,
+    )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ConfidentialNoteTest.kt",
+            "Kotlin confidential note contract tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteTests.java",
+            "Android Java confidential note contract tests",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "derivesRustConfidentialV2Vectors",
+                "constructorsAndAccessorsAreDefensive",
+                "rejectsMalformedAndAmbiguousInputs",
+                "derivationsAreDomainSeparated",
+                "encryptsAndDecryptsPlaintextContract",
+                "ConfidentialEncryptedPayload.VERSION_V1",
+                "ConfidentialNoteEncryption.publicKeyFromPrivateKey",
+                "ConfidentialNoteDecryption.decryptNote",
+                "ConfidentialNoteDecryption.decryptNoteWithOwnerTag",
+                "ConfidentialNoteOpening.fromSpendKeyWithDiversifier",
+                "U128_OVERFLOW",
+                "other-chain",
+                "ciphertext",
+            ),
+            label,
+            errors,
+        )
+
+
+def check_mobile_offline_readiness_coverage(texts, errors):
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt",
+            "Kotlin Offline Torii readiness client",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java",
+            "Android Java Offline Torii readiness client",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "OFFLINE_READINESS_PATH",
+                '"/v1/offline/readiness"',
+                "OFFLINE_V2_READINESS_PATH",
+                '"/v1/offline/v2/readiness"',
+                "getOfflineReadiness",
+                "getOfflineV2Readiness",
+                "TransportSecurity.requireHttpRequestAllowed",
+                '"Accept"',
+                '"application/json"',
+                "extractRejectCode",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt",
+            "Kotlin Offline readiness ABI-7 parser",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java",
+            "Android Java Offline readiness ABI-7 parser",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "parseOfflineReadiness",
+                "parseOfflineV2Readiness",
+                "offline_kagemusha_abi7",
+                "offline_kagemusha_recursive_compact_available",
+                "offline_kagemusha_abi7_mode",
+                "offline_kagemusha_recursive_compact_mode",
+                "offline_kagemusha_abi7_bridge_abi_version",
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+                "offline_kagemusha_abi7_circuit_id",
+                "offline_kagemusha_recursive_compact_circuit_id",
+                "offline_kagemusha_abi7_artifacts",
+                "offline_kagemusha_recursive_compact_artifacts_available",
+                "must match",
+                "must be an exact non-empty string",
+                "must be a boolean",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt",
+            "Kotlin Offline readiness client tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientV2ReadinessTest.kt",
+            "Kotlin Offline V2 readiness client tests",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "readinessUsesCanonicalGetPathAndParsesBody",
+                "readinessParsesShortAbi7Aliases",
+                "readinessRejectsConflictingAbi7AliasesAndVerboseValues",
+                "readinessRejectsMalformedPresentAliasValues",
+                "readinessAcceptsMatchingAbi7AliasesAndVerboseValues",
+                "offline_kagemusha_abi7_bridge_abi_version",
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+                "offline_kagemusha_abi7_circuit_id",
+                "offline_kagemusha_recursive_compact_circuit_id",
+                "offline_kagemusha_abi7_artifacts",
+                "offline_kagemusha_recursive_compact_artifacts_available",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt",
+        ('"/v1/offline/readiness"',),
+        "Kotlin Offline readiness path test",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientV2ReadinessTest.kt",
+        ('"/v1/offline/v2/readiness"',),
+        "Kotlin Offline V2 readiness path test",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java",
+        (
+            "readinessUsesCanonicalGetPathAndParsesResponse",
+            "v2ReadinessUsesCanonicalGetPathAndParsesResponse",
+            "propagatesNon2xxResponses",
+            "propagatesRejectCodeFromNon2xxResponses",
+            "rejectsInsecureAuthorizationHeader",
+            "/v1/offline/readiness",
+            "/v1/offline/v2/readiness",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "offline_unavailable",
+        ),
+        "Android Java Offline Torii readiness client tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJsonParserTest.java",
+        (
+            "parsesOfflineReadinessShortAbi7Aliases",
+            "parsesOfflineReadinessMatchingAbi7Aliases",
+            "rejectsOfflineReadinessConflictingAbi7Aliases",
+            "rejectsOfflineReadinessMalformedAbi7Aliases",
+            "parsesOfflineV2ReadinessShortAbi7Aliases",
+            "rejectsOfflineV2ReadinessConflictingAbi7Aliases",
+            "rejectsOfflineV2ReadinessMalformedAbi7Aliases",
+            "offline_kagemusha_abi7_bridge_abi_version",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "offline_kagemusha_abi7_circuit_id",
+            "offline_kagemusha_recursive_compact_circuit_id",
+            "offline_kagemusha_abi7_artifacts",
+            "offline_kagemusha_recursive_compact_artifacts_available",
+        ),
+        "Android Java Offline readiness parser tests",
+        errors,
+    )
+
+
+def check_kotlin_offline_cash_settlement_coverage(texts, errors):
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt",
+        (
+            "object OfflineCashCodec",
+            "canonicalAmountString",
+            "receiptKeys",
+            "redeemRequestCommitmentHex",
+            "stableIdempotencyKey",
+            '"offline-cash:setup:${sha256Hex(digestInput)}"',
+            '"redeem_request"',
+            "MAX_NUMERIC_SCALE = 28",
+            "MAX_NUMERIC_BYTES = 64",
+            "JsonEncoder.encode(payload)",
+            "MessageDigest.getInstance(\"SHA-256\")",
+        ),
+        "Kotlin offline cash canonical codec",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineSettlementProofs.kt",
+        (
+            "object OfflineSettlementProofs",
+            'BACKEND: String = "stark/fri/sha256-goldilocks"',
+            'REDEEM_REQUEST_CIRCUIT_ID: String = "offline-bearer-redeem-request"',
+            "buildRedeemRequestProof",
+            "OfflineCashCodec.canonicalAmountString",
+            "OfflineCashCodec.redeemRequestCommitmentHex",
+            "OfflineStarkEnvelopeProver.buildEnvelope",
+            "publicInputsHex = commitmentHex",
+        ),
+        "Kotlin offline settlement proof builder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashCodecTest.kt",
+        (
+            "canonicalAmountMatchesRustNumericDisplay",
+            "canonicalAmountRejectsInvalidRustNumericForms",
+            "receiptKeysAreSortedAndFormatted",
+            "idempotencyKeyUsesOperationIdForMutationsAndSha256ForSetup",
+            "redeemRequestCommitmentHexMatchesExpected",
+            '"1e3"',
+            "BigInteger.ONE.shiftLeft(511)",
+            '"offline-cash:setup:$expectedHex"',
+            '"kind":"redeem_request"',
+        ),
+        "Kotlin offline cash codec tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineSettlementProofsParityTest.kt",
+        (
+            "redeemProofsMatchRustFixtures",
+            '"/offline/redeem_proof_fixtures.json"',
+            "expected_commitment_hex",
+            "expected_proof",
+            "assertProofEquals",
+            "assertEnvelopeEquals",
+            "assertMerklePathEquals",
+            "assertBigIntegerEquals",
+        ),
+        "Kotlin offline settlement proof fixture parity tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/resources/offline/redeem_proof_fixtures.json",
+        (
+            '"backend": "stark/fri/sha256-goldilocks"',
+            '"circuit_id": "offline-bearer-redeem-request"',
+            '"expected_commitment_hex"',
+            '"public_inputs_hex"',
+            '"transcript_label": "offline-bearer-redeem-request"',
+        ),
+        "Kotlin offline settlement proof fixtures",
+        errors,
+    )
+
+
+def check_android_offline_transfer_persistence_coverage(texts, errors):
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineQrStream.java",
+        (
+            "public final class OfflineQrStream",
+            "Frame checksum mismatch",
+            "recoveredChunks",
+            "SAKURA_STORM_SKIN",
+            "OFFLINE_PAYMENT_TOKEN",
+            "TextCodec",
+            "QR text prefix missing",
+        ),
+        "Android offline QR stream implementation",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournal.java",
+        (
+            "public final class OfflineJournal",
+            "appendPending",
+            "markCommitted",
+            "OfflineJournalException.Reason.DUPLICATE_PENDING",
+            "OfflineJournalException.Reason.NOT_PENDING",
+            "HMAC-SHA256",
+            "computeChain",
+            "pendingEntries",
+        ),
+        "Android offline journal implementation",
+        errors,
+    )
+    for relative, label in (
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/DirectoryPendingTransactionQueue.java",
+            "Android directory pending transaction queue",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueue.java",
+            "Android file pending transaction queue",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/OfflineJournalPendingTransactionQueue.java",
+            "Android journal-backed pending transaction queue",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "implements PendingTransactionQueue",
+                "enqueue",
+                "drain",
+                "size",
+                "setExportedKeyBundle",
+                "exportedKeyBundle",
+                "telemetryQueueName",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/DirectoryPendingTransactionQueue.java",
+        (
+            '"pending-%020d.bin"',
+            '"oem_directory"',
+        ),
+        "Android directory pending transaction queue ordering",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/HttpClientTransport.java",
+        (
+            "pending_queue.depth",
+            "queue.telemetryQueueName()",
+            "queue.enqueue(enriched)",
+            "flushPendingQueue",
+        ),
+        "Android HTTP transport pending queue integration",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java",
+        (
+            "enableOfflineJournalQueue",
+            "enableDirectoryPendingQueue",
+            "pendingQueue",
+            "OfflineJournalPendingTransactionQueue",
+            "DirectoryPendingTransactionQueue",
+        ),
+        "Android client config offline queue integration",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineQrStreamTest.java",
+        (
+            "roundTripPayload",
+            "recoversMissingChunk",
+            "rejectsBadChecksum",
+            "textCodecRejectsLegacyVersionedPrefix",
+            "sakuraStormScanSessionPresetRecoversDroppedFrame",
+            '"iroha:qr-old:"',
+            "recoveredChunks() == 1",
+        ),
+        "Android offline QR stream tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJournalTest.java",
+        (
+            "appendAndCommitCycle",
+            "duplicatePendingRejected",
+            "markMissingEntryFails",
+            "OfflineJournalException.Reason.DUPLICATE_PENDING",
+            "OfflineJournalException.Reason.NOT_PENDING",
+            "reopened journal should have no pending",
+        ),
+        "Android offline journal tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineAuditLoggerTest.java",
+        (
+            "recordsAndExportsEntries",
+            "rejectsFractionalTimestamp",
+            "exportJson",
+            '"timestamp_ms": 1.5',
+        ),
+        "Android offline audit logger tests",
+        errors,
+    )
+    for relative, label in (
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/DirectoryPendingTransactionQueueTests.java",
+            "Android directory pending transaction queue tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueueTests.java",
+            "Android file pending transaction queue tests",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "shouldPersistAndDrainInOrder",
+                "shouldPersistExport",
+                "exportedKeyBundle",
+                "keyAlias",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/OfflineJournalPendingTransactionQueueTest.java",
+        (
+            "enqueuesAndDrainsEntries",
+            "rewritesJournalAfterDrain",
+            "queue should be empty after drain",
+            "journal should reopen without pending entries",
+        ),
+        "Android journal-backed pending transaction queue tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ClientConfigOfflineQueueTests.java",
+        (
+            "builderEnablesJournalQueue",
+            "builderEnablesDirectoryQueue",
+            "helperReturnsConfigWithDirectoryQueue",
+            "OfflineJournalPendingTransactionQueue",
+            "DirectoryPendingTransactionQueue",
+        ),
+        "Android client config offline queue tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportOfflineQueueTests.java",
+        (
+            "helperReturnsConfigWithJournalQueue",
+            "HttpClientTransport.withOfflineJournalQueue",
+            "OfflineJournalPendingTransactionQueue",
+        ),
+        "Android HTTP transport offline queue helper tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportPendingQueueTests.java",
+        (
+            "flushesPendingQueueBeforeNewSubmission",
+            "queuesFailedSubmissionAndEmitsTelemetry",
+            "android.pending_queue.depth",
+            "oem_directory",
+            "failed submission should be queued for later replay",
+        ),
+        "Android HTTP transport pending queue replay tests",
+        errors,
+    )
+
+
+def check_mobile_transaction_norito_runner_coverage(texts, errors):
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/TransactionPayload.kt",
+        (
+            "require(chainId.isNotBlank())",
+            "require(authority.isNotBlank())",
+            "require(creationTimeMs >= 0)",
+            "require(timeToLiveMs > 0)",
+            "require(nonce > 0)",
+            "metadata.toMap()",
+            "metadata key must not be blank",
+        ),
+        "Kotlin transaction payload validation",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt",
+        (
+            "requireCanonicalI105Address(authority, \"authority\")",
+            "Wire payload must include a valid Norito header",
+            "Instruction payload must be wire-framed",
+            "Unsupported AccountController tag",
+            "Trailing bytes after authority payload",
+            "decodeExecutable(decoder)",
+            "encodeExecutable(encoder, value)",
+        ),
+        "Kotlin Norito transaction payload adapter",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java",
+        (
+            "requireCanonicalI105Address(authority, \"authority\")",
+            "Wire payload must include a valid Norito header",
+            "Instruction payload must be wire-framed",
+            "Unsupported AccountController tag",
+            "Trailing bytes after authority payload",
+            "decodeExecutable(decoder)",
+            "encodeExecutable(encoder, value)",
+        ),
+        "Android Java Norito transaction payload adapter",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/SignedTransactionHasher.java",
+        (
+            "TransactionEntrypoint::External",
+            "SignedTransactionEncoder.encode(transaction)",
+            "new byte[12 + encoded.length]",
+            "IrohaHash.prehash(canonicalBytes)",
+            "Failed to encode signed transaction",
+        ),
+        "Android signed transaction canonical hasher",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeCodec.java",
+        (
+            "DEFAULT_SCHEMA = \"iroha.android.offline.Envelope\"",
+            "NoritoCodec.encode(envelope, schemaName, adapter)",
+            "NoritoCodec.decode(encoded, adapter, schemaName)",
+            "Failed to encode offline signing envelope",
+            "Failed to decode offline signing envelope",
+        ),
+        "Android offline signing envelope Norito codec",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/TransactionPayloadTest.kt",
+        (
+            "blank chainId throws",
+            "negative creationTimeMs throws",
+            "zero timeToLiveMs throws",
+            "defensive copy on metadata input",
+            "metadata getter returns immutable snapshot",
+            "copy validates new values",
+        ),
+        "Kotlin transaction payload tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/TransferWirePayloadEncoderParityTest.kt",
+        (
+            "transfer asset encoding matches Rust fixture generator",
+            "dataspace scoped transfer asset encoding matches Rust fixture generator",
+            "decodeAssetTransferPayload(wirePayload.payloadBytes.copyOf(12))",
+            "mutated[mutated.lastIndex]",
+            "TransferBox encoding must match Rust",
+        ),
+        "Kotlin transfer wire payload parity tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterAccountWirePayloadEncoderParityTest.kt",
+        (
+            "register account encoding matches Rust fixture generator",
+            "decodeRegisterAccountPayload(wirePayload.payloadBytes.copyOf(12))",
+            "mutated[mutated.lastIndex]",
+            "RegisterBox encoding must match Rust",
+        ),
+        "Kotlin register-account wire payload parity tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/NoritoJavaCodecAdapterParityTest.kt",
+        (
+            "codec round-trips payload as bare payload",
+            "codec encodes account id authority as struct",
+            "codec encodes multisig authority and signatures",
+            "codec supports instructions and wire payload variants",
+            "codec encodes chain id ivm and instruction layouts",
+            "assertBarePayload(encoded)",
+            "decodeOptionPayload",
+        ),
+        "Kotlin Norito Java codec parity tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/TransactionFixtureParityTest.kt",
+        (
+            "transaction payload fixtures round-trip with kotlin codec",
+            "typed metadata fixture preserves gas limit as json number",
+            "transaction fixture manifest remains canonical for kotlin codec",
+            "signed transaction decoder round-trips multisig signatures",
+            "signed transaction decoder rejects adversarial envelopes",
+            "fixture loader accepts wire instruction entries",
+            "fixture loader rejects wire instruction arguments",
+            "fixture loader rejects missing wire instruction fields",
+            "SignedTransactionEncoder.encodeVersioned(signed)",
+            "SignedTransactionEncoder.decodeVersioned(versioned)",
+            "adapter.encodeTransaction(payload)",
+        ),
+        "Kotlin transaction fixture parity tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/norito/NoritoCodecAdapterTests.java",
+        (
+            "javaCodecRoundTripsPayload",
+            "javaCodecEncodesTypedMetadata",
+            "javaCodecEncodesMultisigAuthority",
+            "javaCodecEncodesMultisigSignatures",
+            "javaCodecRejectsMalformedSignedTransactions",
+            "javaCodecSupportsWireInstructionPayloads",
+            "javaCodecEncodesInstructionLayout",
+            "gas_limit must round-trip as a JSON number",
+            "gas_limit must not be encoded as a JSON string",
+            "assertBarePayload(encoded)",
+        ),
+        "Android Norito codec adapter tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/TransferWirePayloadEncoderTests.java",
+        (
+            "encodeAssetTransferAcceptsDataspaceScopedAssetId",
+            "encodeAssetTransferRejectsMalformedScopeSuffix",
+            "decodeAssetTransferRejectsUnsupportedDiscriminant",
+            "decodeAccountIdRejectsTrailingBytes",
+            "dataspace:<id>",
+            "Unsupported TransferBox discriminant",
+            "Trailing bytes",
+        ),
+        "Android transfer wire payload tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/SetPrimaryAccountAliasWirePayloadEncoderTests.java",
+        (
+            "encodeSupportsDomainScopedAliasesInExplicitDataspace",
+            "encodeDomainAliasUsesTransparentDomainNamePayload",
+            "decodeRoundTripsDomainAlias",
+            "decodeRejectsTrailingPayloadBytes",
+            "encodeRejectsNegativeDataspace",
+            "dataspace must be non-negative",
+        ),
+        "Android set-primary alias wire payload tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/AccountLiteralHardCutTests.java",
+        (
+            "accountBuildersRejectDomainSuffixedLiterals",
+            "accountTargetInstructionsRejectDomainSuffixedLiterals",
+            "persistCouncilRejectsDomainSuffixedMembers",
+            "connectApprovePreimageRejectsDomainSuffix",
+            "canonical I105 encoded",
+        ),
+        "Android account literal hard-cut tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtureTests.java",
+        (
+            "validatePayloadFixtures",
+            "fixtureLoaderAcceptsWireInstructionEntries",
+            "fixtureLoaderRejectsWireInstructionArguments",
+            "typed_metadata_gas_limit",
+            "instruction fixtures must use wire payloads",
+            "encoded payload mismatch",
+        ),
+        "Android transaction payload fixture tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixturesTests.java",
+        (
+            "toPayloadRejectsMissingWireInstructionFields",
+            "expected missing instruction payload fields to be rejected",
+        ),
+        "Android transaction payload fixture adversarial tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionFixtureManifestTests.java",
+        (
+            "validateManifest",
+            "validateManifestSchema",
+            "All fixtures must be validated against the canonical SDK codec",
+            "SignedTransactionHasher.hashCanonicalHex(signedBytes)",
+            "SignedTransactionEncoder.encodeVersioned(signed)",
+            "SignedTransactionEncoder.decodeVersioned(versioned)",
+            "instruction wire payload mismatch",
+        ),
+        "Android transaction fixture manifest tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/SignedTransactionHasherTests.java",
+        (
+            "hashHexMatchesCanonicalBytes",
+            "hashIgnoresExportedKeyBundle",
+            "hashRejectsInvalidPayload",
+            "canonicalBytesWrapsEntrypoint",
+            "Exported key bundles must not affect canonical signed transaction hash",
+            "Entrypoint discriminant must be zero",
+        ),
+        "Android signed transaction hasher tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeCodecTests.java",
+        (
+            "roundTripWithExportedKey",
+            "roundTripWithoutExportedKey",
+            "decoded.exportedKeyBundle().isPresent()",
+            "decoded.exportedKeyBundle().equals(Optional.empty())",
+        ),
+        "Android offline signing envelope codec tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderOfflineEnvelopeTests.java",
+        (
+            "encodeAndSignEnvelopeIncludesMetadata",
+            "encodeAndSignEnvelopeWithExportedKey",
+            "setExportedKeyBundle(bundle.encode())",
+            "Envelope should include exported key",
+            "Metadata should round trip",
+        ),
+        "Android transaction builder offline envelope tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
+        (
+            '"fixtures"',
+            '"payload_base64"',
+            '"signed_base64"',
+            '"payload_hash"',
+            '"signed_hash"',
+        ),
+        "Android transaction fixture manifest resource",
+        errors,
+    )
+
+
+def check_kotlin_norito_framing_runner_coverage(texts, errors):
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoHeader.kt",
+        (
+            "VARINT_OFFSETS",
+            "COMPACT_SEQ_LEN",
+            "FIELD_BITSET",
+            "PACKED_STRUCT",
+            "COMPACT_LEN",
+            "SUPPORTED_FLAGS_MASK",
+            "validateFlags",
+            "decodeView",
+            "MAX_HEADER_PADDING",
+            "Non-zero Norito header padding",
+        ),
+        "Kotlin Norito header implementation",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoColumnar.kt",
+        (
+            "DESC_U64_DELTA_OPTSTR_BOOL",
+            "DESC_U64_DELTA_OPTU32_BOOL",
+            "DESC_U64_DELTA_BYTES_BOOL",
+            "encodeNcbU64OptionalStringBool",
+            "decodeNcbU64OptionalStringBool",
+            "encodeRowsU64OptionalStringBoolAdaptive",
+            "decodeRowsU64OptionalStringBoolAdaptive",
+            "encodeNcbU64OptionalU32Bool",
+            "decodeNcbU64OptionalU32Bool",
+            "encodeNcbU64BytesBool",
+            "decodeNcbU64BytesBool",
+            "Trailing bytes after optional string columnar decode",
+            "Trailing bytes after optional u32 columnar decode",
+            "Trailing bytes after bytes bool columnar decode",
+        ),
+        "Kotlin Norito columnar implementation",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoAoS.kt",
+        (
+            "encodeU64OptionalStringBool",
+            "decodeU64OptionalStringBool",
+            "encodeU64OptionalU32Bool",
+            "decodeU64OptionalU32Bool",
+            "encodeU64BytesBool",
+            "decodeU64BytesBool",
+            "Varint.decode",
+        ),
+        "Kotlin Norito AoS implementation",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoHeaderTest.kt",
+        (
+            "decode rejects reserved layout flags",
+            "decode rejects field bitset without required flags",
+            "NoritoHeader.VARINT_OFFSETS",
+            "NoritoHeader.COMPACT_SEQ_LEN",
+            "NoritoHeader.FIELD_BITSET",
+            "NoritoHeader.PACKED_STRUCT",
+            "NoritoHeader.COMPACT_LEN",
+            "frameWithUncheckedFlags",
+            "NoritoHeader.decode(framed, null)",
+        ),
+        "Kotlin Norito header layout flag tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoColumnarTest.kt",
+        (
+            "optional string columnar matches Rust golden and rejects malformed payloads",
+            "optional u32 columnar matches Rust golden and rejects malformed AoS",
+            "bytes bool columnar and adaptive layouts match Rust goldens",
+            "030000005b000000010000000000000002020500000000000000010000000300000061626302",
+            "030000005c0000000100000000000000020205000000070000000900000002",
+            "020000005400000001000000000000000200000000000000030000000500000061626300ff01",
+            "decodeNcbU64OptionalStringBool(columnar.withTrailing())",
+            "badPresence[18]",
+            "badUtf8[34]",
+            "badAos[10]",
+            "badFlags[badFlags.size - 1]",
+        ),
+        "Kotlin Norito columnar golden/adversarial tests",
+        errors,
+    )
+
+
+def check_mobile_account_address_canonical_coverage(texts, errors):
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddress.kt",
+            "Kotlin AccountAddress implementation",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java",
+            "Android AccountAddress implementation",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "DEFAULT_I105_DISCRIMINANT",
+                "fromI105",
+                "toI105",
+                "fromAccount",
+                "canonicalHex",
+                "canonicalBytes",
+                "curveIdForAlgorithm",
+                "MISSING_I105_SENTINEL",
+                "INVALID_I105_CHAR",
+                "UNEXPECTED_NETWORK_PREFIX",
+                "UNSUPPORTED_ALGORITHM",
+                "gost3410-2012-256-paramset-a",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/CurveSupportConfig.kt",
+            "Kotlin AccountAddress curve support configuration",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java",
+            "Android AccountAddress curve support configuration",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "CurveSupportConfig",
+                "ed25519Only",
+                "allowMlDsa",
+                "allowGost",
+                "allowBls",
+                "allowSm2",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/PublicKeyCodec.kt",
+            "Kotlin public-key codec curve registry",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/PublicKeyCodec.java",
+            "Android public-key codec curve registry",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "algorithmForCurveId",
+                "encodePublicKeyMultihash",
+                "decodePublicKeyLiteral",
+                "compactPublicKeyPayload",
+                "decodeCompactPublicKeyPayload",
+                "compactAlgorithmTagForCurveId",
+                "curveIdForCompactAlgorithmTag",
+                "curveIdForMultihashCode",
+                "multihashCodeForCurveId",
+                "secp256k1",
+                "bls_normal",
+                "bls_small",
+                "gost256a",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountAddressTest.kt",
+        (
+            "mixedI105LiteralRoundTripsToOriginalCanonicalPayload",
+            "rejectsNonCanonicalFullwidthKanaPayload",
+            "curveRegistryCoversAllCryptoAlgorithms",
+            "fromAccountRejectsBlankOrPaddedCurveAlgorithmAliases",
+            "fromAccountRejectsControlAndUnicodeConfusableCurveAlgorithmAliases",
+            "longGostLabelsAreAcceptedWhenGostSupportIsEnabled",
+            "INVALID_I105_CHAR",
+            "UNSUPPORTED_ALGORITHM",
+            "gost3410-2012-256-paramset-a",
+        ),
+        "Kotlin AccountAddress canonical tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/I105CanonicalTest.kt",
+        (
+            "fromAccount produces 36 canonical bytes for ed25519",
+            "fromAccount produces same I105 for known key",
+            "Canonical should be 36 bytes",
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+        ),
+        "Kotlin I105 canonical SPKI tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java",
+        (
+            "complianceFixtureSuite",
+            "goldenVectorsRoundTrip",
+            "mixedI105LiteralRoundTrip",
+            "i105PrefixMismatchThrows",
+            "i105RejectsFullwidthSentinel",
+            "i105RejectsNonCanonicalFullwidthKana",
+            "i105RejectsInvalidCharacters",
+            "curveSupportDefaults",
+            "curveSupportConfigurationToggle",
+            "fullCryptoCurveRegistry",
+            "curveAlgorithmAliasesRejectBlankAndPaddedLabels",
+            "curveAlgorithmAliasesRejectControlsAndUnicodeConfusables",
+            "longGostLabelsAcceptedWhenEnabled",
+            "singleKeyPayloadExtraction",
+            "fixtures/account/address_vectors.json",
+            "INVALID_I105_CHAR",
+            "UNSUPPORTED_ALGORITHM",
+            "gost3410-2012-256-paramset-a",
+        ),
+        "Android AccountAddress compliance tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "fixtures/account/address_vectors.json",
+        (
+            '"format_version": 1',
+            '"default_network_prefix"',
+            '"positive"',
+            '"negative"',
+            '"canonical_hex"',
+            '"i105"',
+            '"expected_error"',
+        ),
+        "Account address shared compliance vectors",
+        errors,
+    )
+
+
+def check_mobile_connect_runner_coverage(texts, errors):
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectCrypto.kt",
+            "Kotlin Connect crypto helpers",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectCrypto.java",
+            "Android Connect crypto helpers",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "deriveDirectionKeys",
+                "x25519 shared secret is all-zero",
+                "buildApprovePreimage",
+                "iroha-connect|approve|v1",
+                "relayAuthHash",
+                "iroha-connect|relay-auth|v1",
+                "nonceFromSequence",
+                "requireNonNegativeSequence",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectEnvelopeCodec.kt",
+            "Kotlin Connect envelope codec",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectEnvelopeCodec.java",
+            "Android Connect envelope codec",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "ENVELOPE_SCHEMA_PATH",
+                "CONNECT_LAYOUT_FLAGS",
+                "encodeSignResultOkEnvelope",
+                "encodeSignRequestRawEnvelope",
+                "encodeSignResultErrEnvelope",
+                "decodeEnvelope",
+                "algorithmTag",
+                "ed25519",
+                "requireNonNegativeSequence",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectFrameCodec.kt",
+            "Kotlin Connect frame codec",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectFrameCodec.java",
+            "Android Connect frame codec",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "encodeCiphertextFrame",
+                "decode",
+                "ConnectRole",
+                "CIPHERTEXT",
+                "requireNonNegativeSequence",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectWalletRequest.kt",
+            "Kotlin Connect wallet request parser",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectWalletRequest.java",
+            "Android Connect wallet request parser",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "irohaconnect",
+                "token_wallet",
+                "tokenWallet",
+                "token_relay",
+                "tokenRelay",
+                "buildWalletWebSocketUri",
+                "wss",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectQueueJournal.kt",
+            "Kotlin Connect queue journal",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectQueueJournal.java",
+            "Android Connect queue journal",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "append",
+                "records",
+                "popOldest",
+                "maxRecords",
+                "maxBytes",
+                "computePayloadHash",
+                "ConnectJournalRecord",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectRetryPolicy.kt",
+            "Kotlin Connect retry policy",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectRetryPolicy.java",
+            "Android Connect retry policy",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "capMillis",
+                "delayMillis",
+                "DEFAULT_MAX_DELAY_MS",
+                "full jitter",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectErrors.java",
+        (
+            "fromHttpStatus",
+            "network.timeout",
+            "network.tls_failure",
+            "codec.invalid_payload",
+            "network.socket_failure",
+            "http.forbidden",
+        ),
+        "Android Connect error classifier",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectQueueError.java",
+        (
+            "queue.expired",
+            "queue.overflow",
+            "ConnectErrorCategory.QUEUE_OVERFLOW",
+        ),
+        "Android Connect queue error classifier",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectCryptoTest.kt",
+        (
+            "deriveDirectionKeysRejectsLowOrderPeerPublicKey",
+            "buildApprovePreimageRejectsDomainQualifiedAccountAlias",
+            "canonical I105 encoded",
+            "iroha-connect|approve|v1",
+            "account_id",
+        ),
+        "Kotlin Connect crypto tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectEnvelopeCodecTest.kt",
+        (
+            "signResultOkAcceptsExactEd25519Algorithm",
+            "signResultOkRejectsNonExactControlAndUnicodeConfusableAlgorithms",
+            "ciphertextFrameRoundTripsAeadBytesWithCanonicalFlags",
+            "ed\\u200B25519",
+            "ed\\uFF0D25519",
+        ),
+        "Kotlin Connect envelope codec tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectSequenceTest.kt",
+        (
+            "negativeSequenceRejectedAcrossConnectSurfaces",
+            "envelopeDecodeRejectsHighBitUint64Sequence",
+            "frameDecodeRejectsHighBitUint64Sequence",
+            "rewriteNoritoChecksum",
+        ),
+        "Kotlin Connect sequence tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectWalletRequestTest.kt",
+        (
+            "acceptsIrohaconnectLaunchUri",
+            "acceptsWrappedIrohaconnectLaunchUri",
+            "derivesRelayAuthHash",
+            "relayAuthHashMatchesSharedFixture",
+            "65de07a9c6110f16b6b7c64e63c71437d88d122344e1a67d2c932a16187cce2f",
+        ),
+        "Kotlin Connect wallet request tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectEnvelopeCodecTest.java",
+        (
+            "decodeLiveSignRequestRawFixture",
+            "encodeAndDecodeSignResultOkEnvelope",
+            "encodeSignResultOkRejectsConfusableAlgorithms",
+            "encryptedRoundTripForSignResultErr",
+            "lowOrderPeerPublicKeyRejected",
+            "negativeSequenceRejectedAcrossConnectSurfaces",
+            "envelopeDecodeRejectsHighBitUint64Sequence",
+            "frameDecodeRejectsHighBitUint64Sequence",
+        ),
+        "Android Connect envelope/sequence tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectQueueJournalTests.java",
+        (
+            "appendAndReadRoundTrip",
+            "pruneExpiredRecords",
+            "popOldestRemovesEntries",
+            "enforceSizeLimits",
+            "decodeAcceptsPadding",
+            "rejectNegativeSequence",
+        ),
+        "Android Connect queue journal tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectRetryPolicyTests.java",
+        (
+            "testCapSaturates",
+            "testDeterministicSeriesZeroSeed",
+            "testDeterministicSeriesSequenceSeed",
+            "testDelayDoesNotExceedCap",
+        ),
+        "Android Connect retry policy tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectErrorTests.java",
+        (
+            "testQueueOverflow",
+            "testTimeoutClassification",
+            "testTlsClassification",
+            "testCodecClassification",
+            "testTransportClassification",
+            "testHttpStatusMapping",
+        ),
+        "Android Connect error classifier tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectWalletRequestTests.java",
+        (
+            "acceptsIrohaconnectLaunchUri",
+            "acceptsWrappedIrohaconnectLaunchUri",
+            "derivesRelayAuthHash",
+            "relayAuthHashMatchesSharedFixture",
+            "65de07a9c6110f16b6b7c64e63c71437d88d122344e1a67d2c932a16187cce2f",
+        ),
+        "Android Connect wallet request tests",
+        errors,
+    )
+
+
+def check_mobile_transport_inspector_attestation_coverage(texts, errors):
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/UrlConnectionTransportExecutor.kt",
+            "Kotlin URLConnection transport executor",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/UrlConnectionTransportExecutor.java",
+            "Android URLConnection transport executor",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "HttpURLConnection",
+                "execute",
+                "openStream",
+                "responseStream",
+                "readBody",
+                "normalizeHeaders",
+                "toMillis",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/transport/UrlConnectionTransportExecutorTest.kt",
+        (
+            "executeRunsOnSuppliedAsyncExecutor",
+            "executeReturns404WithEmptyBodyWhenServerSendsNoContent",
+            "injectedDefaultExecutorPreservesUrlConnectionTimeoutDefaults",
+            "javaCallersCanUseTwoTimeoutConstructor",
+            "url-connection-test-pool-1",
+            "Content-Length: 0",
+            "ServerSocket(0)",
+        ),
+        "Kotlin URLConnection transport executor tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/transport/UrlConnectionTransportExecutorTests.java",
+        (
+            "executeReturns404WithEmptyBodyWhenServerSendsNoContent",
+            "Content-Length: 0",
+            "ServerSocket(0)",
+            "UrlConnectionTransportExecutor",
+            "TransportRequest.builder()",
+        ),
+        "Android URLConnection transport executor tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tools/PendingQueueInspector.java",
+        (
+            "inspect",
+            "decodeLine",
+            "EntrySummary",
+            "SignedTransactionHasher.hashHex",
+            "OfflineSigningEnvelopeCodec",
+            "issuedAtIso",
+            "hasExportedKeyBundle",
+            "toJson",
+        ),
+        "Android pending queue inspector",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tools/PendingQueueInspectorTests.java",
+        (
+            "inspectModernEntries",
+            "pending-queue-modern-",
+            "pixel-strongbox",
+            "iroha.android.transaction.Payload.v1",
+            "SignedTransactionHasher.hashHex",
+            "issuedAtMs",
+        ),
+        "Android pending queue inspector tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifier.java",
+        (
+            "ATTESTATION_OID",
+            "verify",
+            "expectedChallenge",
+            "requireStrongBox",
+            "CertPathValidator",
+            "Attestation challenge mismatch",
+            "StrongBox attestation required by policy",
+            "parseKeyDescription",
+        ),
+        "Android attestation verifier",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifierTests.java",
+        (
+            "strongBoxAttestationPasses",
+            "challengeMismatchFails",
+            "strongBoxRequirementFailsForTee",
+            "teeAttestationAllowedWithoutStrongBoxRequirement",
+            "builderRequiresTrustAnchor",
+            "STRONGBOX_CHALLENGE",
+            "TEE_CHALLENGE",
+        ),
+        "Android attestation verifier tests",
         errors,
     )
 
@@ -5448,6 +7563,10 @@ def check_python(texts, errors):
             "_kagemusha_input_archive",
             "test_recursive_kagemusha_helpers_reject_malformed_native_outputs",
             "test_recursive_kagemusha_helpers_reject_empty_payload_native_outputs",
+            "native.kagemusha_build_pallas_open_envelopes_archive = malformed_one",
+            "native.kagemusha_build_previous_proof_open_envelopes_archive = malformed_one",
+            "native.kagemusha_build_pallas_open_envelopes_archive = empty_payload_one",
+            "native.kagemusha_build_previous_proof_open_envelopes_archive = empty_payload_one",
             "returned invalid Norito archive",
             "returned empty Norito payload",
             "assert_rejects_malformed_native_outputs",
@@ -8550,6 +10669,8 @@ def check_java_kotlin(texts, errors):
             "withHeaderPadding(kagemushaNoritoFrameWithPayload(0x4b), new byte[65])",
             "native redeem returned invalid Norito archive",
             "native redeem returned empty Norito payload",
+            "native build Pallas open envelopes returned invalid Norito archive",
+            "native build previous proof open envelopes returned empty Norito payload",
         ),
         "Android Java recursive spend native output Norito guard tests",
         errors,
@@ -8567,6 +10688,8 @@ def check_java_kotlin(texts, errors):
             "withHeaderPadding(kagemushaNoritoFrameWithPayload(0x4b), ByteArray(65))",
             "native redeem returned invalid Norito archive",
             "native redeem returned empty Norito payload",
+            "native build Pallas open envelopes returned invalid Norito archive",
+            "native build previous proof open envelopes returned empty Norito payload",
         ),
         "Kotlin recursive spend native output Norito guard tests",
         errors,
@@ -8583,9 +10706,17 @@ def check_java_kotlin(texts, errors):
                 "requestArchive must not exceed",
                 "bundleArchive must not exceed",
                 "previousWitnessArchive must not exceed",
+                "recordBundleArchive must not exceed",
+                "previousBundleArchive must not exceed",
                 "requestArchive must be a valid Norito archive",
                 "bundleArchive must be a valid Norito archive",
+                "recordBundleArchive must be a valid Norito archive",
+                "previousBundleArchive must be a valid Norito archive",
                 "previousWitnessArchive must contain a non-empty Norito payload",
+                "recordBundleArchive must contain a non-empty Norito payload",
+                "previousBundleArchive must contain a non-empty Norito payload",
+                "buildPallasOpenEnvelopesArchive(malformedArchive)",
+                "buildPreviousProofOpenEnvelopesArchive",
                 "kagemushaNoritoFrameWithPayload",
             ),
             label,
@@ -8607,6 +10738,79 @@ def check_java_kotlin(texts, errors):
             f"{label} must cover oversized previous-witness inputs",
             errors,
         )
+        require(
+            "recordBundleArchive must not exceed" in text,
+            f"{label} must cover oversized Pallas builder record-bundle inputs",
+            errors,
+        )
+        require(
+            "previousBundleArchive must not exceed" in text,
+            f"{label} must cover oversized Pallas builder previous-bundle inputs",
+            errors,
+        )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
+        (
+            "testRejectsEmptyRequestArchivesBeforeBridgeCall",
+            "testRejectsMalformedInputArchivesBeforeBridgeCall",
+            "testRejectsOversizedInputArchivesBeforeBridgeCall",
+            "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
+            '"buildPallasOpenEnvelopesArchive"',
+            '"buildPreviousProofOpenEnvelopesArchive"',
+            "KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive",
+            "KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive",
+            ".emptyRequestArchive",
+            ".invalidInputArchive",
+            ".oversizedInputArchive",
+            ".emptyInputPayload",
+        ),
+        "Swift Pallas builder input guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "Kagemusha recursive spend helpers reject empty request archives before native calls",
+            "Kagemusha recursive spend helpers reject oversized request archives before native calls",
+            "Kagemusha recursive spend helpers reject malformed Norito request archives before native calls",
+            "Kagemusha recursive spend helpers reject empty-payload Norito request archives before native calls",
+            "kagemushaBuildPallasOpenEnvelopesArchive(Buffer.alloc(0))",
+            "kagemushaBuildPreviousProofOpenEnvelopesArchive(Buffer.alloc(0))",
+            "kagemushaBuildPallasOpenEnvelopesArchive(oversizedArchive)",
+            "kagemushaBuildPreviousProofOpenEnvelopesArchive(oversizedArchive)",
+            "recordBundleArchive must be a valid Norito archive",
+            "previousBundleArchive must be a valid Norito archive",
+            "recordBundleArchive must contain a non-empty Norito payload",
+            "previousBundleArchive must contain a non-empty Norito payload",
+        ),
+        "JavaScript Pallas builder input guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "test_kagemusha_native_prover_helpers_reject_empty_requests",
+            "test_kagemusha_native_prover_helpers_reject_malformed_norito_requests",
+            "test_kagemusha_native_prover_helpers_reject_empty_payload_norito_requests",
+            "test_recursive_kagemusha_helpers_reject_oversized_inputs_before_copy_and_native",
+            "PALLAS_OPEN_ENVELOPE_BUILDER_METHOD",
+            "PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD",
+            "record_bundle_archive must not be empty",
+            "previous_bundle_archive must not be empty",
+            "record_bundle_archive must be a valid Norito archive",
+            "previous_bundle_archive must be a valid Norito archive",
+            "record_bundle_archive must contain a non-empty Norito payload",
+            "previous_bundle_archive must contain a non-empty Norito payload",
+            "match=rf\"{field} must not exceed {len(valid_archive)} bytes\"",
+            "lambda: getattr(kagemusha, PALLAS_OPEN_ENVELOPE_BUILDER_METHOD)(\n            oversized_archive\n        ),\n        \"record_bundle_archive\",",
+            "lambda: getattr(kagemusha, PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD)(\n            oversized_archive\n        ),\n        \"previous_bundle_archive\",",
+        ),
+        "Python Pallas builder input guard tests",
+        errors,
+    )
     require_contains(
         texts,
         java_test,
@@ -9382,6 +11586,81 @@ def check_sdk_readme_previous_proof_boundary(texts, errors):
         )
 
 
+def check_sdk_readme_pallas_open_envelope_builder_surface(texts, errors):
+    sdk_required = {
+        "IrohaSwift/README.md": (
+            "KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive:)",
+            "buildPreviousProofOpenEnvelopesArchive(previousBundleArchive:)",
+            "opaque Pallas opening archives",
+            "current hop record bundle",
+            "previous recursive proof",
+        ),
+        "java/iroha_android/README.md": (
+            "KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive)",
+            "buildPreviousProofOpenEnvelopesArchive(previousBundleArchive)",
+            "KagemushaRecursiveSpendRequestCodecs.buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)",
+            "buildPreviousProofOpenEnvelopesArchive(previousBundle)",
+            "opaque Pallas opening archives",
+            "current-hop record bundle",
+            "previous recursive proof",
+        ),
+        "kotlin/README.md": (
+            "KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive)",
+            "buildPreviousProofOpenEnvelopesArchive(previousBundleArchive)",
+            "KagemushaRecursiveSpendRequestCodecs.buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)",
+            "buildPreviousProofOpenEnvelopesArchive(previousBundle)",
+            "opaque Pallas opening archives",
+            "current-hop record bundle",
+            "previous recursive proof",
+        ),
+        "javascript/iroha_js/README.md": (
+            "kagemushaBuildPallasOpenEnvelopesArchive(recordBundleArchive)",
+            "kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundleArchive)",
+            "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable()",
+            "opaque Pallas opening archives",
+            "current-hop record bundle",
+            "previous recursive proof",
+        ),
+        "python/iroha_python/README.md": (
+            "kagemusha_build_pallas_open_envelopes_archive(record_bundle_archive)",
+            "kagemusha_build_previous_proof_open_envelopes_archive(previous_bundle_archive)",
+            "is_kagemusha_pallas_open_envelope_builder_available()",
+            "opaque Pallas opening archives",
+            "current-hop record bundle",
+            "previous recursive proof",
+        ),
+    }
+    for relative, required in sdk_required.items():
+        text = re.sub(r"\s+", " ", texts[relative])
+        for needle in required:
+            require(
+                needle in text,
+                f"{relative} missing Pallas open-envelope builder docs: {needle}",
+                errors,
+            )
+
+
+def check_offline_doc_pallas_open_envelope_builder_surface(texts, errors):
+    text = re.sub(r"\s+", " ", texts["docs/source/offline_kagemusha.md"])
+    required = (
+        "Swift, Kotlin/JVM, Java Android, JavaScript/Node, and Python",
+        "current-hop and previous-proof Pallas open-envelope archive builders",
+        "buildPallasOpenEnvelopesArchive",
+        "buildPreviousProofOpenEnvelopesArchive",
+        "kagemushaBuildPallasOpenEnvelopesArchive",
+        "kagemusha_build_pallas_open_envelopes_archive",
+        "record bundle or previous recursive bundle",
+        "SDKs should treat the generated archives as native-owned opaque Norito bytes",
+        "C# remains a Windows-machine TODO",
+    )
+    for needle in required:
+        require(
+            needle in text,
+            f"offline Kagemusha docs missing Pallas open-envelope builder surface: {needle}",
+            errors,
+        )
+
+
 def check_sdk_readme_instruction_transaction_surface(texts, errors):
     common_required = (
         "KagemushaTransfer",
@@ -9883,6 +12162,17 @@ def run_checks(texts):
     check_node_host(texts, errors)
     check_jvm_sdk_script_pins_jdk21(texts, errors)
     check_mobile_privacy_production_gate_exactness(texts, errors)
+    check_mobile_zk_merkle_provider_adversarial_coverage(texts, errors)
+    check_mobile_zk_torii_parser_shape_coverage(texts, errors)
+    check_mobile_confidential_note_coverage(texts, errors)
+    check_mobile_offline_readiness_coverage(texts, errors)
+    check_kotlin_offline_cash_settlement_coverage(texts, errors)
+    check_android_offline_transfer_persistence_coverage(texts, errors)
+    check_mobile_transaction_norito_runner_coverage(texts, errors)
+    check_kotlin_norito_framing_runner_coverage(texts, errors)
+    check_mobile_account_address_canonical_coverage(texts, errors)
+    check_mobile_connect_runner_coverage(texts, errors)
+    check_mobile_transport_inspector_attestation_coverage(texts, errors)
     check_javascript(texts, errors)
     check_python(texts, errors)
     check_swift(texts, errors)
@@ -9891,6 +12181,8 @@ def run_checks(texts):
     check_mobile_halo2_canonical_vk_hash(texts, errors)
     check_cross_sdk_preferred_mode_fallback_policy(texts, errors)
     check_sdk_readme_previous_proof_boundary(texts, errors)
+    check_sdk_readme_pallas_open_envelope_builder_surface(texts, errors)
+    check_offline_doc_pallas_open_envelope_builder_surface(texts, errors)
     check_sdk_readme_instruction_transaction_surface(texts, errors)
     check_sdk_accumulator_digest_is_native_owned(texts, errors)
     check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors)
@@ -11526,6 +13818,783 @@ if mode == "--negative-control-mobile-privacy-production-gate-exactness":
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile privacy production-gate exactness drift was not detected")
+
+if mode == "--negative-control-mobile-zk-merkle-provider-adversarial-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePathTest.kt",
+            "Kotlin ZK Merkle Torii provider adversarial tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/ZkAssetMerklePathTests.java",
+            "Android Java ZK Merkle Torii provider adversarial tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original.replace(
+            "toriiProviderRejectsPathCountDriftAndReorderedNodeResponses",
+            "toriiProviderAllowsPathCountDriftAndReorderedNodeResponses",
+        )
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile ZK Merkle provider adversarial coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile ZK Merkle provider adversarial coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile ZK Merkle provider adversarial coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: mobile ZK Merkle provider adversarial coverage drift was not detected"
+    )
+
+if mode == "--negative-control-mobile-zk-torii-parser-shape-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/ConfidentialAssetToriiClientTest.kt",
+            "Kotlin ZK Torii parser shape tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ConfidentialAssetToriiClientTests.java",
+            "Android Java ZK Torii parser shape tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original
+        for old, new in (
+            (
+                "rootsAndMerklePathsRejectOverflowDuplicateKeysAndInconsistentShape",
+                "rootsAndMerklePathsAllowOverflowDuplicateKeysAndInconsistentShape",
+            ),
+            (
+                "merklePathParserRejectsDuplicateKeysBeforeLastValueWins",
+                "merklePathParserAllowsDuplicateKeysBeforeLastValueWins",
+            ),
+        ):
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile ZK Torii parser shape coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile ZK Torii parser shape coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile ZK Torii parser shape coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile ZK Torii parser shape coverage drift was not detected")
+
+if mode == "--negative-control-mobile-confidential-note-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructionsTest.kt",
+            "Kotlin confidential encrypted payload tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ZkAssetInstructionsTest.java",
+            "Android Java confidential encrypted payload tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ConfidentialNoteTest.kt",
+            "Kotlin confidential note contract tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteTests.java",
+            "Android Java confidential note contract tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original
+        for old, new in (
+            (
+                "confidentialEncryptedPayloadIsStrictAndDefensive",
+                "confidentialEncryptedPayloadAllowsAmbiguousInputs",
+            ),
+            (
+                "derivesRustConfidentialV2Vectors",
+                "derivesDriftedConfidentialV2Vectors",
+            ),
+            (
+                "encryptsAndDecryptsPlaintextContract",
+                "encryptsAndDecryptsDriftedPlaintextContract",
+            ),
+        ):
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile confidential note coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile confidential note coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile confidential note coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile confidential note coverage drift was not detected")
+
+if mode == "--negative-control-mobile-offline-readiness-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt",
+            "Kotlin Offline readiness client tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientV2ReadinessTest.kt",
+            "Kotlin Offline V2 readiness client tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java",
+            "Android Java Offline Torii readiness client tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJsonParserTest.java",
+            "Android Java Offline readiness parser tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original
+        for old, new in (
+            (
+                "readinessRejectsMalformedPresentAliasValues",
+                "readinessAllowsMalformedPresentAliasValues",
+            ),
+            (
+                "v2ReadinessUsesCanonicalGetPathAndParsesResponse",
+                "v2ReadinessUsesNoncanonicalGetPathAndParsesResponse",
+            ),
+            (
+                "rejectsOfflineV2ReadinessMalformedAbi7Aliases",
+                "allowsOfflineV2ReadinessMalformedAbi7Aliases",
+            ),
+        ):
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile offline readiness coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile offline readiness coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile offline readiness coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile offline readiness coverage drift was not detected")
+
+if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashCodecTest.kt",
+            "Kotlin offline cash codec tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineSettlementProofsParityTest.kt",
+            "Kotlin offline settlement proof fixture parity tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original
+        for old, new in (
+            (
+                "redeemRequestCommitmentHexMatchesExpected",
+                "redeemRequestCommitmentHexAllowsDrift",
+            ),
+            (
+                "redeemProofsMatchRustFixtures",
+                "redeemProofsAllowRustFixtureDrift",
+            ),
+        ):
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate Kotlin offline cash settlement coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Kotlin offline cash settlement coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected Kotlin offline cash settlement coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Kotlin offline cash settlement coverage drift was not detected")
+
+if mode == "--negative-control-android-offline-transfer-persistence-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineQrStreamTest.java",
+            "Android offline QR stream tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJournalTest.java",
+            "Android offline journal tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportPendingQueueTests.java",
+            "Android HTTP transport pending queue replay tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original
+        for old, new in (
+            ("recoversMissingChunk", "allowsMissingChunkLoss"),
+            ("duplicatePendingRejected", "duplicatePendingAllowed"),
+            ("queuesFailedSubmissionAndEmitsTelemetry", "dropsFailedSubmissionAndTelemetry"),
+        ):
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate Android offline transfer persistence coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Android offline transfer persistence coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected Android offline transfer persistence coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Android offline transfer persistence coverage drift was not detected")
+
+if mode == "--negative-control-mobile-transaction-norito-runner-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/NoritoJavaCodecAdapterParityTest.kt",
+            "Kotlin Norito Java codec parity tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/TransactionFixtureParityTest.kt",
+            "Kotlin transaction fixture parity tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/norito/NoritoCodecAdapterTests.java",
+            "Android Norito codec adapter tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtureTests.java",
+            "Android transaction payload fixture tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/SignedTransactionHasherTests.java",
+            "Android signed transaction hasher tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeCodecTests.java",
+            "Android offline signing envelope codec tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original
+        for old, new in (
+            (
+                "codec supports instructions and wire payload variants",
+                "codec supports unframed instruction variants",
+            ),
+            (
+                "signed transaction decoder rejects adversarial envelopes",
+                "signed transaction decoder allows adversarial envelopes",
+            ),
+            (
+                "javaCodecRejectsMalformedSignedTransactions",
+                "javaCodecAllowsMalformedSignedTransactions",
+            ),
+            (
+                "fixtureLoaderRejectsWireInstructionArguments",
+                "fixtureLoaderAllowsWireInstructionArguments",
+            ),
+            (
+                "hashIgnoresExportedKeyBundle",
+                "hashIncludesExportedKeyBundle",
+            ),
+            (
+                "roundTripWithExportedKey",
+                "dropsExportedKey",
+            ),
+        ):
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile transaction/Norito coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile transaction/Norito coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile transaction/Norito coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile transaction/Norito coverage drift was not detected")
+
+if mode == "--negative-control-kotlin-norito-framing-runner-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoHeaderTest.kt",
+            "Kotlin Norito header layout flag tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoColumnarTest.kt",
+            "Kotlin Norito columnar golden/adversarial tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original
+        for old, new in (
+            (
+                "decode rejects reserved layout flags",
+                "decode permits reserved layout flags",
+            ),
+            (
+                "decode rejects field bitset without required flags",
+                "decode permits field bitset without required flags",
+            ),
+            (
+                "optional string columnar matches Rust golden and rejects malformed payloads",
+                "optional string columnar permits malformed payloads",
+            ),
+            (
+                "optional u32 columnar matches Rust golden and rejects malformed AoS",
+                "optional u32 columnar permits malformed AoS",
+            ),
+            (
+                "bytes bool columnar and adaptive layouts match Rust goldens",
+                "bytes bool columnar accepts trailing flags",
+            ),
+        ):
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate Kotlin Norito framing coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Kotlin Norito framing coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected Kotlin Norito framing coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Kotlin Norito framing coverage drift was not detected")
+
+if mode == "--negative-control-mobile-account-address-canonical-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountAddressTest.kt",
+            "Kotlin AccountAddress canonical tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/I105CanonicalTest.kt",
+            "Kotlin I105 canonical SPKI tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java",
+            "Android AccountAddress compliance tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original
+        for old, new in (
+            (
+                "mixedI105LiteralRoundTripsToOriginalCanonicalPayload",
+                "mixedI105LiteralAllowsCanonicalDrift",
+            ),
+            (
+                "rejectsNonCanonicalFullwidthKanaPayload",
+                "allowsNonCanonicalFullwidthKanaPayload",
+            ),
+            (
+                "fromAccountRejectsBlankOrPaddedCurveAlgorithmAliases",
+                "fromAccountAllowsBlankOrPaddedCurveAlgorithmAliases",
+            ),
+            (
+                "fromAccount produces same I105 for known key",
+                "fromAccount permits I105 drift for known key",
+            ),
+            (
+                "complianceFixtureSuite",
+                "skipsComplianceFixtureSuite",
+            ),
+            (
+                "i105RejectsFullwidthSentinel",
+                "i105AllowsFullwidthSentinel",
+            ),
+            (
+                "curveAlgorithmAliasesRejectBlankAndPaddedLabels",
+                "curveAlgorithmAliasesAllowBlankAndPaddedLabels",
+            ),
+        ):
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile account address canonical coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile account address canonical coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile account address canonical coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: mobile account address canonical coverage drift was not detected"
+    )
+
+if mode == "--negative-control-mobile-connect-runner-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectCryptoTest.kt",
+            "Kotlin Connect crypto tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectEnvelopeCodecTest.kt",
+            "Kotlin Connect envelope codec tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectSequenceTest.kt",
+            "Kotlin Connect sequence tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectWalletRequestTest.kt",
+            "Kotlin Connect wallet request tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectEnvelopeCodecTest.java",
+            "Android Connect envelope/sequence tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectQueueJournalTests.java",
+            "Android Connect queue journal tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectRetryPolicyTests.java",
+            "Android Connect retry policy tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectErrorTests.java",
+            "Android Connect error classifier tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectWalletRequestTests.java",
+            "Android Connect wallet request tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original
+        for old, new in (
+            (
+                "deriveDirectionKeysRejectsLowOrderPeerPublicKey",
+                "deriveDirectionKeysAllowsLowOrderPeerPublicKey",
+            ),
+            (
+                "buildApprovePreimageRejectsDomainQualifiedAccountAlias",
+                "buildApprovePreimageAllowsDomainQualifiedAccountAlias",
+            ),
+            (
+                "signResultOkAcceptsExactEd25519Algorithm",
+                "signResultOkAcceptsLooseEd25519Algorithm",
+            ),
+            (
+                "signResultOkRejectsNonExactControlAndUnicodeConfusableAlgorithms",
+                "signResultOkAllowsNonExactControlAndUnicodeConfusableAlgorithms",
+            ),
+            (
+                "negativeSequenceRejectedAcrossConnectSurfaces",
+                "negativeSequenceAcceptedAcrossConnectSurfaces",
+            ),
+            (
+                "relayAuthHashMatchesSharedFixture",
+                "relayAuthHashDriftsFromSharedFixture",
+            ),
+            (
+                "decodeLiveSignRequestRawFixture",
+                "skipLiveSignRequestRawFixture",
+            ),
+            (
+                "encodeSignResultOkRejectsConfusableAlgorithms",
+                "encodeSignResultOkAllowsConfusableAlgorithms",
+            ),
+            (
+                "pruneExpiredRecords",
+                "retainExpiredRecords",
+            ),
+            (
+                "enforceSizeLimits",
+                "ignoreSizeLimits",
+            ),
+            (
+                "rejectNegativeSequence",
+                "acceptNegativeSequence",
+            ),
+            (
+                "testDeterministicSeriesZeroSeed",
+                "testNondeterministicSeriesZeroSeed",
+            ),
+            (
+                "testDelayDoesNotExceedCap",
+                "testDelayMayExceedCap",
+            ),
+            (
+                "testQueueOverflow",
+                "queueOverflowCheckSkipped",
+            ),
+            (
+                "testHttpStatusMapping",
+                "httpStatusMappingCheckSkipped",
+            ),
+        ):
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile Connect runner coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile Connect runner coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile Connect runner coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile Connect runner coverage drift was not detected")
+
+if mode == "--negative-control-mobile-transport-inspector-attestation-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/transport/UrlConnectionTransportExecutorTest.kt",
+            "Kotlin URLConnection transport executor tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/transport/UrlConnectionTransportExecutorTests.java",
+            "Android URLConnection transport executor tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tools/PendingQueueInspectorTests.java",
+            "Android pending queue inspector tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifierTests.java",
+            "Android attestation verifier tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original
+        for old, new in (
+            (
+                "executeRunsOnSuppliedAsyncExecutor",
+                "executeMayUseCommonPool",
+            ),
+            (
+                "executeReturns404WithEmptyBodyWhenServerSendsNoContent",
+                "executeReturns404WithoutEmptyBodyAssertion",
+            ),
+            (
+                "injectedDefaultExecutorPreservesUrlConnectionTimeoutDefaults",
+                "injectedDefaultExecutorChangesUrlConnectionTimeoutDefaults",
+            ),
+            (
+                "javaCallersCanUseTwoTimeoutConstructor",
+                "javaCallersSkipTwoTimeoutConstructor",
+            ),
+            (
+                "inspectModernEntries",
+                "skipModernPendingQueueEntries",
+            ),
+            (
+                "strongBoxAttestationPasses",
+                "skipStrongBoxAttestationPasses",
+            ),
+            (
+                "challengeMismatchFails",
+                "challengeMismatchPasses",
+            ),
+            (
+                "strongBoxRequirementFailsForTee",
+                "strongBoxRequirementAllowsTee",
+            ),
+            (
+                "builderRequiresTrustAnchor",
+                "builderAllowsMissingTrustAnchor",
+            ),
+        ):
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile transport/inspector/attestation coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile transport/inspector/attestation coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile transport/inspector/attestation coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: mobile transport/inspector/attestation coverage drift was not detected"
+    )
 
 if mode == "--negative-control-jvm-sdk-android-harness-script":
     target = JVM_SDK_TEST_COMMAND
@@ -13636,6 +16705,60 @@ if mode == "--negative-control-android-lineage-witness-append-availability-probe
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android Java lineage witness append availability probe drift was not detected")
 
+if mode == "--negative-control-jvm-pallas-builder-input-guards":
+    mutated = dict(texts)
+    target = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt"
+    mutated[target] = mutated[target].replace(
+        "previousBundleArchive must be a valid Norito archive",
+        "previousProofBundleArchive must be a valid Norito archive",
+        1,
+    )
+    if mutated[target] == texts[target]:
+        raise SystemExit("negative control failed: unable to mutate JVM Pallas builder input guards")
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected JVM Pallas builder input guard drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM Pallas builder input guard drift was not detected")
+
+if mode == "--negative-control-non-csharp-pallas-builder-input-guards":
+    mutated = dict(texts)
+    target = "python/iroha_python/tests/kagemusha_test.py"
+    mutated[target] = mutated[target].replace(
+        "lambda: getattr(kagemusha, PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD)(\n            oversized_archive\n        ),\n        \"previous_bundle_archive\",",
+        "lambda: getattr(kagemusha, PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD)(\n            valid_archive\n        ),\n        \"previous_bundle_archive\",",
+        1,
+    )
+    if mutated[target] == texts[target]:
+        raise SystemExit("negative control failed: unable to mutate non-C# Pallas builder input guards")
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected non-C# Pallas builder input guard drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: non-C# Pallas builder input guard drift was not detected")
+
+if mode == "--negative-control-non-csharp-pallas-builder-native-output-guards":
+    mutated = dict(texts)
+    target = "python/iroha_python/tests/kagemusha_test.py"
+    mutated[target] = mutated[target].replace(
+        "native.kagemusha_build_previous_proof_open_envelopes_archive = malformed_one",
+        "native.kagemusha_build_previous_proof_open_envelopes_archive = empty_payload_one",
+        1,
+    )
+    if mutated[target] == texts[target]:
+        raise SystemExit("negative control failed: unable to mutate non-C# Pallas builder native output guards")
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected non-C# Pallas builder native output drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: non-C# Pallas builder native output drift was not detected")
+
 if mode == "--negative-control-js-lineage-readonly-declarations":
     mutated = dict(texts)
     target = "javascript/iroha_js/index.d.ts"
@@ -14036,6 +17159,24 @@ if mode == "--negative-control-sdk-readme-proof-chain-accumulator":
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README proof-chain accumulator drift was not detected")
 
+if mode == "--negative-control-sdk-readme-pallas-builder-surface":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/README.md"
+    mutated[target] = mutated[target].replace(
+        "kagemushaBuildPallasOpenEnvelopesArchive(recordBundleArchive)",
+        "kagemushaBuildOpenEnvelopesArchive(recordBundleArchive)",
+        1,
+    )
+    if mutated[target] == texts[target]:
+        raise SystemExit("negative control failed: unable to mutate SDK README Pallas builder surface")
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected SDK README Pallas builder drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: SDK README Pallas builder drift was not detected")
+
 if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":
     mutated = dict(texts)
     target = "docs/source/offline_kagemusha.md"
@@ -14059,6 +17200,24 @@ if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: offline Kagemusha accumulator boundary drift was not detected")
+
+if mode == "--negative-control-offline-doc-pallas-builder-surface":
+    mutated = dict(texts)
+    target = "docs/source/offline_kagemusha.md"
+    mutated[target] = mutated[target].replace(
+        "current-hop and previous-proof Pallas open-envelope archive builders",
+        "caller-provided Pallas open-envelope archive metadata",
+        1,
+    )
+    if mutated[target] == texts[target]:
+        raise SystemExit("negative control failed: unable to mutate offline Kagemusha Pallas builder surface")
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected offline Kagemusha Pallas builder drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: offline Kagemusha Pallas builder drift was not detected")
 
 if mode == "--negative-control-offline-doc-instruction-transaction-surface":
     mutated = dict(texts)

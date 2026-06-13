@@ -7848,21 +7848,45 @@ impl Actor {
             return false;
         }
 
-        for key in &stale_keys {
-            self.clear_rbc_runtime_state(*key, true);
+        let keys_to_clear = {
+            let chunk_store = if self.ensure_rbc_chunk_store() {
+                self.subsystems.da_rbc.rbc.chunk_store.as_ref()
+            } else {
+                None
+            };
+            let store_required = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .store_cfg
+                .as_ref()
+                .is_some_and(|cfg| cfg.max_sessions > 0 && cfg.max_bytes > 0);
+            if chunk_store.is_none() && store_required {
+                warn!(
+                    "RBC chunk store unavailable; deferring stale session prune until persisted state can be inspected"
+                );
+                return false;
+            }
+
+            let mut keys_to_clear = Vec::with_capacity(stale_keys.len());
+            for key in &stale_keys {
+                if let Some(store) = chunk_store {
+                    if let Err(err) = store.remove(key) {
+                        warn!(?err, ?key, "failed to remove stale RBC session from store");
+                        continue;
+                    }
+                }
+                keys_to_clear.push(*key);
+            }
+            keys_to_clear
+        };
+
+        if keys_to_clear.is_empty() {
+            return false;
         }
 
-        let chunk_store = if self.ensure_rbc_chunk_store() {
-            self.subsystems.da_rbc.rbc.chunk_store.as_ref()
-        } else {
-            None
-        };
-        if let Some(store) = chunk_store {
-            for key in &stale_keys {
-                if let Err(err) = store.remove(key) {
-                    warn!(?err, ?key, "failed to remove stale RBC session from store");
-                }
-            }
+        for key in &keys_to_clear {
+            self.clear_rbc_runtime_state(*key, true);
         }
 
         self.publish_rbc_backlog_snapshot();
