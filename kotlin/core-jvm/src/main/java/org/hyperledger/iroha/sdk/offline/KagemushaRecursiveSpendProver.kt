@@ -686,8 +686,16 @@ class KagemushaRecursiveSpendProver private constructor() {
             call("init", requestArchive, ::nativeInitSpend)
 
         @JvmStatic
+        fun initSpend(request: InitSpendRequest): ByteArray =
+            initSpend(KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request))
+
+        @JvmStatic
         fun appendSpend(requestArchive: ByteArray?): ByteArray =
             call("append", requestArchive, ::nativeAppendSpend)
+
+        @JvmStatic
+        fun appendSpend(request: AppendSpendRequest): ByteArray =
+            appendSpend(KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(request))
 
         @JvmStatic
         fun transitionProfileInit(requestArchive: ByteArray?): ByteArray =
@@ -737,8 +745,18 @@ class KagemushaRecursiveSpendProver private constructor() {
             call("verify", requestArchive, ::nativeVerifySpend)
 
         @JvmStatic
+        fun verifySpend(request: VerifySpendRequest): VerifySpendResult =
+            KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
+                verifySpend(KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(request)),
+            )
+
+        @JvmStatic
         fun redeemSpend(requestArchive: ByteArray?): ByteArray =
             call("redeem", requestArchive, ::nativeRedeemSpend)
+
+        @JvmStatic
+        fun redeemSpend(request: RedeemSpendRequest): ByteArray =
+            redeemSpend(KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(request))
 
         private fun call(
             label: String,

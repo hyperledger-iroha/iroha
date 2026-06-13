@@ -1703,9 +1703,7 @@ fn instruction_account_permission_holder(
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
             GrantBox::Permission(grant) => {
-                if dataspace_scoped_permission_target_needs_state(&grant.object)
-                    || dataspace_scoped_permission_target(&grant.object, None, None).is_some()
-                {
+                if dataspace_scoped_permission_target(&grant.object, None, None).is_some() {
                     AccountPermissionHolderTarget::Skip
                 } else {
                     AccountPermissionHolderTarget::Holder(&grant.destination)
@@ -1718,9 +1716,7 @@ fn instruction_account_permission_holder(
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         return match revoke {
             RevokeBox::Permission(revoke) => {
-                if dataspace_scoped_permission_target_needs_state(&revoke.object)
-                    || dataspace_scoped_permission_target(&revoke.object, None, None).is_some()
-                {
+                if dataspace_scoped_permission_target(&revoke.object, None, None).is_some() {
                     AccountPermissionHolderTarget::Skip
                 } else {
                     AccountPermissionHolderTarget::Holder(&revoke.destination)
@@ -4369,7 +4365,7 @@ impl LaneRouter for ConfigLaneRouter {
         tx: &AcceptedTransaction<'_>,
         state_view: &StateView<'_>,
     ) -> RoutingDecision {
-        evaluate_policy_with_view(&self.policy, tx, state_view)
+        evaluate_policy_with_view(&state_view.nexus().routing_policy, tx, state_view)
     }
 
     fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
@@ -4520,7 +4516,7 @@ impl LaneRouter for ConfigLaneRouter {
         }
         if let Some(account_id) = account_permission_holder_routing_target(tx) {
             return resolve_query_routing_decision(
-                &self.policy,
+                &nexus.routing_policy,
                 &nexus.lane_catalog,
                 &nexus.dataspace_catalog,
                 account_id,
@@ -4532,8 +4528,8 @@ impl LaneRouter for ConfigLaneRouter {
             Some(&nexus.dataspace_catalog),
             Some(state_view),
         )?;
-        let matched_rule = self
-            .policy
+        let matched_rule = nexus
+            .routing_policy
             .rules
             .iter()
             .find(|rule| rule_matches(rule, tx, Some(state_view)));
@@ -4543,7 +4539,7 @@ impl LaneRouter for ConfigLaneRouter {
             matched_rule.is_some_and(|rule| rule.matcher.account.is_some()),
         );
         resolve_policy_routing_decision(
-            &self.policy,
+            &nexus.routing_policy,
             matched_rule,
             target.dataspace_id,
             target.coordinator_route,
@@ -4582,7 +4578,7 @@ impl LaneRouter for ConfigLaneRouter {
         }
         if let Some(account_id) = account_permission_holder_routing_target(tx) {
             return resolve_query_routing_decision(
-                &self.policy,
+                &nexus.routing_policy,
                 &nexus.lane_catalog,
                 &nexus.dataspace_catalog,
                 account_id,
@@ -4597,8 +4593,8 @@ impl LaneRouter for ConfigLaneRouter {
             Some(&nexus.dataspace_catalog),
             Some(state_view),
         )?;
-        let matched_rule = self
-            .policy
+        let matched_rule = nexus
+            .routing_policy
             .rules
             .iter()
             .find(|rule| rule_matches(rule, tx, Some(state_view)));
@@ -4608,7 +4604,7 @@ impl LaneRouter for ConfigLaneRouter {
             matched_rule.is_some_and(|rule| rule.matcher.account.is_some()),
         );
         resolve_policy_routing_plan(
-            &self.policy,
+            &nexus.routing_policy,
             matched_rule,
             target,
             &nexus.lane_catalog,
@@ -4625,6 +4621,16 @@ impl LaneRouter for ConfigLaneRouter {
             || transaction_target_routing_requires_state(tx)
         {
             return Ok(None);
+        }
+        if self.policy.rules.is_empty() {
+            let target = transaction_dataspace_routing_target(
+                tx,
+                Some(self.dataspace_catalog.as_ref()),
+                None,
+            )?;
+            if !matches!(target, Some(dataspace_id) if dataspace_id != DataSpaceId::UNIVERSAL) {
+                return Ok(None);
+            }
         }
         if let Some(decision) = self.catalog_only_routing_decision(tx)? {
             return Ok(Some(decision));
@@ -4651,6 +4657,25 @@ impl LaneRouter for ConfigLaneRouter {
         if policy_needs_state(self.policy.as_ref())
             || dataspace_scoped_permission_routing_requires_state(tx)
             || transaction_target_routing_requires_state(tx)
+        {
+            return Ok(None);
+        }
+        if self.policy.rules.is_empty() {
+            let target = transaction_dataspace_routing_target(
+                tx,
+                Some(self.dataspace_catalog.as_ref()),
+                None,
+            )?;
+            if !matches!(target, Some(dataspace_id) if dataspace_id != DataSpaceId::UNIVERSAL) {
+                return Ok(None);
+            }
+        }
+        if let Some(account_id) = account_permission_holder_routing_target(tx)
+            && !self
+                .policy
+                .rules
+                .iter()
+                .any(|rule| query_rule_matches(rule, account_id, None))
         {
             return Ok(None);
         }
@@ -11642,6 +11667,78 @@ mod tests {
             )
             .expect("validation routing should use account scope"),
             expected
+        );
+    }
+
+    #[test]
+    fn state_view_routing_uses_committed_nexus_policy_not_cached_router_policy() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (holder_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let committed_policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![LaneRoutingRule {
+                lane: lane_id,
+                dataspace: Some(dataspace_id),
+                matcher: LaneRoutingMatcher {
+                    account: Some("*@paynet".to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy::default(),
+            DataSpaceCatalog::default(),
+            LaneCatalog::default(),
+        );
+        let permission = Permission::from(CanRegisterTrigger {
+            authority: holder_id.clone(),
+        });
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                permission,
+                holder_id.clone(),
+            ))],
+        );
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(dataspace_id);
+        let state = state_with_account_scope_entries(&[(holder_id, scope_entry)], catalog);
+        {
+            let mut nexus = state.nexus.write();
+            nexus.routing_policy = committed_policy;
+            nexus.lane_catalog = lane_catalog;
+        }
+        let state_view = state.view();
+
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &state_view)
+                .expect("state-view routing should use committed nexus policy")
+                .coordinator_route(),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+        assert_eq!(
+            router
+                .try_route_plan_without_state(&tx)
+                .expect("permission grant without a cached rule should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_state(&tx, &state)
+                .expect("state routing should use committed nexus policy")
+                .coordinator_route(),
+            RoutingDecision::new(lane_id, dataspace_id)
         );
     }
 

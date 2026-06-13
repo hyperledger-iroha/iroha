@@ -402,6 +402,47 @@ fn canonicalize_proposal_batch_with_plans(
     }
 }
 
+fn refresh_proposal_routing_from_state(
+    tx_batch: &[AcceptedTransaction<'static>],
+    routing_batch: &mut Vec<RoutingDecision>,
+    routing_plan_batch: &mut Vec<crate::queue::RoutingPlan>,
+    state_view: &crate::state::StateView<'_>,
+    ledger_time_ms: u64,
+) -> Result<bool> {
+    debug_assert_eq!(tx_batch.len(), routing_batch.len());
+    debug_assert_eq!(tx_batch.len(), routing_plan_batch.len());
+    if tx_batch.is_empty() {
+        return Ok(false);
+    }
+
+    let nexus = &state_view.nexus;
+    let mut refreshed_routing = Vec::with_capacity(tx_batch.len());
+    let mut refreshed_plans = Vec::with_capacity(tx_batch.len());
+    for (idx, tx) in tx_batch.iter().enumerate() {
+        let refreshed_plan = crate::queue::evaluate_policy_plan_with_catalog_and_world_at(
+            &nexus.routing_policy,
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+            tx,
+            state_view.world(),
+            ledger_time_ms,
+        )
+        .map_err(|err| {
+            eyre!("proposal routing cannot be resolved from committed state at index {idx}: {err}")
+        })?;
+        refreshed_routing.push(refreshed_plan.coordinator_route());
+        refreshed_plans.push(refreshed_plan);
+    }
+
+    let changed = routing_batch.as_slice() != refreshed_routing.as_slice()
+        || routing_plan_batch.as_slice() != refreshed_plans.as_slice();
+    if changed {
+        *routing_batch = refreshed_routing;
+        *routing_plan_batch = refreshed_plans;
+    }
+    Ok(changed)
+}
+
 const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_millis(1);
 
 #[derive(Debug, Clone, Copy)]
@@ -3006,6 +3047,25 @@ impl Actor {
                 } else {
                     BlockBuilder::new(tx_batch.clone()).chain(view, None)
                 };
+                let routing_ledger_time_ms =
+                    u64::try_from(builder.creation_time().as_millis()).unwrap_or(u64::MAX);
+                {
+                    let state_view = self.state.view();
+                    if refresh_proposal_routing_from_state(
+                        &tx_batch,
+                        &mut routing_batch,
+                        &mut routing_plan_batch,
+                        &state_view,
+                        routing_ledger_time_ms,
+                    )? {
+                        info!(
+                            height = proposal_height,
+                            view,
+                            tx_count = tx_batch.len(),
+                            "proposal routing refreshed from committed Nexus state before sidecar assembly"
+                        );
+                    }
+                }
                 if proposal_height > 2 && previous_roster_evidence.is_none() {
                     return Err(eyre!(
                         "missing previous-roster evidence for parent block at height {}",
@@ -3290,6 +3350,45 @@ impl Actor {
 
                 let proof_policy_bundle = crate::da::proof_policy_bundle(&lane_config);
                 builder = builder.with_da_proof_policies(Some(proof_policy_bundle));
+
+                if !tx_batch.is_empty() {
+                    let before_routes = routing_plan_batch
+                        .iter()
+                        .map(|plan| {
+                            let route = plan.coordinator_route();
+                            (route.lane_id.as_u32(), route.dataspace_id.as_u64())
+                        })
+                        .collect::<Vec<_>>();
+                    let (state_height, refreshed) = {
+                        let state_view = self.state.view();
+                        let state_height = state_view.height();
+                        let refreshed = refresh_proposal_routing_from_state(
+                            &tx_batch,
+                            &mut routing_batch,
+                            &mut routing_plan_batch,
+                            &state_view,
+                            routing_ledger_time_ms,
+                        )?;
+                        (state_height, refreshed)
+                    };
+                    let after_routes = routing_plan_batch
+                        .iter()
+                        .map(|plan| {
+                            let route = plan.coordinator_route();
+                            (route.lane_id.as_u32(), route.dataspace_id.as_u64())
+                        })
+                        .collect::<Vec<_>>();
+                    info!(
+                        height = proposal_height,
+                        view,
+                        state_height,
+                        tx_count = tx_batch.len(),
+                        refreshed,
+                        before_routes = ?before_routes,
+                        after_routes = ?after_routes,
+                        "proposal routing resolved from committed Nexus state before execution context assembly"
+                    );
+                }
 
                 let native_amx_receipts = self
                     .native_amx_receipts_for_batch(&tx_batch, &routing_plan_batch, proposal_height)

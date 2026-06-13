@@ -4,10 +4,10 @@ public sealed class CanonicalRequestHeaders
 {
     public CanonicalRequestHeaders(string accountId, string signatureBase64, long timestampMs, string nonce)
     {
-        AccountId = accountId;
-        SignatureBase64 = signatureBase64;
+        AccountId = CanonicalRequest.RequireExactNonBlank(accountId, nameof(accountId));
+        SignatureBase64 = CanonicalRequest.RequireExactNonBlank(signatureBase64, nameof(signatureBase64));
         TimestampMs = timestampMs;
-        Nonce = nonce;
+        Nonce = CanonicalRequest.RequireExactNonBlank(nonce, nameof(nonce));
     }
 
     public string AccountId { get; }

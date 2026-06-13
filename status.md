@@ -2,6 +2,23 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Core native AMX vote fixture checked signing
+
+- Routed native AMX BLS vote fixtures through checked seeded/random key
+  generation plus `Signature::try_new`.
+- Verified each generated vote signature against the attestation-body preimage
+  before aggregate QC construction, preserving validator-ordering,
+  duplicate-signer, outsider, quorum, and body-mismatch coverage on checked
+  BLS vote bytes.
+- Validation:
+  - `cargo test -j 1 -p iroha_core native_amx --lib -- --nocapture`
+    (`14` passed, `4973` filtered out)
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/native_amx.rs`
+  - `cargo clippy -j 1 -p iroha_core --lib --tests --no-deps -- -D warnings`
+  - Note: `cargo fmt --package iroha_core -- --check` still reports unrelated
+    formatting drift in `crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+    and `crates/iroha_core/src/sumeragi/main_loop/vote_verify.rs`.
+
 ## 2026-06-13 SCCP submission-surface exact helper inventory
 
 - Hardened copied `user_prover_submission_surfaces` validation so top-level JS
@@ -290,6 +307,346 @@ Last updated: 2026-06-13
   - The TLC fast rerun was not completed in this turn because another active
     agent session was already running `scripts/formal/sumeragi_tlc.sh fast`
     against the shared `target/tlc/sumeragi-fast` metadata directory.
+
+## 2026-06-13 Recursive spend JVM guard validation
+
+- Fixed the Android Java recursive-spend standalone harness source so the
+  `ci/check_kagemusha_recursive_spend_jvm_sdk.sh` direct `javac` path compiles
+  the expanded request-codec fixture helpers, not only the Gradle harness path.
+- Re-ran the JVM recursive-spend guard plus cross-SDK parity and production
+  readiness guards after the typed lineage artifact request/helper updates.
+- Validation passed:
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=$(/usr/libexec/java_home -v 21) ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check -- java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+
+## 2026-06-13 Recursive spend Python artifact validation
+
+- Hardened the Python recursive-spend typed request API so init and
+  lineage-append request constructors validate lineage verifier/proving-key
+  artifacts as bound one-hop or append packages before request serialization.
+- Added Python fixture helpers and negative coverage for wrong artifact
+  profiles, raw verifier/proving-key pair mismatches, mixed typed/raw key
+  material, and unnecessary lineage artifacts on semantic append output.
+- Updated the SDK parity guard to require the Python request-codec artifact
+  validation helpers and reran the Python, C#, parity, and production-readiness
+  validation lanes.
+- Validation passed:
+  - `source /private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/activate && cd python/iroha_python && pytest -q tests/kagemusha_test.py`
+  - `ci/check_kagemusha_recursive_spend_python_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-13 Recursive lineage artifact helper overloads
+
+- Added Kotlin/JVM and Android Java high-level
+  `buildRecursiveSpendInitRequest` and lineage-append helper overloads that
+  accept validated `LineageKeyArtifacts` packages directly.
+- Positive helper coverage now builds init requests from init-profile artifacts
+  and reserved-lineage append requests from append-profile artifacts, keeping
+  wallet flow assembly on the typed artifact path instead of raw byte pairs.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest,org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check -- kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+
+## 2026-06-13 Recursive lineage artifact typed request API
+
+- Added Kotlin/JVM and Android Java recursive-spend request constructors that
+  accept validated `LineageKeyArtifacts` directly, so wallet code no longer
+  needs to split artifact packages back into raw verifier/proving-key byte
+  arrays for init and lineage-append requests.
+- Init constructors reject append-profile artifact packages, append
+  constructors reject init-profile packages, and both paths continue delegating
+  through the raw-byte request validation so circuit id and verifier-key
+  commitment binding is preserved.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest,org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check -- kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+
+## 2026-06-13 Recursive lineage key artifact request validation
+
+- Hardened Kotlin/JVM and Android Java Kagemusha recursive init and
+  lineage-append requests so lineage verifier keys and proving-key archives
+  are validated as bound artifact pairs before request serialization.
+- Init requests now require one-hop lineage artifacts, append requests that
+  select lineage-append output require append-circuit artifacts, and both paths
+  reject malformed ZK1 verifier keys plus proving-key archives whose circuit id
+  or verifier-key commitment does not match the supplied verifier key.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check -- kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+- Broader SDK validation also passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest,org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 Recursive hop Pallas envelope archive validation
+
+- Hardened Kotlin/JVM and Android Java Kagemusha init/append requests so
+  `pallasOpenEnvelopes` must be the exact native Norito
+  `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>` archive, compact and
+  uncompressed, with Pallas envelope metadata present and nonzero.
+- Request preflight now parses the record-bundle fold-step count and rejects
+  Pallas archive count mismatches before serialization or native bridge
+  dispatch, preserving the one-open-envelope-per-hop contract.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check -- kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+
+## 2026-06-13 Recursive previous-proof envelope archive validation
+
+- Hardened Kotlin/JVM and Android Java Kagemusha recursive append requests so
+  `previousProofOpenEnvelopes` must be the native Norito
+  `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>` archive, uncompressed with the
+  exact schema hash, and contain exactly one compact Pallas open-verifier
+  envelope.
+- The mobile preflight now rejects empty or multiple-envelope archives, wrong
+  curve ids, malformed proof transcripts, missing or all-zero verifier
+  metadata, trailing bytes, and malformed payloads before JNI/native bridge
+  dispatch.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check -- kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+
+## 2026-06-13 Privacy localnet lifecycle host parity
+
+- Mirrored the 19-reference localnet lifecycle evidence gate into the JS NAPI
+  and Python PyO3 native hosts so bridge, JavaScript, and Python capability
+  archives enforce the same shield-to-redeem evidence contract.
+- Strengthened the JavaScript FFI contract parity guard to require the
+  lifecycle evidence fields, lifecycle audit-reference labels, `19` ready audit
+  references, and adversarial lifecycle rejection coverage in every native host
+  implementation.
+- Focused validation passed:
+  - `rustfmt --edition 2024 --check crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test --test-name-pattern "native privacy FFI capabilities accept internal evidence while defaulting fail-closed" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `cargo test -p iroha_js_host privacy_capabilities_accept_exact_internal_evidence_for_all_rows --lib`
+  - `cargo test -p iroha_js_host privacy_production_evidence_rejects_adversarial_bindings_for_all_rows --lib`
+  - `cargo test -p iroha_python_rs privacy_capabilities_accept_exact_internal_evidence_for_all_rows --lib`
+  - `cargo test -p iroha_python_rs privacy_production_evidence_rejects_adversarial_bindings_for_all_rows --lib`
+
+## 2026-06-13 Privacy localnet lifecycle evidence gate
+
+- Tightened the privacy production evidence gate so localnet acceptance must
+  include an explicit successful shield-to-redeem lifecycle, not only a generic
+  smoke transaction.
+- Ready gate audit references now carry distinct hashes for shield tx, hop
+  proof, recursive init/verify, recursive append/verify, unshield proof, redeem
+  tx, replay rejection, restart replay rejection, and state recovery evidence.
+- Added adversarial evidence tests that reject false lifecycle status,
+  malformed lifecycle hashes, and reused lifecycle artifact hashes.
+- Focused validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p connect_norito_bridge privacy_capabilities_accept_exact_internal_evidence_for_all_rows --lib`
+  - `cargo test -p connect_norito_bridge privacy_production_evidence_rejects_adversarial_bindings_for_all_rows --lib`
+  - `cargo test -p connect_norito_bridge privacy_production_evidence_rejects_adversarial_zk_ace_bindings --lib`
+  - `git diff --check -- crates/connect_norito_bridge/src/lib.rs`
+
+## 2026-06-13 Privacy production witness-shape validation
+
+- Hardened the `privacy-production-enabled` bridge dispatch so decoded
+  confidential-transfer-v2 and unshield-v3 witnesses reject algorithm-mismatched
+  fields, invalid input/output counts, out-of-range leaf indices, duplicate
+  leaf references, and duplicate input rho/nullifier material before verifier-key
+  lookup or prover setup.
+- Added fast adversarial production-dispatch tests for transfer witnesses with
+  public amounts, unshield change outputs, missing outputs, and duplicate input
+  leaves, plus unshield witnesses with transfer outputs, too many private change
+  outputs, out-of-range leaf indices, and duplicate input rho.
+- Focused validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled transfer_witness_shape_rejects_ignored_or_ambiguous_fields --lib`
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled unshield_witness_shape_rejects_ignored_or_ambiguous_fields --lib`
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled privacy_production --lib`
+
+## 2026-06-13 ZK Torii client JSON numeric exactness
+
+- Hardened Kotlin/JVM and Android Java `/v1/zk/roots` and
+  `/v1/zk/merkle-path` response parsers so numeric fields must be JSON integer
+  numbers, not quoted or fractional values that the node does not emit.
+- Added adversarial client parser tests for quoted `height`, quoted
+  `frontier_len`, and quoted Merkle path direction bytes while preserving the
+  canonical POST request/response coverage.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 Confidential encrypted payload ciphertext cap
+
+- Capped confidential encrypted note ciphertexts at 64 KiB in the Rust data
+  model, Kotlin/JVM SDK, and Android Java SDK so shield payloads cannot become
+  unbounded transaction or wallet-memory inputs.
+- Rust validation, serialization, and decode paths now reject oversized
+  ciphertexts; SDK constructors and wire decoders reject the same limit before
+  caller code can hand oversized encrypted notes to transaction builders.
+- Focused validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_data_model encrypted_payload --lib`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 ZK Asset Merkle Path Provider Verification
+
+- Hardened Kotlin/JVM and Android Java Merkle path models so direction bytes
+  must match leaf-index bits and leaf indexes fit the returned path depth.
+- Torii-backed providers now verify returned sibling paths hash the requested
+  commitment to the returned root before returning them.
+- Added adversarial provider tests for mismatched commitments, non-verifying
+  siblings, leaf-index/direction mismatches, and defensive copies.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+
+## 2026-06-13 Confidential note X25519 key-material hardening
+
+- Hardened Kotlin/JVM and Android Java confidential note encryption/decryption to reject all-zero X25519 private material before public-key derivation or ECDH, and to map low-order peer public keys to explicit `IllegalArgumentException` failures.
+- Added adversarial tests for zero private keys, non-zero low-order recipient public keys, zero ephemeral private keys, and zero recipient private keys on decrypt.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 Android native bridge production feature build documentation
+
+- Updated `kotlin/README.md` to document the default fail-closed `buildNativeLibs` command and the explicit `-PprivacyProductionEnabled=true` production-gated command that passes `--features privacy-production-enabled` to `connect_norito_bridge`.
+- Validation passed:
+  - `./gradlew :client-android:tasks -PprivacyProductionEnabled=true --console=plain`
+  - `git diff --check -- kotlin/README.md kotlin/client-android/build.gradle.kts`
+
+## 2026-06-13 Confidential encrypted payload Rust low-order vector coverage
+
+- Extended the Rust `ConfidentialEncryptedPayload` validation regression test to cover a non-zero low-order X25519 ephemeral public key in addition to the all-zero key, matching the Kotlin/JVM and Android Java adversarial coverage.
+- Validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_data_model encrypted_payload --lib`
+
+## 2026-06-13 Confidential encrypted payload Rust canonical length hardening
+
+- Hardened the Rust `ConfidentialEncryptedPayload` decoder to reject non-canonical ciphertext-length varints, matching the Kotlin/JVM and Android Java SDK wire decoders and keeping malformed Shield payloads fail-closed at the data-model boundary.
+- Added an adversarial raw-envelope decode test for a two-byte overlong encoding of a short ciphertext length.
+- Validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_data_model encrypted_payload --lib`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 Confidential encrypted payload low-order key parity
+
+- Hardened Kotlin/JVM and Android Java `ConfidentialEncryptedPayload` validation to reject X25519 low-order ephemeral public keys with the same fixed-probe contributory check Rust uses, not only the all-zero key.
+- Added focused tests for a non-zero low-order X25519 key while preserving the Rust wire fixture and malformed decode coverage.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+## 2026-06-13 Confidential encrypted payload SDK wire codec
+
+- Added Kotlin/JVM and Android Java `ConfidentialEncryptedPayload` v1 wire
+  encode/decode helpers for the Rust envelope layout: `version | ephemeral |
+  nonce | compact ciphertext length | ciphertext`.
+- Pinned both SDKs to the existing Rust `fixtures/confidential/encrypted_payload_v1.json`
+  positive vector and added malformed decode coverage for truncation, trailing
+  bytes, unsupported versions, and non-canonical compact lengths.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 Confidential note payload encryption SDK contract
+
+- Defined the mobile SDK confidential-v2 note plaintext contract behind the
+  existing `ConfidentialEncryptedPayload` envelope: plaintext version `1`
+  contains `rho`, `owner_tag`, `asset`, `chain_id`, and canonical decimal
+  `amount` so decrypted notes are self-contained and can derive commitments and
+  nullifiers without caller-supplied hidden fields.
+- Added Kotlin/JVM and Android Java X25519/HKDF-SHA256/XChaCha20-Poly1305 note
+  encryption and authenticated decryption helpers, including optional
+  expected-chain validation, defensive key/plaintext wiping, deterministic
+  payload vectors shared by both SDKs, canonical varint checks, and strict UTF-8
+  plaintext decoding.
+- Added adversarial coverage for ciphertext tampering, wrong-recipient keys,
+  and wrong-chain use so wallet callers cannot accidentally treat unauthenticated
+  or cross-chain payloads as spendable notes.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 Confidential note derivation SDK primitives
+
+- Added Kotlin/JVM and Android Java confidential-v2 note opening models plus
+  owner-tag, asset-tag, chain-tag, note-commitment, and nullifier derivation
+  helpers that byte-match the Rust `confidential_v2` derivation path.
+- The SDK helpers defensively copy secret material, reject malformed fixed-size
+  fields, non-canonical Pasta scalars, ambiguous asset/chain text, noncanonical
+  `u128` amounts, and empty spend keys before deriving proof inputs.
+- Added fail-closed `ConfidentialNoteDecryption` entry points until the node or
+  bridge defines the encrypted note plaintext layout; callers cannot silently
+  parse opaque ciphertext as a wallet note.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 ZK asset Merkle-path Torii endpoint
+
+- Added `POST /v1/zk/merkle-path` for current confidential-v2 `zk_assets`
+  commitment inclusion paths, with JSON/Norito response negotiation, OpenAPI
+  discovery, API-token route wiring, batch request ordering, and fail-closed
+  validation for non-confidential-v2 assets, duplicate/ambiguous commitments,
+  malformed commitment hex, oversized batches, missing commitments, missing ZK
+  state, and root-history/frontier mismatches.
+- Wired the Kotlin/JVM and Android Java confidential-asset Torii clients and
+  Merkle-path providers to call the endpoint, parse typed path responses, and
+  reject node responses whose path count, commitment order, or sibling depth do
+  not match the request.
+- Validation passed:
+  - `cargo test -p iroha_torii handle_v1_zk_merkle_path --lib` (`11` tests)
+  - `cargo test -p iroha_torii zk_roots_selector_tests --lib` (`51` tests)
+  - `cargo test -p iroha_torii openapi --lib` (`30` tests)
+  - `cargo check -p iroha_torii`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - ZK Roots JVM Client and Merkle Providers
+
+- Added Kotlin/JVM and Java Android `ConfidentialAssetToriiClient` wrappers for
+  `POST /v1/zk/roots`, with exact JSON request bodies, non-null empty-string
+  latest roots, canonical lowercase 32-byte root hex, and root-count `height`
+  validation.
+- Added fail-closed Torii Merkle-path providers plus local zk_assets Merkle-path
+  providers for audited frontier material. The local path verifier uses the
+  Pasta-field `poseidon_pair` compressor from confidential-v2, pads to the
+  fixed depth-16 tree, and rejects non-canonical scalar nodes instead of falling
+  back to a different hash.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :jvm:compileJava --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - ZK Asset JVM Instruction Surface
+
+- Added Kotlin/JVM and Java Android typed builders for `RegisterZkAsset`,
+  `Shield`, and `Unshield`, including strict v1 confidential encrypted
+  payloads, proof-attachment JSON, canonical u128 amounts, fixed-width
+  commitments/nullifiers/roots, private change outputs, and defensive-copy
+  semantics.
+- Added native signer bridge wrappers that return canonical versioned signed
+  transaction bytes plus native transaction hashes, validating all public fields
+  and key material before checking JNI availability. The Rust JNI path encodes
+  `Unshield::new_with_outputs` so private change commitments are preserved.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `cargo test -p connect_norito_bridge unshield_encoder_path_preserves_private_change_outputs`
+  - `cargo check -p connect_norito_bridge`
 
 ## 2026-06-13 Crypto packed signature fixture checked signing
 
@@ -4137,6 +4494,24 @@ Last updated: 2026-06-13
   - `cargo test -p iroha_cli` (`cargo` emitted the existing
     `MlDsaSecretKey::sign` unused warning; all `iroha_cli` unit and smoke
     tests passed)
+## 2026-06-12 Privacy proof production dispatch hardening
+
+- Added the opt-in `privacy-production-enabled` native bridge feature for the
+  confidential-transfer-v2 and unshield proof builders, with default builds
+  still returning the serialized production-disabled privacy result.
+- Hardened confidential proof witness/circuit material with zeroization and
+  changed unshield v3 input aggregation to reject `u128` overflow instead of
+  wrapping before proof generation.
+- Kotlin/JVM and Java Android privacy capability APIs now derive readiness from
+  the native Norito capability archive when the bridge is actually loaded, while
+  malformed, missing, duplicate, or incomplete capability evidence remains
+  fail-closed.
+- Validation passed:
+  - `cargo check -p connect_norito_bridge --features privacy-production-enabled`
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled overflowing_unshield_input_sum_returns_proving_failed -- --nocapture`
+  - `cargo test -p iroha_core --features zk-halo2-ipa generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change --lib -- --nocapture`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest ./gradlew :jvm:test --console=plain`
 
 ## 2026-06-12 user config test seed regression
 
@@ -177560,3 +177935,151 @@ Last updated: 2026-06-13
   - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
 - Hygiene checks passed with no lockfile drift. The long-running Rust
   `connect_norito_bridge` proof test was still active and was not interrupted.
+
+## 2026-06-12 - Typed Recursive Spend Request SDK Codecs
+
+- Added Kotlin/JVM and Java Android typed builders for
+  `KagemushaRecursiveSpendInitRequestV1`,
+  `KagemushaRecursiveSpendAppendRequestV1`,
+  `KagemushaRecursiveSpendVerifyRequestV1`, and
+  `KagemushaRecursiveSpendRedeemRequestV1`, plus typed verify-result and bundle
+  summary decoders.
+- The builders validate nested Norito archives, canonical nonzero note amounts,
+  nonnegative block heights, lineage verifier-record requirements, and append
+  output-circuit compatibility before native dispatch.
+- Tightened request layout coverage so encoded SDK requests pin compact Norito
+  root fields, raw embedded archive payloads, `Option` child-length framing, and
+  Rust-compatible `[u8; N]` fixed-array encoding without an extra sequence length.
+- Added Kotlin/JVM and Java Android record-backed hop-evidence helpers for
+  explicit `VerifiedFoldHopEvidence` inputs. The helpers decode privacy
+  build-result archives, validate nested `OpenVerifyEnvelope` metadata, active
+  Kagemusha verifier records, verifier-key commitments, public-input schemas,
+  strict ZK1 `PROF`/`I10P` instance columns, root continuity, and canonical
+  proof attachments before emitting `KagemushaVerifiedFoldRecordBundle` or
+  redeem `ProofAttachment` archives. The proof-output-only Pallas/open-envelope
+  and record-bundle builders now fail closed.
+- Added explicit recursive-spend init/append request helper overloads that pair
+  checked `VerifiedFoldHopEvidence` with caller-supplied Pallas open-envelopes
+  archives before encoding request archives. The proof-output-only init/append
+  helpers fail closed for the same missing-context reason, so app code cannot
+  accidentally serialize under-specified production requests.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Confidential Note Owner-Tag Binding
+
+- Hardened Kotlin/JVM and Java Android confidential note decryption so the
+  default decrypt path rejects payloads whose plaintext owner tag does not
+  match the owner tag derived from the supplied spend key.
+- Added explicit diversified-owner-tag decrypt overloads and diversified
+  opening constructors, keeping diversified confidential-v2 outputs supported
+  without silently accepting an owner tag chosen by the sender.
+- Moved recipient-private-key handling under the decrypt cleanup path so
+  malformed payload versions or low-order peer keys cannot skip zeroization of
+  copied private material.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Recursive Spend Request Archive Validation
+
+- Hardened Kotlin/JVM and Java Android recursive-spend request objects so
+  record bundles, previous/current bundles, redeem proof attachments, verifier
+  records, and lineage witnesses reject wrong-schema or non-compact Norito
+  archives during construction instead of waiting for encode or native dispatch.
+- Added adversarial request-constructor coverage for wrong-schema init/append
+  record bundles, verify/redeem bundles, redeem proof attachments, and lineage
+  witnesses.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Typed Confidential Witness Request Codecs
+
+- Added Kotlin/JVM and Java Android typed confidential-v2 witness builders for
+  production transfer and unshield proving, covering note inputs, transfer
+  outputs, unshield change outputs, verifier references, public-input schemas,
+  and proof/verify request archive construction.
+- The builders validate canonical u128 amounts, 32-byte secret/scalar fields,
+  nonempty bounded commitment trees, one-or-two input notes, duplicate leaf/rho
+  rejection, transfer/unshield shape separation, and exact production verifier
+  catalog references before request dispatch.
+- Padded the private witness Norito archive with the native decoder's required
+  8-byte payload-alignment gap and added a Rust bridge golden-vector test that
+  decodes the SDK-produced witness bytes into
+  `PrivacyConfidentialWitnessV1`.
+- Focused validation passed:
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled privacy_production --lib`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `cargo fmt --all --check`
+
+## 2026-06-13 - Recursive Spend Hop Evidence Shape Hardening
+
+- Hardened Kotlin/JVM and Java Android recursive-spend hop-evidence builders
+  so confidential-transfer-v2 ZK1 proof bytes must expose exactly the nine
+  single-row public-instance columns declared by the canonical public-input
+  schema; extra columns are rejected before a fold-record bundle can be emitted.
+- Added adversarial SDK coverage for extra public columns, root-after equal to
+  root-before, broken multi-hop root continuity, cross-hop chain-id drift, and
+  cross-hop asset drift.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Native ZK1 I10P Parser Exactness
+
+- Hardened the native `connect_norito_bridge` ZK1 public-instance parser so
+  `I10P` payloads reject zero column/row counts, oversized matrix dimensions,
+  truncated scalar payloads, and trailing bytes instead of partially projecting
+  public inputs.
+- Added a focused bridge regression proving valid one-column payloads still
+  decode while empty, truncated, trailing, and over-cap payloads fail closed.
+- Focused validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p connect_norito_bridge zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads --lib`
+
+## 2026-06-13 - Kagemusha Readiness Alias Exactness
+
+- Hardened Kotlin/JVM and Java Android Offline/Offline V2 readiness parsers so
+  the legacy `offline_kagemusha_abi7*` keys and the
+  `offline_kagemusha_recursive_compact_*` keys must agree when Torii emits both
+  families. Conflicting derived enablement, mode, bridge ABI, circuit-id, or
+  artifact flags now fail parsing instead of silently preferring one alias.
+- Kept legacy-only and recursive-compact-only readiness bodies supported for
+  compatibility with existing test fixtures, while adding matching-alias and
+  conflicting-alias regression coverage.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineJsonParserTest,org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Kagemusha Readiness Alias Type Hardening
+
+- Tightened the Kotlin/JVM and Java Android Offline/Offline V2 readiness alias
+  parsers so present alias values must be typed and exact: booleans must be
+  JSON booleans, string aliases must be exact non-empty strings, and bridge ABI
+  aliases must be exact integers or exact integer strings.
+- Expanded adversarial readiness coverage so each aliased field conflicts
+  independently, and malformed present values fail before clients can treat
+  them as absent defaults.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineJsonParserTest,org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - ZK Merkle Path Response Exactness
+
+- Hardened Kotlin/JVM and Android Java ZK Merkle-path response models so
+  node-supplied path entries reject impossible leaf indices, direction bits that
+  do not match the leaf index, path-root mismatches, sibling/tree-depth
+  mismatches, witness-node cardinality mismatches, and entries outside the
+  reported `frontier_len` before wallet code consumes Torii proof material.
+- Mirrored Java JSON parser behavior with Kotlin for oversized integer tokens,
+  preserving them as `BigInteger` values so typed ZK response validators emit
+  controlled range errors instead of raw parser overflow failures.
+- Tightened Java ZK public constructors and providers so null lists are rejected
+  instead of silently becoming empty request or proof material.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.client.JsonParserTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.JsonParserTests,org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check`

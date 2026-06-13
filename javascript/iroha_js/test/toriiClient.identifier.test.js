@@ -43,6 +43,7 @@ const PARAMETER_DIGEST = "77".repeat(32);
 const EVALUATION_KEY_DIGEST = "88".repeat(32);
 const OUTPUT_HASH = "99".repeat(32);
 const ASSOCIATED_DATA_HASH = "aa".repeat(32);
+const PROOF_SCHEMA_HASH = "bb".repeat(32);
 const BFV_SEED_HEX =
   "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF";
 const BFV_PUBLIC_PARAMETERS = {
@@ -471,39 +472,62 @@ function signedReceiptFixture(overrides = {}) {
   };
 }
 
-test("listIdentifierPolicies normalizes BFV metadata", async () => {
+function claimRecordFixture(overrides = {}) {
+  return {
+    policy_id: POLICY_ID,
+    opaque_id: OPAQUE_ID,
+    receipt_hash: RECEIPT_HASH,
+    uaid: UAID,
+    account_id: ACCOUNT_ID,
+    verified_at_ms: 7,
+    expires_at_ms: 17,
+    ...overrides,
+  };
+}
+
+function identifierPolicyFixture(overrides = {}) {
+  return {
+    policy_id: POLICY_ID,
+    owner: ACCOUNT_ID,
+    active: true,
+    normalization: "phone_e164",
+    resolver_public_key: "ed25519:resolver-key",
+    backend: "bfv-affine-sha3-256-v1",
+    input_encryption: "bfv-v1",
+    input_encryption_public_parameters: "ABCD",
+    input_encryption_public_parameters_decoded: {
+      parameters: {
+        polynomial_degree: 64,
+        plaintext_modulus: 257,
+        ciphertext_modulus: 1099511627776,
+        decomposition_base_log: 12,
+      },
+      public_key: {
+        b: [1, 2, 3],
+        a: [4, 5, 6],
+      },
+      max_input_bytes: 32,
+      norito_length_encoding: "u64-v1",
+    },
+    proof_verifier: {
+      proof_backend: "halo2-ipa",
+      circuit_id: "identifier-ram-lfe-v1",
+      public_inputs_schema_hash: PROOF_SCHEMA_HASH,
+      verifying_key_bytes_b64: "AQID",
+    },
+    note: "retail phone policy",
+    ...overrides,
+  };
+}
+
+test("listIdentifierPolicies normalizes BFV and proof-verifier metadata", async () => {
   const client = new ToriiClient("https://example.test", {
     fetchImpl: async (input, init) => {
       assert.equal(init.method, "GET");
       assert.equal(new URL(input).pathname, "/v1/identifier-policies");
       return jsonResponse(200, {
         total: 1,
-        items: [
-          {
-            policy_id: POLICY_ID,
-            owner: ACCOUNT_ID,
-            active: true,
-            normalization: "phone_e164",
-            resolver_public_key: "ed25519:resolver-key",
-            backend: "bfv-affine-sha3-256-v1",
-            input_encryption: "bfv-v1",
-            input_encryption_public_parameters: "ABCD",
-            input_encryption_public_parameters_decoded: {
-              parameters: {
-                polynomial_degree: 64,
-                plaintext_modulus: 257,
-                ciphertext_modulus: 1099511627776,
-                decomposition_base_log: 12,
-              },
-              public_key: {
-                b: [1, 2, 3],
-                a: [4, 5, 6],
-              },
-              max_input_bytes: 32,
-            },
-            note: "retail phone policy",
-          },
-        ],
+        items: [identifierPolicyFixture()],
       });
     },
   });
@@ -514,6 +538,8 @@ test("listIdentifierPolicies normalizes BFV metadata", async () => {
   assert.equal(result.items[0].owner, ACCOUNT_ID);
   assert.equal(result.items[0].input_encryption, "bfv-v1");
   assert.equal(result.items[0].input_encryption_public_parameters, "ABCD");
+  assert.equal(result.items[0].proof_verifier.proof_backend, "halo2-ipa");
+  assert.equal(result.items[0].proof_verifier.public_inputs_schema_hash, PROOF_SCHEMA_HASH);
   assert.equal(
     result.items[0].input_encryption_public_parameters_decoded.parameters.polynomial_degree,
     64,
@@ -530,7 +556,72 @@ test("listIdentifierPolicies normalizes BFV metadata", async () => {
       a: [4, 5, 6],
     },
     max_input_bytes: 32,
+    norito_length_encoding: "u64-v1",
   });
+});
+
+test("listIdentifierPolicies rejects non-exact policy metadata", async () => {
+  const cases = [
+    ["owner", { owner: ` ${ACCOUNT_ID}` }],
+    ["normalization", { normalization: "Phone_E164" }],
+    ["backend", { backend: "bfv-affine-sha3-256-v1 " }],
+    ["input_encryption", { input_encryption: "BFV-v1" }],
+    ["input_encryption_public_parameters", { input_encryption_public_parameters: " ABCD" }],
+    ["note", { note: "retail phone policy " }],
+    [
+      "input_encryption_public_parameters_decoded.norito_length_encoding",
+      {
+        input_encryption_public_parameters_decoded: {
+          ...identifierPolicyFixture().input_encryption_public_parameters_decoded,
+          norito_length_encoding: " u64-v1",
+        },
+      },
+    ],
+  ];
+
+  for (const [field, overrides] of cases) {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => jsonResponse(200, {
+        total: 1,
+        items: [identifierPolicyFixture(overrides)],
+      }),
+    });
+    await assert.rejects(
+      () => client.listIdentifierPolicies(),
+      new RegExp(`identifier policy list response\\.items\\[0\\]\\.${field.replaceAll(".", "\\.")}`),
+      `identifier policy metadata ${field} exactness`,
+    );
+  }
+});
+
+test("listIdentifierPolicies rejects non-exact proof-verifier metadata", async () => {
+  const cases = [
+    ["proof_backend", { proof_backend: " halo2-ipa" }],
+    ["circuit_id", { circuit_id: "identifier-ram-lfe-v1 " }],
+    ["public_inputs_schema_hash", { public_inputs_schema_hash: ` ${PROOF_SCHEMA_HASH}` }],
+    ["verifying_key_bytes_b64", { verifying_key_bytes_b64: "AQID " }],
+  ];
+
+  for (const [field, proofOverrides] of cases) {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => jsonResponse(200, {
+        total: 1,
+        items: [
+          identifierPolicyFixture({
+            proof_verifier: {
+              ...identifierPolicyFixture().proof_verifier,
+              ...proofOverrides,
+            },
+          }),
+        ],
+      }),
+    });
+    await assert.rejects(
+      () => client.listIdentifierPolicies(),
+      new RegExp(`identifier policy list response\\.items\\[0\\]\\.proof_verifier\\.${field}`),
+      `identifier policy proof verifier ${field} exactness`,
+    );
+  }
 });
 
 test("resolveIdentifier posts encrypted input with output opening and normalizes response", async () => {
@@ -1576,6 +1667,43 @@ test("getIdentifierClaimByReceiptHash returns null on 404", async () => {
   });
   const result = await client.getIdentifierClaimByReceiptHash(RECEIPT_HASH);
   assert.equal(result, null);
+});
+
+test("getIdentifierClaimByReceiptHash parses exact claim records", async () => {
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async (input, init) => {
+      assert.equal(init.method, "GET");
+      assert.equal(
+        new URL(input).pathname,
+        `/v1/identifiers/receipts/${RECEIPT_HASH}`,
+      );
+      return jsonResponse(200, claimRecordFixture());
+    },
+  });
+
+  const result = await client.getIdentifierClaimByReceiptHash(RECEIPT_HASH);
+  assert.deepEqual(result, claimRecordFixture());
+});
+
+test("getIdentifierClaimByReceiptHash rejects non-exact claim record fields", async () => {
+  const cases = [
+    ["policy_id", claimRecordFixture({ policy_id: ` ${POLICY_ID}` })],
+    ["opaque_id", claimRecordFixture({ opaque_id: `${OPAQUE_ID} ` })],
+    ["receipt_hash", claimRecordFixture({ receipt_hash: ` ${RECEIPT_HASH}` })],
+    ["uaid", claimRecordFixture({ uaid: `${UAID} ` })],
+    ["account_id", claimRecordFixture({ account_id: ` ${ACCOUNT_ID}` })],
+  ];
+
+  for (const [field, body] of cases) {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => jsonResponse(200, body),
+    });
+    await assert.rejects(
+      () => client.getIdentifierClaimByReceiptHash(RECEIPT_HASH),
+      new RegExp(`identifier claim lookup response\\.${field}`),
+      `claim record ${field} exactness`,
+    );
+  }
 });
 
 test("normalizeIdentifierInput normalizes supported identifier forms", () => {

@@ -2860,6 +2860,127 @@ public sealed class ToriiClientTests
         Assert.Equal("phone#retail", resolved.SignaturePayload!["policy_id"]!.GetValue<string>());
     }
 
+    [Fact]
+    public async Task ResolveIdentifierAsyncDeserializesNestedReceiptEnvelope()
+    {
+        using var handler = new RecordingHandler(request =>
+        {
+            var payload = ReadBodyAsJson(request);
+            Assert.Equal("/v1/identifiers/resolve", request.RequestUri!.AbsolutePath);
+            Assert.Equal("phone#retail", payload.RootElement.GetProperty("policy_id").GetString());
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(IdentifierResolveEnvelopeJson(
+                    IdentifierResolvePayloadJson(),
+                    """{"kind":"signed","signature":"ABCD"}""")),
+            };
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
+        {
+            PolicyId = "phone#retail",
+            Input = "+15551234567",
+        });
+
+        Assert.Equal("phone#retail", resolved.PolicyId);
+        Assert.Equal("opaque-1", resolved.OpaqueId);
+        Assert.Equal("receipt-1", resolved.ReceiptHash);
+        Assert.Equal("sorauﾛ1Nmerchant", resolved.AccountId);
+        Assert.Equal(1710000000000L, resolved.ResolvedAtMilliseconds);
+        Assert.Equal(1710003600000L, resolved.ExpiresAtMilliseconds);
+        Assert.Equal("bfv-programmed-sha3-256-v1", resolved.Backend);
+        Assert.Equal("ABCD", resolved.Signature);
+        Assert.Equal(string.Empty, resolved.SignaturePayloadHex);
+        Assert.Equal(
+            "identifier_lookup_retail",
+            resolved.SignaturePayload!["payload"]!["execution"]!["program_id"]!.GetValue<string>());
+        Assert.Equal("signed", resolved.SignaturePayload!["attestation"]!["kind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ResolveIdentifierAsyncDeserializesNestedProofReceiptEnvelope()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(IdentifierResolveEnvelopeJson(
+                IdentifierResolvePayloadJson(),
+                """{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AQID"}""")),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
+        {
+            PolicyId = "phone#retail",
+            Input = "+15551234567",
+        });
+
+        Assert.Equal("phone#retail", resolved.PolicyId);
+        Assert.Equal(string.Empty, resolved.Signature);
+        Assert.Equal(string.Empty, resolved.SignaturePayloadHex);
+        Assert.Equal("proof", resolved.SignaturePayload!["attestation"]!["kind"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData(" phone#retail", null, """{"kind":"signed","signature":"ABCD"}""", "payload.policy_id", "whitespace")]
+    [InlineData("phone#retail", " bfv-programmed-sha3-256-v1", """{"kind":"signed","signature":"ABCD"}""", "payload.execution.backend", "whitespace")]
+    [InlineData("phone#retail", null, """{"kind":"signed","signature":" ABCD"}""", "attestation.signature", "whitespace")]
+    [InlineData("phone#retail", null, """{"kind":"signed","signature":"ABCD","proof_b64":"AQID"}""", "signed attestations", "proof fields")]
+    [InlineData("phone#retail", null, """{"kind":"proof","proof_b64":"AQID"}""", "attestation.proof_backend", "required")]
+    [InlineData("phone#retail", null, """{"kind":"proof","proof_backend":"halo2/ipa"}""", "attestation.proof_b64", "required")]
+    [InlineData("phone#retail", null, """{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"@@@"}""", "attestation.proof_b64", "valid base64")]
+    [InlineData("phone#retail", null, """{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AQID","signature":"ABCD"}""", "proof attestations", "must not include signature")]
+    public async Task ResolveIdentifierAsyncRejectsMalformedNestedReceiptEnvelope(
+        string policyId,
+        string? backend,
+        string attestationJson,
+        string expectedField,
+        string expectedReason)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(IdentifierResolveEnvelopeJson(
+                IdentifierResolvePayloadJson(policyId, backend ?? "bfv-programmed-sha3-256-v1"),
+                attestationJson)),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
+            new ToriiIdentifierResolveRequest
+            {
+                PolicyId = "phone#retail",
+                Input = "+15551234567",
+            }));
+
+        Assert.Contains(expectedField, error.Message);
+        Assert.Contains(expectedReason, error.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(MalformedIdentifierResolveEnvelopeJson))]
+    public async Task ResolveIdentifierAsyncRejectsInvalidNestedReceiptShape(
+        string responseJson,
+        string expectedField,
+        string expectedReason)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responseJson),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
+            new ToriiIdentifierResolveRequest
+            {
+                PolicyId = "phone#retail",
+                Input = "+15551234567",
+            }));
+
+        Assert.Contains(expectedField, error.Message);
+        Assert.Contains(expectedReason, error.Message);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(" phone#retail")]
@@ -4712,6 +4833,106 @@ public sealed class ToriiClientTests
               "signature_payload": {{signaturePayloadJson}}
             }
             """;
+    }
+
+    private static string IdentifierResolveEnvelopeJson(string payloadJson, string attestationJson)
+    {
+        return $$"""
+            {
+              "payload": {{payloadJson}},
+              "attestation": {{attestationJson}}
+            }
+            """;
+    }
+
+    private static string IdentifierResolvePayloadJson(
+        string policyId = "phone#retail",
+        string backend = "bfv-programmed-sha3-256-v1",
+        string executedAtJson = "1710000000000",
+        string expiresAtJson = "1710003600000")
+    {
+        return $$"""
+            {
+              "policy_id": {{JsonSerializer.Serialize(policyId)}},
+              "account_id": "sorauﾛ1Nmerchant",
+              "opaque_id": "opaque-1",
+              "receipt_hash": "receipt-1",
+              "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "execution": {
+                "program_id": "identifier_lookup_retail",
+                "program_digest": "program-digest",
+                "backend": {{JsonSerializer.Serialize(backend)}},
+                "verification_mode": "signed",
+                "input_ciphertext_hash": "input-hash",
+                "output_ciphertext_hash": "output-hash",
+                "parameter_digest": "parameter-digest",
+                "evaluation_key_digest": "evaluation-key-digest",
+                "output_hash": "output-open-hash",
+                "associated_data_hash": "associated-data-hash",
+                "executed_at_ms": {{executedAtJson}},
+                "expires_at_ms": {{expiresAtJson}}
+              },
+              "opening": {
+                "payload": {
+                  "program_id": "identifier_lookup_retail",
+                  "input_ciphertext_hash": "input-hash",
+                  "output_ciphertext_hash": "output-hash",
+                  "parameter_digest": "parameter-digest",
+                  "evaluation_key_digest": "evaluation-key-digest",
+                  "opened_output_hash": "opened-output-hash",
+                  "opened_at_ms": 1710000000000,
+                  "expires_at_ms": 1710003600000
+                },
+                "signature": "ABCD"
+              }
+            }
+            """;
+    }
+
+    public static IEnumerable<object[]> MalformedIdentifierResolveEnvelopeJson()
+    {
+        const string signedAttestation = """{"kind":"signed","signature":"ABCD"}""";
+
+        yield return new object[]
+        {
+            $$"""{"payload": {{IdentifierResolvePayloadJson()}}}""",
+            "attestation",
+            "required",
+        };
+        yield return new object[]
+        {
+            $$"""{"attestation": {{signedAttestation}}}""",
+            "payload",
+            "required",
+        };
+        yield return new object[]
+        {
+            IdentifierResolveEnvelopeJson(
+                IdentifierResolvePayloadJson(executedAtJson: "-1"),
+                signedAttestation),
+            "executed_at_ms",
+            "non-negative",
+        };
+        yield return new object[]
+        {
+            IdentifierResolveEnvelopeJson(
+                IdentifierResolvePayloadJson(expiresAtJson: "1710003600000.5"),
+                signedAttestation),
+            "expires_at_ms",
+            "integer",
+        };
+        yield return new object[]
+        {
+            $$"""
+              {
+                "payload": {{IdentifierResolvePayloadJson()}},
+                "attestation": {{signedAttestation}},
+                "signature_payload_hex": "DEADBEEF"
+              }
+              """,
+            "must not mix",
+            "legacy",
+        };
     }
 
     private static string VerifyingKeyCommitmentHex(string backend, byte[] bytes)

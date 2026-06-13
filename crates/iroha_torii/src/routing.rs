@@ -5232,6 +5232,67 @@ pub struct ZkRootsGetResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+/// Request for current zk-assets confidential-v2 inclusion paths.
+pub struct ZkMerklePathGetRequestDto {
+    /// Asset selector (unprefixed Base58 id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>`)
+    /// whose shielded pool commitment paths to fetch.
+    pub asset_id: String,
+    /// Commitment hex strings (32 bytes, lowercase, 0x-less preferred).
+    pub commitments: Vec<String>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Inclusion path for one zk-assets confidential-v2 commitment.
+pub struct ZkMerklePathDto {
+    /// Commitment being proven, encoded as lowercase 32-byte hex.
+    pub commitment: String,
+    /// Zero-based commitment index in the current frontier.
+    pub leaf_index: u32,
+    /// Poseidon sibling nodes, leaf level first, encoded as lowercase 32-byte hex.
+    pub siblings: Vec<String>,
+    /// Direction bytes parallel to `siblings`: 0 means current node was left, 1 means right.
+    pub directions: Vec<u8>,
+    /// Intermediate parent nodes, leaf level first, encoded as lowercase 32-byte hex.
+    pub witness_nodes: Vec<String>,
+    /// Current confidential-v2 Merkle root for this path.
+    pub root: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Response with current zk-assets confidential-v2 inclusion paths.
+pub struct ZkMerklePathGetResponseDto {
+    /// Current confidential-v2 Merkle root, encoded as lowercase 32-byte hex.
+    pub root: String,
+    /// Number of commitments in the current frontier.
+    pub frontier_len: u32,
+    /// Fixed confidential-v2 tree depth.
+    pub tree_depth: u32,
+    /// Paths returned in the same order as the request commitments.
+    pub paths: Vec<ZkMerklePathDto>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
 /// Request for election tally (convenience JSON wrapper).
 pub struct ZkVoteGetTallyRequestDto {
     /// Unique election identifier.
@@ -14578,6 +14639,86 @@ pub(crate) fn resolve_asset_definition_selector(
         })
 }
 
+const ZK_MERKLE_PATH_MAX_COMMITMENTS: usize = 128;
+
+fn zk_query_conversion_error(message: impl Into<String>) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
+    ))
+}
+
+fn parse_zk_merkle_commitment_hex(value: &str, index: usize) -> Result<[u8; 32]> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(zk_query_conversion_error(format!(
+            "commitments[{index}] must not be empty"
+        )));
+    }
+    let raw = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+    if raw.len() != 64 {
+        return Err(zk_query_conversion_error(format!(
+            "commitments[{index}] must be 32-byte hex"
+        )));
+    }
+    let bytes = hex::decode(raw).map_err(|err| {
+        zk_query_conversion_error(format!("invalid commitments[{index}] hex: {err}"))
+    })?;
+    let mut out = [0_u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+fn zk_merkle_not_found() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::NotFound,
+    ))
+}
+
+fn ensure_confidential_v2_asset(
+    world: &impl WorldReadOnly,
+    asset_id: &iroha_data_model::asset::id::AssetDefinitionId,
+    st: &iroha_core::state::ZkAssetState,
+    current_root: &[u8; 32],
+) -> Result<()> {
+    let transfer_vk_is_confidential_v2 = st
+        .vk_transfer
+        .as_ref()
+        .and_then(|binding| world.verifying_keys().get(&binding.id))
+        .is_some_and(|record| {
+            iroha_core::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(
+                &record.circuit_id,
+            )
+        });
+    if !transfer_vk_is_confidential_v2 {
+        return Err(zk_query_conversion_error(format!(
+            "asset `{asset_id}` does not use the confidential-v2 Merkle tree"
+        )));
+    }
+    if let Some(recorded_root) = st.root_history.last() {
+        if recorded_root != current_root {
+            return Err(zk_query_conversion_error(format!(
+                "asset `{asset_id}` confidential-v2 root history does not match the current commitment frontier"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn unique_commitment_index(commitments: &[[u8; 32]], commitment: &[u8; 32]) -> Result<usize> {
+    let mut found = None;
+    for (index, candidate) in commitments.iter().enumerate() {
+        if candidate == commitment {
+            if found.is_some() {
+                return Err(zk_query_conversion_error(
+                    "commitment appears more than once in the current frontier; path lookup by commitment is ambiguous",
+                ));
+            }
+            found = Some(index);
+        }
+    }
+    found.ok_or_else(zk_merkle_not_found)
+}
+
 #[cfg(feature = "app_api")]
 fn canonical_gas_asset_definition_id(state: &CoreState, asset_literal: &str) -> Result<String> {
     let selector = asset_literal.trim();
@@ -14647,6 +14788,92 @@ pub async fn handle_v1_zk_roots(
         roots: roots_tail.into_iter().map(hex::encode).collect(),
         // For convenience, report the total number of roots recorded for this asset.
         height: roots_all.len() as u32,
+    };
+    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    Ok(crate::utils::respond_with_format(resp, format))
+}
+
+/// POST /v1/zk/merkle-path — current confidential-v2 commitment inclusion paths.
+///
+/// Returns inclusion paths for commitments in the current `zk_assets` frontier.
+/// The endpoint intentionally serves only assets bound to the canonical
+/// confidential-transfer-v2 verifier, so callers do not accidentally mix legacy
+/// shielded roots with confidential-v2 proof witnesses.
+pub async fn handle_v1_zk_merkle_path(
+    state: Arc<CoreState>,
+    accept: Option<axum::http::HeaderValue>,
+    NoritoJson(req): NoritoJson<ZkMerklePathGetRequestDto>,
+) -> Result<Response> {
+    if req.commitments.len() > ZK_MERKLE_PATH_MAX_COMMITMENTS {
+        return Err(zk_query_conversion_error(format!(
+            "commitments supports at most {ZK_MERKLE_PATH_MAX_COMMITMENTS} entries"
+        )));
+    }
+    let mut requested = Vec::with_capacity(req.commitments.len());
+    let mut seen = BTreeSet::new();
+    for (index, commitment) in req.commitments.iter().enumerate() {
+        let parsed = parse_zk_merkle_commitment_hex(commitment, index)?;
+        if !seen.insert(parsed) {
+            return Err(zk_query_conversion_error(format!(
+                "commitments[{index}] duplicates an earlier request entry"
+            )));
+        }
+        requested.push(parsed);
+    }
+
+    let now_ms = asset_alias_observation_time_ms(&state);
+    let world = state.world_view();
+    let ad = resolve_asset_definition_selector(&world, &req.asset_id, now_ms)?;
+    let st = world.zk_assets().get(&ad).ok_or_else(zk_merkle_not_found)?;
+    let root = iroha_core::zk::confidential_v2::compute_confidential_root_v2(&st.commitments)
+        .map_err(|err| {
+            zk_query_conversion_error(format!("failed to compute current root: {err}"))
+        })?;
+    ensure_confidential_v2_asset(&world, &ad, st, &root)?;
+
+    let mut paths = Vec::with_capacity(requested.len());
+    for commitment in requested {
+        let leaf_index = unique_commitment_index(&st.commitments, &commitment)?;
+        let path = iroha_core::zk::confidential_v2::compute_confidential_merkle_path_v2(
+            &st.commitments,
+            leaf_index,
+        )
+        .map_err(|err| {
+            zk_query_conversion_error(format!(
+                "failed to compute commitment path at index {leaf_index}: {err}"
+            ))
+        })?;
+        if path.root != root {
+            return Err(zk_query_conversion_error(
+                "computed commitment path root does not match current frontier root",
+            ));
+        }
+        let leaf_index = u32::try_from(leaf_index).map_err(|_| {
+            zk_query_conversion_error("leaf index does not fit in the response schema")
+        })?;
+        paths.push(ZkMerklePathDto {
+            commitment: hex::encode(commitment),
+            leaf_index,
+            siblings: path.siblings.iter().map(hex::encode).collect(),
+            directions: path.directions.clone(),
+            witness_nodes: path.witness_nodes.iter().map(hex::encode).collect(),
+            root: hex::encode(path.root),
+        });
+    }
+
+    let frontier_len = u32::try_from(st.commitments.len()).map_err(|_| {
+        zk_query_conversion_error("frontier length does not fit in the response schema")
+    })?;
+    let tree_depth = u32::try_from(iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2)
+        .map_err(|_| zk_query_conversion_error("tree depth does not fit in the response schema"))?;
+    let resp = ZkMerklePathGetResponseDto {
+        root: hex::encode(root),
+        frontier_len,
+        tree_depth,
+        paths,
     };
     let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -14924,6 +15151,63 @@ mod zk_roots_selector_tests {
         block
             .commit()
             .expect("commit gas accepted assets parameter");
+    }
+
+    fn seed_zk_asset_frontier_for_test(
+        state: &std::sync::Arc<iroha_core::state::State>,
+        definition_id: &AssetDefinitionId,
+        commitments: Vec<[u8; 32]>,
+        circuit_id: &str,
+        root_override: Option<[u8; 32]>,
+    ) -> [u8; 32] {
+        let root = iroha_core::zk::confidential_v2::compute_confidential_root_v2(&commitments)
+            .expect("confidential-v2 root");
+        let vk_id =
+            iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "torii_transfer_v2_test");
+        let mut vk_record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
+            1,
+            circuit_id,
+            None,
+            "test",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pallas",
+            [0x42; 32],
+            [0x43; 32],
+        );
+        vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        {
+            let world = tx.world_mut_for_testing();
+            world
+                .verifying_keys_mut_for_testing()
+                .insert(vk_id.clone(), vk_record);
+            let mut zk_state = iroha_core::state::ZkAssetState::default();
+            zk_state.commitments = commitments;
+            zk_state.root_history = vec![root_override.unwrap_or(root)];
+            zk_state.vk_transfer = Some(iroha_core::state::ZkAssetVerifierBinding {
+                id: vk_id,
+                commitment: [0x43; 32],
+            });
+            world
+                .zk_assets_mut_for_testing()
+                .insert(definition_id.clone(), zk_state);
+        }
+        tx.apply();
+        block.commit().expect("commit zk asset frontier for test");
+        root
+    }
+
+    fn assert_query_conversion_contains(err: Error, expected: &str) {
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
+            )) if message.contains(expected)
+        ));
     }
 
     #[test]
@@ -15677,6 +15961,348 @@ mod zk_roots_selector_tests {
             Error::Query(iroha_data_model::ValidationFail::NotPermitted(ref message))
                 if message.contains("invalid asset selector")
         ));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_merkle_path_returns_batch_paths_in_request_order() {
+        let (state, definition_id) = selector_state();
+        let commitments = vec![[0x11; 32], [0x22; 32], [0x33; 32]];
+        let root = seed_zk_asset_frontier_for_test(
+            &state,
+            &definition_id,
+            commitments.clone(),
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            None,
+        );
+
+        let response = handle_v1_zk_merkle_path(
+            state,
+            None,
+            crate::NoritoJson(ZkMerklePathGetRequestDto {
+                asset_id: "usd#main".to_owned(),
+                commitments: vec![
+                    hex::encode(commitments[2]),
+                    format!("0x{}", hex::encode(commitments[0])),
+                ],
+            }),
+        )
+        .await
+        .expect("zk merkle path handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkMerklePathGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+
+        assert_eq!(payload.root, hex::encode(root));
+        assert_eq!(payload.frontier_len, commitments.len() as u32);
+        assert_eq!(
+            payload.tree_depth,
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 as u32
+        );
+        assert_eq!(payload.paths.len(), 2);
+        assert_eq!(payload.paths[0].commitment, hex::encode(commitments[2]));
+        assert_eq!(payload.paths[0].leaf_index, 2);
+        assert_eq!(payload.paths[1].commitment, hex::encode(commitments[0]));
+        assert_eq!(payload.paths[1].leaf_index, 0);
+
+        let expected =
+            iroha_core::zk::confidential_v2::compute_confidential_merkle_path_v2(&commitments, 2)
+                .expect("expected path");
+        assert_eq!(
+            payload.paths[0].siblings,
+            expected
+                .siblings
+                .iter()
+                .map(hex::encode)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(payload.paths[0].directions, expected.directions);
+        assert_eq!(
+            payload.paths[0].witness_nodes,
+            expected
+                .witness_nodes
+                .iter()
+                .map(hex::encode)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(payload.paths[0].root, hex::encode(expected.root));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_merkle_path_negotiates_norito_response_when_requested() {
+        let (state, definition_id) = selector_state();
+        let commitments = vec![[0x44; 32]];
+        seed_zk_asset_frontier_for_test(
+            &state,
+            &definition_id,
+            commitments.clone(),
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            None,
+        );
+
+        let response = handle_v1_zk_merkle_path(
+            state,
+            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
+            crate::NoritoJson(ZkMerklePathGetRequestDto {
+                asset_id: definition_id.to_string(),
+                commitments: vec![hex::encode(commitments[0])],
+            }),
+        )
+        .await
+        .expect("zk merkle path handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(crate::utils::NORITO_MIME_TYPE)
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkMerklePathGetResponseDto =
+            norito::decode_from_bytes(&bytes).expect("norito response payload");
+        assert_eq!(payload.frontier_len, 1);
+        assert_eq!(payload.paths.len(), 1);
+        assert_eq!(payload.paths[0].leaf_index, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_merkle_path_returns_current_root_for_empty_request() {
+        let (state, definition_id) = selector_state();
+        let commitments = vec![[0x55; 32]];
+        let root = seed_zk_asset_frontier_for_test(
+            &state,
+            &definition_id,
+            commitments.clone(),
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            None,
+        );
+
+        let response = handle_v1_zk_merkle_path(
+            state,
+            None,
+            crate::NoritoJson(ZkMerklePathGetRequestDto {
+                asset_id: definition_id.to_string(),
+                commitments: Vec::new(),
+            }),
+        )
+        .await
+        .expect("empty request should return the current frontier metadata");
+
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkMerklePathGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.root, hex::encode(root));
+        assert!(payload.paths.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_merkle_path_rejects_asset_without_zk_state() {
+        let (state, definition_id) = selector_state();
+
+        let err = handle_v1_zk_merkle_path(
+            state,
+            None,
+            crate::NoritoJson(ZkMerklePathGetRequestDto {
+                asset_id: definition_id.to_string(),
+                commitments: vec![hex::encode([0x66; 32])],
+            }),
+        )
+        .await
+        .expect_err("asset without zk state should fail");
+
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_merkle_path_rejects_missing_commitment() {
+        let (state, definition_id) = selector_state();
+        seed_zk_asset_frontier_for_test(
+            &state,
+            &definition_id,
+            vec![[0x77; 32]],
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            None,
+        );
+
+        let err = handle_v1_zk_merkle_path(
+            state,
+            None,
+            crate::NoritoJson(ZkMerklePathGetRequestDto {
+                asset_id: definition_id.to_string(),
+                commitments: vec![hex::encode([0x78; 32])],
+            }),
+        )
+        .await
+        .expect_err("missing commitment should fail");
+
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_merkle_path_rejects_duplicate_request_commitment() {
+        let (state, definition_id) = selector_state();
+
+        let err = handle_v1_zk_merkle_path(
+            state,
+            None,
+            crate::NoritoJson(ZkMerklePathGetRequestDto {
+                asset_id: definition_id.to_string(),
+                commitments: vec![hex::encode([0x88; 32]), hex::encode([0x88; 32])],
+            }),
+        )
+        .await
+        .expect_err("duplicate request commitment should fail");
+
+        assert_query_conversion_contains(err, "duplicates an earlier request entry");
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_merkle_path_rejects_ambiguous_frontier_commitment() {
+        let (state, definition_id) = selector_state();
+        seed_zk_asset_frontier_for_test(
+            &state,
+            &definition_id,
+            vec![[0x99; 32], [0x99; 32]],
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            None,
+        );
+
+        let err = handle_v1_zk_merkle_path(
+            state,
+            None,
+            crate::NoritoJson(ZkMerklePathGetRequestDto {
+                asset_id: definition_id.to_string(),
+                commitments: vec![hex::encode([0x99; 32])],
+            }),
+        )
+        .await
+        .expect_err("ambiguous frontier commitment should fail");
+
+        assert_query_conversion_contains(err, "appears more than once");
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_merkle_path_rejects_malformed_commitment_hex() {
+        let (state, definition_id) = selector_state();
+
+        let err = handle_v1_zk_merkle_path(
+            state,
+            None,
+            crate::NoritoJson(ZkMerklePathGetRequestDto {
+                asset_id: definition_id.to_string(),
+                commitments: vec!["0x1234".to_owned()],
+            }),
+        )
+        .await
+        .expect_err("malformed commitment should fail");
+
+        assert_query_conversion_contains(err, "must be 32-byte hex");
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_merkle_path_rejects_oversized_batch() {
+        let (state, definition_id) = selector_state();
+        let commitments = (0..=ZK_MERKLE_PATH_MAX_COMMITMENTS)
+            .map(|index| hex::encode([index as u8; 32]))
+            .collect();
+
+        let err = handle_v1_zk_merkle_path(
+            state,
+            None,
+            crate::NoritoJson(ZkMerklePathGetRequestDto {
+                asset_id: definition_id.to_string(),
+                commitments,
+            }),
+        )
+        .await
+        .expect_err("oversized commitment batch should fail");
+
+        assert_query_conversion_contains(err, "supports at most");
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_merkle_path_rejects_non_confidential_v2_asset() {
+        let (state, definition_id) = selector_state();
+        seed_zk_asset_frontier_for_test(
+            &state,
+            &definition_id,
+            vec![[0xaa; 32]],
+            "legacy-transfer-circuit",
+            None,
+        );
+
+        let err = handle_v1_zk_merkle_path(
+            state,
+            None,
+            crate::NoritoJson(ZkMerklePathGetRequestDto {
+                asset_id: definition_id.to_string(),
+                commitments: vec![hex::encode([0xaa; 32])],
+            }),
+        )
+        .await
+        .expect_err("non-confidential-v2 asset should fail");
+
+        assert_query_conversion_contains(err, "does not use the confidential-v2 Merkle tree");
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_merkle_path_rejects_root_history_mismatch() {
+        let (state, definition_id) = selector_state();
+        seed_zk_asset_frontier_for_test(
+            &state,
+            &definition_id,
+            vec![[0xbb; 32]],
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            Some([0xcc; 32]),
+        );
+
+        let err = handle_v1_zk_merkle_path(
+            state,
+            None,
+            crate::NoritoJson(ZkMerklePathGetRequestDto {
+                asset_id: definition_id.to_string(),
+                commitments: vec![hex::encode([0xbb; 32])],
+            }),
+        )
+        .await
+        .expect_err("mismatched root history should fail");
+
+        assert_query_conversion_contains(err, "root history does not match");
     }
 }
 

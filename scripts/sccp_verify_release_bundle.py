@@ -6371,6 +6371,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "native_sdk_artifacts[",
             "native_sdk_artifacts contains duplicate sdk",
             "native_sdk_artifacts contains unknown sdk",
+            "native_sdk_artifacts must match expected SDK order",
             "def _native_evm_prover_sdk_artifact_key_blocker(",
             ".sdk contains control character",
             ".sdk must be printable ASCII",
@@ -6505,6 +6506,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash",
             "def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifacts",
+            "def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_order",
             "def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifacts",
             "def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "secret_token_native_sdk_field",
@@ -6692,6 +6694,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash",
             "def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash",
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifacts",
+            "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_order",
             "def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifacts",
             "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "secret_token_native_sdk_field",
@@ -7290,6 +7293,8 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "readiness report native_evm_prover_bundle",
             "cross_sdk_fixture_parity_artifact sha256 must match",
             "native_prover_self_test_artifact sha256 must match",
+            "native_sdk_artifacts must match expected SDK order",
+            "sdk_artifacts must match expected SDK order",
             "def _native_evm_prover_sdk_artifact_key_blocker(",
             "def _native_evm_prover_summary_sdk_artifact_key_blocker(",
             ".sdk must be printable ASCII",
@@ -7332,6 +7337,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "def _native_evm_validation_blockers(",
             'return f"{item_label} contains sensitive name"',
             "def _native_evm_validation_blockers_cell(",
+            "native_sdk_artifacts must match expected SDK order",
         ),
     ),
     (
@@ -7352,6 +7358,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "sha256 must match implementation_hash",
             "audit_hashes missing field",
             "sdk_artifacts missing sdk",
+            "sdk_artifacts must match expected SDK order",
             "validation_status must be passed",
             "validation_blockers must be empty",
             "validation_blockers must be empty when validation_status is passed",
@@ -7369,6 +7376,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_bundle_rejects_malformed_copied_native_evm_summary_before_render",
             "test_release_bundle_rejects_blocked_copied_native_evm_summary_before_render",
             "test_release_bundle_rejects_malformed_copied_native_evm_artifacts_before_render",
+            "test_release_bundle_rejects_copied_native_evm_sdk_artifact_order_before_render",
             "test_release_bundle_rejects_copied_native_evm_summary_binding_before_render",
             "test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields",
             "test_release_bundle_verifier_rejects_duplicate_native_evm_prover_nested_json_keys",
@@ -7381,6 +7389,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "secret-token-native-blocker",
             "validation_blockers[0] contains sensitive name",
             "validation_blockers contains blocker with sensitive name",
+            "test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_order",
             "test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_drift",
             "test_release_bundle_verifier_rejects_native_evm_prover_sdk_implementation_artifact_drift",
             "test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture",
@@ -7393,6 +7402,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifact_ids",
             "test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_sdk_artifact_ids",
+            "test_release_bundle_verifier_rejects_native_evm_prover_report_sdk_artifact_order",
             "test_release_bundle_verifier_rejects_native_evm_prover_malformed_unknown_field_names",
             "secret-token-sdk",
             "test_release_bundle_verifier_blocks_malformed_native_prover_blockers",
@@ -7426,6 +7436,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_readiness_report_redacts_malformed_native_evm_prover_fixture_json",
             "test_release_readiness_report_redacts_native_evm_manifest_artifact_path_failure",
             "test_release_readiness_report_redacts_native_evm_payload_artifact_path_failures",
+            "test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_order",
             "test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_drift",
             "secret-token-sdk",
@@ -13321,6 +13332,7 @@ def _native_evm_prover_bundle_artifact_summary(
 
     rows: list[dict[str, Any]] = []
     by_sdk: dict[str, dict[str, Any]] = {}
+    semantic_sdk_order: list[str] = []
     for index, artifact in enumerate(artifacts):
         label = f"native_sdk_artifacts[{index}]"
         if not isinstance(artifact, dict):
@@ -13338,6 +13350,7 @@ def _native_evm_prover_bundle_artifact_summary(
         if sdk_key_blocker is not None:
             blockers.append(sdk_key_blocker)
             continue
+        semantic_sdk_order.append(sdk)
         if sdk in by_sdk:
             blockers.append(
                 _native_evm_sdk_name_blocker("native_sdk_artifacts", sdk, "duplicate")
@@ -13384,6 +13397,8 @@ def _native_evm_prover_bundle_artifact_summary(
 
     for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(by_sdk)):
         blockers.append(f"native_sdk_artifacts missing sdk: {sdk}")
+    if semantic_sdk_order != sorted(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
+        blockers.append("native_sdk_artifacts must match expected SDK order")
 
     return sorted(rows, key=lambda row: row["sdk"]), blockers
 

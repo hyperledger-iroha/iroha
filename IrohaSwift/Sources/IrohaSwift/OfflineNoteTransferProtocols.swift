@@ -1023,7 +1023,49 @@ public enum OfflineNoteNearbyMessageKind: String, Codable, Sendable {
 }
 
 public enum OfflineNoteNearbyTransportPolicy {
+    public static let exchangeTimeoutSeconds: UInt64 = 90
+    public static let invitationTimeoutSeconds: TimeInterval = 20
+    public static let localNetworkPreflightTimeoutSeconds: TimeInterval = 12
+    public static let maxPeerDisplayNameUTF8Bytes = 63
+    public static let defaultPeerDisplayNamePrefix = "iroha"
     public static let receiptAckDisconnectGraceNanoseconds: UInt64 = 1_500_000_000
+
+    public static func peerDisplayName(
+        prefix: String = defaultPeerDisplayNamePrefix,
+        uuid: UUID = UUID()
+    ) -> String {
+        let suffix = String(uuid.uuidString.prefix(8)).lowercased()
+        let sanitizedPrefix = sanitizedPeerDisplayNamePrefix(prefix)
+        let candidate = "\(sanitizedPrefix)-\(suffix)"
+        guard candidate.utf8.count > maxPeerDisplayNameUTF8Bytes else {
+            return candidate
+        }
+        let maxPrefixLength = Swift.max(1, maxPeerDisplayNameUTF8Bytes - suffix.utf8.count - 1)
+        let clippedPrefix = String(sanitizedPrefix.prefix(maxPrefixLength)).trimmingCharacters(
+            in: CharacterSet(charactersIn: "-")
+        )
+        let finalPrefix = clippedPrefix.isEmpty ? defaultPeerDisplayNamePrefix : clippedPrefix
+        return "\(finalPrefix)-\(suffix)"
+    }
+
+    private static func sanitizedPeerDisplayNamePrefix(_ prefix: String) -> String {
+        let folded = prefix.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var output = ""
+        var previousWasSeparator = false
+        for scalar in folded.unicodeScalars {
+            if ("a"..."z").contains(String(scalar)) || ("0"..."9").contains(String(scalar)) {
+                output.unicodeScalars.append(scalar)
+                previousWasSeparator = false
+            } else if scalar == "-" || scalar == "_" {
+                if !previousWasSeparator, !output.isEmpty {
+                    output.append("-")
+                    previousWasSeparator = true
+                }
+            }
+        }
+        let trimmed = output.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return trimmed.isEmpty ? defaultPeerDisplayNamePrefix : trimmed
+    }
 
     public static func requiresDisconnectGraceAfterSending(_ kind: OfflineNoteNearbyMessageKind) -> Bool {
         kind == .receiptAck
@@ -1037,6 +1079,11 @@ public enum OfflineNoteNearbyTransportPolicy {
 public enum OfflineNoteNearbyDiscoveryPolicy {
     public static let protocolKey = "protocol"
     public static let protocolVersion = "offline-bearer-cash-v1"
+    public static let bonjourServiceName = bonjourServiceName(for: OfflineNoteTransferHandoff.nearbyServiceName)
+
+    public static func bonjourServiceName(for serviceName: String) -> String {
+        "_\(serviceName)._tcp"
+    }
 
     public static var discoveryInfo: [String: String] {
         [protocolKey: protocolVersion]
@@ -1051,6 +1098,10 @@ public enum OfflineNoteNearbyDiscoveryPolicy {
 }
 
 public enum OfflineNoteNearbyPeerSelection {
+    public static func peerKey(displayName: String, selectionHash: Int) -> String {
+        "\(displayName.utf8.count):\(displayName)#\(selectionHash)"
+    }
+
     public static func shouldAcceptInvitation(
         didFinish: Bool,
         connectedPeerName: String?

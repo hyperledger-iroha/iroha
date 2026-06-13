@@ -20,6 +20,8 @@ use crate::json_helpers::fixed_bytes;
 
 /// Version discriminator for confidential encrypted payloads (v1 layout).
 pub const CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1: u8 = 1;
+/// Maximum encrypted note payload bytes accepted by confidential instructions.
+pub const CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES: usize = 64 * 1024;
 
 /// AEAD-wrapped note payload for confidential instructions.
 ///
@@ -28,6 +30,10 @@ pub const CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1: u8 = 1;
 /// - `ephemeral_pubkey` conveys the sender's Diffie–Hellman public key (X25519, 32 bytes).
 /// - `nonce` is the XChaCha20-Poly1305 nonce used for AEAD encryption (24 bytes).
 /// - `ciphertext` stores the encrypted payload with the Poly1305 authentication tag.
+///
+/// The ciphertext is capped at [`CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES`]. Current
+/// shielded-note plaintexts are compact note descriptors; the cap keeps malformed client payloads
+/// from becoming unbounded transaction or wallet memory inputs.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -83,7 +89,23 @@ fn read_varint(bytes: &[u8]) -> Result<(usize, usize), NoritoError> {
             .checked_shl(shift_u32)
             .ok_or_else(|| NoritoError::Message("ciphertext length overflow".to_owned()))?;
         if byte & 0x80 == 0 {
-            return Ok((value, idx + 1));
+            let encoded_len = idx + 1;
+            if encoded_len > 1 {
+                let min_shift = 7usize
+                    .checked_mul(encoded_len - 1)
+                    .ok_or_else(|| NoritoError::Message("ciphertext length overflow".into()))?;
+                let min_value = 1usize
+                    .checked_shl(u32::try_from(min_shift).map_err(|_| {
+                        NoritoError::Message("ciphertext length overflow".to_owned())
+                    })?)
+                    .ok_or_else(|| NoritoError::Message("ciphertext length overflow".into()))?;
+                if value < min_value {
+                    return Err(NoritoError::Message(
+                        "non-canonical ciphertext length".into(),
+                    ));
+                }
+            }
+            return Ok((value, encoded_len));
         }
         shift += 7;
         if shift >= usize::BITS as usize {
@@ -154,6 +176,11 @@ impl ConfidentialEncryptedPayload {
                 "confidential encrypted payload ciphertext must not be empty".to_owned(),
             ));
         }
+        if self.ciphertext.len() > CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES {
+            return Err(NoritoError::Message(format!(
+                "confidential encrypted payload ciphertext must not exceed {CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES} bytes",
+            )));
+        }
         X25519Sha256::decode_public_key(&self.ephemeral_pubkey).map_err(|err| {
             NoritoError::Message(format!(
                 "invalid confidential encrypted payload X25519 ephemeral public key: {err}"
@@ -177,6 +204,11 @@ impl Default for ConfidentialEncryptedPayload {
 
 impl norito::NoritoSerialize for ConfidentialEncryptedPayload {
     fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), NoritoError> {
+        if self.ciphertext.len() > CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES {
+            return Err(NoritoError::Message(format!(
+                "confidential encrypted payload ciphertext must not exceed {CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES} bytes",
+            )));
+        }
         writer.write_all(&[self.version])?;
         writer.write_all(&self.ephemeral_pubkey)?;
         writer.write_all(&self.nonce)?;
@@ -228,6 +260,11 @@ impl<'a> norito_core::DecodeFromSlice<'a> for ConfidentialEncryptedPayload {
         let nonce_end_inclusive = nonce_end_exclusive - 1;
         nonce.copy_from_slice(&bytes[nonce_start..=nonce_end_inclusive]);
         let (cipher_len, varint_len) = read_varint(&bytes[nonce_end_exclusive..])?;
+        if cipher_len > CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES {
+            return Err(NoritoError::Message(format!(
+                "confidential encrypted payload ciphertext must not exceed {CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES} bytes",
+            )));
+        }
         let cipher_start = nonce_end_exclusive + varint_len;
         let cipher_end = cipher_start
             .checked_add(cipher_len)
@@ -635,15 +672,81 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_payload_validation_rejects_low_order_ephemeral_key() {
-        let payload = ConfidentialEncryptedPayload::new([0u8; 32], [2u8; 24], vec![3, 4, 5]);
+    fn encrypted_payload_validation_rejects_oversized_ciphertext() {
+        let payload = ConfidentialEncryptedPayload::new(
+            [7u8; 32],
+            [2u8; 24],
+            vec![3; CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES + 1],
+        );
         let err = payload
             .validate()
-            .expect_err("low-order X25519 ephemeral key must fail");
+            .expect_err("oversized confidential ciphertext must fail validation");
         assert!(
-            err.to_string().contains("low-order"),
+            err.to_string().contains("ciphertext must not exceed"),
             "unexpected error: {err}"
         );
+
+        let err = norito::to_bytes(&payload)
+            .expect_err("oversized confidential ciphertext must fail serialization");
+        assert!(
+            err.to_string().contains("ciphertext must not exceed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn encrypted_payload_decode_rejects_noncanonical_ciphertext_length() {
+        let mut payload = Vec::new();
+        payload.push(CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1);
+        payload.extend_from_slice(&[7u8; 32]);
+        payload.extend_from_slice(&[2u8; 24]);
+        payload.extend_from_slice(&[0x83, 0x00]);
+        payload.extend_from_slice(&[3, 4, 5]);
+
+        let err = ConfidentialEncryptedPayload::decode_from_slice(&payload)
+            .expect_err("non-canonical confidential ciphertext length must fail");
+        assert!(
+            err.to_string().contains("non-canonical ciphertext length"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn encrypted_payload_decode_rejects_oversized_ciphertext_length() {
+        let mut payload = Vec::new();
+        payload.push(CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1);
+        payload.extend_from_slice(&[7u8; 32]);
+        payload.extend_from_slice(&[2u8; 24]);
+        write_varint(
+            &mut payload,
+            CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES + 1,
+        )
+        .expect("write oversized length");
+
+        let err = ConfidentialEncryptedPayload::decode_from_slice(&payload)
+            .expect_err("oversized confidential ciphertext length must fail");
+        assert!(
+            err.to_string().contains("ciphertext must not exceed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn encrypted_payload_validation_rejects_low_order_ephemeral_key() {
+        for ephemeral in [[0u8; 32], {
+            let mut key = [0u8; 32];
+            key[0] = 1;
+            key
+        }] {
+            let payload = ConfidentialEncryptedPayload::new(ephemeral, [2u8; 24], vec![3, 4, 5]);
+            let err = payload
+                .validate()
+                .expect_err("low-order X25519 ephemeral key must fail");
+            assert!(
+                err.to_string().contains("low-order"),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

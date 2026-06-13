@@ -1,21 +1,31 @@
 package org.hyperledger.iroha.android.privacy;
 
+import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.TypeAdapter;
+
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 
 /** Raw Norito V1 privacy proof bridge backed by {@code connect_norito_bridge}. */
 public final class PrivacyNativeBridge {
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 7;
   public static final int PRIVACY_FFI_VERSION_V1 = 1;
   public static final String PRODUCTION_GATE_VERSION = "privacy-production-gate-v1";
+  public static final int STATUS_OK = 0;
   public static final int STATUS_ERROR = 1;
   public static final int ERROR_NULL_POINTER = 1;
   public static final int ERROR_MALFORMED_NORITO = 2;
   public static final int ERROR_UNSUPPORTED_ALGORITHM = 3;
   public static final int ERROR_PRODUCTION_DISABLED = 4;
   public static final int ERROR_INVALID_REQUEST = 5;
+  public static final int ERROR_PROVING_FAILED = 6;
   public static final int PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
 
   private static final int PRIVACY_NORITO_HEADER_BYTES = 40;
@@ -32,6 +42,8 @@ public final class PrivacyNativeBridge {
   private static final int PRIVACY_SCHEMA_BUILD_PROOF_RESULT = 0x42;
   private static final int PRIVACY_SCHEMA_VERIFY_PROOF_RESULT = 0x56;
   private static final long PRIVACY_CRC64_REFLECTED_POLY = 0xC96C5795D7870F42L;
+  private static final String CONFIDENTIAL_TRANSFER_ALGORITHM_ID = "confidential-transfer-v2";
+  private static final String UNSHIELD_ALGORITHM_ID = "unshield";
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   private static final byte[] PRIVACY_NORITO_MAGIC = new byte[] {'N', 'R', 'T', '0'};
   private static final long[] PRIVACY_CRC64_TABLE = buildPrivacyCrc64Table();
@@ -76,6 +88,64 @@ public final class PrivacyNativeBridge {
               "performance_gates",
               "external_audit"));
   private static final List<String> PRODUCTION_GATE_AUDIT_REFERENCES = Collections.emptyList();
+  private static final TypeAdapter<Long> NATIVE_U32 = NoritoAdapters.uint(32);
+  private static final TypeAdapter<String> NATIVE_STRING = NoritoAdapters.stringAdapter();
+  private static final TypeAdapter<Boolean> NATIVE_BOOL = NoritoAdapters.boolAdapter();
+  private static final TypeAdapter<NativeGateStatus> NATIVE_GATE_STATUS_ADAPTER =
+      typedStruct(
+          Arrays.asList(
+              NoritoAdapters.field("key", NATIVE_STRING),
+              NoritoAdapters.field("passed", NATIVE_BOOL)),
+          fields -> new NativeGateStatus(
+              stringField(fields, "key"),
+              booleanField(fields, "passed")));
+  private static final TypeAdapter<NativeProductionGate> NATIVE_PRODUCTION_GATE_ADAPTER =
+      typedStruct(
+          Arrays.asList(
+              NoritoAdapters.field("version", NATIVE_STRING),
+              NoritoAdapters.field("ready", NATIVE_BOOL),
+              NoritoAdapters.field("gates", NoritoAdapters.sequence(NATIVE_GATE_STATUS_ADAPTER)),
+              NoritoAdapters.field("required_gates", NoritoAdapters.sequence(NATIVE_STRING)),
+              NoritoAdapters.field("missing", NoritoAdapters.sequence(NATIVE_STRING)),
+              NoritoAdapters.field("audit_references", NoritoAdapters.sequence(NATIVE_STRING))),
+          fields ->
+              new NativeProductionGate(
+                  stringField(fields, "version"),
+                  booleanField(fields, "ready"),
+                  listField(fields, "gates"),
+                  listField(fields, "required_gates"),
+                  listField(fields, "missing"),
+                  listField(fields, "audit_references")));
+  private static final TypeAdapter<NativeCapability> NATIVE_CAPABILITY_ADAPTER =
+      typedStruct(
+          Arrays.asList(
+              NoritoAdapters.field("algorithm_id", NATIVE_STRING),
+              NoritoAdapters.field("proof_family", NATIVE_STRING),
+              NoritoAdapters.field("backend_family", NATIVE_STRING),
+              NoritoAdapters.field("sdk_entrypoints", NoritoAdapters.sequence(NATIVE_STRING)),
+              NoritoAdapters.field("planned_entrypoints", NoritoAdapters.sequence(NATIVE_STRING)),
+              NoritoAdapters.field("production_ready", NATIVE_BOOL),
+              NoritoAdapters.field("production_gate", NATIVE_PRODUCTION_GATE_ADAPTER)),
+          fields ->
+              new NativeCapability(
+                  stringField(fields, "algorithm_id"),
+                  stringField(fields, "proof_family"),
+                  stringField(fields, "backend_family"),
+                  listField(fields, "sdk_entrypoints"),
+                  listField(fields, "planned_entrypoints"),
+                  booleanField(fields, "production_ready"),
+                  objectField(fields, "production_gate")));
+  private static final TypeAdapter<NativeCapabilities> NATIVE_CAPABILITIES_ADAPTER =
+      typedStruct(
+          Arrays.asList(
+              NoritoAdapters.field("version", NATIVE_U32),
+              NoritoAdapters.field("gate_version", NATIVE_STRING),
+              NoritoAdapters.field("algorithms", NoritoAdapters.sequence(NATIVE_CAPABILITY_ADAPTER))),
+          fields ->
+              new NativeCapabilities(
+                  uintField(fields, "version"),
+                  stringField(fields, "gate_version"),
+                  listField(fields, "algorithms")));
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   private PrivacyNativeBridge() {}
@@ -596,7 +666,270 @@ public final class PrivacyNativeBridge {
   }
 
   static PrivacyCapabilities privacyCapabilities(final boolean bridgeAvailable) {
-    return new PrivacyCapabilities(true, bridgeAvailable);
+    if (!bridgeAvailable || !NATIVE_AVAILABLE) {
+      return PrivacyCapabilities.failClosed(bridgeAvailable);
+    }
+    try {
+      final byte[] archive =
+          requireNativeOutput(
+              invokeNativeOutput("privacy capabilities", PrivacyNativeBridge::nativeCapabilities),
+              "privacy capabilities",
+              PRIVACY_SCHEMA_CAPABILITIES_RESULT);
+      return privacyCapabilitiesFromArchive(archive, bridgeAvailable);
+    } catch (final RuntimeException error) {
+      return PrivacyCapabilities.failClosed(bridgeAvailable);
+    } catch (final LinkageError error) {
+      return PrivacyCapabilities.failClosed(bridgeAvailable);
+    }
+  }
+
+  static PrivacyCapabilities privacyCapabilitiesFromArchive(
+      final byte[] archive, final boolean bridgeAvailable) {
+    try {
+      return privacyCapabilitiesFromNative(
+          NoritoCodec.decode(archive, NATIVE_CAPABILITIES_ADAPTER, null), bridgeAvailable);
+    } catch (final RuntimeException error) {
+      return PrivacyCapabilities.failClosed(bridgeAvailable);
+    }
+  }
+
+  private static PrivacyCapabilities privacyCapabilitiesFromNative(
+      final NativeCapabilities nativeCapabilities, final boolean bridgeAvailable) {
+    if (nativeCapabilities.version != PRIVACY_FFI_VERSION_V1
+        || !PRODUCTION_GATE_VERSION.equals(nativeCapabilities.gateVersion)) {
+      return PrivacyCapabilities.failClosed(bridgeAvailable);
+    }
+
+    final Map<String, NativeCapability> algorithmsById = new LinkedHashMap<>();
+    for (final NativeCapability algorithm : nativeCapabilities.algorithms) {
+      if (algorithmsById.put(algorithm.algorithmId, algorithm) != null) {
+        return PrivacyCapabilities.failClosed(bridgeAvailable);
+      }
+    }
+    final NativeCapability confidentialTransfer =
+        algorithmsById.get(CONFIDENTIAL_TRANSFER_ALGORITHM_ID);
+    final NativeCapability unshield = algorithmsById.get(UNSHIELD_ALGORITHM_ID);
+    if (confidentialTransfer == null || unshield == null) {
+      return PrivacyCapabilities.failClosed(bridgeAvailable);
+    }
+
+    final List<NativeCapability> rows = Arrays.asList(confidentialTransfer, unshield);
+    for (final NativeCapability row : rows) {
+      if (!PRODUCTION_GATE_VERSION.equals(row.productionGate.version)) {
+        return PrivacyCapabilities.failClosed(bridgeAvailable);
+      }
+    }
+
+    boolean rowReady = true;
+    for (final NativeCapability row : rows) {
+      rowReady &=
+          row.productionReady
+              && row.plannedEntrypoints.isEmpty()
+              && row.productionGate.ready;
+    }
+    final List<String> auditReferences = nativeAuditReferences(rows);
+    boolean aggregateReady = rowReady && !auditReferences.isEmpty();
+    for (final String key : PRODUCTION_GATE_REQUIRED) {
+      aggregateReady &= nativeGatePassed(rows, key);
+    }
+
+    List<String> missing = nativeMissing(rows);
+    if (!aggregateReady && missing.isEmpty()) {
+      missing = PRODUCTION_GATE_MISSING;
+    }
+
+    return new PrivacyCapabilities(
+        true,
+        bridgeAvailable,
+        aggregateReady,
+        nativeGatePassed(rows, "real_proving"),
+        nativeGatePassed(rows, "real_verification"),
+        nativeGatePassed(rows, "chain_admission"),
+        nativeGatePassed(rows, "sdk_parity"),
+        nativeGatePassed(rows, "wallet_state"),
+        nativeGatePassed(rows, "witness_privacy_checks"),
+        nativeGatePassed(rows, "deterministic_tests"),
+        nativeGatePassed(rows, "negative_adversarial_tests"),
+        nativeGatePassed(rows, "replay_nullifier_tests"),
+        nativeGatePassed(rows, "fuzzing"),
+        nativeGatePassed(rows, "parser_fuzzing"),
+        nativeGatePassed(rows, "verifier_fuzzing"),
+        nativeGatePassed(rows, "performance_gates"),
+        nativeGatePassed(rows, "external_audit"),
+        aggregateReady ? Collections.emptyList() : missing,
+        auditReferences);
+  }
+
+  private static boolean nativeGatePassed(
+      final List<NativeCapability> rows, final String key) {
+    for (final NativeCapability row : rows) {
+      if (!row.productionGate.requiredGates.contains(key)) {
+        continue;
+      }
+      boolean passed = false;
+      for (final NativeGateStatus status : row.productionGate.gates) {
+        if (key.equals(status.key) && status.passed) {
+          passed = true;
+          break;
+        }
+      }
+      if (!passed) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static List<String> nativeMissing(final List<NativeCapability> rows) {
+    final List<String> missing = new ArrayList<>();
+    for (final NativeCapability row : rows) {
+      missing.addAll(row.productionGate.missing);
+    }
+    return stableDistinct(missing);
+  }
+
+  private static List<String> nativeAuditReferences(final List<NativeCapability> rows) {
+    final List<String> references = new ArrayList<>();
+    for (final NativeCapability row : rows) {
+      references.addAll(row.productionGate.auditReferences);
+    }
+    return stableDistinct(references);
+  }
+
+  private static List<String> stableDistinct(final List<String> values) {
+    return Collections.unmodifiableList(new ArrayList<>(new LinkedHashSet<>(values)));
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <T> TypeAdapter<T> typedStruct(
+      final List<? extends NoritoAdapters.StructField<?>> fields,
+      final NoritoAdapters.StructAdapter.StructFactory factory) {
+    return (TypeAdapter<T>) (TypeAdapter<?>) NoritoAdapters.struct(fields, factory);
+  }
+
+  private static String stringField(final Map<String, Object> fields, final String name) {
+    final Object value = fields.get(name);
+    if (!(value instanceof String)) {
+      throw new IllegalArgumentException("missing native capability string field " + name);
+    }
+    return (String) value;
+  }
+
+  private static boolean booleanField(final Map<String, Object> fields, final String name) {
+    final Object value = fields.get(name);
+    if (!(value instanceof Boolean)) {
+      throw new IllegalArgumentException("missing native capability bool field " + name);
+    }
+    return (Boolean) value;
+  }
+
+  private static int uintField(final Map<String, Object> fields, final String name) {
+    final Object value = fields.get(name);
+    if (!(value instanceof Long)) {
+      throw new IllegalArgumentException("missing native capability uint field " + name);
+    }
+    final long number = (Long) value;
+    if (number < 0 || number > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("native capability uint field " + name + " is out of range");
+    }
+    return (int) number;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <T> List<T> listField(final Map<String, Object> fields, final String name) {
+    final Object value = fields.get(name);
+    if (!(value instanceof List<?>)) {
+      throw new IllegalArgumentException("missing native capability list field " + name);
+    }
+    return Collections.unmodifiableList(new ArrayList<>((List<T>) value));
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <T> T objectField(final Map<String, Object> fields, final String name) {
+    final Object value = fields.get(name);
+    if (value == null) {
+      throw new IllegalArgumentException("missing native capability object field " + name);
+    }
+    return (T) value;
+  }
+
+  private static final class NativeGateStatus {
+    private final String key;
+    private final boolean passed;
+
+    private NativeGateStatus(final String key, final boolean passed) {
+      this.key = key;
+      this.passed = passed;
+    }
+  }
+
+  private static final class NativeProductionGate {
+    private final String version;
+    private final boolean ready;
+    private final List<NativeGateStatus> gates;
+    private final List<String> requiredGates;
+    private final List<String> missing;
+    private final List<String> auditReferences;
+
+    private NativeProductionGate(
+        final String version,
+        final boolean ready,
+        final List<NativeGateStatus> gates,
+        final List<String> requiredGates,
+        final List<String> missing,
+        final List<String> auditReferences) {
+      this.version = version;
+      this.ready = ready;
+      this.gates = gates;
+      this.requiredGates = requiredGates;
+      this.missing = missing;
+      this.auditReferences = auditReferences;
+    }
+  }
+
+  private static final class NativeCapability {
+    private final String algorithmId;
+    @SuppressWarnings("unused")
+    private final String proofFamily;
+    @SuppressWarnings("unused")
+    private final String backendFamily;
+    @SuppressWarnings("unused")
+    private final List<String> sdkEntrypoints;
+    private final List<String> plannedEntrypoints;
+    private final boolean productionReady;
+    private final NativeProductionGate productionGate;
+
+    private NativeCapability(
+        final String algorithmId,
+        final String proofFamily,
+        final String backendFamily,
+        final List<String> sdkEntrypoints,
+        final List<String> plannedEntrypoints,
+        final boolean productionReady,
+        final NativeProductionGate productionGate) {
+      this.algorithmId = algorithmId;
+      this.proofFamily = proofFamily;
+      this.backendFamily = backendFamily;
+      this.sdkEntrypoints = sdkEntrypoints;
+      this.plannedEntrypoints = plannedEntrypoints;
+      this.productionReady = productionReady;
+      this.productionGate = productionGate;
+    }
+  }
+
+  private static final class NativeCapabilities {
+    private final int version;
+    private final String gateVersion;
+    private final List<NativeCapability> algorithms;
+
+    private NativeCapabilities(
+        final int version,
+        final String gateVersion,
+        final List<NativeCapability> algorithms) {
+      this.version = version;
+      this.gateVersion = gateVersion;
+      this.algorithms = algorithms;
+    }
   }
 
   public static final class PrivacyCapabilities {
@@ -621,29 +954,69 @@ public final class PrivacyNativeBridge {
     private final List<String> missingProductionGates;
     private final List<String> auditReferences;
 
+    private static PrivacyCapabilities failClosed(final boolean bridgeAvailable) {
+      return new PrivacyCapabilities(
+          true,
+          bridgeAvailable,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          PRODUCTION_GATE_MISSING,
+          PRODUCTION_GATE_AUDIT_REFERENCES);
+    }
+
     private PrivacyCapabilities(
         final boolean androidSdkAvailable,
-        final boolean bridgeAvailable) {
+        final boolean bridgeAvailable,
+        final boolean productionReady,
+        final boolean realProving,
+        final boolean realVerification,
+        final boolean chainAdmission,
+        final boolean sdkParity,
+        final boolean walletState,
+        final boolean witnessPrivacyChecks,
+        final boolean deterministicTests,
+        final boolean negativeAdversarialTests,
+        final boolean replayNullifierTests,
+        final boolean fuzzing,
+        final boolean parserFuzzing,
+        final boolean verifierFuzzing,
+        final boolean performanceGates,
+        final boolean externalAudit,
+        final List<String> missingProductionGates,
+        final List<String> auditReferences) {
       this.androidSdkAvailable = androidSdkAvailable;
       this.bridgeAvailable = bridgeAvailable;
       this.productionGateVersion = PRODUCTION_GATE_VERSION;
-      this.productionReady = false;
-      this.realProving = false;
-      this.realVerification = false;
-      this.chainAdmission = false;
-      this.sdkParity = false;
-      this.walletState = false;
-      this.witnessPrivacyChecks = false;
-      this.deterministicTests = false;
-      this.negativeAdversarialTests = false;
-      this.replayNullifierTests = false;
-      this.fuzzing = false;
-      this.parserFuzzing = false;
-      this.verifierFuzzing = false;
-      this.performanceGates = false;
-      this.externalAudit = false;
-      this.missingProductionGates = PRODUCTION_GATE_MISSING;
-      this.auditReferences = PRODUCTION_GATE_AUDIT_REFERENCES;
+      this.productionReady = productionReady;
+      this.realProving = realProving;
+      this.realVerification = realVerification;
+      this.chainAdmission = chainAdmission;
+      this.sdkParity = sdkParity;
+      this.walletState = walletState;
+      this.witnessPrivacyChecks = witnessPrivacyChecks;
+      this.deterministicTests = deterministicTests;
+      this.negativeAdversarialTests = negativeAdversarialTests;
+      this.replayNullifierTests = replayNullifierTests;
+      this.fuzzing = fuzzing;
+      this.parserFuzzing = parserFuzzing;
+      this.verifierFuzzing = verifierFuzzing;
+      this.performanceGates = performanceGates;
+      this.externalAudit = externalAudit;
+      this.missingProductionGates = stableDistinct(missingProductionGates);
+      this.auditReferences = stableDistinct(auditReferences);
     }
 
     public boolean isAndroidSdkAvailable() {

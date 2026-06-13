@@ -13,6 +13,38 @@ and completed history lives in [`status.md`](./status.md).
 
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- Privacy production readiness now requires a 4-peer localnet
+  shield-to-redeem lifecycle evidence set: shield tx, hop proof, recursive
+  init/verify, recursive append/verify, unshield proof, redeem tx, replay
+  rejection, restart replay rejection, and state recovery must each have
+  distinct production artifact hashes in the ready-gate audit references.
+  Generic smoke-only localnet evidence is not sufficient for release signoff,
+  and the same contract must remain mirrored across `connect_norito_bridge`,
+  `iroha_js_host`, and `iroha_python_rs`.
+- ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
+  endpoint for current confidential-v2 commitment inclusion paths, and the
+  Kotlin/JVM plus Android Java Torii Merkle providers call it directly.
+  Torii-backed providers verify returned sibling paths against requested
+  commitments and roots, and SDK path models enforce leaf-index direction
+  consistency before wallet or prover code receives paths. The SDK Torii
+  clients also reject quoted or fractional numeric fields in zk roots/path
+  responses so wallet code sees the same integer shapes the node emits. SDK
+  response parsers must also keep node-supplied Merkle paths structurally
+  exact: duplicate keys, overflowing counters, depth/array mismatches, root
+  mismatches, direction-bit mismatches, and `leaf_index >= frontier_len` fail
+  before wallet code can consume proof material. Keep local providers limited
+  to audited caller-supplied frontier material.
+- Confidential-v2 SDK note derivation and encrypted note payload handling now
+  exist for Kotlin/JVM and Android Java, with Rust-vector parity for owner tags,
+  note commitments, nullifiers, asset tags, and chain tags, Rust-fixture parity
+  for the `ConfidentialEncryptedPayload` wire envelope, low-order X25519
+  public-key rejection parity, canonical ciphertext-length rejection parity,
+  a 64 KiB encrypted-note ciphertext cap, and a shared deterministic
+  X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Default decryption
+  binds the plaintext owner tag to the supplied spend key, while diversified
+  notes must use the explicit expected-owner-tag overload. Keep the
+  higher-level wallet flows pinned to this contract when wiring shield-note
+  recovery into production clients.
 - Kagemusha SDK parity must keep ABI-7 compact projection verifier surfaces
   aligned across package roots and native hosts. Python now exposes both the
   optional-height verifier and the explicit
@@ -21,38 +53,65 @@ and completed history lives in [`status.md`](./status.md).
   before native probing or dispatch, accepting safe non-negative numbers and
   bounded `u64` bigints only, and the SDK parity guard must continue pinning
   those surfaces.
-- Kagemusha C# SDK validation still needs a Windows-machine confirmation even
-  though a temporary macOS .NET 8 SDK validated the standalone runner. On
-  Windows, install or select a .NET 8 SDK, run the standalone C# Kagemusha guard
-  `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` or its direct
-  `dotnet test` equivalent, and preserve the selected `dotnet --version`
-  evidence in the output. The focused pass should cover
+- Kagemusha recursive-spend JVM/Android request objects now reject wrong-schema
+  bundles, record bundles, proof attachments, verifier records, and lineage
+  witnesses at construction time; keep this fail-fast contract for wallet
+  request assembly instead of relying on later encode or native dispatch errors.
+  Init and lineage-append requests must also keep lineage verifier/proving-key
+  artifacts bound to the expected one-hop or append circuit and verifier-key
+  commitment before serialization; wallet-facing constructors should prefer
+  validated `LineageKeyArtifacts` packages over manually split raw key bytes,
+  including through the high-level recursive-spend request helper overloads.
+  The Python typed recursive-spend request API now enforces the same package
+  binding before encoding, including rejection of wrong-profile artifacts,
+  mismatched raw verifier/proving-key pairs, mixed typed/raw key material, and
+  unnecessary lineage artifacts on semantic append output.
+  The JVM recursive-spend guard must continue exercising both Gradle and direct
+  `javac` Android harness compilation for these typed request surfaces.
+  The explicit hop-evidence builders must also keep confidential-transfer-v2
+  public-instance shape exact: exactly nine single-row ZK1 columns, no extra
+  public columns, nonzero root transitions, continuous multi-hop roots, and
+  stable chain/asset binding across every folded hop. Native bridge ZK1 `I10P`
+  parsing must stay exact too: zero dimensions, over-cap dimensions, truncated
+  payloads, and trailing bytes reject before public-input projection.
+- Kagemusha Offline/Offline V2 readiness parsers must treat the legacy
+  `offline_kagemusha_abi7*` key family and the
+  `offline_kagemusha_recursive_compact_*` key family as aliases for the same
+  derived node signal. Legacy-only and recursive-compact-only bodies remain
+  supported, but when both families are present their enablement, mode, bridge
+  ABI, circuit-id, and artifact values must match or parsing fails closed.
+  Present alias values must also keep their expected exact types: booleans as
+  JSON booleans, strings as non-empty unpadded strings, and bridge ABI values as
+  exact integers or exact integer strings.
+- Confidential-v2 JVM/Android proof assembly now has typed transfer and
+  unshield witness/request codecs for the production native bridge. Keep wallet
+  integrations on these builders instead of raw witness bytes so canonical
+  u128 values, fixed 32-byte fields, bounded commitment trees, duplicate
+  input rejection, transfer/unshield shape separation, exact verifier
+  references, public-input schema constants, and the native Norito witness
+  alignment padding remain pinned by SDK and Rust golden-vector tests.
+- Kagemusha C# SDK validation now passes on this macOS host with .NET SDK
+  8.0.128 through `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, including
+  a freshly built `connect_norito_bridge` native library and 103 focused SDK
+  tests across recursive spend, privacy native, transaction builder, canonical
+  request, and Torii identifier receipt surfaces. The focused pass covers
   `csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs`,
-  `PrivacyNativeTests.cs`, `TransactionBuilderTests.cs`,
-  `CanonicalRequestTests.cs`, `ToriiClientTests.cs`,
-  `SignedQueryBuilderTests.cs`, `SignedIterableQueryBuilderTests.cs`, and
-  `VerifyingKeyBackendTagTests.cs`, with native bridge loading and P/Invoke
-  symbol probing enabled for the ABI-6
-  recursive spend, ABI-7 compact-token, recursive aggregation, recursive
-  compact verifier/projection, instruction transaction-builder surfaces, C#
-  canonical request auth exactness, C# signed query exactness, and C#
-  production verifier-backend label exactness. The
-  standalone runner now builds `connect_norito_bridge`, resolves the
+  `PrivacyNativeTests.cs`, and `TransactionBuilderTests.cs`, with native bridge
+  loading and P/Invoke symbol probing enabled for the ABI-6 recursive spend and
+  ABI-7 compact-token, recursive aggregation, recursive compact
+  verifier/projection, and instruction transaction-builder surfaces. The
+  standalone runner builds `connect_norito_bridge`, resolves the
   platform-specific native library name, fails if the freshly built artifact is
   missing, prints the selected native bridge path, and prepends that directory
   to the macOS, Linux, and Windows loader paths before invoking `dotnet test`.
-  The cross-SDK parity guard also requires refreshed local NoritoBridge
-  XCFramework slices to export the recursive compact prove/verify symbols; if a
-  generated `dist/NoritoBridge.xcframework` is stale, rebuild it with
-  `scripts/build_norito_xcframework.sh` before accepting parity evidence.
-  The
-  Windows pass must also pin the C# negative controls for malformed Norito
-  input/output headers, caller archive-copy immutability, verifier-unavailable
-  status mapping, transaction-builder schema and wire-name drift,
-  verifier-backend test-filter drift, and package/evidence parity. After the
-  Windows run passes, update `status.md`
-  with the C# SDK evidence and rerun the Kagemusha SDK parity or production
-  readiness guards needed to clear the C# row.
+  Windows remains a separate host-certification follow-up so the same C# lane
+  is proven against `connect_norito_bridge.dll`, Windows loader paths, RID, and
+  architecture. The Windows pass must also pin the C# negative controls for
+  malformed Norito input/output headers, caller archive-copy immutability,
+  verifier-unavailable status mapping, transaction-builder schema and wire-name
+  drift, and package/evidence parity. After the Windows run passes, update
+  `status.md` with the Windows C# SDK evidence and rerun the Kagemusha SDK
+  parity or production readiness guards needed to clear the Windows-only row.
   Windows-machine TODOs:
   - Select a .NET 8 SDK and capture `dotnet --version` in the run log.
   - Capture the Windows `dotnet --info` output, including RID/architecture, so
@@ -173,7 +232,18 @@ and completed history lives in [`status.md`](./status.md).
   and privacy native bridge tests, while the Android Java harness runs
   recursive spend, canonical request auth, Offline Cash lifecycle, Offline Note
   V2, Offline Note, privacy native bridge, and transaction-builder archive
-  tests. The focused runner now also executes the Kotlin/JVM and Android Java
+  tests. Kotlin/JVM and Android Java privacy capability APIs must continue
+  deriving bridge readiness from the native Norito capability archive when the
+  bridge is loaded, while malformed, duplicate, incomplete, or absent evidence
+  keeps the SDK capability surface fail-closed. Privacy proof dispatch must keep
+  the `privacy-production-enabled` feature opt-in, preserve default
+  production-disabled serialized results, and retain focused coverage for real
+  confidential-transfer-v2/unshield proving, verification, and checked unshield
+  input-sum overflow rejection. The production-enabled bridge must also reject
+  algorithm-mismatched witness fields, invalid input/output counts, duplicate
+  input leaf/rho material, and out-of-range leaf indices before verifier-key
+  lookup or prover setup. The focused runner now also executes the
+  Kotlin/JVM and Android Java
   account-literal, canonical request auth, and Offline Cash issuer-key
   exactness tests, plus Torii event-stream verifier-filter, signing-algorithm,
   Nexus wallet signature-algorithm, verifier-key backend/instruction, and
@@ -182,6 +252,25 @@ and completed history lives in [`status.md`](./status.md).
   event verifier filters, padded signing algorithm labels, padded Nexus wallet
   signature labels, padded verifier record fields, and padded verifier
   backend/status labels stay covered by the same mobile SDK gate.
+  Kotlin/JVM and Android Java recursive-spend request codecs must keep
+  init/append/verify/redeem archive schemas, compact request payload layouts,
+  raw embedded archive payloads, Norito `Option` child-length framing, Rust
+  `[u8; N]` fixed-array byte layout, bundle/result decoders, lineage gap checks,
+  hop `pallasOpenEnvelopes` archives whose exact native
+  `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>` count matches the record-bundle
+  fold-step count, previous-proof open-envelope archives with the same exact
+  native schema and exactly one Pallas envelope with nonzero verifier metadata,
+  malformed/trailing archive rejection, and nonnegative block-height guards
+  pinned in the focused JVM SDK runner and parity inventory. Kotlin/JVM and
+  Android Java now also expose typed
+  `RegisterZkAsset`, `Shield`, and `Unshield` builders plus native
+  signed-transaction wrappers that preserve private change outputs and return
+  canonical versioned transaction bytes with native hashes. The JVM roots/Merkle
+  slice now exposes typed `/v1/zk/roots` clients and local zk_assets path
+  providers for audited frontier material; remaining SDK gaps are
+  confidential-v2 note derivation/decryption after canonical derivation
+  confirmation, Torii-backed path acquisition when the node endpoint exists,
+  and audited end-to-end localnet coverage.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,
@@ -7416,7 +7505,18 @@ and completed history lives in [`status.md`](./status.md).
   Python, Swift, Kotlin/JVM, and Java Android now expose record-backed compact-token
   prover wrappers over that ABI, so mobile wallets can pass
   `KagemushaVerifiedFoldRecordBundle` Norito bytes through the native bridge
-  instead of constructing preverified folded public inputs themselves. The same
+  while Kotlin/JVM and Java Android recursive-spend evidence helpers keep
+  `VerifiedFoldHopEvidence` explicit for `chain_id`, asset, and `root_after`,
+  validate privacy build results, nested `OpenVerifyEnvelope`s, active
+  Kagemusha verifier records, schema hashes, verifier-key commitments, strict
+  ZK1 public-instance columns, and root continuity before emitting checked
+  fold-record bundles or redeem proof attachments. Proof-output-only helpers
+  must remain fail-closed because privacy proof outputs do not carry Pallas IPA
+  opening envelopes or enough chain context to derive a production-safe record
+  bundle; init/append request helpers must likewise require explicit checked
+  hop evidence plus caller-supplied Pallas open-envelopes archives before
+  serializing recursive-spend request archives instead of constructing
+  preverified folded public inputs themselves. The same
   SDK surfaces now expose the ABI-6 recursive aggregation proof-bundle prover,
   which accepts record-backed bundle bytes plus proof-derived Pallas
   open-envelope archive bytes and returns an admission-neutral

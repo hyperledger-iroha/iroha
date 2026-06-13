@@ -17,15 +17,19 @@ public static class CanonicalRequest
         long? timestampMs = null,
         string? nonce = null)
     {
-        var checkedAccountId = RequireExactNonBlank(accountId, nameof(accountId));
-        var checkedMethod = RequireExactNonBlank(method, nameof(method));
-        var checkedPath = RequireExactNonBlank(path, nameof(path));
+        var exactAccountId = RequireExactNonBlank(accountId, nameof(accountId));
+        var exactMethod = RequireExactNonBlank(method, nameof(method));
+        var exactPath = RequireExactNonBlank(path, nameof(path));
 
         var effectiveTimestamp = timestampMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var effectiveNonce = nonce is null ? GenerateNonce() : RequireExactNonBlank(nonce, nameof(nonce));
-        var message = BuildSignatureMessage(checkedMethod, checkedPath, query, body, effectiveTimestamp, effectiveNonce);
+        var message = BuildSignatureMessage(exactMethod, exactPath, query, body, effectiveTimestamp, effectiveNonce);
         var signature = Ed25519Signer.Sign(message, privateKeySeed);
-        return new CanonicalRequestHeaders(checkedAccountId, Convert.ToBase64String(signature), effectiveTimestamp, effectiveNonce);
+        return new CanonicalRequestHeaders(
+            exactAccountId,
+            Convert.ToBase64String(signature),
+            effectiveTimestamp,
+            effectiveNonce);
     }
 
     public static string BuildCanonicalQueryString(string? rawQuery)
@@ -76,20 +80,24 @@ public static class CanonicalRequest
         long timestampMs = 0,
         string? nonce = null)
     {
-        var checkedNonce = RequireExactNonBlank(nonce, nameof(nonce));
+        var exactNonce = RequireExactNonBlank(nonce, nameof(nonce));
         var baseMessage = Encoding.UTF8.GetString(BuildMessage(method, path, query, body));
-        return Encoding.UTF8.GetBytes($"{baseMessage}\n{timestampMs}\n{checkedNonce}");
+        return Encoding.UTF8.GetBytes($"{baseMessage}\n{timestampMs}\n{exactNonce}");
     }
 
-    private static string RequireExactNonBlank(string? value, string parameterName)
+    internal static string RequireExactNonBlank(string? value, string paramName)
     {
         if (string.IsNullOrEmpty(value))
         {
-            throw new ArgumentException($"{parameterName} must not be empty", parameterName);
+            throw new ArgumentException($"{paramName} must not be empty.", paramName);
         }
-        if (value != value.Trim() || value.Any(char.IsControl))
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
         {
-            throw new ArgumentException($"{parameterName} must not contain surrounding whitespace or control characters", parameterName);
+            throw new ArgumentException($"{paramName} must not contain surrounding whitespace.", paramName);
+        }
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException($"{paramName} must not contain control characters.", paramName);
         }
 
         return value;

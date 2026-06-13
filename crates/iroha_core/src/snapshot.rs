@@ -2355,7 +2355,7 @@ mod tests {
     }
 
     fn accepted_manifest_transaction() -> AcceptedTransaction<'static> {
-        let key_pair = KeyPair::random();
+        let key_pair = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let transaction = TransactionBuilder::new(ChainId::from(TEST_CHAIN_ID), authority)
             .with_instructions([PublishSpaceDirectoryManifest {
@@ -2366,7 +2366,7 @@ mod tests {
     }
 
     fn accepted_log_transaction(message: &str) -> AcceptedTransaction<'static> {
-        let key_pair = KeyPair::random();
+        let key_pair = KeyPair::from_seed(vec![0x32; 32], Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let transaction = TransactionBuilder::new(ChainId::from(TEST_CHAIN_ID), authority)
             .with_instructions([Log::new(Level::INFO, message.to_owned())])
@@ -2377,7 +2377,7 @@ mod tests {
     fn signed_block_with_transaction(
         transaction: AcceptedTransaction<'static>,
     ) -> Arc<SignedBlock> {
-        let block_signer = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let block_signer = KeyPair::from_seed(vec![0x33; 32], Algorithm::BlsNormal);
         Arc::new(
             BlockBuilder::new(vec![transaction])
                 .chain(0, None)

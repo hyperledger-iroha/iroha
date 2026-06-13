@@ -76,6 +76,8 @@ export const BSC_NETWORK_PROFILES = Object.freeze({
     routeConfigOut: "artifacts/sccp-bsc/taira-bsc-xor-route.torii.toml",
     routeFullConfigOut:
       "artifacts/sccp-bsc/taira-bsc-xor-route.full-taira-config.toml",
+    routeFullConfigEvidenceOut:
+      "artifacts/sccp-bsc/taira-bsc-xor-route.full-taira-config.evidence.json",
     nativeBundleOut:
       "artifacts/sccp-bsc/bsc-testnet-native-evm-prover-bundle.json",
   }),
@@ -97,6 +99,8 @@ export const BSC_NETWORK_PROFILES = Object.freeze({
       "artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.torii.toml",
     routeFullConfigOut:
       "artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.full-taira-config.toml",
+    routeFullConfigEvidenceOut:
+      "artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.full-taira-config.evidence.json",
     nativeBundleOut:
       "artifacts/sccp-bsc/bsc-mainnet-native-evm-prover-bundle.json",
   }),
@@ -131,6 +135,8 @@ export const DEPLOYMENT_EVIDENCE_SCHEMA =
   "iroha-sccp-bsc-taira-xor-deployment-evidence/v1";
 export const ROUTE_MANIFEST_SCHEMA =
   "iroha-sccp-taira-xor-route-manifest-draft/v1";
+export const OFFLINE_FULL_TOML_EVIDENCE_SCHEMA =
+  "iroha-sccp-bsc-taira-xor-offline-full-toml-evidence/v1";
 export const PRODUCTION_REQUIREMENTS_SCHEMA =
   "iroha-sccp-bsc-taira-xor-production-requirements/v1";
 export const TAIRA_BURN_RECORD_CONTRACT_SCHEMA =
@@ -146,6 +152,8 @@ export const DEFAULT_ROUTE_CONFIG_OUT =
   "artifacts/sccp-bsc/taira-bsc-xor-route.torii.toml";
 export const DEFAULT_ROUTE_FULL_CONFIG_OUT =
   "artifacts/sccp-bsc/taira-bsc-xor-route.full-taira-config.toml";
+export const DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT =
+  "artifacts/sccp-bsc/taira-bsc-xor-route.full-taira-config.evidence.json";
 export const DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT =
   "artifacts/sccp-bsc/bsc-testnet-native-evm-prover-bundle.json";
 export const DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT =
@@ -156,6 +164,7 @@ export const CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT = "artifacts/sccp-bsc";
 export const DEFAULT_PRIVATE_KEY_ENV = "SCCP_BSC_DEPLOYER_PRIVATE_KEY";
 export const TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES = 32;
 export const TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
+export const TAIRA_BURN_RECORD_PRODUCTION_ARTIFACT_MIN_BYTES = 256;
 export const SCCP_BSC_JSON_INPUT_MAX_BYTES = 12 * 1024 * 1024;
 export const SCCP_BSC_TEXT_INPUT_MAX_BYTES = 8 * 1024 * 1024;
 export const SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES = 512 * 1024 * 1024;
@@ -166,6 +175,8 @@ const SECRET_KEY_PATTERN =
 const PRIVATE_KEY_PEM_PATTERN =
   /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/iu;
 const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
+const PLACEHOLDER_BURN_RECORD_TEXT_PATTERN =
+  /(?:diagnostic|dummy|fixture|mock|placeholder|stub|test-only)/iu;
 const DIAGNOSTIC_TEXT_KEYS = [
   "schema",
   "warning",
@@ -361,9 +372,9 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs compile [--out ${DEFAULT_ARTIFACTS_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs deploy --bsc-network testnet|mainnet --verifier <verifier-key.json> --broadcast true --confirm-network ${ROUTE_ID}:testnet|${ROUTE_ID}:mainnet [--confirm-mainnet true] [--private-key-env ${DEFAULT_PRIVATE_KEY_ENV}] [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs evidence --bsc-network testnet|mainnet --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
-	  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>] [--production-ready true --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
-  node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs self-test
 
@@ -454,6 +465,7 @@ export function bscProductionRequirements(options = {}) {
   const deploymentEvidenceOut = defaultDeploymentEvidenceOut(profile);
   const routeManifestOut = defaultRouteManifestOut(profile);
   const nativeBundleOut = defaultNativeEvmProverBundleOut(profile);
+  const fullConfigEvidenceOut = defaultRouteFullConfigEvidenceOut(profile);
   return {
     schema: PRODUCTION_REQUIREMENTS_SCHEMA,
     routeId: ROUTE_ID,
@@ -489,7 +501,8 @@ export function bscProductionRequirements(options = {}) {
         "--route-canary-evidence-hash <0x...> " +
         "--route-canary-transaction-id <0x...> " +
         "--route-canary-explorer-url <url> " +
-        "--full-toml-ready true --offline-full-toml-sha256 <0x...> " +
+        "--full-toml-ready true " +
+        `--offline-full-toml-evidence ${fullConfigEvidenceOut} ` +
         "--production-ready true --live-readback-checked true " +
         `${routeManifestConfirmation} --out ${routeManifestOut}`,
       nativeProverBundle:
@@ -512,7 +525,9 @@ export function bscProductionRequirements(options = {}) {
         "--audit-no-wasm-no-remote-scan <hex-or-relative-file> " +
         `--out ${nativeBundleOut} ` +
         `--attach-route-manifest-out ${routeManifestOut}`,
-      routeConfig: `node scripts/sccp_bsc_taira_xor_deploy.mjs route-config --manifest ${routeManifestOut}`,
+      routeConfig:
+        `node scripts/sccp_bsc_taira_xor_deploy.mjs route-config --manifest ${routeManifestOut} ` +
+        `--base-config <deployed-taira-config.toml> --write-offline-full-toml-evidence ${fullConfigEvidenceOut}`,
     },
     inputs: [
       productionRequirementInput({
@@ -696,6 +711,9 @@ const defaultRouteConfigOut = (profile, { fullConfigMode = false } = {}) =>
   fullConfigMode
     ? profile.routeFullConfigOut ?? DEFAULT_ROUTE_FULL_CONFIG_OUT
     : profile.routeConfigOut ?? DEFAULT_ROUTE_CONFIG_OUT;
+
+const defaultRouteFullConfigEvidenceOut = (profile) =>
+  profile.routeFullConfigEvidenceOut ?? DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT;
 
 const defaultNativeEvmProverBundleOut = (profile) =>
   profile.nativeBundleOut ?? DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT;
@@ -2305,6 +2323,8 @@ const PRODUCTION_PROOF_MATERIAL_SHAPE_MIN_BYTES = 4096;
 const PRODUCTION_PROOF_MATERIAL_MIN_UNIQUE_BYTES = 16;
 const PRODUCTION_PROOF_MATERIAL_MAX_REPEATED_PATTERN_BYTES = 64;
 const PRODUCTION_PROOF_MATERIAL_MAX_DOMINANT_BYTE_FRACTION = 0.98;
+const PRODUCTION_BURN_RECORD_ARTIFACT_MIN_UNIQUE_BYTES = 16;
+const PRODUCTION_BURN_RECORD_ARTIFACT_MAX_DOMINANT_BYTE_FRACTION = 0.98;
 const SNARKJS_R1CS_MAGIC = [0x72, 0x31, 0x63, 0x73];
 const SNARKJS_ZKEY_MAGIC = [0x7a, 0x6b, 0x65, 0x79];
 
@@ -2492,6 +2512,56 @@ function assertProductionProofMaterialShape(artifact, label, kind = null) {
   }
   throw new Error(
     `${label} looks like placeholder proof material: only ${uniqueBytes.size} unique byte values across ${bytes.length} bytes.`,
+  );
+}
+
+function assertProductionBurnRecordArtifactShape(bytes, label) {
+  if (bytes.length < TAIRA_BURN_RECORD_PRODUCTION_ARTIFACT_MIN_BYTES) {
+    throw new Error(
+      `${label} must be at least ${TAIRA_BURN_RECORD_PRODUCTION_ARTIFACT_MIN_BYTES} bytes for production-ready BSC routes.`,
+    );
+  }
+  const decodedText = Buffer.from(bytes).toString("utf8");
+  if (PLACEHOLDER_BURN_RECORD_TEXT_PATTERN.test(decodedText)) {
+    throw new Error(
+      `${label} looks like placeholder burn-record material: text contains fixture, diagnostic, mock, stub, dummy, or placeholder markers.`,
+    );
+  }
+  const repeatedPatternLength = repeatedPrefixPatternLength(bytes);
+  if (repeatedPatternLength > 0) {
+    throw new Error(
+      `${label} looks like placeholder burn-record material: repeated ${repeatedPatternLength}-byte pattern.`,
+    );
+  }
+  const arithmeticDelta = constantByteDelta(bytes);
+  if (arithmeticDelta !== null) {
+    throw new Error(
+      `${label} looks like placeholder burn-record material: arithmetic byte sequence with step ${arithmeticDelta}.`,
+    );
+  }
+  const dominant = dominantByteFrequency(bytes);
+  if (
+    dominant.count / bytes.length >
+    PRODUCTION_BURN_RECORD_ARTIFACT_MAX_DOMINANT_BYTE_FRACTION
+  ) {
+    throw new Error(
+      `${label} looks like placeholder burn-record material: byte 0x${dominant.byte
+        .toString(16)
+        .padStart(
+          2,
+          "0",
+        )} dominates ${dominant.count} of ${bytes.length} bytes.`,
+    );
+  }
+  const uniqueBytes = new Set();
+  for (const byte of bytes) {
+    uniqueBytes.add(byte);
+    if (uniqueBytes.size >= PRODUCTION_BURN_RECORD_ARTIFACT_MIN_UNIQUE_BYTES) {
+      return;
+    }
+  }
+  throw new Error(
+    `${label} looks like placeholder burn-record material: only ${uniqueBytes.size} unique byte values across ${bytes.length} bytes.`,
   );
 }
 
@@ -3552,6 +3622,12 @@ function normalizeBscTairaBurnRecordContract(contract, options = {}) {
       `TAIRA burn-record contract artifact must decode to ${TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES}-${TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES} bytes.`,
     );
   }
+  if (optionEnabled(options, "production-ready", false)) {
+    assertProductionBurnRecordArtifactShape(
+      artifact.bytes,
+      "TAIRA burn-record contract artifact",
+    );
+  }
   const artifactSha256 = bytesToHex(sha256(new Uint8Array(artifact.bytes)));
   const declaredArtifactSha256 = normalizeCanonicalHex32(
     readRequiredString(
@@ -3881,11 +3957,165 @@ function normalizeBscPostDeployEvidence(
   };
 }
 
+function normalizeBscOfflineFullTomlEvidence(record, profile) {
+  const reason = unsafeSecretReason(record, "BSC offline full TOML evidence");
+  if (reason) {
+    throw new Error(reason);
+  }
+  const schema = readRequiredString(
+    record,
+    ["schema"],
+    "BSC offline full TOML evidence schema",
+  );
+  if (schema !== OFFLINE_FULL_TOML_EVIDENCE_SCHEMA) {
+    throw new Error(
+      `BSC offline full TOML evidence schema must be ${OFFLINE_FULL_TOML_EVIDENCE_SCHEMA}.`,
+    );
+  }
+  const routeId = readRequiredString(
+    record,
+    ["routeId", "route_id"],
+    "BSC offline full TOML evidence routeId",
+  );
+  if (routeId !== ROUTE_ID) {
+    throw new Error(`BSC offline full TOML evidence routeId must be ${ROUTE_ID}.`);
+  }
+  const assetKey = readRequiredString(
+    record,
+    ["assetKey", "asset_key"],
+    "BSC offline full TOML evidence assetKey",
+  );
+  if (assetKey !== ASSET_KEY) {
+    throw new Error(`BSC offline full TOML evidence assetKey must be ${ASSET_KEY}.`);
+  }
+  const networkValues = ["bscNetwork", "bsc_network", "network", "chain"]
+    .map((key) =>
+      hasOwn(record, key)
+        ? canonicalRecordString(
+            ownValue(record, key),
+            `BSC offline full TOML evidence ${key}`,
+          )
+        : "",
+    )
+    .filter(Boolean);
+  if (networkValues.length === 0) {
+    throw new Error("BSC offline full TOML evidence network is required.");
+  }
+  const evidenceProfile = normalizeBscNetworkProfile(networkValues[0]);
+  for (const value of networkValues.slice(1)) {
+    const aliasProfile = normalizeBscNetworkProfile(value);
+    if (aliasProfile.key !== evidenceProfile.key) {
+      throw new Error(
+        "BSC offline full TOML evidence network aliases disagree.",
+      );
+    }
+  }
+  if (evidenceProfile.key !== profile.key) {
+    throw new Error(
+      "BSC offline full TOML evidence network must match deployment evidence network.",
+    );
+  }
+  const postDeployLiveEvidence =
+    readFirstRecord(
+      record,
+      "postDeployLiveEvidence",
+      "post_deploy_live_evidence",
+    ) ?? {};
+  const fullTomlReadySources = [
+    {
+      record,
+      keys: ["fullTomlReady", "full_toml_ready"],
+      pathName: "BSC offline full TOML evidence",
+    },
+    {
+      record: postDeployLiveEvidence,
+      keys: ["fullTomlReady", "full_toml_ready"],
+      pathName: "BSC offline full TOML evidence postDeployLiveEvidence",
+    },
+  ];
+  for (const source of fullTomlReadySources) {
+    assertSingleValueAlias(
+      source.record,
+      source.keys,
+      source.pathName,
+      "BSC offline full TOML evidence fullTomlReady",
+    );
+  }
+  const fullTomlReady = readConsistentBoolean(
+    record,
+    ["fullTomlReady", "full_toml_ready"],
+    "BSC offline full TOML evidence fullTomlReady",
+  );
+  const nestedFullTomlReady = readConsistentBoolean(
+    postDeployLiveEvidence,
+    ["fullTomlReady", "full_toml_ready"],
+    "BSC offline full TOML evidence postDeployLiveEvidence.fullTomlReady",
+  );
+  if (fullTomlReady !== true || nestedFullTomlReady !== true) {
+    throw new Error("BSC offline full TOML evidence fullTomlReady must be true.");
+  }
+  const offlineFullTomlSha256Sources = [
+    {
+      record,
+      keys: ["offlineFullTomlSha256", "offline_full_toml_sha256"],
+      pathName: "BSC offline full TOML evidence",
+    },
+    {
+      record: postDeployLiveEvidence,
+      keys: ["offlineFullTomlSha256", "offline_full_toml_sha256"],
+      pathName: "BSC offline full TOML evidence postDeployLiveEvidence",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    offlineFullTomlSha256Sources,
+    "BSC offline full TOML evidence offlineFullTomlSha256",
+  );
+  const offlineFullTomlSha256 = readRequiredConsistentNormalizedString(
+    offlineFullTomlSha256Sources,
+    "BSC offline full TOML evidence offlineFullTomlSha256",
+    (value, label) => normalizeCanonicalHex32(value, label),
+  );
+  return {
+    fullTomlReady: true,
+    offlineFullTomlSha256,
+  };
+}
+
+function mergeBscOfflineFullTomlEvidenceOptions(options, offlineEvidence) {
+  if (!offlineEvidence) {
+    return options;
+  }
+  const next = { ...options };
+  if (options["full-toml-ready"] !== undefined) {
+    const suppliedReady = optionEnabled(options, "full-toml-ready", false);
+    if (!suppliedReady) {
+      throw new Error(
+        "--full-toml-ready disagrees with --offline-full-toml-evidence.",
+      );
+    }
+  }
+  next["full-toml-ready"] = "true";
+  if (options["offline-full-toml-sha256"] !== undefined) {
+    const suppliedHash = normalizeCanonicalHex32(
+      options["offline-full-toml-sha256"],
+      "--offline-full-toml-sha256",
+    );
+    if (suppliedHash !== offlineEvidence.offlineFullTomlSha256) {
+      throw new Error(
+        "--offline-full-toml-sha256 disagrees with --offline-full-toml-evidence.",
+      );
+    }
+  }
+  next["offline-full-toml-sha256"] = offlineEvidence.offlineFullTomlSha256;
+  return next;
+}
+
 export async function buildBscTairaXorRouteManifestDraft({
   options = {},
   evidence,
   tairaContract,
   liveEvidence = null,
+  offlineFullTomlEvidence = null,
   createdAt = new Date().toISOString(),
 } = {}) {
   const routeEvidence = normalizeBscDeploymentEvidenceForRouteManifest(
@@ -3974,10 +4204,17 @@ export async function buildBscTairaXorRouteManifestDraft({
       "production-ready BSC route manifests require proofArtifactHash and provingKeyHash.",
     );
   }
+  const normalizedOfflineFullTomlEvidence = offlineFullTomlEvidence
+    ? normalizeBscOfflineFullTomlEvidence(offlineFullTomlEvidence, profile)
+    : null;
+  const routeOptions = mergeBscOfflineFullTomlEvidenceOptions(
+    options,
+    normalizedOfflineFullTomlEvidence,
+  );
   const postDeployLiveEvidence = normalizeBscPostDeployEvidence(
     evidence,
     liveEvidence,
-    options,
+    routeOptions,
     { profile, requireFullTomlReady: productionReady },
   );
   if (productionReady && !postDeployLiveEvidence) {
@@ -5038,6 +5275,12 @@ function normalizeRouteManifestForConfig(manifest) {
       "route manifest TAIRA burn-record artifact sha256 does not match artifact bytes.",
     );
   }
+  if (productionReady) {
+    assertProductionBurnRecordArtifactShape(
+      artifact.bytes,
+      "route manifest TAIRA burn-record artifact",
+    );
+  }
   const settlementAssetDefinitionId = normalizeCanonicalAssetDefinitionId(
     readFirstString(
       burnRecord,
@@ -5525,6 +5768,73 @@ export function buildMergedBscTairaXorRouteConfigToml(
   return `${mergedLines.join("\n").replace(/\s*$/u, "")}\n`;
 }
 
+function canonicalizeBscOfflineFullConfigTomlForHash(toml) {
+  const normalized = String(toml ?? "").replace(/\r\n?/gu, "\n");
+  const filtered = normalized
+    .split("\n")
+    .filter(
+      (line) =>
+        !/^\s*post_deploy_offline_full_toml_sha256\s*=/u.test(line),
+    )
+    .join("\n");
+  return filtered.endsWith("\n") ? filtered : `${filtered}\n`;
+}
+
+function bscOfflineFullTomlSha256(toml) {
+  return bytesToHex(
+    sha256(textEncoder.encode(canonicalizeBscOfflineFullConfigTomlForHash(toml))),
+  );
+}
+
+function normalizeBscRouteManifestPath(value) {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_ROUTE_MANIFEST_OUT;
+  }
+  return normalizeNonEmptyText(value, "BSC route manifest path");
+}
+
+function buildBscOfflineFullTomlEvidence({
+  manifest,
+  profile,
+  manifestPath,
+  baseConfigPath,
+  fullConfigPath,
+  renderedTomlSha256,
+  offlineFullTomlSha256,
+  hashInputSha256,
+}) {
+  const route = normalizeRouteManifestForConfig(manifest);
+  const expectedProfile =
+    BSC_NETWORK_PROFILES[route.bscNetwork] ?? BSC_NETWORK_PROFILES.testnet;
+  if (expectedProfile.key !== profile.key) {
+    throw new Error(
+      "BSC offline full TOML evidence profile must match route manifest network.",
+    );
+  }
+  return {
+    schema: OFFLINE_FULL_TOML_EVIDENCE_SCHEMA,
+    routeId: route.routeId,
+    assetKey: route.assetKey,
+    bscNetwork: profile.key,
+    chain: profile.chain,
+    chainIdHex: profile.chainIdHex,
+    networkIdHex: profile.networkIdHex,
+    fullTomlReady: true,
+    offlineFullTomlSha256,
+    hashMode:
+      "sha256:merged-full-config-without-post_deploy_offline_full_toml_sha256",
+    hashInputSha256,
+    renderedTomlSha256,
+    routeManifestPath: manifestPath,
+    fullConfigPath,
+    baseConfigProvided: Boolean(baseConfigPath),
+    postDeployLiveEvidence: {
+      fullTomlReady: true,
+      offlineFullTomlSha256,
+    },
+  };
+}
+
 async function commandCompile(options) {
   const out = resolve(options.out ?? DEFAULT_ARTIFACTS_OUT);
   const { artifacts, warnings } = await compileBscContracts({ writeOut: out });
@@ -5762,11 +6072,18 @@ async function commandRouteManifest(options) {
   const liveEvidence = options["live-evidence"]
     ? await readJson(options["live-evidence"], "BSC live route evidence")
     : null;
+  const offlineFullTomlEvidence = options["offline-full-toml-evidence"]
+    ? await readJson(
+        options["offline-full-toml-evidence"],
+        "BSC offline full TOML evidence",
+      )
+    : null;
   const manifest = await buildBscTairaXorRouteManifestDraft({
     options,
     evidence,
     tairaContract,
     liveEvidence,
+    offlineFullTomlEvidence,
   });
   const out = resolve(
     options.out ??
@@ -5801,8 +6118,11 @@ async function commandRouteManifest(options) {
 }
 
 async function commandRouteConfig(options) {
-  const manifest = await readJson(
+  const manifestPath = normalizeBscRouteManifestPath(
     options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT,
+  );
+  const manifest = await readJson(
+    manifestPath,
     "BSC route manifest",
   );
   const profile =
@@ -5828,13 +6148,55 @@ async function commandRouteConfig(options) {
   const out = await writeTextNoSecrets(outPath, toml, 0o644);
   const renderedTomlSha256 = bytesToHex(sha256(textEncoder.encode(toml)));
   const fullConfigMode = Boolean(baseConfigPath);
+  const hashInputToml = fullConfigMode
+    ? canonicalizeBscOfflineFullConfigTomlForHash(toml)
+    : null;
+  const hashInputSha256 = hashInputToml
+    ? bytesToHex(sha256(textEncoder.encode(hashInputToml)))
+    : null;
+  const offlineFullTomlSha256 = fullConfigMode ? hashInputSha256 : null;
+  let offlineFullTomlEvidenceOut = null;
+  let offlineFullTomlEvidence = null;
+  if (options["write-offline-full-toml-evidence"]) {
+    if (!fullConfigMode) {
+      throw new Error(
+        "--write-offline-full-toml-evidence requires --base-config.",
+      );
+    }
+    offlineFullTomlEvidenceOut = resolve(
+      options["write-offline-full-toml-evidence"] === "true"
+        ? defaultRouteFullConfigEvidenceOut(profile)
+        : options["write-offline-full-toml-evidence"],
+    );
+    offlineFullTomlEvidence = buildBscOfflineFullTomlEvidence({
+      manifest,
+      profile,
+      manifestPath,
+      baseConfigPath,
+      fullConfigPath: out,
+      renderedTomlSha256,
+      offlineFullTomlSha256,
+      hashInputSha256,
+    });
+    assertBscCanonicalProductionOutputSafe(
+      offlineFullTomlEvidenceOut,
+      offlineFullTomlEvidence,
+      "BSC offline full TOML evidence",
+    );
+    await writeJsonNoSecrets(offlineFullTomlEvidenceOut, offlineFullTomlEvidence);
+  }
   return {
     ok: true,
     wrote: out,
+    wroteOfflineFullTomlEvidence: offlineFullTomlEvidenceOut,
     mode: fullConfigMode ? "merged-full-config" : "overlay",
     baseConfig: baseConfigPath ? resolve(baseConfigPath) : null,
     renderedTomlSha256,
-    offlineFullTomlSha256: fullConfigMode ? renderedTomlSha256 : null,
+    offlineFullTomlSha256,
+    offlineFullTomlHashMode: fullConfigMode
+      ? "sha256:merged-full-config-without-post_deploy_offline_full_toml_sha256"
+      : null,
+    offlineFullTomlEvidence,
     routeId: readFirstValue(manifest, "routeId", "route_id") ?? null,
     assetKey: readFirstValue(manifest, "assetKey", "asset_key") ?? null,
     productionReady:

@@ -9124,6 +9124,77 @@ def test_release_bundle_rejects_malformed_copied_native_evm_artifacts_before_ren
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
 
+def test_release_bundle_rejects_copied_native_evm_sdk_artifact_order_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied native prover summaries must keep SDK rows in canonical order."""
+
+    bundle = load_bundle_module()
+    real_report_module = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return real_report_module._corridor_phases()
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = real_report_module._build_report(*args, **kwargs)
+            if self.calls == 2:
+                native_summary = dict(report["native_evm_prover_bundle"])
+                native_summary["sdk_artifacts"] = list(
+                    reversed(native_summary["sdk_artifacts"])
+                )
+                report["native_evm_prover_bundle"] = native_summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("native EVM SDK artifact reorder was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("native EVM SDK artifact reorder reached rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle.sdk_artifacts must match "
+        "expected SDK order"
+    ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
 def test_release_bundle_rejects_copied_native_evm_summary_binding_before_render(
     tmp_path: Path,
     monkeypatch,
@@ -16461,6 +16532,47 @@ def test_release_bundle_verifier_rejects_padded_native_evm_prover_sdk_artifacts(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_order(
+    tmp_path: Path,
+) -> None:
+    """Published native prover manifests must keep SDK rows in canonical order."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["native_sdk_artifacts"] = list(reversed(payload["native_sdk_artifacts"]))
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts "
+        "must match expected SDK order"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifact_ids(
     tmp_path: Path,
 ) -> None:
@@ -16613,6 +16725,47 @@ def test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_sdk_
     assert confusable_sdk not in verified.stdout
     assert secret_unknown_sdk not in verified.stdout
     assert secret_unknown_sdk not in verified.stderr
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_prover_report_sdk_artifact_order(
+    tmp_path: Path,
+) -> None:
+    """Published native prover readiness summaries must keep SDK row order."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["native_evm_prover_bundle"]["sdk_artifacts"] = list(
+        reversed(report["native_evm_prover_bundle"]["sdk_artifacts"])
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts must match "
+        "expected SDK order"
+    ) in verified.stdout
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"

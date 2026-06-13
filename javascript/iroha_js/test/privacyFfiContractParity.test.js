@@ -2335,6 +2335,11 @@ test("native privacy FFI capabilities accept internal evidence while defaulting 
     );
     assert.match(
       text,
+      /struct\s+PrivacyProductionLocalnetEvidenceV1[\s\S]*smoke_passed:\s*bool[\s\S]*smoke_tx_hash:\s*&'static str[\s\S]*lifecycle_passed:\s*bool[\s\S]*lifecycle_shield_tx_hash:\s*&'static str[\s\S]*lifecycle_hop_proof_hash:\s*&'static str[\s\S]*lifecycle_recursive_init_hash:\s*&'static str[\s\S]*lifecycle_recursive_init_verify_hash:\s*&'static str[\s\S]*lifecycle_recursive_append_hash:\s*&'static str[\s\S]*lifecycle_recursive_append_verify_hash:\s*&'static str[\s\S]*lifecycle_unshield_proof_hash:\s*&'static str[\s\S]*lifecycle_redeem_tx_hash:\s*&'static str[\s\S]*replay_rejected:\s*bool/,
+      `${label} must require shield-to-redeem localnet lifecycle evidence`,
+    );
+    assert.match(
+      text,
       /const\s+PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES:\s*&\[&str\]\s*=\s*&\[[\s\S]*"rust_core"[\s\S]*"ffi"[\s\S]*"python"[\s\S]*"javascript"[\s\S]*"java_android"[\s\S]*"kotlin"[\s\S]*"swift"[\s\S]*"csharp"[\s\S]*\][\s\S]*const\s+PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS:\s*&\[&str\]\s*=\s*&\[[\s\S]*"types"[\s\S]*"validation_rules"[\s\S]*"error_codes"[\s\S]*"golden_vectors"[\s\S]*\]/,
       `${label} must pin the production SDK export and parity artifact surfaces`,
     );
@@ -2380,8 +2385,8 @@ test("native privacy FFI capabilities accept internal evidence while defaulting 
     );
     assert.match(
       text,
-      /fn\s+privacy_ready_gate_audit_references_are_valid\([^)]*\)\s*->\s*bool\s*\{[\s\S]*chain_id:[\s\S]*reviewer:[\s\S]*review_artifact_hash:[\s\S]*review_artifact_signature:[\s\S]*fuzz_artifact_hash:[\s\S]*performance_artifact_hash:[\s\S]*localnet_run_id:[\s\S]*privacy_production_localnet_run_id_is_valid/,
-      `${label} must validate ready-state audit references and 4-peer localnet evidence`,
+      /fn\s+privacy_ready_gate_audit_references_are_valid\([^)]*\)\s*->\s*bool\s*\{[\s\S]*audit_references\.len\(\)\s*!=\s*19[\s\S]*chain_id:[\s\S]*reviewer:[\s\S]*review_artifact_hash:[\s\S]*review_artifact_signature:[\s\S]*fuzz_artifact_hash:[\s\S]*performance_artifact_hash:[\s\S]*localnet_run_id:[\s\S]*localnet_smoke_tx_hash:[\s\S]*localnet_replay_rejection_hash:[\s\S]*localnet_restart_replay_rejection_hash:[\s\S]*localnet_state_recovery_hash:[\s\S]*localnet_lifecycle_shield_tx_hash:[\s\S]*localnet_lifecycle_hop_proof_hash:[\s\S]*localnet_lifecycle_recursive_init_hash:[\s\S]*localnet_lifecycle_recursive_init_verify_hash:[\s\S]*localnet_lifecycle_recursive_append_hash:[\s\S]*localnet_lifecycle_recursive_append_verify_hash:[\s\S]*localnet_lifecycle_unshield_proof_hash:[\s\S]*localnet_lifecycle_redeem_tx_hash:[\s\S]*localnet_hashes[\s\S]*privacy_production_localnet_run_id_is_valid[\s\S]*privacy_production_evidence_hash_is_valid\(hash\)[\s\S]*other\s*==\s*hash/,
+      `${label} must validate ready-state audit references and full localnet lifecycle evidence`,
     );
     assert.match(
       text,
@@ -2470,12 +2475,12 @@ test("native privacy FFI capabilities accept internal evidence while defaulting 
     );
     assert.match(
       text,
-      /privacy_capabilities_accept_exact_internal_evidence_for_all_rows[\s\S]*privacy_capabilities_with_production_evidence[\s\S]*all rows with exact internal evidence must be admitted[\s\S]*buildZkAceAuthorizationProofV1[\s\S]*buildZkAceAuthorizedTransferInstruction/,
+      /privacy_capabilities_accept_exact_internal_evidence_for_all_rows[\s\S]*privacy_capabilities_with_production_evidence[\s\S]*all rows with exact internal evidence must be admitted[\s\S]*audit_references\.len\(\),\s*19[\s\S]*buildZkAceAuthorizationProofV1[\s\S]*buildZkAceAuthorizedTransferInstruction/,
       `${label} must test exact internal evidence admission for every catalog row including ZK-ACE`,
     );
     assert.match(
       text,
-      /privacy_production_evidence_rejects_adversarial_zk_ace_bindings[\s\S]*wrong chain[\s\S]*mock chain marker[\s\S]*wrong verifier key[\s\S]*mutated public input schema[\s\S]*dev fixture entrypoint[\s\S]*local verifier entrypoint[\s\S]*missing SDK export surface[\s\S]*mismatched SDK export entrypoint[\s\S]*dev fixture SDK export[\s\S]*missing SDK parity artifact[\s\S]*wrong SDK parity artifact kind[\s\S]*bad SDK parity artifact hash[\s\S]*three-peer localnet downgrade[\s\S]*replay acceptance[\s\S]*restart replay acceptance[\s\S]*bad review artifact hash[\s\S]*unsigned review artifact[\s\S]*missing required state/,
+      /privacy_production_evidence_rejects_adversarial_zk_ace_bindings[\s\S]*wrong chain[\s\S]*mock chain marker[\s\S]*wrong verifier key[\s\S]*mutated public input schema[\s\S]*dev fixture entrypoint[\s\S]*local verifier entrypoint[\s\S]*missing SDK export surface[\s\S]*mismatched SDK export entrypoint[\s\S]*dev fixture SDK export[\s\S]*missing SDK parity artifact[\s\S]*wrong SDK parity artifact kind[\s\S]*bad SDK parity artifact hash[\s\S]*three-peer localnet downgrade[\s\S]*localnet lifecycle failure[\s\S]*bad localnet lifecycle shield hash[\s\S]*reused localnet lifecycle hash[\s\S]*replay acceptance[\s\S]*restart replay acceptance[\s\S]*bad review artifact hash[\s\S]*unsigned review artifact[\s\S]*missing required state/,
       `${label} must test adversarial ZK-ACE production evidence rejection`,
     );
     assert.match(

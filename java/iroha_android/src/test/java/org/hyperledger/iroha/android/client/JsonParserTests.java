@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
+import java.math.BigInteger;
+
 public final class JsonParserTests {
 
   private JsonParserTests() {}
@@ -8,6 +10,7 @@ public final class JsonParserTests {
     parsesNumbers();
     rejectsLeadingZeros();
     rejectsOverflow();
+    oversizedIntegerTokensRemainAvailableForBigIntegerConsumers();
     rejectsDuplicateObjectKeys();
     System.out.println("[IrohaAndroid] JsonParserTests passed.");
   }
@@ -28,6 +31,13 @@ public final class JsonParserTests {
 
   private static void rejectsOverflow() {
     assertThrows(() -> JsonParser.parse("1e309"), "expected overflow rejection");
+  }
+
+  private static void oversizedIntegerTokensRemainAvailableForBigIntegerConsumers() {
+    final String raw = "184467440737095516160000000000000000000";
+    final Object parsed = JsonParser.parse(raw);
+    assert parsed instanceof BigInteger : "expected BigInteger";
+    assert new BigInteger(raw).equals(parsed) : "BigInteger value mismatch";
   }
 
   private static void rejectsDuplicateObjectKeys() {

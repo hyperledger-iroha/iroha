@@ -427,6 +427,102 @@ fileprivate func decodeOptionalStringArrayValue(
     return []
 }
 
+fileprivate func decodeOptionalExactStringValue(
+    from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
+    keys: [String],
+    debugName: String
+) throws -> String? {
+    for key in keys {
+        let codingKey = ToriiAnyCodingKey(key)
+        guard container.contains(codingKey) else {
+            continue
+        }
+        guard let value = try container.decodeIfPresent(String.self, forKey: codingKey) else {
+            continue
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: codingKey,
+                in: container,
+                debugDescription: "\(debugName) must not be empty."
+            )
+        }
+        guard trimmed == value else {
+            throw DecodingError.dataCorruptedError(
+                forKey: codingKey,
+                in: container,
+                debugDescription: "\(debugName) must not contain surrounding whitespace."
+            )
+        }
+        return value
+    }
+    return nil
+}
+
+fileprivate func decodeOptionalExactStringArrayValue(
+    from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
+    keys: [String],
+    debugName: String
+) throws -> [String] {
+    for key in keys {
+        let codingKey = ToriiAnyCodingKey(key)
+        guard container.contains(codingKey) else {
+            continue
+        }
+        let values = try container.decodeIfPresent([String].self, forKey: codingKey) ?? []
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: codingKey,
+                    in: container,
+                    debugDescription: "\(debugName) must not contain empty values."
+                )
+            }
+            guard trimmed == value else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: codingKey,
+                    in: container,
+                    debugDescription: "\(debugName) must not contain surrounding whitespace."
+                )
+            }
+        }
+        if !values.isEmpty {
+            return values
+        }
+    }
+    return []
+}
+
+fileprivate func decodeExactToriiAccountId<K: CodingKey>(
+    from container: KeyedDecodingContainer<K>,
+    forKey key: K,
+    debugName: String
+) throws -> String {
+    let raw = try ToriiIdentifierReceiptWireValue.exactString(
+        from: container,
+        forKey: key,
+        debugName: debugName
+    )
+    guard !raw.contains("@") else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(debugName) must be a canonical account identifier."
+        )
+    }
+    let normalized = try normalizeToriiAccountIdQueryValue(raw, field: debugName)
+    guard normalized == raw else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(debugName) must be a canonical account identifier."
+        )
+    }
+    return raw
+}
+
 fileprivate func decodeRequiredStringValue(
     from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
     keys: [String],
@@ -541,14 +637,20 @@ public struct ToriiAccountAliasResolution: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let anyContainer = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
-        alias = try container.decode(String.self, forKey: .alias)
-        let scalarAccountId = try decodeOptionalStringValue(
-            from: anyContainer,
-            keys: ["account_id", "accountId"]
+        alias = try ToriiIdentifierReceiptWireValue.exactString(
+            from: container,
+            forKey: .alias,
+            debugName: "account alias resolution.alias"
         )
-        let arrayAccountIds = try decodeOptionalStringArrayValue(
+        let scalarAccountId = try decodeOptionalExactStringValue(
             from: anyContainer,
-            keys: ["account_ids", "accountIds"]
+            keys: ["account_id", "accountId"],
+            debugName: "account alias resolution.account_id"
+        )
+        let arrayAccountIds = try decodeOptionalExactStringArrayValue(
+            from: anyContainer,
+            keys: ["account_ids", "accountIds"],
+            debugName: "account alias resolution.account_ids"
         )
         let resolvedAccountIds = ([scalarAccountId].compactMap { $0 } + arrayAccountIds)
             .reduce(into: [String]()) { values, value in
@@ -567,7 +669,11 @@ public struct ToriiAccountAliasResolution: Decodable, Sendable {
         accountId = primaryAccountId
         accountIds = resolvedAccountIds
         index = try container.decodeIfPresent(UInt64.self, forKey: .index)
-        source = try container.decodeIfPresent(String.self, forKey: .source)
+        source = try ToriiIdentifierReceiptWireValue.exactOptionalString(
+            from: container,
+            forKey: .source,
+            debugName: "account alias resolution.source"
+        )
     }
 }
 
@@ -691,19 +797,68 @@ public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let normalizationRaw = try ToriiIdentifierReceiptWireValue.exactLowercaseString(
+            from: container,
+            forKey: .normalization,
+            debugName: "identifier policy.normalization"
+        )
+        guard let normalization = ToriiIdentifierNormalization(rawValue: normalizationRaw) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .normalization,
+                in: container,
+                debugDescription: "identifier policy.normalization must be a supported wire value."
+            )
+        }
+        let inputEncryption = try ToriiIdentifierReceiptWireValue.exactOptionalString(
+            from: container,
+            forKey: .inputEncryption,
+            debugName: "identifier policy.input_encryption"
+        )
+        if let inputEncryption, inputEncryption != inputEncryption.lowercased() {
+            throw DecodingError.dataCorruptedError(
+                forKey: .inputEncryption,
+                in: container,
+                debugDescription: "identifier policy.input_encryption must be an exact lowercase wire value."
+            )
+        }
         self.init(
-            policyId: try container.decode(String.self, forKey: .policyId),
-            programId: try container.decodeIfPresent(String.self, forKey: .programId) ?? "",
-            owner: try container.decode(String.self, forKey: .owner),
+            policyId: try ToriiIdentifierReceiptWireValue.exactPolicyId(
+                from: container,
+                forKey: .policyId,
+                debugName: "identifier policy.policy_id"
+            ),
+            programId: try ToriiIdentifierReceiptWireValue.exactProgramId(
+                from: container,
+                forKey: .programId,
+                debugName: "identifier policy.program_id"
+            ) ?? "",
+            owner: try ToriiIdentifierReceiptWireValue.exactAccountId(
+                from: container,
+                forKey: .owner,
+                debugName: "identifier policy.owner"
+            ),
             active: try container.decode(Bool.self, forKey: .active),
-            normalization: try container.decode(ToriiIdentifierNormalization.self, forKey: .normalization),
-            resolverPublicKey: try container.decode(String.self, forKey: .resolverPublicKey),
-            outputOpeningPublicKey: try container.decodeIfPresent(String.self, forKey: .outputOpeningPublicKey) ?? "",
-            backend: try container.decode(String.self, forKey: .backend),
-            inputEncryption: try container.decodeIfPresent(String.self, forKey: .inputEncryption),
-            inputEncryptionPublicParameters: try container.decodeIfPresent(
-                String.self,
-                forKey: .inputEncryptionPublicParameters
+            normalization: normalization,
+            resolverPublicKey: try ToriiIdentifierReceiptWireValue.exactString(
+                from: container,
+                forKey: .resolverPublicKey,
+                debugName: "identifier policy.resolver_public_key"
+            ),
+            outputOpeningPublicKey: try ToriiIdentifierReceiptWireValue.exactProgramId(
+                from: container,
+                forKey: .outputOpeningPublicKey,
+                debugName: "identifier policy.output_opening_public_key"
+            ) ?? "",
+            backend: try ToriiIdentifierReceiptWireValue.exactLowercaseString(
+                from: container,
+                forKey: .backend,
+                debugName: "identifier policy.backend"
+            ),
+            inputEncryption: inputEncryption,
+            inputEncryptionPublicParameters: try ToriiIdentifierReceiptWireValue.exactOptionalEvenLengthHex(
+                from: container,
+                forKey: .inputEncryptionPublicParameters,
+                debugName: "identifier policy.input_encryption_public_parameters"
             ),
             inputEncryptionPublicParametersDecoded: try container.decodeIfPresent(
                 ToriiIdentifierBfvPublicParameters.self,
@@ -717,7 +872,11 @@ public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
                 ToriiRamLfeProofVerifierMetadata.self,
                 forKey: .proofVerifier
             ),
-            note: try container.decodeIfPresent(String.self, forKey: .note)
+            note: try ToriiIdentifierReceiptWireValue.exactOptionalString(
+                from: container,
+                forKey: .note,
+                debugName: "identifier policy.note"
+            )
         )
     }
 
@@ -774,6 +933,59 @@ public struct ToriiRamLfeProgramPolicySummary: Decodable, Sendable {
         case proofVerifier = "proof_verifier"
         case note
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        programId = try ToriiIdentifierReceiptWireValue.exactString(
+            from: container,
+            forKey: .programId,
+            debugName: "ram-lfe program policy.program_id"
+        )
+        owner = try ToriiIdentifierReceiptWireValue.exactString(
+            from: container,
+            forKey: .owner,
+            debugName: "ram-lfe program policy.owner"
+        )
+        active = try container.decode(Bool.self, forKey: .active)
+        resolverPublicKey = try ToriiIdentifierReceiptWireValue.exactString(
+            from: container,
+            forKey: .resolverPublicKey,
+            debugName: "ram-lfe program policy.resolver_public_key"
+        )
+        backend = try ToriiIdentifierReceiptWireValue.exactLowercaseString(
+            from: container,
+            forKey: .backend,
+            debugName: "ram-lfe program policy.backend"
+        )
+        verificationMode = try ToriiIdentifierReceiptWireValue.exactLowercaseString(
+            from: container,
+            forKey: .verificationMode,
+            debugName: "ram-lfe program policy.verification_mode"
+        )
+        inputEncryption = try ToriiIdentifierReceiptWireValue.exactOptionalString(
+            from: container,
+            forKey: .inputEncryption,
+            debugName: "ram-lfe program policy.input_encryption"
+        )
+        inputEncryptionPublicParameters = try ToriiIdentifierReceiptWireValue.exactOptionalEvenLengthHex(
+            from: container,
+            forKey: .inputEncryptionPublicParameters,
+            debugName: "ram-lfe program policy.input_encryption_public_parameters"
+        )
+        inputEncryptionPublicParametersDecoded = try container.decodeIfPresent(
+            ToriiIdentifierBfvPublicParameters.self,
+            forKey: .inputEncryptionPublicParametersDecoded
+        )
+        ramFheProfile = try container.decodeIfPresent(
+            ToriiIdentifierRamFheProfile.self,
+            forKey: .ramFheProfile
+        )
+        proofVerifier = try container.decodeIfPresent(
+            ToriiRamLfeProofVerifierMetadata.self,
+            forKey: .proofVerifier
+        )
+        note = try container.decodeIfPresent(String.self, forKey: .note)
+    }
 }
 
 public struct ToriiRamLfeProgramPolicyListResponse: Decodable, Sendable {
@@ -821,6 +1033,18 @@ public struct ToriiIdentifierBfvPublicParameters: Decodable, Sendable {
         case publicKey = "public_key"
         case maxInputBytes = "max_input_bytes"
         case noritoLengthEncoding = "norito_length_encoding"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        parameters = try container.decode(ToriiIdentifierBfvParameters.self, forKey: .parameters)
+        publicKey = try container.decode(ToriiIdentifierBfvPublicKey.self, forKey: .publicKey)
+        maxInputBytes = try container.decode(UInt16.self, forKey: .maxInputBytes)
+        noritoLengthEncoding = try ToriiIdentifierReceiptWireValue.exactOptionalString(
+            from: container,
+            forKey: .noritoLengthEncoding,
+            debugName: "identifier policy.input_encryption_public_parameters_decoded.norito_length_encoding"
+        )
     }
 }
 
@@ -897,6 +1121,30 @@ public struct ToriiRamLfeProofVerifierMetadata: Decodable, Sendable {
         case publicInputsSchemaHash = "public_inputs_schema_hash"
         case verifyingKeyBytesB64 = "verifying_key_bytes_b64"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        proofBackend = try ToriiIdentifierReceiptWireValue.exactString(
+            from: container,
+            forKey: .proofBackend,
+            debugName: "ram-lfe proof verifier.proof_backend"
+        )
+        circuitId = try ToriiIdentifierReceiptWireValue.exactString(
+            from: container,
+            forKey: .circuitId,
+            debugName: "ram-lfe proof verifier.circuit_id"
+        )
+        publicInputsSchemaHash = try ToriiIdentifierReceiptWireValue.exactHash(
+            from: container,
+            forKey: .publicInputsSchemaHash,
+            debugName: "ram-lfe proof verifier.public_inputs_schema_hash"
+        )
+        verifyingKeyBytesB64 = try ToriiIdentifierReceiptWireValue.exactString(
+            from: container,
+            forKey: .verifyingKeyBytesB64,
+            debugName: "ram-lfe proof verifier.verifying_key_bytes_b64"
+        )
+    }
 }
 
 fileprivate enum ToriiIdentifierReceiptWireValue {
@@ -954,20 +1202,28 @@ fileprivate enum ToriiIdentifierReceiptWireValue {
         from container: KeyedDecodingContainer<K>,
         forKey key: K
     ) throws -> String {
+        try exactPolicyId(from: container, forKey: key, debugName: "payload.policy_id")
+    }
+
+    static func exactPolicyId<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K,
+        debugName: String
+    ) throws -> String {
         let raw = try container.decode(String.self, forKey: key)
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "payload.policy_id must not be empty."
+                debugDescription: "\(debugName) must not be empty."
             )
         }
         guard trimmed == raw else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "payload.policy_id must not contain surrounding whitespace."
+                debugDescription: "\(debugName) must not contain surrounding whitespace."
             )
         }
         let parts = raw.split(
@@ -979,7 +1235,7 @@ fileprivate enum ToriiIdentifierReceiptWireValue {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "payload.policy_id must use `kind#rule`."
+                debugDescription: "\(debugName) must use `kind#rule`."
             )
         }
         let kind = String(parts[0])
@@ -988,14 +1244,14 @@ fileprivate enum ToriiIdentifierReceiptWireValue {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "payload.policy_id.kind must not contain surrounding whitespace."
+                debugDescription: "\(debugName).kind must not contain surrounding whitespace."
             )
         }
         guard rule.trimmingCharacters(in: .whitespacesAndNewlines) == rule else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "payload.policy_id.rule must not contain surrounding whitespace."
+                debugDescription: "\(debugName).rule must not contain surrounding whitespace."
             )
         }
         return raw
@@ -1080,6 +1336,170 @@ fileprivate enum ToriiIdentifierReceiptWireValue {
         forKey key: K
     ) throws -> String {
         try normalizedUaid(try container.decode(String.self, forKey: key), field: key.stringValue)
+    }
+
+    static func exactAccountId<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K,
+        debugName: String
+    ) throws -> String {
+        let raw = try container.decode(String.self, forKey: key)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(debugName) must not be empty."
+            )
+        }
+        guard trimmed == raw else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(debugName) must not contain surrounding whitespace."
+            )
+        }
+        do {
+            _ = try AccountAddress.parseEncoded(raw, expectedPrefix: 0x02F1)
+        } catch {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(debugName) must be a canonical account identifier."
+            )
+        }
+        return raw
+    }
+
+    static func exactString<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K,
+        debugName: String
+    ) throws -> String {
+        let raw = try container.decode(String.self, forKey: key)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(debugName) must not be empty."
+            )
+        }
+        guard trimmed == raw else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(debugName) must not contain surrounding whitespace."
+            )
+        }
+        return raw
+    }
+
+    static func exactOptionalString<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K,
+        debugName: String
+    ) throws -> String? {
+        guard let raw = try container.decodeIfPresent(String.self, forKey: key) else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(debugName) must not be empty."
+            )
+        }
+        guard trimmed == raw else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(debugName) must not contain surrounding whitespace."
+            )
+        }
+        return raw
+    }
+
+    static func exactLowercaseString<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K,
+        debugName: String
+    ) throws -> String {
+        let raw = try exactString(from: container, forKey: key, debugName: debugName)
+        guard raw == raw.lowercased() else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(debugName) must be an exact lowercase RAM-LFE tag."
+            )
+        }
+        return raw
+    }
+
+    static func exactHash<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K,
+        debugName: String
+    ) throws -> String {
+        let normalized = try normalizedHash(
+            try container.decode(String.self, forKey: key),
+            field: debugName
+        )
+        guard normalized.count == 64, normalized.allSatisfy(\.isHexDigit) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(debugName) must be a 32-byte hex string."
+            )
+        }
+        return normalized
+    }
+
+    static func exactEvenLengthHex<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K,
+        debugName: String
+    ) throws -> String {
+        let raw = try exactString(from: container, forKey: key, debugName: debugName)
+        let body: String
+        if raw.hasPrefix("0x") || raw.hasPrefix("0X") {
+            body = String(raw.dropFirst(2))
+        } else {
+            body = raw
+        }
+        guard !body.isEmpty, body.count.isMultiple(of: 2), body.allSatisfy(\.isHexDigit) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(debugName) must be an even-length hex string."
+            )
+        }
+        return body
+    }
+
+    static func exactOptionalEvenLengthHex<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K,
+        debugName: String
+    ) throws -> String? {
+        guard let raw = try exactOptionalString(from: container, forKey: key, debugName: debugName) else {
+            return nil
+        }
+        let body: String
+        if raw.hasPrefix("0x") || raw.hasPrefix("0X") {
+            body = String(raw.dropFirst(2))
+        } else {
+            body = raw
+        }
+        guard !body.isEmpty, body.count.isMultiple(of: 2), body.allSatisfy(\.isHexDigit) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(debugName) must be an even-length hex string."
+            )
+        }
+        return body
     }
 }
 
@@ -1885,40 +2305,28 @@ public struct ToriiIdentifierClaimRecord: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        policyId = try ToriiIdentifierReceiptWireValue.normalizedPolicyId(
+        policyId = try ToriiIdentifierReceiptWireValue.exactPolicyId(
             from: container,
-            forKey: .policyId
+            forKey: .policyId,
+            debugName: "identifier claim record.policy_id"
         )
         opaqueId = try ToriiIdentifierReceiptWireValue.normalizedOpaqueId(
-            from: container,
-            forKey: .opaqueId
+            try container.decode(String.self, forKey: .opaqueId),
+            field: "identifier claim record.opaque_id"
         )
-        guard let normalizedReceiptHash = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
-            from: container,
-            forKey: .receiptHash
-        ) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.receiptHash,
-                DecodingError.Context(
-                    codingPath: decoder.codingPath,
-                    debugDescription: "receipt_hash is required."
-                )
-            )
-        }
-        receiptHash = normalizedReceiptHash
+        receiptHash = try ToriiIdentifierReceiptWireValue.normalizedHash(
+            try container.decode(String.self, forKey: .receiptHash),
+            field: "identifier claim record.receipt_hash"
+        )
         uaid = try ToriiIdentifierReceiptWireValue.normalizedUaid(
-            from: container,
-            forKey: .uaid
+            try container.decode(String.self, forKey: .uaid),
+            field: "identifier claim record.uaid"
         )
-        accountId = try container.decode(String.self, forKey: .accountId)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !accountId.isEmpty else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .accountId,
-                in: container,
-                debugDescription: "account_id must not be empty."
-            )
-        }
+        accountId = try ToriiIdentifierReceiptWireValue.exactAccountId(
+            from: container,
+            forKey: .accountId,
+            debugName: "identifier claim record.account_id"
+        )
         verifiedAtMs = try container.decode(UInt64.self, forKey: .verifiedAtMs)
         expiresAtMs = try container.decodeIfPresent(UInt64.self, forKey: .expiresAtMs)
     }
@@ -2148,6 +2556,54 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
         case receipt
         case outputOpening = "output_opening"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        programId = try ToriiIdentifierReceiptWireValue.exactString(
+            from: container,
+            forKey: .programId,
+            debugName: "ram-lfe execute response.program_id"
+        )
+        opaqueHash = try ToriiIdentifierReceiptWireValue.exactHash(
+            from: container,
+            forKey: .opaqueHash,
+            debugName: "ram-lfe execute response.opaque_hash"
+        )
+        receiptHash = try ToriiIdentifierReceiptWireValue.exactHash(
+            from: container,
+            forKey: .receiptHash,
+            debugName: "ram-lfe execute response.receipt_hash"
+        )
+        outputCiphertext = try ToriiIdentifierReceiptWireValue.exactEvenLengthHex(
+            from: container,
+            forKey: .outputCiphertext,
+            debugName: "ram-lfe execute response.output_ciphertext"
+        )
+        outputHash = try ToriiIdentifierReceiptWireValue.exactHash(
+            from: container,
+            forKey: .outputHash,
+            debugName: "ram-lfe execute response.output_hash"
+        )
+        associatedDataHash = try ToriiIdentifierReceiptWireValue.exactHash(
+            from: container,
+            forKey: .associatedDataHash,
+            debugName: "ram-lfe execute response.associated_data_hash"
+        )
+        executedAtMs = try container.decode(UInt64.self, forKey: .executedAtMs)
+        expiresAtMs = try container.decodeIfPresent(UInt64.self, forKey: .expiresAtMs)
+        backend = try ToriiIdentifierReceiptWireValue.exactLowercaseString(
+            from: container,
+            forKey: .backend,
+            debugName: "ram-lfe execute response.backend"
+        )
+        verificationMode = try ToriiIdentifierReceiptWireValue.exactLowercaseString(
+            from: container,
+            forKey: .verificationMode,
+            debugName: "ram-lfe execute response.verification_mode"
+        )
+        receipt = try container.decode(ToriiRamLfeExecutionReceipt.self, forKey: .receipt)
+        outputOpening = try container.decode(ToriiRamLfeOutputOpening.self, forKey: .outputOpening)
+    }
 }
 
 public struct ToriiRamLfeReceiptVerifyRequest: Encodable, Sendable {
@@ -2184,6 +2640,38 @@ public struct ToriiRamLfeReceiptVerifyResponse: Decodable, Sendable {
         case associatedDataHash = "associated_data_hash"
         case outputHashMatches = "output_hash_matches"
         case error
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        valid = try container.decode(Bool.self, forKey: .valid)
+        programId = try ToriiIdentifierReceiptWireValue.exactString(
+            from: container,
+            forKey: .programId,
+            debugName: "ram-lfe receipt verify response.program_id"
+        )
+        backend = try ToriiIdentifierReceiptWireValue.exactLowercaseString(
+            from: container,
+            forKey: .backend,
+            debugName: "ram-lfe receipt verify response.backend"
+        )
+        verificationMode = try ToriiIdentifierReceiptWireValue.exactLowercaseString(
+            from: container,
+            forKey: .verificationMode,
+            debugName: "ram-lfe receipt verify response.verification_mode"
+        )
+        outputHash = try ToriiIdentifierReceiptWireValue.exactHash(
+            from: container,
+            forKey: .outputHash,
+            debugName: "ram-lfe receipt verify response.output_hash"
+        )
+        associatedDataHash = try ToriiIdentifierReceiptWireValue.exactHash(
+            from: container,
+            forKey: .associatedDataHash,
+            debugName: "ram-lfe receipt verify response.associated_data_hash"
+        )
+        outputHashMatches = try container.decodeIfPresent(Bool.self, forKey: .outputHashMatches)
+        error = try container.decodeIfPresent(String.self, forKey: .error)
     }
 }
 
@@ -10729,10 +11217,10 @@ public struct ToriiMultisigContractCallResponse: Decodable, Sendable {
                 debugDescription: "ok must be true"
             )
         }
-        let resolved = try container.decode(String.self, forKey: .resolvedMultisigAccountId)
-        resolvedMultisigAccountId = try normalizeToriiAccountIdQueryValue(
-            resolved,
-            field: "resolved_multisig_account_id"
+        resolvedMultisigAccountId = try decodeExactToriiAccountId(
+            from: container,
+            forKey: .resolvedMultisigAccountId,
+            debugName: "resolved_multisig_account_id"
         )
         submitted = try container.decodeIfPresent(Bool.self, forKey: .submitted)
         proposalId = try container.decodeIfPresent(String.self, forKey: .proposalId)
@@ -10809,10 +11297,10 @@ public struct ToriiMultisigSpecResponse: Decodable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let resolved = try container.decode(String.self, forKey: .resolvedMultisigAccountId)
-        resolvedMultisigAccountId = try normalizeToriiAccountIdQueryValue(
-            resolved,
-            field: "resolved_multisig_account_id"
+        resolvedMultisigAccountId = try decodeExactToriiAccountId(
+            from: container,
+            forKey: .resolvedMultisigAccountId,
+            debugName: "resolved_multisig_account_id"
         )
         spec = try container.decode(ToriiJSONValue.self, forKey: .spec)
     }
@@ -10873,10 +11361,10 @@ public struct ToriiMultisigProposalsListResponse: Decodable, Sendable, Equatable
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let resolved = try container.decode(String.self, forKey: .resolvedMultisigAccountId)
-        resolvedMultisigAccountId = try normalizeToriiAccountIdQueryValue(
-            resolved,
-            field: "resolved_multisig_account_id"
+        resolvedMultisigAccountId = try decodeExactToriiAccountId(
+            from: container,
+            forKey: .resolvedMultisigAccountId,
+            debugName: "resolved_multisig_account_id"
         )
         proposals = try container.decode([ToriiMultisigProposalEntry].self, forKey: .proposals)
     }
@@ -10937,10 +11425,10 @@ public struct ToriiMultisigProposalGetResponse: Decodable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let resolved = try container.decode(String.self, forKey: .resolvedMultisigAccountId)
-        resolvedMultisigAccountId = try normalizeToriiAccountIdQueryValue(
-            resolved,
-            field: "resolved_multisig_account_id"
+        resolvedMultisigAccountId = try decodeExactToriiAccountId(
+            from: container,
+            forKey: .resolvedMultisigAccountId,
+            debugName: "resolved_multisig_account_id"
         )
         proposalId = try container.decode(String.self, forKey: .proposalId)
         let hashRaw = try container.decode(String.self, forKey: .instructionsHash)

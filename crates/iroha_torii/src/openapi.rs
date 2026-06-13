@@ -2344,6 +2344,17 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/zk/merkle-path".to_owned(),
+        Value::Object(json_post_operation(
+            "ZK",
+            "Fetch ZK Merkle paths.",
+            "Fetch current confidential-v2 commitment inclusion paths.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/zk/verify".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
@@ -6729,6 +6740,7 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/proofs/query"
                     | "/v1/rwas/query"
                     | "/v1/pipeline/transactions/status"
+                    | "/v1/zk/merkle-path"
                     | "/v1/zk/roots"
                     | "/v1/zk/verify"
                     | "/v1/zk/verify-batch"

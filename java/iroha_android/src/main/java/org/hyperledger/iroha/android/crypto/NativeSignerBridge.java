@@ -1,8 +1,15 @@
 package org.hyperledger.iroha.android.crypto;
 
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstruction;
+import org.hyperledger.iroha.android.model.instructions.ShieldInstruction;
+import org.hyperledger.iroha.android.model.instructions.UnshieldInstruction;
+
 /** Thin JVM/JNI wrapper around {@code connect_norito_bridge} signing helpers. */
 public final class NativeSignerBridge {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
+  private static final int HASH_BYTES = 32;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   private NativeSignerBridge() {}
@@ -71,6 +78,167 @@ public final class NativeSignerBridge {
     return nativeVerifyDetached(algorithm.bridgeCode(), publicKey, message, signature);
   }
 
+  public static NativeSignedTransaction encodeShieldSignedTransaction(
+      final SigningAlgorithm algorithm,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final ShieldInstruction instruction,
+      final byte[] privateKey) {
+    return encodeShieldSignedTransaction(
+        algorithm, chainId, authority, creationTimeMs, null, instruction, privateKey);
+  }
+
+  public static NativeSignedTransaction encodeShieldSignedTransaction(
+      final SigningAlgorithm algorithm,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final Long ttlMs,
+      final ShieldInstruction instruction,
+      final byte[] privateKey) {
+    requireCreationTime(creationTimeMs);
+    if (instruction == null) {
+      throw new IllegalArgumentException("instruction must be provided");
+    }
+    final byte[] key = requirePrivateKey(privateKey);
+    final byte[] chainBytes = textBytes(chainId, "chainId");
+    final byte[] authorityBytes = textBytes(authority, "authority");
+    final byte[] assetBytes = textBytes(instruction.asset(), "asset");
+    final byte[] fromBytes = textBytes(instruction.from(), "from");
+    final byte[] amountBytes = textBytes(instruction.amount(), "amount");
+    final long ttl = ttlValue(ttlMs);
+    final boolean hasTtl = ttlMs != null;
+    requireNative();
+    return requireNativeSignedOutput(
+        nativeEncodeShieldSignedTransaction(
+            algorithm.bridgeCode(),
+            chainBytes,
+            authorityBytes,
+            creationTimeMs,
+            ttl,
+            hasTtl,
+            assetBytes,
+            fromBytes,
+            amountBytes,
+            instruction.noteCommitment(),
+            instruction.encryptedPayload().ephemeralPublicKey(),
+            instruction.encryptedPayload().nonce(),
+            instruction.encryptedPayload().ciphertext(),
+            key),
+        "encodeShieldSignedTransaction");
+  }
+
+  public static NativeSignedTransaction encodeUnshieldSignedTransaction(
+      final SigningAlgorithm algorithm,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final UnshieldInstruction instruction,
+      final byte[] privateKey) {
+    return encodeUnshieldSignedTransaction(
+        algorithm, chainId, authority, creationTimeMs, null, instruction, privateKey);
+  }
+
+  public static NativeSignedTransaction encodeUnshieldSignedTransaction(
+      final SigningAlgorithm algorithm,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final Long ttlMs,
+      final UnshieldInstruction instruction,
+      final byte[] privateKey) {
+    requireCreationTime(creationTimeMs);
+    if (instruction == null) {
+      throw new IllegalArgumentException("instruction must be provided");
+    }
+    final byte[] key = requirePrivateKey(privateKey);
+    final byte[] chainBytes = textBytes(chainId, "chainId");
+    final byte[] authorityBytes = textBytes(authority, "authority");
+    final byte[] assetBytes = textBytes(instruction.asset(), "asset");
+    final byte[] toBytes = textBytes(instruction.to(), "to");
+    final byte[] amountBytes = textBytes(instruction.publicAmount(), "publicAmount");
+    final byte[] inputsBytes = flattenFixed32(instruction.inputs());
+    final byte[] outputsBytes = flattenFixed32(instruction.outputs());
+    final byte[] proofJsonBytes = instruction.proof().toNativeJson().getBytes(StandardCharsets.UTF_8);
+    final byte[] rootHintBytes = optionalBytes(instruction.rootHint());
+    final long ttl = ttlValue(ttlMs);
+    final boolean hasTtl = ttlMs != null;
+    requireNative();
+    return requireNativeSignedOutput(
+        nativeEncodeUnshieldSignedTransaction(
+            algorithm.bridgeCode(),
+            chainBytes,
+            authorityBytes,
+            creationTimeMs,
+            ttl,
+            hasTtl,
+            assetBytes,
+            toBytes,
+            amountBytes,
+            inputsBytes,
+            outputsBytes,
+            proofJsonBytes,
+            rootHintBytes,
+            key),
+        "encodeUnshieldSignedTransaction");
+  }
+
+  public static NativeSignedTransaction encodeRegisterZkAssetSignedTransaction(
+      final SigningAlgorithm algorithm,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final RegisterZkAssetInstruction instruction,
+      final byte[] privateKey) {
+    return encodeRegisterZkAssetSignedTransaction(
+        algorithm, chainId, authority, creationTimeMs, null, instruction, privateKey);
+  }
+
+  public static NativeSignedTransaction encodeRegisterZkAssetSignedTransaction(
+      final SigningAlgorithm algorithm,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final Long ttlMs,
+      final RegisterZkAssetInstruction instruction,
+      final byte[] privateKey) {
+    requireCreationTime(creationTimeMs);
+    if (instruction == null) {
+      throw new IllegalArgumentException("instruction must be provided");
+    }
+    final byte[] key = requirePrivateKey(privateKey);
+    final byte[] chainBytes = textBytes(chainId, "chainId");
+    final byte[] authorityBytes = textBytes(authority, "authority");
+    final byte[] assetBytes = textBytes(instruction.asset(), "asset");
+    final byte[] transferBytes = optionalTextBytes(instruction.transferVerifyingKey());
+    final byte[] unshieldBytes = optionalTextBytes(instruction.unshieldVerifyingKey());
+    final byte[] shieldBytes = optionalTextBytes(instruction.shieldVerifyingKey());
+    final long ttl = ttlValue(ttlMs);
+    final boolean hasTtl = ttlMs != null;
+    requireNative();
+    return requireNativeSignedOutput(
+        nativeEncodeRegisterZkAssetSignedTransaction(
+            algorithm.bridgeCode(),
+            chainBytes,
+            authorityBytes,
+            creationTimeMs,
+            ttl,
+            hasTtl,
+            assetBytes,
+            instruction.mode().bridgeCode(),
+            instruction.allowShield(),
+            instruction.allowUnshield(),
+            transferBytes,
+            instruction.transferVerifyingKey() != null,
+            unshieldBytes,
+            instruction.unshieldVerifyingKey() != null,
+            shieldBytes,
+            instruction.shieldVerifyingKey() != null,
+            key),
+        "encodeRegisterZkAssetSignedTransaction");
+  }
+
   private static void requireNative() {
     if (!NATIVE_AVAILABLE) {
       throw new IllegalStateException(LIBRARY_NAME + " is not available in this runtime");
@@ -86,6 +254,79 @@ public final class NativeSignerBridge {
     }
   }
 
+  private static NativeSignedTransaction requireNativeSignedOutput(
+      final byte[][] output, final String context) {
+    if (output == null || output.length != 2) {
+      throw new IllegalArgumentException(context + " returned invalid output");
+    }
+    if (output[0] == null || output[0].length == 0) {
+      throw new IllegalArgumentException(context + " returned empty transaction bytes");
+    }
+    if (output[1] == null || output[1].length != HASH_BYTES) {
+      throw new IllegalArgumentException(context + " returned invalid hash bytes");
+    }
+    return new NativeSignedTransaction(output[0], output[1]);
+  }
+
+  private static byte[] textBytes(final String value, final String name) {
+    if (value == null) {
+      throw new IllegalArgumentException(name + " must be provided");
+    }
+    if (value.trim().isEmpty()) {
+      throw new IllegalArgumentException(name + " must not be blank");
+    }
+    if (!value.trim().equals(value)) {
+      throw new IllegalArgumentException(name + " must not contain surrounding whitespace");
+    }
+    if (value.indexOf('\0') >= 0) {
+      throw new IllegalArgumentException(name + " must not contain NUL");
+    }
+    return value.getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static byte[] optionalTextBytes(final String value) {
+    return value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static void requireCreationTime(final long creationTimeMs) {
+    if (creationTimeMs < 0) {
+      throw new IllegalArgumentException("creationTimeMs must be non-negative");
+    }
+  }
+
+  private static long ttlValue(final Long ttlMs) {
+    if (ttlMs == null) {
+      return 0L;
+    }
+    if (ttlMs <= 0) {
+      throw new IllegalArgumentException("ttlMs must be positive when provided");
+    }
+    return ttlMs;
+  }
+
+  private static byte[] requirePrivateKey(final byte[] privateKey) {
+    if (privateKey == null || privateKey.length == 0) {
+      throw new IllegalArgumentException("privateKey must not be empty");
+    }
+    return privateKey.clone();
+  }
+
+  private static byte[] flattenFixed32(final List<byte[]> values) {
+    final byte[] out = new byte[values.size() * 32];
+    for (int i = 0; i < values.size(); i++) {
+      final byte[] value = values.get(i);
+      if (value.length != 32) {
+        throw new IllegalArgumentException("value[" + i + "] must be exactly 32 bytes");
+      }
+      System.arraycopy(value, 0, out, i * 32, 32);
+    }
+    return out;
+  }
+
+  private static byte[] optionalBytes(final byte[] value) {
+    return value == null ? new byte[0] : value.clone();
+  }
+
   private static native byte[] nativePublicKeyFromPrivate(int algorithmCode, byte[] privateKey);
 
   private static native byte[][] nativeKeypairFromSeed(int algorithmCode, byte[] seed);
@@ -94,6 +335,57 @@ public final class NativeSignerBridge {
 
   private static native boolean nativeVerifyDetached(
       int algorithmCode, byte[] publicKey, byte[] message, byte[] signature);
+
+  private static native byte[][] nativeEncodeShieldSignedTransaction(
+      int algorithmCode,
+      byte[] chainId,
+      byte[] authority,
+      long creationTimeMs,
+      long ttlMs,
+      boolean ttlPresent,
+      byte[] asset,
+      byte[] from,
+      byte[] amount,
+      byte[] noteCommitment,
+      byte[] payloadEphemeralPublicKey,
+      byte[] payloadNonce,
+      byte[] payloadCiphertext,
+      byte[] privateKey);
+
+  private static native byte[][] nativeEncodeUnshieldSignedTransaction(
+      int algorithmCode,
+      byte[] chainId,
+      byte[] authority,
+      long creationTimeMs,
+      long ttlMs,
+      boolean ttlPresent,
+      byte[] asset,
+      byte[] to,
+      byte[] publicAmount,
+      byte[] inputs,
+      byte[] outputs,
+      byte[] proofJson,
+      byte[] rootHint,
+      byte[] privateKey);
+
+  private static native byte[][] nativeEncodeRegisterZkAssetSignedTransaction(
+      int algorithmCode,
+      byte[] chainId,
+      byte[] authority,
+      long creationTimeMs,
+      long ttlMs,
+      boolean ttlPresent,
+      byte[] asset,
+      int modeCode,
+      boolean allowShield,
+      boolean allowUnshield,
+      byte[] transferVerifyingKey,
+      boolean transferVerifyingKeyPresent,
+      byte[] unshieldVerifyingKey,
+      boolean unshieldVerifyingKeyPresent,
+      byte[] shieldVerifyingKey,
+      boolean shieldVerifyingKeyPresent,
+      byte[] privateKey);
 
   /** Raw keypair bytes returned by the bridge. */
   public record KeypairBytes(byte[] privateKey, byte[] publicKey) {}

@@ -2724,6 +2724,7 @@ def _native_evm_prover_bundle_artifact_summary(
 
     rows: list[dict[str, Any]] = []
     by_sdk: dict[str, dict[str, Any]] = {}
+    semantic_sdk_order: list[str] = []
     for index, artifact in enumerate(artifacts):
         label = f"native_sdk_artifacts[{index}]"
         if not isinstance(artifact, dict):
@@ -2741,6 +2742,7 @@ def _native_evm_prover_bundle_artifact_summary(
         if sdk_key_blocker is not None:
             blockers.append(sdk_key_blocker)
             continue
+        semantic_sdk_order.append(sdk)
         if sdk in by_sdk:
             if _native_evm_sdk_name_has_sensitive_marker(sdk):
                 blockers.append(
@@ -2790,6 +2792,8 @@ def _native_evm_prover_bundle_artifact_summary(
 
     for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(by_sdk)):
         blockers.append(f"native_sdk_artifacts missing sdk: {sdk}")
+    if semantic_sdk_order != sorted(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
+        blockers.append("native_sdk_artifacts must match expected SDK order")
 
     return sorted(rows, key=lambda row: row["sdk"]), blockers
 

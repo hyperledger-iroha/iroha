@@ -2737,6 +2737,13 @@ mod chained {
     }
 
     impl BlockBuilder<Chained> {
+        /// Creation time that will be embedded in the block header.
+        #[inline]
+        #[must_use]
+        pub fn creation_time(&self) -> Duration {
+            self.0.header.creation_time()
+        }
+
         /// Attach a DA commitment bundle and update the header hash accordingly.
         #[must_use]
         pub fn with_da_commitments(mut self, commitments: Option<DaCommitmentBundle>) -> Self {

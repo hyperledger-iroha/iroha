@@ -22,6 +22,8 @@ use iroha_data_model::{
     proof::{ProofBox, VerifyingKeyRecord},
     zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
 };
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+use zeroize::{Zeroize, Zeroizing};
 pub const CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified";
 pub const CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID: &str =
@@ -117,6 +119,88 @@ pub struct AssetHiddenTransferProofV1 {
     pub output_commitments: Vec<[u8; 32]>,
     pub root: [u8; 32],
     pub proof: ProofBox,
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Zeroize for ConfidentialMerklePathV2 {
+    fn zeroize(&mut self) {
+        self.siblings.zeroize();
+        self.directions.zeroize();
+        self.witness_nodes.zeroize();
+        self.root.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Drop for ConfidentialMerklePathV2 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Zeroize for ConfidentialTransferInputV2 {
+    fn zeroize(&mut self) {
+        self.amount.zeroize();
+        self.rho.zeroize();
+        self.diversifier.zeroize();
+        self.leaf_index.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Drop for ConfidentialTransferInputV2 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Zeroize for ConfidentialTransferOutputV2 {
+    fn zeroize(&mut self) {
+        self.amount.zeroize();
+        self.rho.zeroize();
+        self.owner_tag.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Drop for ConfidentialTransferOutputV2 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Zeroize for ConfidentialUnshieldInputV2 {
+    fn zeroize(&mut self) {
+        self.amount.zeroize();
+        self.rho.zeroize();
+        self.diversifier.zeroize();
+        self.leaf_index.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Drop for ConfidentialUnshieldInputV2 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Zeroize for ConfidentialUnshieldOutputV3 {
+    fn zeroize(&mut self) {
+        self.amount.zeroize();
+        self.rho.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Drop for ConfidentialUnshieldOutputV3 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 pub fn normalize_confidential_circuit_id(raw: &str) -> String {
@@ -896,9 +980,58 @@ struct ConfidentialTransferWitnessV2 {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Zeroize for ConfidentialTransferWitnessV2 {
+    fn zeroize(&mut self) {
+        self.include_input_1.zeroize();
+        self.include_output_1.zeroize();
+        self.input_0_amount.zeroize();
+        self.input_1_amount.zeroize();
+        self.output_0_amount.zeroize();
+        self.output_1_amount.zeroize();
+        self.input_0_rho.zeroize();
+        self.input_1_rho.zeroize();
+        self.output_0_rho.zeroize();
+        self.output_1_rho.zeroize();
+        self.spend_scalar.zeroize();
+        self.input_0_diversifier.zeroize();
+        self.input_1_diversifier.zeroize();
+        self.output_0_owner_tag.zeroize();
+        self.output_1_owner_tag.zeroize();
+        self.asset_tag.zeroize();
+        self.chain_tag.zeroize();
+        self.input_0_path.zeroize();
+        self.input_1_path.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Drop for ConfidentialTransferWitnessV2 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Default)]
 pub(super) struct ConfidentialTransferCircuitV2<const DEPTH: usize> {
     witness: Option<ConfidentialTransferWitnessV2>,
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl<const DEPTH: usize> Zeroize for ConfidentialTransferCircuitV2<DEPTH> {
+    fn zeroize(&mut self) {
+        if let Some(witness) = &mut self.witness {
+            witness.zeroize();
+        }
+        self.witness = None;
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl<const DEPTH: usize> Drop for ConfidentialTransferCircuitV2<DEPTH> {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -1583,9 +1716,49 @@ struct ConfidentialUnshieldWitnessV2 {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Zeroize for ConfidentialUnshieldWitnessV2 {
+    fn zeroize(&mut self) {
+        self.include_input_1.zeroize();
+        self.input_0_amount.zeroize();
+        self.input_1_amount.zeroize();
+        self.input_0_rho.zeroize();
+        self.input_1_rho.zeroize();
+        self.spend_scalar.zeroize();
+        self.input_0_diversifier.zeroize();
+        self.input_1_diversifier.zeroize();
+        self.input_0_path.zeroize();
+        self.input_1_path.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Drop for ConfidentialUnshieldWitnessV2 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Default)]
 pub(super) struct ConfidentialUnshieldCircuitV2<const DEPTH: usize> {
     witness: Option<ConfidentialUnshieldWitnessV2>,
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl<const DEPTH: usize> Zeroize for ConfidentialUnshieldCircuitV2<DEPTH> {
+    fn zeroize(&mut self) {
+        if let Some(witness) = &mut self.witness {
+            witness.zeroize();
+        }
+        self.witness = None;
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl<const DEPTH: usize> Drop for ConfidentialUnshieldCircuitV2<DEPTH> {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -1978,9 +2151,52 @@ struct ConfidentialUnshieldWitnessV3 {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Zeroize for ConfidentialUnshieldWitnessV3 {
+    fn zeroize(&mut self) {
+        self.include_input_1.zeroize();
+        self.include_output_0.zeroize();
+        self.input_0_amount.zeroize();
+        self.input_1_amount.zeroize();
+        self.output_0_amount.zeroize();
+        self.input_0_rho.zeroize();
+        self.input_1_rho.zeroize();
+        self.output_0_rho.zeroize();
+        self.spend_scalar.zeroize();
+        self.input_0_diversifier.zeroize();
+        self.input_1_diversifier.zeroize();
+        self.input_0_path.zeroize();
+        self.input_1_path.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Drop for ConfidentialUnshieldWitnessV3 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Default)]
 pub(super) struct ConfidentialUnshieldCircuitV3<const DEPTH: usize> {
     witness: Option<ConfidentialUnshieldWitnessV3>,
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl<const DEPTH: usize> Zeroize for ConfidentialUnshieldCircuitV3<DEPTH> {
+    fn zeroize(&mut self) {
+        if let Some(witness) = &mut self.witness {
+            witness.zeroize();
+        }
+        self.witness = None;
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl<const DEPTH: usize> Drop for ConfidentialUnshieldCircuitV3<DEPTH> {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -2823,7 +3039,7 @@ pub fn build_confidential_transfer_proof_v2(
     }
     let (params, parsed_vk) = parse_vk_for_transfer(circuit_id, vk_box)?;
     let spend_scalar = hash_to_scalar(b"iroha.confidential.v2.spend_scalar", &[spend_key]);
-    let spend_scalar_bytes = scalar_to_repr_bytes(spend_scalar);
+    let spend_scalar_bytes = Zeroizing::new(scalar_to_repr_bytes(spend_scalar));
     let asset_tag = derive_confidential_asset_tag_v2(asset_definition_id);
     let chain_tag = derive_confidential_chain_tag_v2(chain_id.as_str());
     let input_0 = inputs
@@ -2914,7 +3130,7 @@ pub fn build_confidential_transfer_proof_v2(
         input_1_rho: input_1.as_ref().map_or([0u8; 32], |note| note.rho),
         output_0_rho: output_0.rho,
         output_1_rho: output_1.as_ref().map_or([0u8; 32], |note| note.rho),
-        spend_scalar: spend_scalar_bytes,
+        spend_scalar: *spend_scalar_bytes,
         input_0_diversifier: input_0.diversifier,
         input_1_diversifier: input_1
             .as_ref()
@@ -3024,7 +3240,7 @@ pub fn build_confidential_unshield_proof_v2(
     }
     let (params, parsed_vk) = parse_vk_for_unshield_v2(circuit_id, vk_box)?;
     let spend_scalar = hash_to_scalar(b"iroha.confidential.v2.spend_scalar", &[spend_key]);
-    let spend_scalar_bytes = scalar_to_repr_bytes(spend_scalar);
+    let spend_scalar_bytes = Zeroizing::new(scalar_to_repr_bytes(spend_scalar));
     let asset_tag = derive_confidential_asset_tag_v2(asset_definition_id);
     let chain_tag = derive_confidential_chain_tag_v2(chain_id.as_str());
     let input_0 = inputs
@@ -3094,7 +3310,7 @@ pub fn build_confidential_unshield_proof_v2(
         input_1_amount: input_1.as_ref().map_or(0, |note| note.amount),
         input_0_rho: input_0.rho,
         input_1_rho: input_1.as_ref().map_or([0u8; 32], |note| note.rho),
-        spend_scalar: spend_scalar_bytes,
+        spend_scalar: *spend_scalar_bytes,
         input_0_diversifier: input_0.diversifier,
         input_1_diversifier: input_1
             .as_ref()
@@ -3189,7 +3405,7 @@ pub fn build_confidential_unshield_proof_v3(
     let (params, parsed_vk) = parse_vk_for_unshield_v3(circuit_id, vk_box)?;
     let change_owner_tag = derive_confidential_owner_tag_v2(spend_key);
     let spend_scalar = hash_to_scalar(b"iroha.confidential.v2.spend_scalar", &[spend_key]);
-    let spend_scalar_bytes = scalar_to_repr_bytes(spend_scalar);
+    let spend_scalar_bytes = Zeroizing::new(scalar_to_repr_bytes(spend_scalar));
     let asset_tag = derive_confidential_asset_tag_v2(asset_definition_id);
     let chain_tag = derive_confidential_chain_tag_v2(chain_id.as_str());
     let input_0 = inputs
@@ -3240,7 +3456,10 @@ pub fn build_confidential_unshield_proof_v3(
     if input_0_path.root != root_hint || input_1_path.root != root_hint {
         return Err("computed confidential Merkle path does not match root_hint".to_owned());
     }
-    let total_input_amount = input_0.amount + input_1.as_ref().map_or(0, |note| note.amount);
+    let total_input_amount = input_0
+        .amount
+        .checked_add(input_1.as_ref().map_or(0, |note| note.amount))
+        .ok_or_else(|| "confidential unshield v3 input amount sum overflows u128".to_owned())?;
     let expected_change_amount = total_input_amount
         .checked_sub(public_amount)
         .ok_or_else(|| "public amount exceeds the available confidential inputs".to_owned())?;
@@ -3277,7 +3496,7 @@ pub fn build_confidential_unshield_proof_v3(
         input_0_rho: input_0.rho,
         input_1_rho: input_1.as_ref().map_or([0u8; 32], |note| note.rho),
         output_0_rho: output_0.as_ref().map_or([0u8; 32], |note| note.rho),
-        spend_scalar: spend_scalar_bytes,
+        spend_scalar: *spend_scalar_bytes,
         input_0_diversifier: input_0.diversifier,
         input_1_diversifier: input_1
             .as_ref()
@@ -4079,6 +4298,71 @@ mod tests {
         assert!(
             bad_change.contains("change note amount mismatch"),
             "unexpected bad-change error: {bad_change}"
+        );
+
+        let overflow_input_0_rho = [0xB1_u8; 32];
+        let overflow_input_1_rho = [0xB2_u8; 32];
+        let overflow_input_0_diversifier =
+            super::derive_confidential_diversifier_v2(b"unshield-v3-overflow-input-0");
+        let overflow_input_1_diversifier =
+            super::derive_confidential_diversifier_v2(b"unshield-v3-overflow-input-1");
+        let overflow_input_0_owner_tag = super::derive_confidential_owner_tag_v2_with_diversifier(
+            &spend_key,
+            overflow_input_0_diversifier,
+        )
+        .expect("overflow input 0 owner tag");
+        let overflow_input_1_owner_tag = super::derive_confidential_owner_tag_v2_with_diversifier(
+            &spend_key,
+            overflow_input_1_diversifier,
+        )
+        .expect("overflow input 1 owner tag");
+        let overflow_tree_commitments = vec![
+            super::derive_confidential_note_v2(
+                asset_definition_id,
+                u128::MAX,
+                overflow_input_0_rho,
+                overflow_input_0_owner_tag,
+            )
+            .expect("overflow input 0 commitment"),
+            super::derive_confidential_note_v2(
+                asset_definition_id,
+                1,
+                overflow_input_1_rho,
+                overflow_input_1_owner_tag,
+            )
+            .expect("overflow input 1 commitment"),
+        ];
+        let overflow_root_hint = super::compute_confidential_root_v2(&overflow_tree_commitments)
+            .expect("overflow confidential root");
+        let overflow = super::build_confidential_unshield_proof_v3(
+            &chain_id,
+            asset_definition_id,
+            &spend_key,
+            &overflow_tree_commitments,
+            &[
+                super::ConfidentialUnshieldInputV2 {
+                    amount: u128::MAX,
+                    rho: overflow_input_0_rho,
+                    diversifier: overflow_input_0_diversifier,
+                    leaf_index: 0,
+                },
+                super::ConfidentialUnshieldInputV2 {
+                    amount: 1,
+                    rho: overflow_input_1_rho,
+                    diversifier: overflow_input_1_diversifier,
+                    leaf_index: 1,
+                },
+            ],
+            &[],
+            0,
+            overflow_root_hint,
+            &vk_record.circuit_id,
+            &vk_box,
+        )
+        .expect_err("overflowing private input sum must reject");
+        assert!(
+            overflow.contains("input amount sum overflows u128"),
+            "unexpected overflow error: {overflow}"
         );
 
         let proof = super::build_confidential_unshield_proof_v3(

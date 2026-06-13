@@ -2046,6 +2046,7 @@ public sealed record class ToriiExplorerAccountQrSnapshot
     public string Svg { get; init; } = string.Empty;
 }
 
+[JsonConverter(typeof(ToriiIdentifierPolicySummaryJsonConverter))]
 public sealed record class ToriiIdentifierPolicySummary
 {
     [JsonPropertyName("policy_id")]
@@ -2091,6 +2092,7 @@ public sealed record class ToriiIdentifierPoliciesResponse
     public IReadOnlyList<ToriiIdentifierPolicySummary> Items { get; init; } = Array.Empty<ToriiIdentifierPolicySummary>();
 }
 
+[JsonConverter(typeof(ToriiIdentifierResolveResponseJsonConverter))]
 public sealed record class ToriiIdentifierResolveResponse
 {
     [JsonPropertyName("policy_id")]

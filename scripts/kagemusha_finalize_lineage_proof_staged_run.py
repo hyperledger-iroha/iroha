@@ -37,7 +37,38 @@ DEFAULT_ARTIFACT_DIR = Path("artifacts/kagemusha")
 EXIT_MARKER_MAX_BYTES = 32
 RUN_REPORT_FILENAME = "lineage-proof-staged-run.json"
 STAGED_RUN_REPORT_SCHEMA = "iroha.kagemusha.lineage_proof_staged_run.v1"
+EXECUTION_REPORT_SCHEMA = "iroha.kagemusha.lineage_staged_execution.v1"
+LINEAGE_EXECUTION_REPORT_FILENAMES = {
+    "init": "lineage-init-key-artifacts-execution.json",
+    "append": "lineage-append-key-artifacts-execution.json",
+    "proof": "lineage-proof-execution.json",
+}
+LINEAGE_KEY_ARTIFACT_LOG_FILENAMES = {
+    "init": "lineage-init-key-artifacts.log",
+    "append": "lineage-append-key-artifacts.log",
+}
+LINEAGE_KEY_ARTIFACT_COMMANDS = {
+    "init": (
+        "iroha app zk kagemusha lineage-key-artifacts "
+        "--profile init "
+        f"--opening-len {readiness.EXPECTED_LINEAGE_PROOF_OPENING_LEN} "
+        "--out artifacts/kagemusha/lineage-init-len128.norito "
+        "--record-out artifacts/kagemusha/lineage-init-len128.record.norito "
+        "--vk-out artifacts/kagemusha/lineage-init-len128.vk "
+        "--pk-out artifacts/kagemusha/lineage-init-len128.pk"
+    ),
+    "append": (
+        "iroha app zk kagemusha lineage-key-artifacts "
+        "--profile append "
+        f"--opening-len {readiness.EXPECTED_LINEAGE_PROOF_OPENING_LEN} "
+        "--out artifacts/kagemusha/lineage-append-len128.norito "
+        "--record-out artifacts/kagemusha/lineage-append-len128.record.norito "
+        "--vk-out artifacts/kagemusha/lineage-append-len128.vk "
+        "--pk-out artifacts/kagemusha/lineage-append-len128.pk"
+    ),
+}
 MAX_STAGED_RUN_REPORT_BYTES = 16 * 1024
+MAX_EXECUTION_REPORT_BYTES = 16 * 1024
 CONTROL_EXIT_MARKER_REDACTION = "<unsafe-exit-marker>"
 SECRET_EXIT_MARKER_REDACTION = "<redacted-secret-marker>"
 CANONICAL_ELAPSED_SECONDS_RE = re.compile(r"(?:0|[1-9][0-9]*)\.[0-9]{6}\n\Z")
@@ -589,6 +620,161 @@ def validate_staged_run_report(
     return []
 
 
+def _validate_sha256_hex(value: object, label: str, field: str) -> list[str]:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value)
+        or value == "0" * 64
+    ):
+        return [f"{label} {field} must be a non-zero SHA-256 hex digest"]
+    return []
+
+
+def _validate_staged_execution_report(
+    *,
+    staged_artifact_dir: Path,
+    profile: str,
+    expected_command: str,
+    expected_log_name: str,
+    expected_phase: str,
+    expected_elapsed_seconds: float | None = None,
+) -> list[str]:
+    label = (
+        "staged lineage proof execution report"
+        if profile == "proof"
+        else f"staged {profile} lineage key artifact execution report"
+    )
+    report_path = staged_artifact_dir / LINEAGE_EXECUTION_REPORT_FILENAMES[profile]
+    text, errors = _read_small_text_file(
+        report_path,
+        label,
+        max_bytes=MAX_EXECUTION_REPORT_BYTES,
+    )
+    if errors:
+        return errors
+    assert text is not None
+    document, errors = _strict_json_loads(text, label)
+    if errors:
+        return errors
+    if not isinstance(document, dict):
+        return [f"{label} must be a JSON object"]
+    allowed_keys = {
+        "schema",
+        "phase",
+        "command",
+        "exit_code",
+        "elapsed_seconds",
+        "log_path",
+        "log_sha256",
+        "log_size_bytes",
+    }
+    extra_keys = sorted(set(document) - allowed_keys)
+    if extra_keys:
+        return [
+            f"{label} contains unexpected field {device_lab._display_path(extra_keys[0])}"
+        ]
+    missing_keys = sorted(allowed_keys - set(document))
+    if missing_keys:
+        return [f"{label} is missing {missing_keys[0]}"]
+    if document["schema"] != EXECUTION_REPORT_SCHEMA:
+        return [f"{label} schema must be {EXECUTION_REPORT_SCHEMA}"]
+    if document["phase"] != expected_phase:
+        return [f"{label} phase must be {expected_phase}"]
+    command_errors = _validate_report_command(
+        document["command"],
+        label,
+        expected_command,
+        "Reserved-lineage proof command"
+        if profile == "proof"
+        else f"{profile} lineage key artifact command",
+    )
+    if command_errors:
+        return command_errors
+    exit_code = document["exit_code"]
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        return [f"{label} exit_code must be an integer"]
+    if exit_code != 0:
+        return [f"{label} exit_code must be 0, got {exit_code}"]
+    elapsed_seconds = document["elapsed_seconds"]
+    if (
+        isinstance(elapsed_seconds, bool)
+        or not isinstance(elapsed_seconds, (int, float))
+        or not math.isfinite(float(elapsed_seconds))
+        or float(elapsed_seconds) <= 0
+    ):
+        return [f"{label} elapsed_seconds must be a finite positive number"]
+    if (
+        expected_elapsed_seconds is not None
+        and float(elapsed_seconds) != expected_elapsed_seconds
+    ):
+        return [
+            f"{label} elapsed_seconds must match staged elapsed seconds "
+            f"{expected_elapsed_seconds}, got {float(elapsed_seconds)}"
+        ]
+    if document["log_path"] != expected_log_name:
+        return [f"{label} log_path must be {expected_log_name}"]
+    log_digest = document["log_sha256"]
+    digest_errors = _validate_sha256_hex(log_digest, label, "log_sha256")
+    if digest_errors:
+        return digest_errors
+    log_size = document["log_size_bytes"]
+    if isinstance(log_size, bool) or not isinstance(log_size, int) or log_size <= 0:
+        return [f"{label} log_size_bytes must be a positive integer"]
+    log_path = staged_artifact_dir / expected_log_name
+    actual_digest, actual_errors = lineage_evidence._sha256_file(
+        log_path,
+        f"{label} log",
+    )
+    if actual_errors:
+        return actual_errors
+    assert actual_digest is not None
+    if log_digest != actual_digest:
+        return [f"{label} log_sha256 must match staged log SHA-256"]
+    try:
+        actual_size = log_path.stat().st_size
+    except OSError:
+        return [f"{label} log size could not be checked"]
+    if log_size != actual_size:
+        return [
+            f"{label} log_size_bytes must match staged log size "
+            f"{actual_size}, got {log_size}"
+        ]
+    return []
+
+
+def validate_staged_execution_reports(
+    *,
+    staged_artifact_dir: Path,
+    expected_command: str,
+    expected_elapsed_seconds: float,
+) -> list[str]:
+    """Validate staged phase execution reports before publishing proof evidence."""
+
+    errors: list[str] = []
+    for profile, log_name in LINEAGE_KEY_ARTIFACT_LOG_FILENAMES.items():
+        errors.extend(
+            _validate_staged_execution_report(
+                staged_artifact_dir=staged_artifact_dir,
+                profile=profile,
+                expected_command=LINEAGE_KEY_ARTIFACT_COMMANDS[profile],
+                expected_log_name=log_name,
+                expected_phase=f"{profile} lineage key artifact command",
+            )
+        )
+        if errors:
+            return errors
+    proof_log_name = readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+    return _validate_staged_execution_report(
+        staged_artifact_dir=staged_artifact_dir,
+        profile="proof",
+        expected_command=expected_command,
+        expected_log_name=proof_log_name,
+        expected_phase="lineage proof command",
+        expected_elapsed_seconds=expected_elapsed_seconds,
+    )
+
+
 def _copy_validated_file(
     source: Path,
     destination: Path,
@@ -661,6 +847,7 @@ def stage_lineage_proof_evidence(
     staged_artifact_dir: Path,
     stage_dir: Path,
     generated_at_utc: str,
+    max_generated_at_future_skew_seconds: int,
     command: str,
     elapsed_seconds: float,
 ) -> tuple[dict[str, Any] | None, list[str]]:
@@ -689,6 +876,7 @@ def stage_lineage_proof_evidence(
         command=command,
         elapsed_seconds=elapsed_seconds,
         generated_at_utc=generated_at_utc,
+        max_generated_at_future_skew_seconds=max_generated_at_future_skew_seconds,
     )
     if evidence_errors:
         return None, evidence_errors
@@ -810,6 +998,18 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
         return 1, None, errors
     assert exit_code_text is not None
     errors.extend(lineage_evidence._validate_generated_at_utc(args.generated_at_utc))
+    generated_at, timestamp_error = readiness.parse_utc_timestamp(
+        args.generated_at_utc,
+        "--generated-at-utc",
+    )
+    if timestamp_error is not None:
+        errors.append(timestamp_error["message"])
+    errors.extend(
+        lineage_evidence._validate_generated_at_future_skew(
+            generated_at,
+            args.max_generated_at_future_skew_seconds,
+        )
+    )
     errors.extend(readiness.validate_lineage_proof_command(
         args.command,
         readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"],
@@ -818,14 +1018,21 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
     errors.extend(elapsed_errors)
     if exit_code_text == "0" and not elapsed_errors:
         assert elapsed_seconds is not None
-        errors.extend(
-            validate_staged_run_report(
-                staged_artifact_dir=args.staged_artifact_dir,
-                expected_exit_code=0,
-                expected_command=args.command,
-                expected_elapsed_seconds=elapsed_seconds,
-            )
+        report_errors = validate_staged_run_report(
+            staged_artifact_dir=args.staged_artifact_dir,
+            expected_exit_code=0,
+            expected_command=args.command,
+            expected_elapsed_seconds=elapsed_seconds,
         )
+        errors.extend(report_errors)
+        if not report_errors:
+            errors.extend(
+                validate_staged_execution_reports(
+                    staged_artifact_dir=args.staged_artifact_dir,
+                    expected_command=args.command,
+                    expected_elapsed_seconds=elapsed_seconds,
+                )
+            )
     if errors:
         return 1, None, errors
     assert elapsed_seconds is not None
@@ -851,6 +1058,9 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
             staged_artifact_dir=args.staged_artifact_dir,
             stage_dir=stage_dir,
             generated_at_utc=args.generated_at_utc,
+            max_generated_at_future_skew_seconds=(
+                args.max_generated_at_future_skew_seconds
+            ),
             command=args.command,
             elapsed_seconds=elapsed_seconds,
         )
@@ -894,6 +1104,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--artifact-dir", type=Path, default=DEFAULT_ARTIFACT_DIR)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--generated-at-utc", default=_default_generated_at_utc())
+    parser.add_argument(
+        "--max-generated-at-future-skew-seconds",
+        type=int,
+        default=readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS,
+        help=(
+            "Maximum number of seconds generated_at_utc may be ahead of the "
+            "finalizer clock."
+        ),
+    )
     parser.add_argument("--command", default=lineage_evidence.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND)
     parser.add_argument("--elapsed-seconds", type=float)
     parser.add_argument("--elapsed-seconds-file", type=Path)

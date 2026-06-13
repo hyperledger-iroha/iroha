@@ -16868,6 +16868,45 @@ def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifac
     assert payload["release_checklist"]["ready"] is False
 
 
+def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_order(
+    tmp_path: Path,
+) -> None:
+    """Native prover manifests must keep SDK artifact rows in canonical order."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["native_sdk_artifacts"] = list(reversed(payload["native_sdk_artifacts"]))
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert "native_sdk_artifacts must match expected SDK order" in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
 def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifacts(
     tmp_path: Path,
 ) -> None:
