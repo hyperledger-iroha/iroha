@@ -21380,7 +21380,8 @@ fn java_native_encode_shield_signed_transaction(
                 );
                 Executable::from([InstructionBox::from(instruction)])
             },
-        );
+        )
+        .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
         java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
     })();
     match result {
@@ -21466,7 +21467,8 @@ fn java_native_encode_unshield_signed_transaction(
                 );
                 Executable::from([InstructionBox::from(instruction)])
             },
-        );
+        )
+        .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
         java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
     })();
     match result {
@@ -21558,7 +21560,8 @@ fn java_native_encode_register_zk_asset_signed_transaction(
             ttl,
             private_key,
             move || Executable::from([InstructionBox::from(register)]),
-        );
+        )
+        .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
         java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
     })();
     match result {

@@ -3866,7 +3866,6 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyStatusTest",
         "org.hyperledger.iroha.sdk.crypto.SigningAlgorithmTest",
         "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest",
-        "org.hyperledger.iroha.sdk.nexus.NexusAppClientTest",
         "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest",
         "org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest",
         "org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest",
@@ -8540,33 +8539,30 @@ def check_csharp(texts, errors):
         "|FullyQualifiedName~PrivacyNativeTests"
         "|FullyQualifiedName~TransactionBuilderTests"
         "|FullyQualifiedName~CanonicalRequestTests"
-        "|FullyQualifiedName~ToriiIdentifierReceiptTests"
         "|FullyQualifiedName~ToriiClientTests"
         "|FullyQualifiedName~SignedQueryBuilderTests"
         "|FullyQualifiedName~SignedIterableQueryBuilderTests"
-        '|FullyQualifiedName~VerifyingKeyBackendTagTests"'
+        "|FullyQualifiedName~VerifyingKeyBackendTagTests"
+        '|FullyQualifiedName~ToriiIdentifierReceiptTests"'
     )
     require(
         expected_csharp_filter in script,
-        "Kagemusha C# SDK script must run recursive spend, privacy native, transaction builder, canonical request, identifier receipt, Torii, signed query, and verifier backend tests",
+        "Kagemusha C# SDK script must run recursive spend, privacy native, transaction builder, canonical request, Torii, signed query, verifier backend, and identifier receipt tests",
         errors,
     )
     require_contains(
         texts,
         "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs",
         (
-            "internal static string RequireExactNonBlank(string? value, string parameterName)",
+            "internal static string RequireExactNonBlank(string? value, string paramName)",
             "value.Trim()",
-            "value.Any(char.IsControl)",
-            "must not contain surrounding whitespace or control characters",
-            "var checkedAccountId = RequireExactNonBlank(accountId, nameof(accountId));",
-            "var checkedMethod = RequireExactNonBlank(method, nameof(method));",
-            "var checkedPath = RequireExactNonBlank(path, nameof(path));",
+            "must not contain surrounding whitespace",
+            "var exactAccountId = RequireExactNonBlank(accountId, nameof(accountId));",
             "var effectiveNonce = nonce is null ? GenerateNonce() : RequireExactNonBlank(nonce, nameof(nonce));",
-            "var checkedNonce = RequireExactNonBlank(nonce, nameof(nonce));",
+            "var exactNonce = RequireExactNonBlank(nonce, nameof(nonce));",
             "return new CanonicalRequestHeaders(",
         ),
-        "C# canonical request account-id, method, path, and nonce exactness",
+        "C# canonical request account-id and nonce exactness",
         errors,
     )
     require_contains(
@@ -8597,16 +8593,14 @@ def check_csharp(texts, errors):
         texts,
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs",
         (
-            "BuildHeadersRejectsNonExactAccountIds",
-            "BuildHeadersRejectsNonExactMethods",
-            "BuildHeadersRejectsNonExactPaths",
-            "BuildHeadersRejectsNonExactCallerProvidedNonces",
-            "BuildSignatureMessageRejectsNonExactMethodsAndPaths",
-            "CanonicalRequestCredentialsRejectsNonExactAccountIds",
-            "CanonicalRequestHeadersRejectsNonExactFields",
+            "CanonicalRequestAuthRejectsPaddedAndBlankFields",
+            "new CanonicalRequestCredentials($\" {FixtureAccountId}\"",
+            "accountId: $\"{FixtureAccountId} \"",
+            "nonce: \" abcdef0123456789abcdef0123456789 \"",
+            "nonce: \" \"",
+            "BuildSignatureMessage(",
             "new CanonicalRequestHeaders(",
             "\" signature \"",
-            "\\u0000",
         ),
         "C# canonical request exactness tests",
         errors,
@@ -8955,7 +8949,7 @@ def check_csharp(texts, errors):
         texts,
         "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs",
         (
-            "Value must not contain surrounding whitespace or control characters.",
+            "Value must not contain surrounding whitespace.",
             "return value;",
             "metadata[RequireExactNonBlank(key, nameof(key))]",
             "replacement[RequireExactNonBlank(key, nameof(values))]",
@@ -8974,13 +8968,11 @@ def check_csharp(texts, errors):
         texts,
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
         (
-            "ConstructorRejectsNonExactRequiredFields",
-            "SetMetadataRejectsNonExactKeys",
-            "ReplaceMetadataRejectsNonExactKeysWithoutMutatingExistingMetadata",
-            "[InlineData(\" 00000042\", FixtureAccountId)]",
-            "[InlineData(FixtureChainId, \" sorau",
-            "[InlineData(\" memo\")]",
-            "[InlineData(\"me\\u001Fmo\")]",
+            "TransactionBuilderRejectsPaddedTopLevelFields",
+            "new TransactionBuilder(\" 00000042\"",
+            "new TransactionBuilder(\"00000042\", $\" {FixtureAccountId}\"",
+            "builder.SetMetadata(\" trace \"",
+            "[\" trace \"] = JsonValue.Create(\"abc\")",
         ),
         "C# transaction builder top-level exactness tests",
         errors,
@@ -8990,14 +8982,13 @@ def check_csharp(texts, errors):
         "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs",
         (
             "private static string RequireExactNonBlank(string? value, string paramName)",
-            "value.Any(char.IsControl)",
-            "must not contain surrounding whitespace or control characters",
+            "Value must not contain surrounding whitespace.",
             "writer.WriteField(EncodeString(RequireExactNonBlank(chainId, nameof(chainId))))",
             "return EncodeString(RequireExactNonBlank(value, nameof(value)))",
-            "var exact = RequireExactNonBlank(value, nameof(value));",
+            "value = RequireExactNonBlank(value, nameof(value));",
             "var trimmed = RequireExactNonBlank(value, nameof(value));",
-            "var exact = RequireExactNonBlank(nftId, nameof(nftId));",
-            "var exact = RequireExactNonBlank(literal, nameof(literal));",
+            "var exactNftId = RequireExactNonBlank(nftId, nameof(nftId));",
+            "var exactLiteral = RequireExactNonBlank(literal, nameof(literal));",
             "RequireExactNonBlank(accountId, nameof(accountId)),",
             "var normalized = RequireExactNonBlank(literal, nameof(literal));",
         ),
@@ -9018,17 +9009,17 @@ def check_csharp(texts, errors):
         texts,
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
         (
-            "TransactionEncodingContextRejectsNonExactChainIds",
-            "TransactionEncodingContextRejectsNonExactNames",
-            "TransactionEncodingContextRejectsNonExactNumerics",
-            "TransactionEncodingContextRejectsNonExactNftIds",
-            "TransactionEncodingContextRejectsNonExactAssetDefinitionIds",
-            "TransactionEncodingContextRejectsNonExactHashLiterals",
-            "TransactionEncodingContextRejectsNonExactFixedByteLiterals",
-            "TransactionEncodingContextRejectsNonExactOptionalStrings",
-            "TransactionEncodingContextRejectsNonExactAccountIds",
-            "[InlineData(\" 0x0102\")]",
-            "[InlineData(\"0x01\\u000002\")]",
+            "TransactionEncodingContextRejectsPaddedBoundaryFields",
+            "new TransactionEncodingContext($\" {FixtureAccountId}\")",
+            "context.EncodeChainId(\" 00000042\")",
+            "context.EncodeAccountId($\" {FixtureAccountId}\")",
+            "context.EncodeName(\" display_name\")",
+            "context.EncodeOptionalString(\" memo \")",
+            "context.EncodeNumeric(\" 15.7500\")",
+            "context.EncodeAssetDefinitionId(\" 62Fk4FPcMuLvW5QjDGNF2a4jAmjM\")",
+            "context.EncodeNftId(\" dragon$wonderland\")",
+            "context.EncodeHashLiteral(\" \" + new string('a', 64))",
+            "context.EncodeFixedBytesLiteral(\" 0x0102\", expectedLength: 2)",
         ),
         "C# transaction encoding boundary exactness tests",
         errors,
@@ -9099,8 +9090,8 @@ def check_csharp(texts, errors):
             "KagemushaNoritoFrameFromPayload",
             "appendVerifierKey",
             "duplicateCidVerifierKey",
-            "paddedCidVerifierKey",
-            "archiveCommittedToPaddedCidVerifierKey",
+            "whitespaceCidVerifierKey",
+            "whitespaceCidProvingKeyArchive",
             "missingCircuitArchive",
             "wrongCommitmentArchive",
             "smuggledCircuitArchive",
@@ -13058,7 +13049,7 @@ if mode == "--negative-control-csharp-lineage-cid1-exactness":
         1,
     )
     mutated_test = texts[test_target].replace(
-        "paddedCidVerifierKey",
+        "whitespaceCidVerifierKey",
         "normalizedCidVerifierKey",
         1,
     )

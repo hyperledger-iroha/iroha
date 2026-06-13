@@ -15,6 +15,39 @@ public sealed class TransactionBuilderTests
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
     private const string FixtureChainId = "00000042";
     private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
+
+    [Fact]
+    public void TransactionBuilderRejectsPaddedTopLevelFields()
+    {
+        Assert.Throws<ArgumentException>(() => new TransactionBuilder(" 00000042", FixtureAccountId));
+        Assert.Throws<ArgumentException>(() => new TransactionBuilder("00000042", $" {FixtureAccountId}"));
+
+        var builder = new TransactionBuilder("00000042", FixtureAccountId);
+        Assert.Throws<ArgumentException>(() => builder.SetMetadata(" trace ", JsonValue.Create("abc")));
+        Assert.Throws<ArgumentException>(
+            () => builder.ReplaceMetadata(
+                new Dictionary<string, JsonNode?>
+                {
+                    [" trace "] = JsonValue.Create("abc"),
+                }));
+    }
+
+    [Fact]
+    public void TransactionEncodingContextRejectsPaddedBoundaryFields()
+    {
+        Assert.Throws<ArgumentException>(() => new TransactionEncodingContext($" {FixtureAccountId}"));
+
+        var context = new TransactionEncodingContext(FixtureAccountId);
+        Assert.Throws<ArgumentException>(() => context.EncodeChainId(" 00000042"));
+        Assert.Throws<ArgumentException>(() => context.EncodeAccountId($" {FixtureAccountId}"));
+        Assert.Throws<ArgumentException>(() => context.EncodeName(" display_name"));
+        Assert.Throws<ArgumentException>(() => context.EncodeOptionalString(" memo "));
+        Assert.Throws<ArgumentException>(() => context.EncodeNumeric(" 15.7500"));
+        Assert.Throws<ArgumentException>(() => context.EncodeAssetDefinitionId(" 62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
+        Assert.Throws<ArgumentException>(() => context.EncodeNftId(" dragon$wonderland"));
+        Assert.Throws<ArgumentException>(() => context.EncodeHashLiteral(" " + new string('a', 64)));
+        Assert.Throws<ArgumentException>(() => context.EncodeFixedBytesLiteral(" 0x0102", expectedLength: 2));
+    }
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
     [Theory]
@@ -183,28 +216,6 @@ public sealed class TransactionBuilderTests
         var context = new TransactionEncodingContext(FixtureAccountId);
 
         Assert.Throws<ArgumentException>(() => context.EncodeAssetDefinitionId(assetDefinitionId));
-    }
-
-    [Theory]
-    [InlineData(" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
-    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ")]
-    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u0000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
-    public void TransactionEncodingContextRejectsNonExactHashLiterals(string literal)
-    {
-        var context = new TransactionEncodingContext(FixtureAccountId);
-
-        Assert.Throws<ArgumentException>(() => context.EncodeHashLiteral(literal));
-    }
-
-    [Theory]
-    [InlineData(" 0x0102")]
-    [InlineData("0x0102 ")]
-    [InlineData("0x01\u000002")]
-    public void TransactionEncodingContextRejectsNonExactFixedByteLiterals(string literal)
-    {
-        var context = new TransactionEncodingContext(FixtureAccountId);
-
-        Assert.Throws<ArgumentException>(() => context.EncodeFixedBytesLiteral(literal, expectedLength: 2));
     }
 
     [Fact]

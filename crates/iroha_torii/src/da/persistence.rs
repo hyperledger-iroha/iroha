@@ -697,12 +697,7 @@ pub(super) fn persist_da_receipt(
         }
     }
 
-    install_artifact_without_overwrite(
-        &tmp_path,
-        &target_path,
-        &encoded,
-        "DA receipt artifact",
-    )?;
+    install_artifact_without_overwrite(&tmp_path, &target_path, &encoded, "DA receipt artifact")?;
 
     debug!(
         path = ?target_path,

@@ -66,6 +66,25 @@ public sealed class ToriiIdentifierReceiptTests
         Assert.Contains("non-negative", error.Message);
     }
 
+    [Fact]
+    public void IdentifierResolveResponseDeserializesNestedReceiptEnvelope()
+    {
+        var receipt = JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(
+            NestedIdentifierResolveResponse("""{"kind":"signed","signature":"ABCD"}"""));
+
+        Assert.NotNull(receipt);
+        Assert.Equal("phone#retail", receipt.PolicyId);
+        Assert.Equal("opaque-1", receipt.OpaqueId);
+        Assert.Equal("receipt-1", receipt.ReceiptHash);
+        Assert.Equal("sorauﾛ1Nmerchant", receipt.AccountId);
+        Assert.Equal(1710000000000L, receipt.ResolvedAtMilliseconds);
+        Assert.Equal(1710003600000L, receipt.ExpiresAtMilliseconds);
+        Assert.Equal("bfv-programmed-sha3-256-v1", receipt.Backend);
+        Assert.Equal("ABCD", receipt.Signature);
+        Assert.Equal(string.Empty, receipt.SignaturePayloadHex);
+        Assert.Equal("signed", receipt.SignaturePayload!["attestation"]!["kind"]!.GetValue<string>());
+    }
+
     [Theory]
     [InlineData("policy_id", " phone#retail ")]
     [InlineData("owner", " sorauﾛ1Nissuer ")]
@@ -124,6 +143,49 @@ public sealed class ToriiIdentifierReceiptTests
             ["ram_fhe_profile"] = null,
             ["note"] = "retail policy",
         };
+    }
+
+    private static string NestedIdentifierResolveResponse(string attestationJson)
+    {
+        return $$"""
+            {
+              "payload": {
+                "policy_id": "phone#retail",
+                "account_id": "sorauﾛ1Nmerchant",
+                "opaque_id": "opaque-1",
+                "receipt_hash": "receipt-1",
+                "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "execution": {
+                  "program_id": "identifier_lookup_retail",
+                  "program_digest": "program-digest",
+                  "backend": "bfv-programmed-sha3-256-v1",
+                  "verification_mode": "signed",
+                  "input_ciphertext_hash": "input-hash",
+                  "output_ciphertext_hash": "output-hash",
+                  "parameter_digest": "parameter-digest",
+                  "evaluation_key_digest": "evaluation-key-digest",
+                  "output_hash": "output-open-hash",
+                  "associated_data_hash": "associated-data-hash",
+                  "executed_at_ms": 1710000000000,
+                  "expires_at_ms": 1710003600000
+                },
+                "opening": {
+                  "payload": {
+                    "program_id": "identifier_lookup_retail",
+                    "input_ciphertext_hash": "input-hash",
+                    "output_ciphertext_hash": "output-hash",
+                    "parameter_digest": "parameter-digest",
+                    "evaluation_key_digest": "evaluation-key-digest",
+                    "opened_output_hash": "opened-output-hash",
+                    "opened_at_ms": 1710000000000,
+                    "expires_at_ms": 1710003600000
+                  },
+                  "signature": "ABCD"
+                }
+              },
+              "attestation": {{attestationJson}}
+            }
+            """;
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

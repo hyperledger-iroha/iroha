@@ -13,29 +13,38 @@ and completed history lives in [`status.md`](./status.md).
 
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- Privacy production readiness now requires a 4-peer localnet
+  shield-to-redeem lifecycle evidence set: shield tx, hop proof, recursive
+  init/verify, recursive append/verify, unshield proof, redeem tx, replay
+  rejection, restart replay rejection, and state recovery must each have
+  distinct production artifact hashes in the ready-gate audit references.
+  Generic smoke-only localnet evidence is not sufficient for release signoff,
+  and the same contract must remain mirrored across `connect_norito_bridge`,
+  `iroha_js_host`, and `iroha_python_rs`.
 - ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
   endpoint for current confidential-v2 commitment inclusion paths, and the
-  Kotlin/JVM plus Android Java Torii Merkle providers call it directly. Keep
-  local providers limited to audited caller-supplied frontier material. The
-  SDK response parsers must keep Merkle path entries structurally exact:
-  noncanonical root text, duplicate keys, overflowing counters, depth/array
-  mismatches, direction-bit mismatches, and `leaf_index >= frontier_len` all
-  fail before wallet code can consume node-supplied proof material.
+  Kotlin/JVM plus Android Java Torii Merkle providers call it directly.
+  Torii-backed providers verify returned sibling paths against requested
+  commitments and roots, and SDK path models enforce leaf-index direction
+  consistency before wallet or prover code receives paths. The SDK Torii
+  clients also reject quoted or fractional numeric fields in zk roots/path
+  responses so wallet code sees the same integer shapes the node emits. SDK
+  response parsers must also keep node-supplied Merkle paths structurally
+  exact: duplicate keys, overflowing counters, depth/array mismatches, root
+  mismatches, direction-bit mismatches, and `leaf_index >= frontier_len` fail
+  before wallet code can consume proof material. Keep local providers limited
+  to audited caller-supplied frontier material.
 - Confidential-v2 SDK note derivation and encrypted note payload handling now
   exist for Kotlin/JVM and Android Java, with Rust-vector parity for owner tags,
-  note commitments, nullifiers, asset tags, and chain tags plus a shared
-  deterministic X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Default
-  decryption binds the plaintext owner tag to the supplied spend key, while
-  diversified notes must use the explicit expected-owner-tag overload. Keep the
+  note commitments, nullifiers, asset tags, and chain tags, Rust-fixture parity
+  for the `ConfidentialEncryptedPayload` wire envelope, low-order X25519
+  public-key rejection parity, canonical ciphertext-length rejection parity,
+  a 64 KiB encrypted-note ciphertext cap, and a shared deterministic
+  X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Default decryption
+  binds the plaintext owner tag to the supplied spend key, while diversified
+  notes must use the explicit expected-owner-tag overload. Keep the
   higher-level wallet flows pinned to this contract when wiring shield-note
   recovery into production clients.
-- Kagemusha Swift mobile transport readiness must keep NFC receive-success
-  preservation and send terminal-success handling in the SDK parity guard. The
-  guard now tracks the mobile transport source, transport UI tests,
-  accepted-payment success state, ACK-ready single-success gate,
-  emulation-started progress suppression after a receive flow has accepted a
-  payment, and send-side progress/failure suppression after a receipt ACK has
-  completed the transfer.
 - Kagemusha SDK parity must keep ABI-7 compact projection verifier surfaces
   aligned across package roots and native hosts. Python now exposes both the
   optional-height verifier and the explicit
@@ -48,12 +57,23 @@ and completed history lives in [`status.md`](./status.md).
   bundles, record bundles, proof attachments, verifier records, and lineage
   witnesses at construction time; keep this fail-fast contract for wallet
   request assembly instead of relying on later encode or native dispatch errors.
-- Kagemusha recursive-spend hop-evidence and native projection parsing must
-  stay exact: confidential-transfer-v2 proof bytes expose exactly nine
-  single-row ZK1 public-instance columns, root transitions are nonzero and
-  continuous across folded hops, chain/asset bindings stay stable, and native
-  bridge ZK1 `I10P` payloads reject zero dimensions, over-cap dimensions,
-  truncated payloads, and trailing bytes before public-input projection.
+  Init and lineage-append requests must also keep lineage verifier/proving-key
+  artifacts bound to the expected one-hop or append circuit and verifier-key
+  commitment before serialization; wallet-facing constructors should prefer
+  validated `LineageKeyArtifacts` packages over manually split raw key bytes,
+  including through the high-level recursive-spend request helper overloads.
+  The Python typed recursive-spend request API now enforces the same package
+  binding before encoding, including rejection of wrong-profile artifacts,
+  mismatched raw verifier/proving-key pairs, mixed typed/raw key material, and
+  unnecessary lineage artifacts on semantic append output.
+  The JVM recursive-spend guard must continue exercising both Gradle and direct
+  `javac` Android harness compilation for these typed request surfaces.
+  The explicit hop-evidence builders must also keep confidential-transfer-v2
+  public-instance shape exact: exactly nine single-row ZK1 columns, no extra
+  public columns, nonzero root transitions, continuous multi-hop roots, and
+  stable chain/asset binding across every folded hop. Native bridge ZK1 `I10P`
+  parsing must stay exact too: zero dimensions, over-cap dimensions, truncated
+  payloads, and trailing bytes reject before public-input projection.
 - Kagemusha Offline/Offline V2 readiness parsers must treat the legacy
   `offline_kagemusha_abi7*` key family and the
   `offline_kagemusha_recursive_compact_*` key family as aliases for the same
@@ -63,44 +83,37 @@ and completed history lives in [`status.md`](./status.md).
   Present alias values must also keep their expected exact types: booleans as
   JSON booleans, strings as non-empty unpadded strings, and bridge ABI values as
   exact integers or exact integer strings.
-- Kagemusha C# SDK validation still needs a Windows-machine confirmation even
-  though a temporary macOS .NET 8 SDK validated the standalone runner. This
-  macOS host has .NET `8.0.128`, while `csharp/global.json` requires
-  `8.0.419`; on Windows, or on any host with the pinned SDK, install or select
-  a .NET 8 SDK, run the standalone C# Kagemusha guard
-  `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` or its direct
-  `dotnet test` equivalent, and preserve the selected `dotnet --version`
-  evidence in the output. The focused pass should cover
+- Confidential-v2 JVM/Android proof assembly now has typed transfer and
+  unshield witness/request codecs for the production native bridge. Keep wallet
+  integrations on these builders instead of raw witness bytes so canonical
+  u128 values, fixed 32-byte fields, bounded commitment trees, duplicate
+  input rejection, transfer/unshield shape separation, exact verifier
+  references, public-input schema constants, and the native Norito witness
+  alignment padding remain pinned by SDK and Rust golden-vector tests.
+- Kagemusha C# SDK validation now passes on this macOS host with .NET SDK
+  8.0.128 through `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, including
+  a freshly built `connect_norito_bridge` native library and 103 focused SDK
+  tests across recursive spend, privacy native, transaction builder, canonical
+  request, and Torii identifier receipt surfaces. The focused pass covers
   `csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs`,
-  `PrivacyNativeTests.cs`, `TransactionBuilderTests.cs`,
-  `CanonicalRequestTests.cs`, `ToriiIdentifierReceiptTests.cs`,
-  `ToriiClientTests.cs`,
-  `SignedQueryBuilderTests.cs`, `SignedIterableQueryBuilderTests.cs`, and
-  `VerifyingKeyBackendTagTests.cs`, with native bridge loading and P/Invoke
-  symbol probing enabled for the ABI-6
-  recursive spend, ABI-7 compact-token, recursive aggregation, recursive
-  compact verifier/projection, instruction transaction-builder surfaces, C#
-  canonical request auth exactness, C# signed query exactness, and C#
-  production verifier-backend label exactness. The
-  standalone runner now builds `connect_norito_bridge`, resolves the
+  `PrivacyNativeTests.cs`, and `TransactionBuilderTests.cs`, with native bridge
+  loading and P/Invoke symbol probing enabled for the ABI-6 recursive spend and
+  ABI-7 compact-token, recursive aggregation, recursive compact
+  verifier/projection, and instruction transaction-builder surfaces. The
+  standalone runner builds `connect_norito_bridge`, resolves the
   platform-specific native library name, fails if the freshly built artifact is
   missing, prints the selected native bridge path, and prepends that directory
   to the macOS, Linux, and Windows loader paths before invoking `dotnet test`.
-  The cross-SDK parity guard also requires refreshed local NoritoBridge
-  XCFramework slices to export the recursive compact prove/verify symbols; if a
-  generated `dist/NoritoBridge.xcframework` is stale, rebuild it with
-  `scripts/build_norito_xcframework.sh` before accepting parity evidence.
-  The
-  Windows pass must also pin the C# negative controls for malformed Norito
-  input/output headers, caller archive-copy immutability, verifier-unavailable
-  status mapping, transaction-builder schema and wire-name drift,
-  verifier-backend test-filter drift, and package/evidence parity. After the
-  Windows run passes, update `status.md`
-  with the C# SDK evidence and rerun the Kagemusha SDK parity or production
-  readiness guards needed to clear the C# row.
+  Windows remains a separate host-certification follow-up so the same C# lane
+  is proven against `connect_norito_bridge.dll`, Windows loader paths, RID, and
+  architecture. The Windows pass must also pin the C# negative controls for
+  malformed Norito input/output headers, caller archive-copy immutability,
+  verifier-unavailable status mapping, transaction-builder schema and wire-name
+  drift, and package/evidence parity. After the Windows run passes, update
+  `status.md` with the Windows C# SDK evidence and rerun the Kagemusha SDK
+  parity or production readiness guards needed to clear the Windows-only row.
   Windows-machine TODOs:
-  - Select the pinned .NET 8 SDK from `csharp/global.json` and capture
-    `dotnet --version` in the run log.
+  - Select a .NET 8 SDK and capture `dotnet --version` in the run log.
   - Capture the Windows `dotnet --info` output, including RID/architecture, so
     the native C# pass is tied to the host that loaded the bridge.
   - Run `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, or the equivalent
@@ -110,9 +123,8 @@ and completed history lives in [`status.md`](./status.md).
     `connect_norito_bridge.dll` before the P/Invoke tests start.
   - Confirm the pass includes `KagemushaRecursiveSpendNativeTests`,
     `PrivacyNativeTests`, `TransactionBuilderTests`, `CanonicalRequestTests`,
-    `ToriiIdentifierReceiptTests`, `ToriiClientTests`,
-    `SignedQueryBuilderTests`, `SignedIterableQueryBuilderTests`, and
-    `VerifyingKeyBackendTagTests`.
+    `ToriiClientTests`, `SignedQueryBuilderTests`, and
+    `SignedIterableQueryBuilderTests`, and `VerifyingKeyBackendTagTests`.
   - Confirm `KagemushaRecursiveSpendNativeTests` exercises
     `KagemushaOverlongCompactLength`,
     `KagemushaOversizedTerminalCompactLength`,
@@ -140,22 +152,6 @@ and completed history lives in [`status.md`](./status.md).
     negatives for persisted `chain_id`, `account_id`, and optional
     `spent_payment_request_id`, rejecting padded or blank values instead of
     normalizing them across account-scope or replay-prevention boundaries.
-  - C# flat Torii identifier policy and resolve-response hardening is now
-    implemented: outbound `policy_id` rejects padding, policy summaries reject
-    padded resolver metadata, and flat resolve receipts reject padded
-    `policy_id`, `opaque_id`, `receipt_hash`, `uaid`, `account_id`, `backend`,
-    `signature`, `signature_payload_hex`, duplicate fields, and negative receipt
-    timestamps before callers can trust the metadata.
-  - Remaining C# identifier-receipt parity is the richer canonical
-    payload/attestation model that Swift/Kotlin/Android already expose. Add C#
-    canonical payload and attestation builders/decoders so padded or mixed-case
-    attestation `kind`, padded `proof_b64`, padded
-    `payload.opening.signature`, signed attestation `signature`, padded
-    `payload.policy_id` and `kind`/`rule` components, padded
-    `payload.execution.program_id` and `payload.opening.payload.program_id`,
-    padded `payload.account_id`, padded hash-like fields, padded numeric-string
-    receipt times, and negative u64 receipt times all fail before canonical
-    receipt bytes are encoded or verified.
   - Confirm the Windows C# pass includes identifier receipt attestation
     selector exactness: Torii JSON receipt parsing now rejects padded,
     control-character, or mixed-case attestation `kind` tags before selecting
@@ -211,19 +207,18 @@ and completed history lives in [`status.md`](./status.md).
     receipt payload builder is added later, mirror the same u64 checks there
     too.
   - Confirm the Windows C# `TransactionBuilder`/`TransactionEncodingContext`
-    pass includes the focused negatives for padded constructor, instruction,
-    metadata, and common encoder fields. Chain ids, authority/account ids,
-    asset/domain ids, metadata keys, numeric strings, optional strings,
-    NFT/trigger labels, fixed-hash literals, and label-like fields now reject
-    surrounding whitespace or control characters before Norito transaction
-    bytes are encoded or signed instead of normalizing with `Trim()`.
+    pass includes the new focused negatives for padded constructor,
+    instruction, metadata, and common encoder fields. Chain ids,
+    authority/account ids, asset/domain ids, metadata keys, numeric strings,
+    optional strings, NFT/trigger labels, and label-like fields now reject
+    surrounding whitespace or control characters before Norito transaction bytes
+    are encoded or signed instead of normalizing with `Trim()`.
   - Confirm the Windows C# canonical request auth pass includes the new
     `CanonicalRequestTests` and `ToriiClientTests` negatives for padded or
-    explicitly blank account ids, caller-provided nonces, methods, paths, and
-    emitted header fields; the implementation now rejects those values before
-    signing or header emission instead of accepting
-    `ArgumentException.ThrowIfNullOrWhiteSpace` or generating a fresh nonce for
-    caller-supplied blank values.
+    explicitly blank account ids, caller-provided nonces, methods, and paths;
+    the implementation now rejects those values before signing or header
+    emission instead of accepting `ArgumentException.ThrowIfNullOrWhiteSpace`
+    or generating a fresh nonce for caller-supplied blank values.
   - Confirm the Windows C# SDK lane includes `PrivacyNativeTests`, whose
     cross-platform .NET 8 pass now covers the public VeRange V1 aliases
     `BuildVeRangeProofV1`, `buildVeRangeProofV1`, `VerifyVeRangeProofV1`, and
@@ -237,71 +232,45 @@ and completed history lives in [`status.md`](./status.md).
   and privacy native bridge tests, while the Android Java harness runs
   recursive spend, canonical request auth, Offline Cash lifecycle, Offline Note
   V2, Offline Note, privacy native bridge, and transaction-builder archive
-  tests. The focused runner now also executes the Kotlin/JVM and Android Java
+  tests. Kotlin/JVM and Android Java privacy capability APIs must continue
+  deriving bridge readiness from the native Norito capability archive when the
+  bridge is loaded, while malformed, duplicate, incomplete, or absent evidence
+  keeps the SDK capability surface fail-closed. Privacy proof dispatch must keep
+  the `privacy-production-enabled` feature opt-in, preserve default
+  production-disabled serialized results, and retain focused coverage for real
+  confidential-transfer-v2/unshield proving, verification, and checked unshield
+  input-sum overflow rejection. The production-enabled bridge must also reject
+  algorithm-mismatched witness fields, invalid input/output counts, duplicate
+  input leaf/rho material, and out-of-range leaf indices before verifier-key
+  lookup or prover setup. The focused runner now also executes the
+  Kotlin/JVM and Android Java
   account-literal, canonical request auth, and Offline Cash issuer-key
   exactness tests, plus Torii event-stream verifier-filter, signing-algorithm,
   Nexus wallet signature-algorithm, verifier-key backend/instruction, and
   verifier record-description/status exactness tests, so padded I105 account
   IDs, padded request auth fields, malformed cached issuer keys, padded Torii
   event verifier filters, padded signing algorithm labels, padded Nexus wallet
-  signature labels, padded verifier record fields, padded verifier
-  backend/status labels, and typed recursive spend request-codec regressions
-  fail before native dispatch. Swift, Kotlin/JVM, Android Java,
-  JavaScript/Node, and Python recursive-spend request codecs must keep
+  signature labels, padded verifier record fields, and padded verifier
+  backend/status labels stay covered by the same mobile SDK gate.
+  Kotlin/JVM and Android Java recursive-spend request codecs must keep
   init/append/verify/redeem archive schemas, compact request payload layouts,
   raw embedded archive payloads, Norito `Option` child-length framing, Rust
-  `[u8; N]` fixed-array byte layout, bundle/result decoders, lineage gap
-  checks, and nonnegative block-height guards pinned in the focused SDK runners
-  and parity inventory.
-  Kotlin/JVM and Android Java recursive-spend evidence helpers must also keep
-  `VerifiedFoldHopEvidence` explicit for `chain_id`, asset, and `root_after`,
-  validate privacy build results, nested `OpenVerifyEnvelope`s, active
-  Kagemusha verifier records, schema hashes, verifier-key commitments, strict
-  ZK1 public-instance columns, and root continuity before emitting checked
-  fold-record bundles or redeem proof attachments. Proof-output-only helpers
-  must remain fail-closed because privacy proof outputs do not carry Pallas IPA
-  opening envelopes or enough chain context to derive a production-safe record
-  bundle; init/append request helpers must likewise require explicit checked
-  hop evidence plus caller-supplied Pallas open-envelopes archives before
-  serializing recursive-spend request archives.
-  The Kotlin/JVM and Android Java ClaimIdentifier wire encoder tests must also keep
-  rejecting explicit claim-account values that do not match
-  `receipt.accountId` before encoding, with a parity negative control wired
-  into the payload-bench workflow so the regression names and mismatch error
-  marker cannot silently disappear. The same guard now also pins exact
-  account-text handling for those ClaimIdentifier encoders, including padded
-  explicit account rejection, so SDK code cannot reintroduce whitespace
-  normalization before constructing signed instruction bytes. Kotlin/JVM and
-  Android Java identifier claim-record parsers must also reject padded
-  `policy_id`, `opaque_id`, `receipt_hash`, `uaid`, and `account_id` fields
-  instead of trimming returned claim state before wallet code consumes it.
-  Swift and JavaScript/Node claim lookup parsers mirror that exact returned
-  claim-state handling, including shipped JS `dist` coverage and Swift async
-  Torii-client regressions for padded persisted claim fields. RAM-LFE execute
-  and receipt-verify response parsers across Kotlin/JVM, Android Java, Swift,
-  and JavaScript/Node must also reject padded returned program IDs, hash fields,
-  backend tags, verification modes, and exposed output ciphertext before proof
-  material reaches wallet code, with a shared parity negative control guarding
-  the source, tests, JS `dist`, and workflow path coverage. RAM-LFE
-  program-policy list parsers on those same non-C# SDKs must likewise keep
-  returned program IDs, owners, resolver keys, backend/mode tags, input
-  encryption metadata, and proof-verifier metadata exact instead of trimming or
-  case-normalizing policy material before wallet code consumes it. JavaScript
-  must also preserve returned `proof_verifier` metadata on program-policy
-  summaries, matching the Java, Kotlin/JVM, and Swift policy surfaces.
-  Identifier-policy list parsers must also preserve returned `proof_verifier`
-  metadata and keep nested proof-backend, circuit-id, public-input schema hash,
-  and verifier-key base64 fields exact across JavaScript/Node, Swift,
-  Kotlin/JVM, and Java Android. Those same non-C# parsers must keep returned
-  owner, normalization, backend, input-encryption, input-parameter, nested
-  `norito_length_encoding`, and note metadata exact instead of trimming or
-  case-normalizing identifier policy material before encrypted lookup helpers
-  consume it. Account-alias resolution parsers across those same non-C# SDKs
-  must reject padded returned `alias`, `account_id`, alternate `account_ids`,
-  and `source` fields before wallet code trusts alias bindings. Multisig
-  response parsers must likewise reject padded, alias-shaped, or otherwise
-  non-canonical returned `resolved_multisig_account_id` values before proposal
-  or spec state is trusted by wallet code.
+  `[u8; N]` fixed-array byte layout, bundle/result decoders, lineage gap checks,
+  hop `pallasOpenEnvelopes` archives whose exact native
+  `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>` count matches the record-bundle
+  fold-step count, previous-proof open-envelope archives with the same exact
+  native schema and exactly one Pallas envelope with nonzero verifier metadata,
+  malformed/trailing archive rejection, and nonnegative block-height guards
+  pinned in the focused JVM SDK runner and parity inventory. Kotlin/JVM and
+  Android Java now also expose typed
+  `RegisterZkAsset`, `Shield`, and `Unshield` builders plus native
+  signed-transaction wrappers that preserve private change outputs and return
+  canonical versioned transaction bytes with native hashes. The JVM roots/Merkle
+  slice now exposes typed `/v1/zk/roots` clients and local zk_assets path
+  providers for audited frontier material; remaining SDK gaps are
+  confidential-v2 note derivation/decryption after canonical derivation
+  confirmation, Torii-backed path acquisition when the node endpoint exists,
+  and audited end-to-end localnet coverage.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,
@@ -309,20 +278,6 @@ and completed history lives in [`status.md`](./status.md).
   Torii event-filter verifier/proof exactness, verifier-key selector exactness,
   identifier-receipt adversarial and shared-vector exactness, package/browser,
   privacy native bridge, and transaction-builder archive test names together.
-- Kagemusha native bridge validation must keep identifier-receipt JSON parsing
-  exact for canonical receipt boundary fields, including attestation kind,
-  proof backend/base64, policy/program IDs, backend/mode labels, hash fields,
-  signatures, `payload.opaque_id`, `payload.uaid`, and `payload.account_id`;
-  the SDK parity guard must continue pinning the padded native bridge
-  payload/proof tests and exact-string parser helper. Native bridge
-  `ClaimIdentifier` transaction builders must also reject a receipt whose
-  embedded `payload.account_id` does not match the explicit claim account before
-  signed transaction bytes are produced; the SDK parity guard and workflow must
-  keep the account-binding negative control active. Privacy proof dispatch must
-  keep the `privacy-production-enabled` feature opt-in, preserve default
-  production-disabled serialized results, and retain focused coverage for real
-  confidential-transfer-v2/unshield proving, verification, and checked unshield
-  input-sum overflow rejection.
 - Kagemusha Swift SDK validation must keep the macOS parse runner aligned with
   the parity inventory by parsing every Kagemusha/Offline Note source and test
   file tracked for Swift, including canonical request auth helpers, recursive
@@ -330,11 +285,9 @@ and completed history lives in [`status.md`](./status.md).
   Nexus app-client wallet signature-algorithm exactness,
   Offline Note issuer-key parsing, text-transfer contracts, receipt challenges,
   wallet/redeem/QR helpers, signing-algorithm discriminants,
-  verifier-backend labels, Torii verifier-key request/event validation,
-  identifier receipt exact account-id decoding, mobile NFC receive
-  success-preservation and send terminal-success policies, and Offline
-  Cash/Kagemusha ABI-7 support files.
-  The payload-bench workflow path inventory and JavaScript parity meta-test must
+  verifier-backend labels, Torii verifier-key request/event validation, and
+  Offline Cash/Kagemusha ABI-7 support files. The
+  payload-bench workflow path inventory and JavaScript parity meta-test must
   stay in lockstep with that expanded Swift parse surface.
 - Kagemusha Python SDK validation must keep the focused Python 3.11 runner on
   the Kagemusha, privacy catalog, crypto algorithm, Nexus app, Offline Cash,
@@ -443,33 +396,12 @@ and completed history lives in [`status.md`](./status.md).
   binding verification paths. Kotlin/JVM and Android Java canonical I105
   account-id literal helpers now reject surrounding whitespace before
   transaction, Connect, and instruction-builder boundaries so padded account
-  strings cannot be normalized into signed payloads. Their
-  `ClaimIdentifierWirePayloadEncoder` implementations also require exact
-  nonblank claim account ids before comparing them with the receipt account, so
-  padded caller account strings cannot be trimmed into a valid
-  `ClaimIdentifier` instruction. Their identifier claim-record JSON parsers
-  likewise require exact returned `policy_id`, `opaque_id`, `receipt_hash`,
-  `uaid`, and `account_id` values so receipt-hash lookups cannot normalize
-  padded persisted claim state. Swift and JavaScript/Node receipt-hash claim
-  lookup helpers enforce the same no-trimming invariant before returning claim
-  records to wallet code.
+  strings cannot be normalized into signed payloads.
 - Kagemusha Android production readiness now has host-side verifier-report
   rendering, a signed-slot assembler, a physical-device raw artifact exporter,
   a strict host puller for those raw slots, and a dedicated
   `:offline-wallet-lab-app` target whose release APK is hash-bound by the
-  physical exporter. The exporter and host assembler now infer device families
-  only from exact Pixel model/codename matches or the standard Samsung S23/S24
-  model prefixes, fail closed for unknown devices, and reject near-match
-  overclassification such as Pixel 6 Pro, Pixel 7a, or Galaxy S23 FE evidence
-  being labeled as a covered matrix row. Model and codename evidence must also
-  be internally consistent when both fields identify standard families, so a
-  Pixel 6 model paired with a Pixel 7 codename fails closed instead of selecting
-  whichever field matched first. Explicit `--device-family` values must also
-  match the inferred model/codename family before a signed slot can be
-  published, and the assembler now signs the exact model/codename fields so the
-  scanner, readiness summary, and release bundle can recompute the family and
-  reject telemetry, slot metadata, or public summary drift.
-  The signed-slot assembler binds every copied source
+  physical exporter. The signed-slot assembler binds every copied source
   artifact to symlink-free ancestors and the opened file identity, uses a
   separate 64 MiB cap for the JNI-bearing offline wallet APK while retaining
   16 MiB caps for smaller evidence artifacts, and rejects source-directory
@@ -496,11 +428,7 @@ and completed history lives in [`status.md`](./status.md).
   accepts only the uncompressed `tar -cf -` stream emitted by the Android
   exporter, so compressed archive streams fail before extraction, and rejects
   noncanonical tar member spellings such as `./` or repeated separators before
-  they can normalize into accepted evidence paths. The raw puller also caps the
-  total tar entry count so empty-directory flooding cannot exhaust host-side
-  staging before slot validation, tightens the raw output root to `0700`, and
-  forces extracted artifact directories to `0700` and files to `0600` before
-  installation so raw evidence privacy does not depend on process umask. It also rejects
+  they can normalize into accepted evidence paths. It also rejects
   control-character output-root, summary-output, raw-slot, and raw artifact
   path strings, plus parent-segment and backslash-bearing output-root,
   summary-output, and raw-slot aliases, before ADB access, metadata reads,
@@ -596,15 +524,9 @@ and completed history lives in [`status.md`](./status.md).
   allowlists, telemetry identity exactness, telemetry app-package binding,
   pending queue field allowlist, and queue empty-after-handoff check before raw
   artifacts can be promoted into a signed slot.
-  The slot assembler now fills missing device identity from the captured
-  attestation result/report and telemetry artifacts before falling back to
-  attached-device ADB, while applying the same no-trimming,
-  no-control-character, no-secret-material, non-empty source/override,
-  duplicate-source consistency, and override/source consistency checks as
-  explicit overrides.
-  Attached-device ADB `getprop` identity reads must remain exact one-LF values
-  whose contents do not need trimming before metadata binding. The standalone
-  Android scanner also rejects copied
+  The slot assembler also requires attached-device ADB `getprop`
+  identity reads to be exact one-LF values whose contents do not need trimming
+  before metadata binding. The standalone Android scanner also rejects copied
   Kagemusha matrix rows by reporting hash-only duplicate device fingerprints or
   attestation challenges across otherwise-valid slots, and the production
   readiness rollup mirrors that non-secret duplicate inventory with
@@ -647,9 +569,7 @@ and completed history lives in [`status.md`](./status.md).
   positive decimal line before it can bind the run report. The lineage and
   compact-key evidence helpers
   now identity-bind validation scratch-file cleanup under `--artifact-dir`
-  before unlinking those temp files. The staged finalizers also reject
-  noncanonical or future-dated `generated_at_utc` values during preflight
-  before creating temporary publish stages or copying artifacts. They
+  before unlinking those temp files. The staged finalizers also
   identity-bind the published artifact directory before their final fsync and
   revalidate temporary staging directory identity before cleanup, and their
   rollback cleanup unlinks only published files whose current identity still
@@ -658,13 +578,10 @@ and completed history lives in [`status.md`](./status.md).
   temporary staging cleanup now also reports removal failures while preserving a
   temp directory whose identity changed before removal. The
   latest attached Pixel 6 / Android 16 slot
-  `google-pixel-6-6a-physical-1781260116917` verifies and signs successfully
+  `google-pixel-6-6a-physical-1781077370103` verifies and signs successfully
   through the lab-app path; remaining Android release work is evidence
   acquisition for the rest of the standard matrix: Pixel 7, Pixel 8, Pixel
-  Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24. The Android
-  device-lab exporter now fails closed when `Build.MODEL` and `Build.DEVICE`
-  do not match a standard matrix family instead of defaulting unknown devices
-  to the Pixel 6 / 6a row.
+  Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24.
 - Kagemusha Reserved-lineage table-base handling must stay proof-witness
   specific: lineage witnesses may carry previous recursive proofs whose
   fixed-window table-base public input differs from the current bundle proof,
@@ -813,19 +730,7 @@ and completed history lives in [`status.md`](./status.md).
   Android summary fields, including `duplicate_bindings`, the per-slot `signed_evidence` map,
   device-family lists, and trusted signer digest fields, are also bound to freshly computed device-lab evidence during both
   readiness-summary comparison and existing-manifest verification before
-  generic summary or manifest drift. Per-slot signed-evidence summaries now
-  preserve non-empty exact `device_family`, `device_model`, and
-  `device_codename`, and release bundle verification recomputes the standard
-  family from model/codename before accepting the public summary entry. Android
-  device-family inference now requires both model and codename to resolve to the
-  same standard family, so one-sided near matches cannot cover the matrix.
-  Build-time release-bundle comparison now reports exact signed-evidence and
-  slot identity drift with Android-specific blockers before generic summary
-  metadata drift, so same-family model/codename substitutions are not accepted
-  as ordinary summary drift.
-  Existing release-bundle verification applies the same exact identity binding
-  to manifest `android_device_lab.signed_evidence` entries before generic
-  manifest drift.
+  generic summary or manifest drift.
   Android covered-family summary drift now fails with an Android-specific
   blocker before generic summary drift.
   Release-bundle readiness-summary shape checks now also reject malformed
@@ -834,8 +739,7 @@ and completed history lives in [`status.md`](./status.md).
   Release-bundle readiness-summary shape checks also require the top-level
   `generated_at` timestamp to use canonical UTC `YYYY-MM-DDTHH:MM:SSZ` form
   and stay within the allowed future-skew window before release evidence is
-  packaged; staged lineage and compact-key finalizers now apply the same
-  helper timestamp skew preflight before temporary publish staging begins.
+  packaged.
   Android signed-evidence slot inventory and per-slot field drift are also
   rejected with Android-specific blockers before generic summary drift during
   build-time readiness-summary comparison.
@@ -939,12 +843,9 @@ and completed history lives in [`status.md`](./status.md).
   descriptor, so a path swapped after validation is reported as cleanup drift
   instead of being removed. Evidence-helper validation scratch files use the
   same parent-fd identity check before cleanup.
-  The finalizer requires the init, append, and proof execution reports to carry
-  zero exit codes plus non-zero SHA-256 digests matching the staged child logs
-  before evidence can publish. It also verifies each published file after
-  install by reopening it through the identity-bound artifact reader and
-  comparing it with the staged source bytes before the final evidence check,
-  then identity-binds the
+  The finalizer also verifies each published file after install by reopening it
+  through the identity-bound artifact reader and comparing it with the staged
+  source bytes before the final evidence check, then identity-binds the
   published artifact directory before the final fsync and revalidates temporary
   staging directory identity before cleanup. Rollback cleanup after failed
   copies, readback verification, or final evidence publication also refuses to
@@ -985,12 +886,9 @@ and completed history lives in [`status.md`](./status.md).
   run report, and byte-count validation before reuse or finalization. The
   production guard also forbids the old staged-runner pipe-read/stdout-mirror
   patterns from returning.
-  The finalizer requires the staged execution report to carry a zero exit code
-  plus a non-zero SHA-256 digest matching the staged generator log before
-  evidence can publish, and rejects elapsed-time drift between the run report
-  and execution report. It reopens every published key artifact, generator log,
-  and evidence JSON after install and compares the identity-bound readback with
-  the staged source bytes before reporting success, then identity-binds the
+  The finalizer reopens every published key artifact, generator log, and
+  evidence JSON after install and compares the identity-bound readback with the
+  staged source bytes before reporting success, then identity-binds the
   published artifact directory before the final fsync and revalidates temporary
   staging directory identity before cleanup.
   The previous staged production-width keygen attempt exited nonzero (`143`)
@@ -2686,7 +2584,7 @@ and completed history lives in [`status.md`](./status.md).
 	  reads, signer-side exactness checks for slot metadata strings,
 	  signed-evidence artifact paths, attestation-chain paths, and raw test
 	  commands before evidence emission, signed-slot assembler rejection of
-	  blank/padded/control-character slot ids, requested device families, and device
+	  padded/control-character slot ids, requested device families, and device
 	  identity overrides before path construction or ADB fallback, standard device-family coverage,
 		  cross-slot duplicate device-fingerprint and attestation-challenge rejection,
 		  explicit slot-id path-safety checks, and a signer helper that emits the
@@ -2907,8 +2805,7 @@ and completed history lives in [`status.md`](./status.md).
 		  and manifest outputs. The staged lineage and compact-key runners also
 		  identity-bind parent syncs before accepting marker and JSON metadata
 		  outputs, and the staged finalizers apply the same gate to the published
-		  artifact directory before final fsync while rejecting future-dated
-		  `generated_at_utc` values before publish staging. Android signed-evidence
+		  artifact directory before final fsync. Android signed-evidence
 		  canonical signature payloads also reject non-finite values before
 		  hashing, signing, or verification.
 	  The Kagemusha release
@@ -7553,7 +7450,18 @@ and completed history lives in [`status.md`](./status.md).
   Python, Swift, Kotlin/JVM, and Java Android now expose record-backed compact-token
   prover wrappers over that ABI, so mobile wallets can pass
   `KagemushaVerifiedFoldRecordBundle` Norito bytes through the native bridge
-  instead of constructing preverified folded public inputs themselves. The same
+  while Kotlin/JVM and Java Android recursive-spend evidence helpers keep
+  `VerifiedFoldHopEvidence` explicit for `chain_id`, asset, and `root_after`,
+  validate privacy build results, nested `OpenVerifyEnvelope`s, active
+  Kagemusha verifier records, schema hashes, verifier-key commitments, strict
+  ZK1 public-instance columns, and root continuity before emitting checked
+  fold-record bundles or redeem proof attachments. Proof-output-only helpers
+  must remain fail-closed because privacy proof outputs do not carry Pallas IPA
+  opening envelopes or enough chain context to derive a production-safe record
+  bundle; init/append request helpers must likewise require explicit checked
+  hop evidence plus caller-supplied Pallas open-envelopes archives before
+  serializing recursive-spend request archives instead of constructing
+  preverified folded public inputs themselves. The same
   SDK surfaces now expose the ABI-6 recursive aggregation proof-bundle prover,
   which accepts record-backed bundle bytes plus proof-derived Pallas
   open-envelope archive bytes and returns an admission-neutral

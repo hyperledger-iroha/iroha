@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -278,11 +279,25 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
         string? signature = null;
         string? signaturePayloadHex = null;
         JsonNode? signaturePayload = null;
+        JsonObject? payload = null;
+        JsonObject? attestation = null;
+        var seenLegacyField = false;
 
         while (reader.Read())
         {
             if (reader.TokenType == JsonTokenType.EndObject)
             {
+                if (payload is not null || attestation is not null)
+                {
+                    if (seenLegacyField)
+                    {
+                        throw new JsonException(
+                            "identifier receipt must not mix nested payload/attestation with legacy receipt fields.");
+                    }
+
+                    return ReadNestedResolveResponse(payload, attestation);
+                }
+
                 return new ToriiIdentifierResolveResponse
                 {
                     PolicyId = policyId ?? throw new JsonException("identifier receipt.policy_id is required."),
@@ -314,43 +329,60 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
             switch (propertyName)
             {
                 case "policy_id":
+                    seenLegacyField = true;
                     policyId = ToriiIdentifierJson.ReadPolicyId(ref reader, "identifier receipt.policy_id");
                     break;
                 case "opaque_id":
+                    seenLegacyField = true;
                     opaqueId = ToriiIdentifierJson.ReadExactString(ref reader, "identifier receipt.opaque_id");
                     break;
                 case "receipt_hash":
+                    seenLegacyField = true;
                     receiptHash = ToriiIdentifierJson.ReadExactString(ref reader, "identifier receipt.receipt_hash");
                     break;
                 case "uaid":
+                    seenLegacyField = true;
                     uaid = ToriiIdentifierJson.ReadExactString(ref reader, "identifier receipt.uaid");
                     break;
                 case "account_id":
+                    seenLegacyField = true;
                     accountId = ToriiIdentifierJson.ReadExactString(ref reader, "identifier receipt.account_id");
                     break;
                 case "resolved_at_ms":
+                    seenLegacyField = true;
                     resolvedAtMilliseconds = ToriiIdentifierJson.ReadNonNegativeInt64(
                         ref reader,
                         "identifier receipt.resolved_at_ms");
                     break;
                 case "expires_at_ms":
+                    seenLegacyField = true;
                     expiresAtMilliseconds = reader.TokenType == JsonTokenType.Null
                         ? null
                         : ToriiIdentifierJson.ReadNonNegativeInt64(ref reader, "identifier receipt.expires_at_ms");
                     break;
                 case "backend":
+                    seenLegacyField = true;
                     backend = ToriiIdentifierJson.ReadExactString(ref reader, "identifier receipt.backend");
                     break;
                 case "signature":
+                    seenLegacyField = true;
                     signature = ToriiIdentifierJson.ReadExactString(ref reader, "identifier receipt.signature");
                     break;
                 case "signature_payload_hex":
+                    seenLegacyField = true;
                     signaturePayloadHex = ToriiIdentifierJson.ReadExactString(
                         ref reader,
                         "identifier receipt.signature_payload_hex");
                     break;
                 case "signature_payload":
+                    seenLegacyField = true;
                     signaturePayload = ToriiIdentifierJson.ReadOptionalNode(ref reader);
+                    break;
+                case "payload":
+                    payload = ReadObjectNode(ref reader, "identifier receipt.payload");
+                    break;
+                case "attestation":
+                    attestation = ReadObjectNode(ref reader, "identifier receipt.attestation");
                     break;
                 default:
                     reader.Skip();
@@ -359,6 +391,155 @@ internal sealed class ToriiIdentifierResolveResponseJsonConverter : JsonConverte
         }
 
         throw new JsonException("identifier resolve response object is truncated.");
+    }
+
+    private static ToriiIdentifierResolveResponse ReadNestedResolveResponse(
+        JsonObject? payload,
+        JsonObject? attestation)
+    {
+        if (payload is null)
+        {
+            throw new JsonException("identifier receipt.payload is required.");
+        }
+
+        if (attestation is null)
+        {
+            throw new JsonException("identifier receipt.attestation is required.");
+        }
+
+        var execution = RequireObject(payload, "execution", "identifier receipt.payload.execution");
+        var kind = RequireExactString(attestation, "kind", "identifier receipt.attestation.kind");
+        var signature = kind switch
+        {
+            "signed" => RequireExactString(attestation, "signature", "identifier receipt.attestation.signature"),
+            "proof" => string.Empty,
+            _ => throw new JsonException("identifier receipt.attestation.kind must be signed or proof."),
+        };
+
+        if (kind == "proof" && attestation.ContainsKey("signature"))
+        {
+            throw new JsonException("identifier receipt.attestation proof attestations must not include signature.");
+        }
+
+        var signaturePayload = new JsonObject
+        {
+            ["payload"] = payload.DeepClone(),
+            ["attestation"] = attestation.DeepClone(),
+        };
+
+        return new ToriiIdentifierResolveResponse
+        {
+            PolicyId = RequirePolicyId(payload, "policy_id", "identifier receipt.payload.policy_id"),
+            OpaqueId = RequireExactString(payload, "opaque_id", "identifier receipt.payload.opaque_id"),
+            ReceiptHash = RequireExactString(payload, "receipt_hash", "identifier receipt.payload.receipt_hash"),
+            Uaid = RequireExactString(payload, "uaid", "identifier receipt.payload.uaid"),
+            AccountId = RequireExactString(payload, "account_id", "identifier receipt.payload.account_id"),
+            ResolvedAtMilliseconds = RequireNonNegativeInt64(
+                execution,
+                "executed_at_ms",
+                "identifier receipt.payload.execution.executed_at_ms"),
+            ExpiresAtMilliseconds = ReadOptionalNonNegativeInt64(
+                execution,
+                "expires_at_ms",
+                "identifier receipt.payload.execution.expires_at_ms"),
+            Backend = RequireExactString(execution, "backend", "identifier receipt.payload.execution.backend"),
+            Signature = signature,
+            SignaturePayloadHex = string.Empty,
+            SignaturePayload = signaturePayload,
+        };
+    }
+
+    private static JsonObject ReadObjectNode(ref Utf8JsonReader reader, string field)
+    {
+        var node = JsonNode.Parse(ref reader);
+        return node as JsonObject ?? throw new JsonException($"{field} must be an object.");
+    }
+
+    private static JsonObject RequireObject(JsonObject payload, string propertyName, string field)
+    {
+        if (!payload.TryGetPropertyValue(propertyName, out var node))
+        {
+            throw new JsonException($"{field} is required.");
+        }
+
+        return node as JsonObject ?? throw new JsonException($"{field} must be an object.");
+    }
+
+    private static string RequirePolicyId(JsonObject payload, string propertyName, string field)
+    {
+        return ToriiIdentifierJson.RequireExactPolicyId(
+            RequireExactString(payload, propertyName, field),
+            field);
+    }
+
+    private static string RequireExactString(JsonObject payload, string propertyName, string field)
+    {
+        if (!payload.TryGetPropertyValue(propertyName, out var node))
+        {
+            throw new JsonException($"{field} is required.");
+        }
+
+        if (node is JsonValue value && value.TryGetValue<string>(out var text))
+        {
+            return ToriiIdentifierJson.RequireExactNonBlank(text, field);
+        }
+
+        throw new JsonException($"{field} must be a string.");
+    }
+
+    private static long RequireNonNegativeInt64(JsonObject payload, string propertyName, string field)
+    {
+        if (!payload.TryGetPropertyValue(propertyName, out var node))
+        {
+            throw new JsonException($"{field} is required.");
+        }
+
+        return ReadNonNegativeInt64(node, field);
+    }
+
+    private static long? ReadOptionalNonNegativeInt64(JsonObject payload, string propertyName, string field)
+    {
+        return payload.TryGetPropertyValue(propertyName, out var node) && node is not null
+            ? ReadNonNegativeInt64(node, field)
+            : null;
+    }
+
+    private static long ReadNonNegativeInt64(JsonNode? node, string field)
+    {
+        if (node is not JsonValue value)
+        {
+            throw new JsonException($"{field} must be an integer.");
+        }
+
+        long parsed;
+        if (value.TryGetValue<long>(out var signedInteger))
+        {
+            parsed = signedInteger;
+        }
+        else if (value.TryGetValue<ulong>(out var unsignedInteger)
+            && unsignedInteger <= long.MaxValue)
+        {
+            parsed = (long)unsignedInteger;
+        }
+        else if (value.TryGetValue<string>(out var text))
+        {
+            text = ToriiIdentifierJson.RequireExactNonBlank(text, field);
+            if (!long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out parsed))
+            {
+                throw new JsonException($"{field} must be an integer.");
+            }
+        }
+        else
+        {
+            throw new JsonException($"{field} must be an integer.");
+        }
+
+        if (parsed < 0)
+        {
+            throw new JsonException($"{field} must be non-negative.");
+        }
+
+        return parsed;
     }
 
     public override void Write(

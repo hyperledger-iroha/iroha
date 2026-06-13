@@ -393,9 +393,18 @@ public sealed class ToriiClient : IDisposable
 
     public async Task<ToriiIdentifierPoliciesResponse> GetIdentifierPoliciesAsync(CancellationToken cancellationToken = default)
     {
-        var response = await GetAsync<ToriiIdentifierPoliciesResponse>(
-            "/v1/identifier-policies",
-            cancellationToken: cancellationToken);
+        ToriiIdentifierPoliciesResponse response;
+        try
+        {
+            response = await GetAsync<ToriiIdentifierPoliciesResponse>(
+                "/v1/identifier-policies",
+                cancellationToken: cancellationToken);
+        }
+        catch (JsonException exception)
+        {
+            throw RewriteIdentifierPoliciesJsonException(exception);
+        }
+
         ValidateIdentifierPoliciesResponse(response);
         return response;
     }
@@ -405,6 +414,7 @@ public sealed class ToriiClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ValidateIdentifierResolveRequest(request);
         var normalizedRequest = request with
         {
             PolicyId = NormalizeIdentifierPolicyId(request.PolicyId, nameof(request.PolicyId)),
@@ -412,12 +422,20 @@ public sealed class ToriiClient : IDisposable
                 request.EncryptedInput,
                 nameof(request.EncryptedInput)),
         };
-        ValidateIdentifierResolveRequest(normalizedRequest);
 
-        var response = await PostAsync<ToriiIdentifierResolveRequest, ToriiIdentifierResolveResponse>(
-            "/v1/identifiers/resolve",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
+        ToriiIdentifierResolveResponse response;
+        try
+        {
+            response = await PostAsync<ToriiIdentifierResolveRequest, ToriiIdentifierResolveResponse>(
+                "/v1/identifiers/resolve",
+                normalizedRequest,
+                cancellationToken: cancellationToken);
+        }
+        catch (JsonException exception)
+        {
+            throw RewriteIdentifierResolveJsonException(exception);
+        }
+
         ValidateIdentifierResolveResponse(response);
         return response;
     }
@@ -1494,6 +1512,50 @@ public sealed class ToriiClient : IDisposable
         return value ?? throw new JsonException($"Torii response for `{response.RequestMessage?.RequestUri}` deserialized to null.");
     }
 
+    private static JsonException RewriteIdentifierPoliciesJsonException(JsonException exception)
+    {
+        const string converterPrefix = "policy.";
+        if (!exception.Message.StartsWith(converterPrefix, StringComparison.Ordinal))
+        {
+            return exception;
+        }
+
+        var itemContext = "identifier policies response.items[0]";
+        var path = exception.Path;
+        if (!string.IsNullOrEmpty(path))
+        {
+            const string itemMarker = ".items[";
+            var markerStart = path.IndexOf(itemMarker, StringComparison.Ordinal);
+            if (markerStart >= 0)
+            {
+                var indexStart = markerStart + itemMarker.Length;
+                var indexEnd = path.IndexOf(']', indexStart);
+                if (indexEnd > indexStart)
+                {
+                    itemContext = $"identifier policies response.items[{path[indexStart..indexEnd]}]";
+                }
+            }
+        }
+
+        var detail = exception.Message[converterPrefix.Length..];
+        if (detail.EndsWith(" must not be empty.", StringComparison.Ordinal))
+        {
+            detail = $"{detail[..^" must not be empty.".Length]} must be a non-empty string.";
+        }
+
+        return new JsonException($"{itemContext}.{detail}", exception);
+    }
+
+    private static JsonException RewriteIdentifierResolveJsonException(JsonException exception)
+    {
+        const string converterPrefix = "identifier receipt.";
+        return exception.Message.StartsWith(converterPrefix, StringComparison.Ordinal)
+            ? new JsonException(
+                $"identifier resolve response.{exception.Message[converterPrefix.Length..]}",
+                exception)
+            : exception;
+    }
+
     private static void ValidateMultisigResponse(ToriiMultisigResponse response, string context)
     {
         if (!response.Ok)
@@ -1509,7 +1571,7 @@ public sealed class ToriiClient : IDisposable
         ValidateIdentifierPolicyId(
             request.PolicyId,
             "identifier resolve request.policy_id",
-            message => new ArgumentException(message, nameof(request)));
+            message => new ArgumentException(message, nameof(request.PolicyId)));
     }
 
     private static void ValidateIdentifierPoliciesResponse(ToriiIdentifierPoliciesResponse response)
@@ -1539,11 +1601,39 @@ public sealed class ToriiClient : IDisposable
             response.PolicyId,
             "identifier resolve response.policy_id",
             static message => new JsonException(message));
+
+        if (IsNestedIdentifierResolveResponse(response))
+        {
+            if (!string.IsNullOrEmpty(response.Signature))
+            {
+                ValidateExactHex(response.Signature, "identifier resolve response.attestation.signature");
+            }
+
+            ValidateIdentifierReceiptSignaturePayload(
+                response.SignaturePayload,
+                "identifier resolve response");
+            return;
+        }
+
         ValidateExactHex(response.Signature, "identifier resolve response.signature");
         ValidateExactHex(response.SignaturePayloadHex, "identifier resolve response.signature_payload_hex");
         ValidateIdentifierReceiptSignaturePayload(
             response.SignaturePayload,
             "identifier resolve response.signature_payload");
+    }
+
+    private static bool IsNestedIdentifierResolveResponse(ToriiIdentifierResolveResponse response)
+    {
+        if (!string.IsNullOrEmpty(response.SignaturePayloadHex)
+            || response.SignaturePayload is not JsonObject payloadObject)
+        {
+            return false;
+        }
+
+        return payloadObject.TryGetPropertyValue("payload", out var payload)
+            && payload is JsonObject
+            && payloadObject.TryGetPropertyValue("attestation", out var attestation)
+            && attestation is JsonObject;
     }
 
     private static void ValidateIdentifierReceiptSignaturePayload(JsonNode? payload, string context)
