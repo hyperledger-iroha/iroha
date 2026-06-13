@@ -181,11 +181,7 @@ class AppendSpendRequest @JvmOverloads constructor(
         requireNonNegativeHeight(blockHeight)
         requireValidNestedArchive(pallasOpenEnvelopesArchive, "pallasOpenEnvelopes")
         previousProofOpenEnvelopesArchive?.let {
-            require(it.size <= KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES) {
-                "previousProofOpenEnvelopes must not exceed " +
-                    "${KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES} bytes"
-            }
-            requireValidNestedArchive(it, "previousProofOpenEnvelopes")
+            requirePreviousProofOpenEnvelopesArchive(it)
         }
         lineageProvingKeyArchiveBytes?.let {
             requireValidNestedArchive(it, "lineageProvingKeyArchive")
@@ -1265,6 +1261,153 @@ private fun requireValidNestedArchive(archive: ByteArray, field: String) {
         "$field must contain a non-empty Norito payload"
     }
 }
+
+private fun requirePreviousProofOpenEnvelopesArchive(archive: ByteArray) {
+    val field = "previousProofOpenEnvelopes"
+    require(archive.isNotEmpty()) { "$field must not be empty" }
+    require(archive.size <= KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES) {
+        "$field must not exceed " +
+            "${KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES} bytes"
+    }
+    val decoded = try {
+        NoritoHeader.decode(archive, PREVIOUS_PROOF_OPEN_ENVELOPES_SCHEMA_HASH)
+    } catch (ex: IllegalArgumentException) {
+        throw IllegalArgumentException(
+            "$field must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive",
+            ex,
+        )
+    }
+    require(decoded.header.compression == NoritoHeader.COMPRESSION_NONE) {
+        "$field must not be compressed"
+    }
+    require(decoded.header.payloadLength > 0) { "$field must contain a non-empty Norito payload" }
+    decoded.header.validateChecksum(decoded.payload)
+    require(decoded.header.flags == NoritoHeader.COMPACT_LEN) {
+        "$field must use compact Norito layout"
+    }
+    val decoder = NoritoDecoder(decoded.payload, decoded.header.flags)
+    val count = checkedInt(decoder.readUInt(64), "$field envelope count")
+    require(count == KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1) {
+        "$field requires exactly " +
+            "${KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1} envelope"
+    }
+    repeat(count) { index ->
+        val itemLength = checkedInt(decoder.readLength(compact(decoder)), "$field envelope length")
+        val itemPayload = decoder.readBytes(itemLength)
+        validatePreviousProofPallasOpenEnvelopePayload(itemPayload, decoded.header.flags, "$field[$index]")
+    }
+    require(decoder.remaining() == 0) { "Trailing bytes after $field archive" }
+}
+
+private fun validatePreviousProofPallasOpenEnvelopePayload(payload: ByteArray, flags: Int, field: String) {
+    val decoder = NoritoDecoder(payload, flags)
+    val paramsN = readField(decoder) { readPallasIpaParams(it, "$field.params") }
+    val publicN = readField(decoder) { readPallasPolyOpenPublic(it, "$field.public") }
+    require(publicN == paramsN) { "$field public opening length must match params.n" }
+    readField(decoder) { readPallasIpaProof(it, paramsN, "$field.proof") }
+    val transcriptLabel = readField(decoder) { readString(it) }
+    require(transcriptLabel.isNotEmpty()) { "$field transcript_label must be non-empty" }
+    require(transcriptLabel.length <= KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES) {
+        "$field transcript_label exceeds " +
+            "$KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES bytes"
+    }
+    readField(decoder) { readRequiredMetadataOption(it, "$field.vk_commitment") }
+    readField(decoder) { readRequiredMetadataOption(it, "$field.public_inputs_schema_hash") }
+    readField(decoder) { readRequiredMetadataOption(it, "$field.domain_tag") }
+    require(decoder.remaining() == 0) { "Trailing bytes after $field" }
+}
+
+private fun readPallasIpaParams(decoder: NoritoDecoder, field: String): Int {
+    val version = readField(decoder) { checkedInt(it.readUInt(16), "$field.version") }
+    require(version == 1) { "$field.version must be 1" }
+    val curveId = readField(decoder) { checkedInt(it.readUInt(16), "$field.curve_id") }
+    require(curveId == PALLAS_CURVE_ID) { "$field.curve_id must be Pallas" }
+    val n = readField(decoder) { checkedInt(it.readUInt(32), "$field.n") }
+    require(n >= 2 && n.countOneBits() == 1) { "$field.n must be a power of two >= 2" }
+    require(n <= KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_N) {
+        "$field.n exceeds max 2^$KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_K"
+    }
+    val gCount = readField(decoder) { readFixed32SequenceCount(it, "$field.g") }
+    require(gCount == n) { "$field.g length must equal params.n" }
+    val hCount = readField(decoder) { readFixed32SequenceCount(it, "$field.h") }
+    require(hCount == n) { "$field.h length must equal params.n" }
+    readField(decoder) { it.readFixed32("$field.u") }
+    require(decoder.remaining() == 0) { "Trailing bytes after $field" }
+    return n
+}
+
+private fun readPallasPolyOpenPublic(decoder: NoritoDecoder, field: String): Int {
+    val version = readField(decoder) { checkedInt(it.readUInt(16), "$field.version") }
+    require(version == 1) { "$field.version must be 1" }
+    val curveId = readField(decoder) { checkedInt(it.readUInt(16), "$field.curve_id") }
+    require(curveId == PALLAS_CURVE_ID) { "$field.curve_id must be Pallas" }
+    val n = readField(decoder) { checkedInt(it.readUInt(32), "$field.n") }
+    readField(decoder) { it.readFixed32("$field.z") }
+    readField(decoder) { it.readFixed32("$field.t") }
+    readField(decoder) { it.readFixed32("$field.p_g") }
+    require(decoder.remaining() == 0) { "Trailing bytes after $field" }
+    return n
+}
+
+private fun readPallasIpaProof(decoder: NoritoDecoder, n: Int, field: String) {
+    val version = readField(decoder) { checkedInt(it.readUInt(16), "$field.version") }
+    require(version == 1) { "$field.version must be 1" }
+    val lCount = readField(decoder) { readFixed32SequenceCount(it, "$field.l") }
+    val rCount = readField(decoder) { readFixed32SequenceCount(it, "$field.r") }
+    require(lCount == rCount) { "$field L/R round count mismatch" }
+    val expectedRounds = n.countTrailingZeroBits()
+    require(lCount == expectedRounds) {
+        "$field round count mismatch: expected $expectedRounds, found $lCount"
+    }
+    readField(decoder) { it.readFixed32("$field.a_final") }
+    readField(decoder) { it.readFixed32("$field.b_final") }
+    require(decoder.remaining() == 0) { "Trailing bytes after $field" }
+}
+
+private fun readFixed32SequenceCount(decoder: NoritoDecoder, field: String): Int {
+    val count = checkedInt(decoder.readUInt(64), "$field count")
+    repeat(count) { index ->
+        val itemLength = checkedInt(decoder.readLength(compact(decoder)), "$field item length")
+        val item = NoritoDecoder(decoder.readBytes(itemLength), decoder.flags, decoder.flagsHint)
+        item.readFixed32("$field[$index]")
+        require(item.remaining() == 0) { "Trailing bytes after $field[$index]" }
+    }
+    return count
+}
+
+private fun readRequiredMetadataOption(decoder: NoritoDecoder, field: String): ByteArray {
+    val payload = readOptionRawPayload(decoder)
+        ?: throw IllegalArgumentException("$field is required")
+    val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+    val value = child.readFixed32(field)
+    require(child.remaining() == 0) { "Trailing bytes after $field" }
+    require(!isZero32(value)) { "$field must be non-zero" }
+    return value
+}
+
+private val PREVIOUS_PROOF_OPEN_ENVELOPES_SCHEMA_HASH = byteArrayOf(
+    0xfe.toByte(),
+    0x38,
+    0x26,
+    0x32,
+    0x8f.toByte(),
+    0x08,
+    0x17,
+    0x71,
+    0x75,
+    0x0f,
+    0x24,
+    0xfe.toByte(),
+    0x11,
+    0x02,
+    0x60,
+    0xca.toByte(),
+)
+
+private const val PALLAS_CURVE_ID = 1
+private const val KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_K = 24
+private const val KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_N = 16_777_216
+private const val KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128
 
 private fun fixed32(value: ByteArray, field: String): ByteArray {
     require(value.size == 32) { "$field must be exactly 32 bytes" }

@@ -2,6 +2,22 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Recursive previous-proof envelope archive validation
+
+- Hardened Kotlin/JVM and Android Java Kagemusha recursive append requests so
+  `previousProofOpenEnvelopes` must be the native Norito
+  `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>` archive, uncompressed with the
+  exact schema hash, and contain exactly one compact Pallas open-verifier
+  envelope.
+- The mobile preflight now rejects empty or multiple-envelope archives, wrong
+  curve ids, malformed proof transcripts, missing or all-zero verifier
+  metadata, trailing bytes, and malformed payloads before JNI/native bridge
+  dispatch.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check -- kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+
 ## 2026-06-13 Privacy localnet lifecycle host parity
 
 - Mirrored the 19-reference localnet lifecycle evidence gate into the JS NAPI

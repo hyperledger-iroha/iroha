@@ -222,8 +222,11 @@ and completed history lives in [`status.md`](./status.md).
   init/append/verify/redeem archive schemas, compact request payload layouts,
   raw embedded archive payloads, Norito `Option` child-length framing, Rust
   `[u8; N]` fixed-array byte layout, bundle/result decoders, lineage gap checks,
-  and nonnegative block-height guards pinned in the focused JVM SDK runner and
-  parity inventory. Kotlin/JVM and Android Java now also expose typed
+  previous-proof open-envelope archives with the exact native
+  `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>` schema and exactly one Pallas
+  envelope with nonzero verifier metadata, malformed/trailing archive
+  rejection, and nonnegative block-height guards pinned in the focused JVM SDK
+  runner and parity inventory. Kotlin/JVM and Android Java now also expose typed
   `RegisterZkAsset`, `Shield`, and `Unshield` builders plus native
   signed-transaction wrappers that preserve private change outputs and return
   canonical versioned transaction bytes with native hashes. The JVM roots/Merkle

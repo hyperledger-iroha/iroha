@@ -542,13 +542,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       requireNonNegativeHeight(blockHeight);
       requireValidNestedArchive(this.pallasOpenEnvelopes, "pallasOpenEnvelopes");
       if (this.previousProofOpenEnvelopes != null) {
-        require(
-            this.previousProofOpenEnvelopes.length
-                <= KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES,
-            "previousProofOpenEnvelopes must not exceed "
-                + KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES
-                + " bytes");
-        requireValidNestedArchive(this.previousProofOpenEnvelopes, "previousProofOpenEnvelopes");
+        requirePreviousProofOpenEnvelopesArchive(this.previousProofOpenEnvelopes);
       }
       if (this.lineageProvingKeyArchive != null) {
         requireValidNestedArchive(this.lineageProvingKeyArchive, "lineageProvingKeyArchive");
@@ -1288,6 +1282,154 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(archive),
         field + " must contain a non-empty Norito payload");
   }
+
+  private static void requirePreviousProofOpenEnvelopesArchive(final byte[] archive) {
+    final String field = "previousProofOpenEnvelopes";
+    require(archive != null && archive.length > 0, field + " must not be empty");
+    require(
+        archive.length <= KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES,
+        field + " must not exceed "
+            + KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES
+            + " bytes");
+    final NoritoHeader.DecodeResult decoded;
+    try {
+      decoded = NoritoHeader.decode(archive, PREVIOUS_PROOF_OPEN_ENVELOPES_SCHEMA_HASH);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(
+          field + " must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive", ex);
+    }
+    require(decoded.header().compression() == NoritoHeader.COMPRESSION_NONE, field + " must not be compressed");
+    require(decoded.header().payloadLength() > 0, field + " must contain a non-empty Norito payload");
+    decoded.header().validateChecksum(decoded.payload());
+    require(decoded.header().flags() == NoritoHeader.COMPACT_LEN, field + " must use compact Norito layout");
+    final NoritoDecoder decoder = new NoritoDecoder(decoded.payload(), decoded.header().flags());
+    final int count = checkedInt(decoder.readUInt(64), field + " envelope count");
+    require(
+        count == KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1,
+        field
+            + " requires exactly "
+            + KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1
+            + " envelope");
+    for (int index = 0; index < count; index++) {
+      final int itemLength = checkedInt(decoder.readLength(compact(decoder)), field + " envelope length");
+      final byte[] itemPayload = decoder.readBytes(itemLength);
+      validatePreviousProofPallasOpenEnvelopePayload(
+          itemPayload, decoded.header().flags(), field + "[" + index + "]");
+    }
+    require(decoder.remaining() == 0, "Trailing bytes after " + field + " archive");
+  }
+
+  private static void validatePreviousProofPallasOpenEnvelopePayload(
+      final byte[] payload, final int flags, final String field) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
+    final int paramsN = readField(decoder, child -> readPallasIpaParams(child, field + ".params"));
+    final int publicN = readField(decoder, child -> readPallasPolyOpenPublic(child, field + ".public"));
+    require(publicN == paramsN, field + " public opening length must match params.n");
+    readField(
+        decoder,
+        child -> {
+          readPallasIpaProof(child, paramsN, field + ".proof");
+          return null;
+        });
+    final String transcriptLabel = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    require(!transcriptLabel.isEmpty(), field + " transcript_label must be non-empty");
+    require(
+        transcriptLabel.length() <= KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES,
+        field
+            + " transcript_label exceeds "
+            + KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES
+            + " bytes");
+    readField(decoder, child -> readRequiredMetadataOption(child, field + ".vk_commitment"));
+    readField(decoder, child -> readRequiredMetadataOption(child, field + ".public_inputs_schema_hash"));
+    readField(decoder, child -> readRequiredMetadataOption(child, field + ".domain_tag"));
+    require(decoder.remaining() == 0, "Trailing bytes after " + field);
+  }
+
+  private static int readPallasIpaParams(final NoritoDecoder decoder, final String field) {
+    final int version = readField(decoder, child -> checkedInt(child.readUInt(16), field + ".version"));
+    require(version == 1, field + ".version must be 1");
+    final int curveId = readField(decoder, child -> checkedInt(child.readUInt(16), field + ".curve_id"));
+    require(curveId == PALLAS_CURVE_ID, field + ".curve_id must be Pallas");
+    final int n = readField(decoder, child -> checkedInt(child.readUInt(32), field + ".n"));
+    require(n >= 2 && Integer.bitCount(n) == 1, field + ".n must be a power of two >= 2");
+    require(
+        n <= KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_N,
+        field + ".n exceeds max 2^" + KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_K);
+    final int gCount = readField(decoder, child -> readFixed32SequenceCount(child, field + ".g"));
+    require(gCount == n, field + ".g length must equal params.n");
+    final int hCount = readField(decoder, child -> readFixed32SequenceCount(child, field + ".h"));
+    require(hCount == n, field + ".h length must equal params.n");
+    readField(decoder, child -> readFixedBytes(child, 32, field + ".u"));
+    require(decoder.remaining() == 0, "Trailing bytes after " + field);
+    return n;
+  }
+
+  private static int readPallasPolyOpenPublic(final NoritoDecoder decoder, final String field) {
+    final int version = readField(decoder, child -> checkedInt(child.readUInt(16), field + ".version"));
+    require(version == 1, field + ".version must be 1");
+    final int curveId = readField(decoder, child -> checkedInt(child.readUInt(16), field + ".curve_id"));
+    require(curveId == PALLAS_CURVE_ID, field + ".curve_id must be Pallas");
+    final int n = readField(decoder, child -> checkedInt(child.readUInt(32), field + ".n"));
+    readField(decoder, child -> readFixedBytes(child, 32, field + ".z"));
+    readField(decoder, child -> readFixedBytes(child, 32, field + ".t"));
+    readField(decoder, child -> readFixedBytes(child, 32, field + ".p_g"));
+    require(decoder.remaining() == 0, "Trailing bytes after " + field);
+    return n;
+  }
+
+  private static void readPallasIpaProof(final NoritoDecoder decoder, final int n, final String field) {
+    final int version = readField(decoder, child -> checkedInt(child.readUInt(16), field + ".version"));
+    require(version == 1, field + ".version must be 1");
+    final int lCount = readField(decoder, child -> readFixed32SequenceCount(child, field + ".l"));
+    final int rCount = readField(decoder, child -> readFixed32SequenceCount(child, field + ".r"));
+    require(lCount == rCount, field + " L/R round count mismatch");
+    final int expectedRounds = Integer.numberOfTrailingZeros(n);
+    require(
+        lCount == expectedRounds,
+        field + " round count mismatch: expected " + expectedRounds + ", found " + lCount);
+    readField(decoder, child -> readFixedBytes(child, 32, field + ".a_final"));
+    readField(decoder, child -> readFixedBytes(child, 32, field + ".b_final"));
+    require(decoder.remaining() == 0, "Trailing bytes after " + field);
+  }
+
+  private static int readFixed32SequenceCount(final NoritoDecoder decoder, final String field) {
+    final int count = checkedInt(decoder.readUInt(64), field + " count");
+    for (int index = 0; index < count; index++) {
+      final int itemLength = checkedInt(decoder.readLength(compact(decoder)), field + " item length");
+      final NoritoDecoder item =
+          new NoritoDecoder(decoder.readBytes(itemLength), decoder.flags(), decoder.flagsHint());
+      readFixedBytes(item, 32, field + "[" + index + "]");
+      require(item.remaining() == 0, "Trailing bytes after " + field + "[" + index + "]");
+    }
+    return count;
+  }
+
+  private static byte[] readRequiredMetadataOption(final NoritoDecoder decoder, final String field) {
+    final byte[] payload = readOptionRawPayload(decoder);
+    if (payload == null) {
+      throw new IllegalArgumentException(field + " is required");
+    }
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final byte[] value = readFixedBytes(child, 32, field);
+    require(child.remaining() == 0, "Trailing bytes after " + field);
+    require(!isZero(value), field + " must be non-zero");
+    return value;
+  }
+
+  private static final byte[] PREVIOUS_PROOF_OPEN_ENVELOPES_SCHEMA_HASH =
+      new byte[] {
+        (byte) 0xfe, 0x38, 0x26, 0x32,
+        (byte) 0x8f, 0x08, 0x17, 0x71,
+        0x75, 0x0f, 0x24, (byte) 0xfe,
+        0x11, 0x02, 0x60, (byte) 0xca
+      };
+
+  private static final int PALLAS_CURVE_ID = 1;
+  private static final int KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_K = 24;
+  private static final int KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_N =
+      1 << KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_K;
+  private static final int KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES =
+      128;
 
   private static byte[] fixedBytes(final byte[] value, final int expectedSize, final String field) {
     require(value != null && value.length == expectedSize, field + " must be exactly " + expectedSize + " bytes");

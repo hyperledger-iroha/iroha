@@ -41,6 +41,13 @@ public final class KagemushaRecursiveSpendProverTest {
         0x48, (byte) 0xAD, 0x0A, (byte) 0xAD,
         (byte) 0xB9, 0x71, 0x57, 0x79
       };
+  private static final byte[] PALLAS_OPEN_ENVELOPE_VECTOR_SCHEMA_HASH =
+      new byte[] {
+        (byte) 0xfe, 0x38, 0x26, 0x32,
+        (byte) 0x8f, 0x08, 0x17, 0x71,
+        0x75, 0x0f, 0x24, (byte) 0xfe,
+        0x11, 0x02, 0x60, (byte) 0xca
+      };
   private static final byte[] CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA =
       ("{\"schema\":\"confidential_transfer_v2\",\"public_inputs\":[\"input_commitment_0\","
               + "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"output_commitment_0\","
@@ -1782,6 +1789,56 @@ public final class KagemushaRecursiveSpendProverTest {
                     syntheticArchive("test.LineageProvingKeyArchive"),
                     null));
     assert error.getMessage().contains("previousProofOpenEnvelopes is required");
+
+    assertArchiveSchema(
+        KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
+            new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
+                syntheticArchive("test.PallasOpenEnvelopes"),
+                sampleNote((byte) 0x44),
+                KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                sampleVerifierRecord(),
+                pallasOpenEnvelopeVectorArchive(),
+                repeat((byte) 0x6c, 64),
+                syntheticArchive("test.LineageProvingKeyArchive"),
+                null)),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST);
+
+    final Object[][] malformedPreviousOpenArchives = {
+      {syntheticArchive("test.WrongPreviousProofOpenEnvelopes"),
+          "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>"},
+      {pallasOpenEnvelopeVectorArchive(0), "requires exactly 1 envelope"},
+      {pallasOpenEnvelopeVectorArchive(2), "requires exactly 1 envelope"},
+      {pallasOpenEnvelopeVectorArchive(spec -> spec.paramsCurveId = 2), "curve_id must be Pallas"},
+      {pallasOpenEnvelopeVectorArchive(spec -> spec.transcriptLabel = ""), "transcript_label must be non-empty"},
+      {pallasOpenEnvelopeVectorArchive(spec -> spec.includeVkCommitment = false), "vk_commitment is required"},
+      {pallasOpenEnvelopeVectorArchive(spec -> spec.trailingEnvelopeBytes = new byte[] {0x7f}), "Trailing bytes"},
+      {pallasOpenEnvelopeVectorArchiveWithPayload(new byte[] {0x00}), "Unexpected end of data"}
+    };
+    for (final Object[] malformed : malformedPreviousOpenArchives) {
+      final byte[] archive = (byte[]) malformed[0];
+      final String expectedMessage = (String) malformed[1];
+      final IllegalArgumentException archiveError =
+          captureIllegalArgument(
+              () ->
+                  new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
+                      sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                      syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
+                      syntheticArchive("test.PallasOpenEnvelopes"),
+                      sampleNote((byte) 0x45),
+                      KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                      sampleVerifierRecord(),
+                      archive,
+                      repeat((byte) 0x6d, 64),
+                      syntheticArchive("test.LineageProvingKeyArchive"),
+                      null));
+      final String actualMessage =
+          archiveError.getMessage()
+              + " / "
+              + (archiveError.getCause() == null ? "" : archiveError.getCause().getMessage());
+      assert actualMessage.contains(expectedMessage) : actualMessage;
+    }
     assertThrows(
         () ->
             new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
@@ -2328,6 +2385,125 @@ public final class KagemushaRecursiveSpendProverTest {
           }
         },
         NoritoHeader.COMPACT_LEN);
+  }
+
+  private interface PallasSpecMutator {
+    void mutate(PallasOpenEnvelopeSpec spec);
+  }
+
+  private static final class PallasOpenEnvelopeSpec {
+    int paramsCurveId = 1;
+    int publicCurveId = 1;
+    String transcriptLabel = "previous-proof-open";
+    boolean includeVkCommitment = true;
+    boolean includePublicInputsSchemaHash = true;
+    boolean includeDomainTag = true;
+    byte[] trailingEnvelopeBytes = new byte[0];
+  }
+
+  private static byte[] pallasOpenEnvelopeVectorArchive() {
+    return pallasOpenEnvelopeVectorArchive(1, spec -> {});
+  }
+
+  private static byte[] pallasOpenEnvelopeVectorArchive(final int count) {
+    return pallasOpenEnvelopeVectorArchive(count, spec -> {});
+  }
+
+  private static byte[] pallasOpenEnvelopeVectorArchive(final PallasSpecMutator mutator) {
+    return pallasOpenEnvelopeVectorArchive(1, mutator);
+  }
+
+  private static byte[] pallasOpenEnvelopeVectorArchive(
+      final int count, final PallasSpecMutator mutator) {
+    final PallasOpenEnvelopeSpec spec = new PallasOpenEnvelopeSpec();
+    mutator.mutate(spec);
+    final byte[] archive =
+        NoritoCodec.encode(
+            new Object(),
+            "test.PallasOpenEnvelopeVector",
+            new TypeAdapter<Object>() {
+              @Override
+              public void encode(final NoritoEncoder encoder, final Object value) {
+                encoder.writeUInt(count, 64);
+                for (int index = 0; index < count; index++) {
+                  writeTestField(
+                      encoder,
+                      envelope -> {
+                        writeTestPallasOpenEnvelope(envelope, spec);
+                        envelope.writeBytes(spec.trailingEnvelopeBytes);
+                      });
+                }
+              }
+
+              @Override
+              public Object decode(final NoritoDecoder decoder) {
+                throw new UnsupportedOperationException("test Pallas envelope vectors are encode-only");
+              }
+            },
+            NoritoHeader.COMPACT_LEN);
+    System.arraycopy(PALLAS_OPEN_ENVELOPE_VECTOR_SCHEMA_HASH, 0, archive, 6, 16);
+    return archive;
+  }
+
+  private static byte[] pallasOpenEnvelopeVectorArchiveWithPayload(final byte[] payload) {
+    final byte[] archive =
+        NoritoCodec.encode(payload, "test.PallasOpenEnvelopeVector", RAW_PAYLOAD_ADAPTER, NoritoHeader.COMPACT_LEN);
+    System.arraycopy(PALLAS_OPEN_ENVELOPE_VECTOR_SCHEMA_HASH, 0, archive, 6, 16);
+    return archive;
+  }
+
+  private static void writeTestPallasOpenEnvelope(
+      final NoritoEncoder encoder, final PallasOpenEnvelopeSpec spec) {
+    final int n = 4;
+    writeTestField(
+        encoder,
+        params -> {
+          writeTestField(params, child -> child.writeUInt(1, 16));
+          writeTestField(params, child -> child.writeUInt(spec.paramsCurveId, 16));
+          writeTestField(params, child -> child.writeUInt(n, 32));
+          writeTestField(params, child -> writeTestFixed32Sequence(child, n, (byte) 0x10));
+          writeTestField(params, child -> writeTestFixed32Sequence(child, n, (byte) 0x20));
+          writeTestField(params, child -> child.writeBytes(repeat((byte) 0x30, 32)));
+        });
+    writeTestField(
+        encoder,
+        publicInput -> {
+          writeTestField(publicInput, child -> child.writeUInt(1, 16));
+          writeTestField(publicInput, child -> child.writeUInt(spec.publicCurveId, 16));
+          writeTestField(publicInput, child -> child.writeUInt(n, 32));
+          writeTestField(publicInput, child -> child.writeBytes(repeat((byte) 0x31, 32)));
+          writeTestField(publicInput, child -> child.writeBytes(repeat((byte) 0x32, 32)));
+          writeTestField(publicInput, child -> child.writeBytes(repeat((byte) 0x33, 32)));
+        });
+    writeTestField(
+        encoder,
+        proof -> {
+          writeTestField(proof, child -> child.writeUInt(1, 16));
+          writeTestField(proof, child -> writeTestFixed32Sequence(child, 2, (byte) 0x40));
+          writeTestField(proof, child -> writeTestFixed32Sequence(child, 2, (byte) 0x50));
+          writeTestField(proof, child -> child.writeBytes(repeat((byte) 0x60, 32)));
+          writeTestField(proof, child -> child.writeBytes(repeat((byte) 0x61, 32)));
+        });
+    writeTestField(encoder, child -> writeTestString(child, spec.transcriptLabel));
+    writeTestField(
+        encoder,
+        child -> writeTestOptionRaw(child, spec.includeVkCommitment ? repeat((byte) 0x70, 32) : null));
+    writeTestField(
+        encoder,
+        child ->
+            writeTestOptionRaw(
+                child, spec.includePublicInputsSchemaHash ? repeat((byte) 0x71, 32) : null));
+    writeTestField(
+        encoder,
+        child -> writeTestOptionRaw(child, spec.includeDomainTag ? repeat((byte) 0x72, 32) : null));
+  }
+
+  private static void writeTestFixed32Sequence(
+      final NoritoEncoder encoder, final int count, final byte seed) {
+    encoder.writeUInt(count, 64);
+    for (int index = 0; index < count; index++) {
+      writeTestField(encoder, child -> child.writeBytes(repeat((byte) (seed + index), 32)));
+    }
   }
 
   private static byte[] zk1VerifierKey(final String circuitId) {

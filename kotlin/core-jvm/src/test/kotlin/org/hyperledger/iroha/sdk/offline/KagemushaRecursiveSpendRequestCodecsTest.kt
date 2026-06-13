@@ -685,6 +685,57 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         }
         assertTrue(error.message.orEmpty().contains("previousProofOpenEnvelopes is required"))
 
+        assertArchiveSchema(
+            KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
+                AppendSpendRequest(
+                    previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
+                    pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes"),
+                    currentNote = sampleNote(seed = 0x44),
+                    outputProofCircuitId = KagemushaRecursiveSpendProver
+                        .RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                    previousLineageVerifierRecord = sampleVerifierRecord(),
+                    previousProofOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                    lineageVerifierKey = ByteArray(64) { 0x6c.toByte() },
+                    lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive"),
+                ),
+            ),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST,
+        )
+
+        val malformedPreviousOpenArchives = listOf(
+            syntheticArchive("test.WrongPreviousProofOpenEnvelopes") to
+                "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
+            pallasOpenEnvelopeVectorArchive(count = 0) to "requires exactly 1 envelope",
+            pallasOpenEnvelopeVectorArchive(count = 2) to "requires exactly 1 envelope",
+            pallasOpenEnvelopeVectorArchive { it.paramsCurveId = 2 } to "curve_id must be Pallas",
+            pallasOpenEnvelopeVectorArchive { it.transcriptLabel = "" } to "transcript_label must be non-empty",
+            pallasOpenEnvelopeVectorArchive { it.includeVkCommitment = false } to "vk_commitment is required",
+            pallasOpenEnvelopeVectorArchive { it.trailingEnvelopeBytes = byteArrayOf(0x7f) } to "Trailing bytes",
+            pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data",
+        )
+        for ((archive, expectedMessage) in malformedPreviousOpenArchives) {
+            val archiveError = assertFailsWith<IllegalArgumentException> {
+                AppendSpendRequest(
+                    previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
+                    pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes"),
+                    currentNote = sampleNote(seed = 0x45),
+                    outputProofCircuitId = KagemushaRecursiveSpendProver
+                        .RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                    previousLineageVerifierRecord = sampleVerifierRecord(),
+                    previousProofOpenEnvelopes = archive,
+                    lineageVerifierKey = ByteArray(64) { 0x6d.toByte() },
+                    lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive"),
+                )
+            }
+            assertTrue(
+                archiveError.message.orEmpty().contains(expectedMessage) ||
+                    archiveError.cause?.message.orEmpty().contains(expectedMessage),
+                "expected `$expectedMessage` in ${archiveError.message} / ${archiveError.cause?.message}",
+            )
+        }
+
         assertFailsWith<IllegalArgumentException> {
             AppendSpendRequest(
                 previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
@@ -884,6 +935,100 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             },
             NoritoHeader.COMPACT_LEN,
         )
+    }
+
+    private data class PallasOpenEnvelopeSpec(
+        var paramsCurveId: Int = 1,
+        var publicCurveId: Int = 1,
+        var transcriptLabel: String = "previous-proof-open",
+        var includeVkCommitment: Boolean = true,
+        var includePublicInputsSchemaHash: Boolean = true,
+        var includeDomainTag: Boolean = true,
+        var trailingEnvelopeBytes: ByteArray = ByteArray(0),
+    )
+
+    private fun pallasOpenEnvelopeVectorArchive(
+        count: Int = 1,
+        mutate: (PallasOpenEnvelopeSpec) -> Unit = {},
+    ): ByteArray {
+        val spec = PallasOpenEnvelopeSpec()
+        mutate(spec)
+        val archive = NoritoCodec.encode(
+            Unit,
+            "test.PallasOpenEnvelopeVector",
+            object : TypeAdapter<Unit> {
+                override fun encode(encoder: NoritoEncoder, value: Unit) {
+                    encoder.writeUInt(count.toLong(), 64)
+                    repeat(count) {
+                        writeTestField(encoder) { envelope ->
+                            writeTestPallasOpenEnvelope(envelope, spec)
+                            envelope.writeBytes(spec.trailingEnvelopeBytes)
+                        }
+                    }
+                }
+
+                override fun decode(decoder: NoritoDecoder): Unit =
+                    throw UnsupportedOperationException("test Pallas envelope vectors are encode-only")
+            },
+            NoritoHeader.COMPACT_LEN,
+        )
+        System.arraycopy(PALLAS_OPEN_ENVELOPE_VECTOR_SCHEMA_HASH, 0, archive, 6, 16)
+        return archive
+    }
+
+    private fun pallasOpenEnvelopeVectorArchiveWithPayload(payload: ByteArray): ByteArray {
+        val archive = NoritoCodec.encode(
+            payload,
+            "test.PallasOpenEnvelopeVector",
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+        System.arraycopy(PALLAS_OPEN_ENVELOPE_VECTOR_SCHEMA_HASH, 0, archive, 6, 16)
+        return archive
+    }
+
+    private fun writeTestPallasOpenEnvelope(encoder: NoritoEncoder, spec: PallasOpenEnvelopeSpec) {
+        val n = 4
+        writeTestField(encoder) { params ->
+            writeTestField(params) { it.writeUInt(1, 16) }
+            writeTestField(params) { it.writeUInt(spec.paramsCurveId.toLong(), 16) }
+            writeTestField(params) { it.writeUInt(n.toLong(), 32) }
+            writeTestField(params) { writeTestFixed32Sequence(it, n, 0x10) }
+            writeTestField(params) { writeTestFixed32Sequence(it, n, 0x20) }
+            writeTestField(params) { it.writeBytes(fixedBytes(0x30)) }
+        }
+        writeTestField(encoder) { public ->
+            writeTestField(public) { it.writeUInt(1, 16) }
+            writeTestField(public) { it.writeUInt(spec.publicCurveId.toLong(), 16) }
+            writeTestField(public) { it.writeUInt(n.toLong(), 32) }
+            writeTestField(public) { it.writeBytes(fixedBytes(0x31)) }
+            writeTestField(public) { it.writeBytes(fixedBytes(0x32)) }
+            writeTestField(public) { it.writeBytes(fixedBytes(0x33)) }
+        }
+        writeTestField(encoder) { proof ->
+            writeTestField(proof) { it.writeUInt(1, 16) }
+            writeTestField(proof) { writeTestFixed32Sequence(it, 2, 0x40) }
+            writeTestField(proof) { writeTestFixed32Sequence(it, 2, 0x50) }
+            writeTestField(proof) { it.writeBytes(fixedBytes(0x60)) }
+            writeTestField(proof) { it.writeBytes(fixedBytes(0x61)) }
+        }
+        writeTestField(encoder) { writeTestString(it, spec.transcriptLabel) }
+        writeTestField(encoder) {
+            writeTestOptionRaw(it, if (spec.includeVkCommitment) fixedBytes(0x70) else null)
+        }
+        writeTestField(encoder) {
+            writeTestOptionRaw(it, if (spec.includePublicInputsSchemaHash) fixedBytes(0x71) else null)
+        }
+        writeTestField(encoder) {
+            writeTestOptionRaw(it, if (spec.includeDomainTag) fixedBytes(0x72) else null)
+        }
+    }
+
+    private fun writeTestFixed32Sequence(encoder: NoritoEncoder, count: Int, seed: Int) {
+        encoder.writeUInt(count.toLong(), 64)
+        repeat(count) { index ->
+            writeTestField(encoder) { it.writeBytes(fixedBytes(seed + index)) }
+        }
     }
 
     private fun zk1VerifierKey(circuitId: String): ByteArray {
@@ -1138,6 +1283,24 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
     private companion object {
         private const val U128_MAX_PLUS_ONE = "340282366920938463463374607431768211456"
+        private val PALLAS_OPEN_ENVELOPE_VECTOR_SCHEMA_HASH = byteArrayOf(
+            0xfe.toByte(),
+            0x38,
+            0x26,
+            0x32,
+            0x8f.toByte(),
+            0x08,
+            0x17,
+            0x71,
+            0x75,
+            0x0f,
+            0x24,
+            0xfe.toByte(),
+            0x11,
+            0x02,
+            0x60,
+            0xca.toByte(),
+        )
         private val CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA: ByteArray =
             (
                 "{\"schema\":\"confidential_transfer_v2\",\"public_inputs\":[\"input_commitment_0\"," +
