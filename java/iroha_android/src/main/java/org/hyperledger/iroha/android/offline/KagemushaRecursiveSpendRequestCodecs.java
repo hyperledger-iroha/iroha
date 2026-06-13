@@ -483,8 +483,15 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       require(this.lineageProvingKeyArchive != null,
           "lineageProvingKeyArchive is required for recursive spend init");
       require(this.lineageProvingKeyArchive.length > 0, "lineageProvingKeyArchive must not be empty");
-      compactPayloadForRequest(this.recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle");
-      requireValidNestedArchive(this.pallasOpenEnvelopes, "pallasOpenEnvelopes");
+      final byte[] recordBundlePayload =
+          compactPayloadForRequest(this.recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle");
+      final int recordBundleHopCount =
+          readVerifiedFoldRecordBundleHopCount(recordBundlePayload, REQUEST_FLAGS, "recordBundle");
+      requirePallasOpenEnvelopesArchive(
+          this.pallasOpenEnvelopes,
+          recordBundleHopCount,
+          "pallasOpenEnvelopes",
+          KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES);
       requireValidNestedArchive(this.lineageProvingKeyArchive, "lineageProvingKeyArchive");
     }
 
@@ -540,15 +547,21 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.lineageProvingKeyArchive = copyNullable(lineageProvingKeyArchive);
       this.blockHeight = blockHeight;
       requireNonNegativeHeight(blockHeight);
-      requireValidNestedArchive(this.pallasOpenEnvelopes, "pallasOpenEnvelopes");
+      final byte[] recordBundlePayload =
+          compactPayloadForRequest(this.recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle");
+      final int recordBundleHopCount =
+          readVerifiedFoldRecordBundleHopCount(recordBundlePayload, REQUEST_FLAGS, "recordBundle");
+      requirePallasOpenEnvelopesArchive(
+          this.pallasOpenEnvelopes,
+          recordBundleHopCount,
+          "pallasOpenEnvelopes",
+          KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES);
       if (this.previousProofOpenEnvelopes != null) {
         requirePreviousProofOpenEnvelopesArchive(this.previousProofOpenEnvelopes);
       }
       if (this.lineageProvingKeyArchive != null) {
         requireValidNestedArchive(this.lineageProvingKeyArchive, "lineageProvingKeyArchive");
       }
-      compactPayloadForRequest(this.recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle");
-
       final SpendBundleSummary previousSummary = decodeBundle(this.previousBundle);
       final String normalizedOutput =
           KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(outputProofCircuitId);
@@ -1283,17 +1296,47 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         field + " must contain a non-empty Norito payload");
   }
 
-  private static void requirePreviousProofOpenEnvelopesArchive(final byte[] archive) {
-    final String field = "previousProofOpenEnvelopes";
+  private static int readVerifiedFoldRecordBundleHopCount(
+      final byte[] payload, final int flags, final String field) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
+    final byte[] bundlePayload = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
+    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
+    require(decoder.remaining() == 0, "Trailing bytes after " + field);
+
+    final NoritoDecoder bundle = new NoritoDecoder(bundlePayload, flags);
+    skipFields(bundle, 2);
+    final int hopCount =
+        readField(bundle, child -> readVerifiedFoldStepCount(child, field + ".steps"));
+    require(bundle.remaining() == 0, "Trailing bytes after " + field + " bundle");
+    require(hopCount > 0, field + " must contain at least one fold step");
+    require(
+        hopCount <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS,
+        field + " fold step count must not exceed " + KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS);
+    return hopCount;
+  }
+
+  private static int readVerifiedFoldStepCount(final NoritoDecoder decoder, final String field) {
+    final int count = checkedInt(decoder.readUInt(64), field + " count");
+    for (int index = 0; index < count; index++) {
+      final int itemLength = checkedInt(decoder.readLength(compact(decoder)), field + " item length");
+      final NoritoDecoder item =
+          new NoritoDecoder(decoder.readBytes(itemLength), decoder.flags(), decoder.flagsHint());
+      skipFields(item, 6);
+      require(item.remaining() == 0, "Trailing bytes after " + field + "[" + index + "]");
+    }
+    require(decoder.remaining() == 0, "Trailing bytes after " + field);
+    return count;
+  }
+
+  private static void requirePallasOpenEnvelopesArchive(
+      final byte[] archive, final int expectedEnvelopeCount, final String field, final int maxBytes) {
     require(archive != null && archive.length > 0, field + " must not be empty");
     require(
-        archive.length <= KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES,
-        field + " must not exceed "
-            + KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES
-            + " bytes");
+        archive.length <= maxBytes,
+        field + " must not exceed " + maxBytes + " bytes");
     final NoritoHeader.DecodeResult decoded;
     try {
-      decoded = NoritoHeader.decode(archive, PREVIOUS_PROOF_OPEN_ENVELOPES_SCHEMA_HASH);
+      decoded = NoritoHeader.decode(archive, OPEN_VERIFY_ENVELOPES_SCHEMA_HASH);
     } catch (final IllegalArgumentException ex) {
       throw new IllegalArgumentException(
           field + " must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive", ex);
@@ -1305,21 +1348,26 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     final NoritoDecoder decoder = new NoritoDecoder(decoded.payload(), decoded.header().flags());
     final int count = checkedInt(decoder.readUInt(64), field + " envelope count");
     require(
-        count == KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1,
-        field
-            + " requires exactly "
-            + KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1
-            + " envelope");
+        count == expectedEnvelopeCount,
+        field + " requires exactly " + expectedEnvelopeCount + " envelope(s)");
     for (int index = 0; index < count; index++) {
       final int itemLength = checkedInt(decoder.readLength(compact(decoder)), field + " envelope length");
       final byte[] itemPayload = decoder.readBytes(itemLength);
-      validatePreviousProofPallasOpenEnvelopePayload(
+      validatePallasOpenEnvelopePayload(
           itemPayload, decoded.header().flags(), field + "[" + index + "]");
     }
     require(decoder.remaining() == 0, "Trailing bytes after " + field + " archive");
   }
 
-  private static void validatePreviousProofPallasOpenEnvelopePayload(
+  private static void requirePreviousProofOpenEnvelopesArchive(final byte[] archive) {
+    requirePallasOpenEnvelopesArchive(
+        archive,
+        KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1,
+        "previousProofOpenEnvelopes",
+        KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES);
+  }
+
+  private static void validatePallasOpenEnvelopePayload(
       final byte[] payload, final int flags, final String field) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
     final int paramsN = readField(decoder, child -> readPallasIpaParams(child, field + ".params"));
@@ -1416,7 +1464,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     return value;
   }
 
-  private static final byte[] PREVIOUS_PROOF_OPEN_ENVELOPES_SCHEMA_HASH =
+  private static final byte[] OPEN_VERIFY_ENVELOPES_SCHEMA_HASH =
       new byte[] {
         (byte) 0xfe, 0x38, 0x26, 0x32,
         (byte) 0x8f, 0x08, 0x17, 0x71,

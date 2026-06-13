@@ -1276,8 +1276,8 @@ public final class KagemushaRecursiveSpendProverTest {
     assertArchiveSchema(
         KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
             new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
-                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
-                syntheticArchive("test.PallasOpenEnvelopes"),
+                sampleRecordBundle(),
+                pallasOpenEnvelopeVectorArchive(),
                 sampleNote(),
                 repeat((byte) 0x5a, 64),
                 syntheticArchive("test.LineageProvingKeyArchive"),
@@ -1288,8 +1288,8 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
             new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
                 sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
-                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
-                syntheticArchive("test.PallasOpenEnvelopes"),
+                sampleRecordBundle(),
+                pallasOpenEnvelopeVectorArchive(),
                 sampleNote((byte) 0x31),
                 KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
                 sampleVerifierRecord(),
@@ -1321,8 +1321,8 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void typedRequestCodecsUseRustCompatibleCompactFieldLayouts() {
-    final byte[] recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE);
-    final byte[] pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes");
+    final byte[] recordBundle = sampleRecordBundle();
+    final byte[] pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive();
     final byte[] lineageVerifierKey = incrementingBytes(64);
     final byte[] lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive");
     final KagemushaRecursiveSpendRequestCodecs.SpendableNoteDescriptor note = sampleNote();
@@ -1453,7 +1453,7 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD),
         recordFields.get(1));
 
-    final byte[] pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes");
+    final byte[] pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive();
     final byte[] initRequest =
         KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendInitRequest(
             evidence,
@@ -1698,8 +1698,8 @@ public final class KagemushaRecursiveSpendProverTest {
     assertThrows(
         () ->
             new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
-                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
-                syntheticArchive("test.PallasOpenEnvelopes"),
+                sampleRecordBundle(),
+                pallasOpenEnvelopeVectorArchive(),
                 sampleNote(),
                 null,
                 null,
@@ -1708,7 +1708,7 @@ public final class KagemushaRecursiveSpendProverTest {
         () ->
             new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
                 syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT),
-                syntheticArchive("test.PallasOpenEnvelopes"),
+                pallasOpenEnvelopeVectorArchive(),
                 sampleNote(),
                 repeat((byte) 0x5a, 64),
                 syntheticArchive("test.LineageProvingKeyArchive"),
@@ -1718,18 +1718,54 @@ public final class KagemushaRecursiveSpendProverTest {
             new KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef(
                 "halo2/ipa:wrong-schema",
                 syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT)));
-    final byte[] corruptedPallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes");
+    final byte[] corruptedPallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive();
     corruptedPallasOpenEnvelopes[corruptedPallasOpenEnvelopes.length - 1] =
         (byte) (corruptedPallasOpenEnvelopes[corruptedPallasOpenEnvelopes.length - 1] ^ 0x01);
     assertThrows(
         () ->
             new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
-                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
+                sampleRecordBundle(),
                 corruptedPallasOpenEnvelopes,
                 sampleNote(),
                 repeat((byte) 0x5a, 64),
                 syntheticArchive("test.LineageProvingKeyArchive"),
                 null));
+    final Object[][] malformedPallasOpenArchives = {
+      {syntheticArchive("test.WrongPallasOpenEnvelopes"),
+          "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>"},
+      {pallasOpenEnvelopeVectorArchive(0), "requires exactly 1 envelope"},
+      {pallasOpenEnvelopeVectorArchive(2), "requires exactly 1 envelope"},
+      {pallasOpenEnvelopeVectorArchive(spec -> spec.publicCurveId = 2), "curve_id must be Pallas"},
+      {pallasOpenEnvelopeVectorArchive(spec -> spec.includeDomainTag = false), "domain_tag is required"},
+      {pallasOpenEnvelopeVectorArchiveWithPayload(new byte[] {0x00}), "Unexpected end of data"}
+    };
+    for (final Object[] malformed : malformedPallasOpenArchives) {
+      final byte[] archive = (byte[]) malformed[0];
+      final String expectedMessage = (String) malformed[1];
+      final IllegalArgumentException archiveError =
+          captureIllegalArgument(
+              () ->
+                  new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
+                      sampleRecordBundle(),
+                      archive,
+                      sampleNote(),
+                      repeat((byte) 0x5a, 64),
+                      syntheticArchive("test.LineageProvingKeyArchive"),
+                      null));
+      assert messageContains(archiveError, expectedMessage)
+          : "expected `" + expectedMessage + "` in " + archiveError.getMessage();
+    }
+    final IllegalArgumentException countMismatch =
+        captureIllegalArgument(
+            () ->
+                new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
+                    sampleRecordBundle(2),
+                    pallasOpenEnvelopeVectorArchive(),
+                    sampleNote(),
+                    repeat((byte) 0x5a, 64),
+                    syntheticArchive("test.LineageProvingKeyArchive"),
+                    null));
+    assert countMismatch.getMessage().contains("requires exactly 2 envelope");
     assertThrows(
         () ->
             new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(
@@ -1779,8 +1815,8 @@ public final class KagemushaRecursiveSpendProverTest {
             () ->
                 new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
                     sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
-                    syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
-                    syntheticArchive("test.PallasOpenEnvelopes"),
+                    sampleRecordBundle(),
+                    pallasOpenEnvelopeVectorArchive(),
                     sampleNote((byte) 0x41),
                     KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                     sampleVerifierRecord(),
@@ -1794,8 +1830,8 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
             new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
                 sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
-                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
-                syntheticArchive("test.PallasOpenEnvelopes"),
+                sampleRecordBundle(),
+                pallasOpenEnvelopeVectorArchive(),
                 sampleNote((byte) 0x44),
                 KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                 sampleVerifierRecord(),
@@ -1824,8 +1860,8 @@ public final class KagemushaRecursiveSpendProverTest {
               () ->
                   new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
                       sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
-                      syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
-                      syntheticArchive("test.PallasOpenEnvelopes"),
+                      sampleRecordBundle(),
+                      pallasOpenEnvelopeVectorArchive(),
                       sampleNote((byte) 0x45),
                       KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                       sampleVerifierRecord(),
@@ -1844,7 +1880,7 @@ public final class KagemushaRecursiveSpendProverTest {
             new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
                 sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
                 syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT),
-                syntheticArchive("test.PallasOpenEnvelopes"),
+                pallasOpenEnvelopeVectorArchive(),
                 sampleNote((byte) 0x42),
                 KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
                 sampleVerifierRecord(),
@@ -2602,6 +2638,31 @@ public final class KagemushaRecursiveSpendProverTest {
         syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD));
   }
 
+  private static byte[] sampleRecordBundle() {
+    return sampleRecordBundle(1);
+  }
+
+  private static byte[] sampleRecordBundle(final int hopCount) {
+    require(hopCount >= 1, "hopCount must be positive");
+    final String asset = sampleAssetDefinition();
+    final List<KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence> hops =
+        new ArrayList<>();
+    byte[] rootBefore = fixedBytes(0x31);
+    for (int index = 0; index < hopCount; index++) {
+      final byte[] rootAfter = fixedBytes(0x32 + index);
+      final ProofFixture fixture = transferProofFixture(rootBefore);
+      hops.add(
+          new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
+              fixture.proofOutputArchive,
+              fixture.verifierRecordRef,
+              "kagemusha-test-chain",
+              asset,
+              rootAfter));
+      rootBefore = rootAfter;
+    }
+    return KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(hops);
+  }
+
   private static String sampleRecipient() {
     try {
       return AccountAddress
@@ -2833,6 +2894,13 @@ public final class KagemushaRecursiveSpendProverTest {
     } catch (final IllegalArgumentException expected) {
       return expected;
     }
+  }
+
+  private static boolean messageContains(final IllegalArgumentException error, final String expected) {
+    return (error.getMessage() != null && error.getMessage().contains(expected))
+        || (error.getCause() != null
+            && error.getCause().getMessage() != null
+            && error.getCause().getMessage().contains(expected));
   }
 
   private static boolean isAllZero(final byte[] bytes) {

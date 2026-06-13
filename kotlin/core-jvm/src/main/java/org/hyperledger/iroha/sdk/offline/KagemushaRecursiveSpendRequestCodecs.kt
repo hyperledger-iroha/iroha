@@ -139,12 +139,22 @@ class InitSpendRequest @JvmOverloads constructor(
         require(lineageProvingKeyArchiveBytes.isNotEmpty()) {
             "lineageProvingKeyArchive must not be empty"
         }
-        KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+        val recordBundlePayload = KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
             recordBundleArchive,
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE,
             "recordBundle",
         )
-        requireValidNestedArchive(pallasOpenEnvelopesArchive, "pallasOpenEnvelopes")
+        val recordBundleHopCount = readVerifiedFoldRecordBundleHopCount(
+            recordBundlePayload,
+            NoritoHeader.COMPACT_LEN,
+            "recordBundle",
+        )
+        requirePallasOpenEnvelopesArchive(
+            pallasOpenEnvelopesArchive,
+            expectedEnvelopeCount = recordBundleHopCount,
+            field = "pallasOpenEnvelopes",
+            maxBytes = KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
+        )
         requireValidNestedArchive(lineageProvingKeyArchiveBytes, "lineageProvingKeyArchive")
     }
 
@@ -179,19 +189,28 @@ class AppendSpendRequest @JvmOverloads constructor(
 
     init {
         requireNonNegativeHeight(blockHeight)
-        requireValidNestedArchive(pallasOpenEnvelopesArchive, "pallasOpenEnvelopes")
+        val recordBundlePayload = KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            recordBundleArchive,
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE,
+            "recordBundle",
+        )
+        val recordBundleHopCount = readVerifiedFoldRecordBundleHopCount(
+            recordBundlePayload,
+            NoritoHeader.COMPACT_LEN,
+            "recordBundle",
+        )
+        requirePallasOpenEnvelopesArchive(
+            pallasOpenEnvelopesArchive,
+            expectedEnvelopeCount = recordBundleHopCount,
+            field = "pallasOpenEnvelopes",
+            maxBytes = KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
+        )
         previousProofOpenEnvelopesArchive?.let {
             requirePreviousProofOpenEnvelopesArchive(it)
         }
         lineageProvingKeyArchiveBytes?.let {
             requireValidNestedArchive(it, "lineageProvingKeyArchive")
         }
-        KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
-            recordBundleArchive,
-            KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE,
-            "recordBundle",
-        )
-
         val previousSummary = KagemushaRecursiveSpendRequestCodecs.decodeBundle(previousBundleArchive)
         val normalizedOutput =
             KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(outputProofCircuitId)
@@ -1262,15 +1281,47 @@ private fun requireValidNestedArchive(archive: ByteArray, field: String) {
     }
 }
 
-private fun requirePreviousProofOpenEnvelopesArchive(archive: ByteArray) {
-    val field = "previousProofOpenEnvelopes"
+private fun readVerifiedFoldRecordBundleHopCount(payload: ByteArray, flags: Int, field: String): Int {
+    val decoder = NoritoDecoder(payload, flags)
+    val bundlePayload = readField(decoder) { it.readRemainingBytes() }
+    readField(decoder) { it.readRemainingBytes() } // verifier records
+    require(decoder.remaining() == 0) { "Trailing bytes after $field" }
+
+    val bundle = NoritoDecoder(bundlePayload, flags)
+    skipFields(bundle, 2) // chain_id, asset
+    val hopCount = readField(bundle) { readVerifiedFoldStepCount(it, "$field.steps") }
+    require(bundle.remaining() == 0) { "Trailing bytes after $field bundle" }
+    require(hopCount > 0) { "$field must contain at least one fold step" }
+    require(hopCount <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS) {
+        "$field fold step count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}"
+    }
+    return hopCount
+}
+
+private fun readVerifiedFoldStepCount(decoder: NoritoDecoder, field: String): Int {
+    val count = checkedInt(decoder.readUInt(64), "$field count")
+    repeat(count) { index ->
+        val itemLength = checkedInt(decoder.readLength(compact(decoder)), "$field item length")
+        val item = NoritoDecoder(decoder.readBytes(itemLength), decoder.flags, decoder.flagsHint)
+        skipFields(item, 6)
+        require(item.remaining() == 0) { "Trailing bytes after $field[$index]" }
+    }
+    require(decoder.remaining() == 0) { "Trailing bytes after $field" }
+    return count
+}
+
+private fun requirePallasOpenEnvelopesArchive(
+    archive: ByteArray,
+    expectedEnvelopeCount: Int,
+    field: String,
+    maxBytes: Int,
+) {
     require(archive.isNotEmpty()) { "$field must not be empty" }
-    require(archive.size <= KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES) {
-        "$field must not exceed " +
-            "${KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES} bytes"
+    require(archive.size <= maxBytes) {
+        "$field must not exceed $maxBytes bytes"
     }
     val decoded = try {
-        NoritoHeader.decode(archive, PREVIOUS_PROOF_OPEN_ENVELOPES_SCHEMA_HASH)
+        NoritoHeader.decode(archive, OPEN_VERIFY_ENVELOPES_SCHEMA_HASH)
     } catch (ex: IllegalArgumentException) {
         throw IllegalArgumentException(
             "$field must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive",
@@ -1287,19 +1338,28 @@ private fun requirePreviousProofOpenEnvelopesArchive(archive: ByteArray) {
     }
     val decoder = NoritoDecoder(decoded.payload, decoded.header.flags)
     val count = checkedInt(decoder.readUInt(64), "$field envelope count")
-    require(count == KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1) {
-        "$field requires exactly " +
-            "${KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1} envelope"
+    require(count == expectedEnvelopeCount) {
+        "$field requires exactly $expectedEnvelopeCount envelope(s)"
     }
     repeat(count) { index ->
         val itemLength = checkedInt(decoder.readLength(compact(decoder)), "$field envelope length")
         val itemPayload = decoder.readBytes(itemLength)
-        validatePreviousProofPallasOpenEnvelopePayload(itemPayload, decoded.header.flags, "$field[$index]")
+        validatePallasOpenEnvelopePayload(itemPayload, decoded.header.flags, "$field[$index]")
     }
     require(decoder.remaining() == 0) { "Trailing bytes after $field archive" }
 }
 
-private fun validatePreviousProofPallasOpenEnvelopePayload(payload: ByteArray, flags: Int, field: String) {
+private fun requirePreviousProofOpenEnvelopesArchive(archive: ByteArray) {
+    requirePallasOpenEnvelopesArchive(
+        archive,
+        expectedEnvelopeCount = KagemushaRecursiveSpendProver
+            .RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1,
+        field = "previousProofOpenEnvelopes",
+        maxBytes = KagemushaRecursiveSpendProver.RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES,
+    )
+}
+
+private fun validatePallasOpenEnvelopePayload(payload: ByteArray, flags: Int, field: String) {
     val decoder = NoritoDecoder(payload, flags)
     val paramsN = readField(decoder) { readPallasIpaParams(it, "$field.params") }
     val publicN = readField(decoder) { readPallasPolyOpenPublic(it, "$field.public") }
@@ -1385,7 +1445,7 @@ private fun readRequiredMetadataOption(decoder: NoritoDecoder, field: String): B
     return value
 }
 
-private val PREVIOUS_PROOF_OPEN_ENVELOPES_SCHEMA_HASH = byteArrayOf(
+private val OPEN_VERIFY_ENVELOPES_SCHEMA_HASH = byteArrayOf(
     0xfe.toByte(),
     0x38,
     0x26,

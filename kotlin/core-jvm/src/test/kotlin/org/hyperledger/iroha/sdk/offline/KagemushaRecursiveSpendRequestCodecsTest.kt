@@ -77,8 +77,8 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertArchiveSchema(
             KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
                 InitSpendRequest(
-                    recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
-                    pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes"),
+                    recordBundle = sampleRecordBundle(),
+                    pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
                     currentNote = sampleNote(),
                     lineageVerifierKey = ByteArray(64) { 0x5a.toByte() },
                     lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive"),
@@ -92,8 +92,8 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
                 AppendSpendRequest(
                     previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
-                    recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
-                    pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes"),
+                    recordBundle = sampleRecordBundle(),
+                    pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
                     currentNote = sampleNote(seed = 0x31),
                     outputProofCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
                     previousLineageVerifierRecord = sampleVerifierRecord(),
@@ -132,8 +132,8 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
     @Test
     fun `typed encoders use Rust compatible compact field layouts`() {
-        val recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE)
-        val pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes")
+        val recordBundle = sampleRecordBundle()
+        val pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive()
         val lineageVerifierKey = ByteArray(64) { (it + 1).toByte() }
         val lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive")
         val note = sampleNote()
@@ -415,7 +415,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             rootAfter = rootAfter,
         )
         val expectedRecordBundle = KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(listOf(evidence))
-        val pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes")
+        val pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive()
 
         val init = KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendInitRequest(
             hop = evidence,
@@ -595,15 +595,15 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     fun `typed requests reject malformed archives heights and lineage gaps before native dispatch`() {
         assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
-                recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
-                pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes"),
+                recordBundle = sampleRecordBundle(),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
                 currentNote = sampleNote(),
             )
         }
         assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
                 recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT),
-                pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes"),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
                 currentNote = sampleNote(),
                 lineageVerifierKey = ByteArray(64) { 0x5a.toByte() },
                 lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive"),
@@ -615,18 +615,53 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
             )
         }
-        val corruptedPallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes")
+        val corruptedPallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive()
         corruptedPallasOpenEnvelopes[corruptedPallasOpenEnvelopes.lastIndex] =
             (corruptedPallasOpenEnvelopes.last().toInt() xor 0x01).toByte()
         assertFailsWith<IllegalArgumentException> {
             InitSpendRequest(
-                recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
+                recordBundle = sampleRecordBundle(),
                 pallasOpenEnvelopes = corruptedPallasOpenEnvelopes,
                 currentNote = sampleNote(),
                 lineageVerifierKey = ByteArray(64) { 0x5a.toByte() },
                 lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive"),
             )
         }
+        val malformedPallasOpenArchives = listOf(
+            syntheticArchive("test.WrongPallasOpenEnvelopes") to
+                "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
+            pallasOpenEnvelopeVectorArchive(count = 0) to "requires exactly 1 envelope",
+            pallasOpenEnvelopeVectorArchive(count = 2) to "requires exactly 1 envelope",
+            pallasOpenEnvelopeVectorArchive { it.publicCurveId = 2 } to "curve_id must be Pallas",
+            pallasOpenEnvelopeVectorArchive { it.includeDomainTag = false } to "domain_tag is required",
+            pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data",
+        )
+        for ((archive, expectedMessage) in malformedPallasOpenArchives) {
+            val archiveError = assertFailsWith<IllegalArgumentException> {
+                InitSpendRequest(
+                    recordBundle = sampleRecordBundle(),
+                    pallasOpenEnvelopes = archive,
+                    currentNote = sampleNote(),
+                    lineageVerifierKey = ByteArray(64) { 0x5a.toByte() },
+                    lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive"),
+                )
+            }
+            assertTrue(
+                archiveError.message.orEmpty().contains(expectedMessage) ||
+                    archiveError.cause?.message.orEmpty().contains(expectedMessage),
+                "expected `$expectedMessage` in ${archiveError.message} / ${archiveError.cause?.message}",
+            )
+        }
+        val countMismatch = assertFailsWith<IllegalArgumentException> {
+            InitSpendRequest(
+                recordBundle = sampleRecordBundle(hopCount = 2),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                currentNote = sampleNote(),
+                lineageVerifierKey = ByteArray(64) { 0x5a.toByte() },
+                lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive"),
+            )
+        }
+        assertTrue(countMismatch.message.orEmpty().contains("requires exactly 2 envelope"))
         assertFailsWith<IllegalArgumentException> {
             VerifySpendRequest(
                 bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
@@ -673,8 +708,8 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         val error = assertFailsWith<IllegalArgumentException> {
             AppendSpendRequest(
                 previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
-                recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
-                pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes"),
+                recordBundle = sampleRecordBundle(),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
                 currentNote = sampleNote(seed = 0x41),
                 outputProofCircuitId = KagemushaRecursiveSpendProver
                     .RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
@@ -689,8 +724,8 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
                 AppendSpendRequest(
                     previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
-                    recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
-                    pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes"),
+                    recordBundle = sampleRecordBundle(),
+                    pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
                     currentNote = sampleNote(seed = 0x44),
                     outputProofCircuitId = KagemushaRecursiveSpendProver
                         .RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
@@ -718,8 +753,8 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             val archiveError = assertFailsWith<IllegalArgumentException> {
                 AppendSpendRequest(
                     previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
-                    recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
-                    pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes"),
+                    recordBundle = sampleRecordBundle(),
+                    pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
                     currentNote = sampleNote(seed = 0x45),
                     outputProofCircuitId = KagemushaRecursiveSpendProver
                         .RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
@@ -740,7 +775,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             AppendSpendRequest(
                 previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
                 recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT),
-                pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes"),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
                 currentNote = sampleNote(seed = 0x42),
                 outputProofCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
                 previousLineageVerifierRecord = sampleVerifierRecord(),
@@ -1141,6 +1176,28 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             verifierKeyId = "halo2/ipa:kagemusha-recursive-spend-lineage-test",
             recordBytes = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD),
         )
+
+    private fun sampleRecordBundle(hopCount: Int = 1): ByteArray {
+        require(hopCount >= 1)
+        val asset = sampleAssetDefinition()
+        val hops = ArrayList<VerifiedFoldHopEvidence>()
+        var rootBefore = fixedBytes(0x31)
+        repeat(hopCount) { index ->
+            val rootAfter = fixedBytes(0x32 + index)
+            val fixture = transferProofFixture(rootBefore)
+            hops.add(
+                VerifiedFoldHopEvidence(
+                    proofOutputArchive = fixture.proofOutputArchive,
+                    verifierRecord = fixture.verifierRecordRef,
+                    chainId = "kagemusha-test-chain",
+                    asset = asset,
+                    rootAfter = rootAfter,
+                ),
+            )
+            rootBefore = rootAfter
+        }
+        return KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(hops)
+    }
 
     private fun sampleRecipient(): String = AccountAddress
         .fromAccount(ByteArray(32) { 0x2a.toByte() }, "ed25519")

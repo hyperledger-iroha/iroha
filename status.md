@@ -2,6 +2,20 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Recursive hop Pallas envelope archive validation
+
+- Hardened Kotlin/JVM and Android Java Kagemusha init/append requests so
+  `pallasOpenEnvelopes` must be the exact native Norito
+  `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>` archive, compact and
+  uncompressed, with Pallas envelope metadata present and nonzero.
+- Request preflight now parses the record-bundle fold-step count and rejects
+  Pallas archive count mismatches before serialization or native bridge
+  dispatch, preserving the one-open-envelope-per-hop contract.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check -- kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+
 ## 2026-06-13 Recursive previous-proof envelope archive validation
 
 - Hardened Kotlin/JVM and Android Java Kagemusha recursive append requests so
