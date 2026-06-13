@@ -1088,6 +1088,16 @@ mod tests {
         BTreeSet::from([JdgSignatureScheme::SimpleThreshold])
     }
 
+    fn checked_random_keypair() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random().expect("generate checked JDG fixture keypair")
+    }
+
+    #[cfg(feature = "bls")]
+    fn checked_random_bls_keypair() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("generate checked JDG BLS fixture keypair")
+    }
+
     fn checked_jdg_signature_payload(
         keypair: &iroha_crypto::KeyPair,
         signing_hash: &Hash,
@@ -1126,7 +1136,7 @@ mod tests {
             .expect("checked JDG SDN commitment fixture seal verifies");
         commitment.seal = seal;
 
-        let signer = iroha_crypto::KeyPair::random().public_key().clone();
+        let signer = checked_random_keypair().public_key().clone();
         JdgAttestation {
             version: iroha_data_model::jurisdiction::JDG_ATTESTATION_VERSION_V1,
             scope: scope.clone(),
@@ -1166,7 +1176,7 @@ mod tests {
     fn enforcer_loads_registry_from_reader() {
         let policy = policy_require_commitments();
         let scope = sample_scope();
-        let sdn_keypair = iroha_crypto::KeyPair::random();
+        let sdn_keypair = checked_random_keypair();
         let records = vec![JdgSdnKeyRecord {
             public_key: sdn_keypair.public_key().clone(),
             activated_at: 0,
@@ -1189,7 +1199,8 @@ mod tests {
         let policy = policy_require_commitments();
         let enforcer =
             JdgSdnEnforcer::from_records(policy, Vec::new()).expect("empty registry allowed");
-        let mut attestation = sample_attestation(&sample_scope(), &iroha_crypto::KeyPair::random());
+        let checked_keypair = checked_random_keypair();
+        let mut attestation = sample_attestation(&sample_scope(), &checked_keypair);
         attestation.sdn_commitments.clear();
 
         let err = enforcer
@@ -1210,7 +1221,7 @@ mod tests {
     fn enforcer_rejects_scope_mismatch() {
         let policy = policy_require_commitments();
         let scope = sample_scope();
-        let sdn_keypair = iroha_crypto::KeyPair::random();
+        let sdn_keypair = checked_random_keypair();
         let enforcer = JdgSdnEnforcer::from_records(
             policy,
             vec![JdgSdnKeyRecord {
@@ -1239,7 +1250,7 @@ mod tests {
     fn enforcer_rejects_inactive_key() {
         let policy = policy_require_commitments();
         let scope = sample_scope();
-        let sdn_keypair = iroha_crypto::KeyPair::random();
+        let sdn_keypair = checked_random_keypair();
         let enforcer = JdgSdnEnforcer::from_records(
             policy,
             vec![JdgSdnKeyRecord {
@@ -1269,8 +1280,8 @@ mod tests {
                 dual_publish_blocks: 1,
             },
         };
-        let parent = iroha_crypto::KeyPair::random();
-        let child = iroha_crypto::KeyPair::random();
+        let parent = checked_random_keypair();
+        let child = checked_random_keypair();
         let records = vec![
             JdgSdnKeyRecord {
                 public_key: parent.public_key().clone(),
@@ -1304,7 +1315,7 @@ mod tests {
 
         let policy = policy_require_commitments();
         let records = vec![JdgSdnKeyRecord {
-            public_key: iroha_crypto::KeyPair::random().public_key().clone(),
+            public_key: checked_random_keypair().public_key().clone(),
             activated_at: 0,
             retired_at: None,
             rotation_parent: None,
@@ -1336,7 +1347,7 @@ mod tests {
             "member count must cover threshold"
         );
         let signers: Vec<_> = (0..member_count)
-            .map(|_| iroha_crypto::KeyPair::random())
+            .map(|_| checked_random_keypair())
             .collect();
         let mut committee_id_bytes = [0u8; 32];
         committee_id_bytes[..8].copy_from_slice(&dataspace.as_u64().to_le_bytes());
@@ -1369,7 +1380,7 @@ mod tests {
             "member count must cover threshold"
         );
         let signers: Vec<_> = (0..member_count)
-            .map(|_| iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .map(|_| checked_random_bls_keypair())
             .collect();
         let mut committee_id_bytes = [0u8; 32];
         committee_id_bytes[..8].copy_from_slice(&dataspace.as_u64().to_le_bytes());
@@ -1558,7 +1569,7 @@ mod tests {
 
         let mut attestation =
             signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 2, 8, 0);
-        attestation.signer_set[0] = iroha_crypto::KeyPair::random().public_key().clone();
+        attestation.signer_set[0] = checked_random_keypair().public_key().clone();
         let err = guard
             .validate(&attestation, dataspace, 3)
             .expect_err("signer must be rejected");

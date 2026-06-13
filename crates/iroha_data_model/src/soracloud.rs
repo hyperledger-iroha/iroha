@@ -20274,7 +20274,13 @@ mod tests {
 
     #[test]
     fn canonical_request_witness_roundtrips_through_norito() {
-        let signer = KeyPair::random();
+        let signer = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked canonical request witness fixture keypair");
+        let signature = Signature::try_new(signer.private_key(), b"canonical-request-witness")
+            .expect("checked canonical request witness fixture signature");
+        signature
+            .verify(signer.public_key(), b"canonical-request-witness")
+            .expect("checked canonical request witness fixture signature verifies");
         let witness = CanonicalRequestWitnessV1 {
             schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
             subject_account: sample_account_id(9),
@@ -20283,7 +20289,7 @@ mod tests {
             canonical_request_hash: sample_hash(61),
             signatures: vec![CanonicalRequestSignatureWitnessV1 {
                 signer: signer.public_key().clone(),
-                signature: Signature::new(signer.private_key(), b"canonical-request-witness"),
+                signature,
             }],
         };
 

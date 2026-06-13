@@ -291,6 +291,43 @@ def test_bsc_source_bridge_direct_parsers_redact_parser_causes(tmp_path):
         raise AssertionError("missing secret BSC source bridge runtime file was accepted")
 
 
+def test_bsc_source_bridge_direct_parsers_redact_typeerror_parser_causes(monkeypatch):
+    module = load_evidence_module()
+
+    class SecretBytes:
+        @staticmethod
+        def fromhex(_text):
+            raise TypeError("secret-token BSC source hex TypeError detail")
+
+    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+
+    for parser, value, label, kwargs in (
+        (
+            module.parse_hex_bytes,
+            "0x" + "11" * 32,
+            "source trust anchor hash",
+            {"byte_length": 32},
+        ),
+        (
+            module.parse_runtime_bytecode_hex,
+            "0x6001600055",
+            "source bridge runtime bytecode",
+            {},
+        ),
+    ):
+        try:
+            parser(value, label=label, **kwargs)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == f"{label} must be hex"
+            assert "secret-token" not in rendered
+            assert "TypeError" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"{label} parser TypeError was accepted")
+
+
 def test_bsc_source_numeric_parsers_require_canonical_ascii_decimal():
     module = load_evidence_module()
 
