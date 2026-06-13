@@ -425,11 +425,27 @@ mod tests {
         }
     }
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked moderation fixture keypair")
+    }
+
+    fn checked_signature(
+        keypair: &KeyPair,
+        body: &ModerationReproBodyV1,
+    ) -> SignatureOf<ModerationReproBodyV1> {
+        let signature = SignatureOf::try_new(keypair.private_key(), body)
+            .expect("sign checked moderation reproducibility fixture");
+        signature
+            .verify(keypair.public_key(), body)
+            .expect("checked moderation reproducibility fixture verifies");
+        signature
+    }
+
     fn sign_manifest(body: ModerationReproBodyV1, roles: &[&str]) -> ModerationReproManifestV1 {
         let mut signatures = Vec::new();
         for &role in roles {
-            let keypair = KeyPair::random();
-            let signature = SignatureOf::new(keypair.private_key(), &body);
+            let keypair = checked_random_keypair();
+            let signature = checked_signature(&keypair, &body);
             signatures.push(ModerationReproSignatureV1 {
                 role: role.to_string(),
                 public_key: keypair.public_key().clone(),
@@ -452,8 +468,8 @@ mod tests {
     #[test]
     fn validate_rejects_duplicate_signer() {
         let body = sample_body();
-        let keypair = KeyPair::random();
-        let signature = SignatureOf::new(keypair.private_key(), &body);
+        let keypair = checked_random_keypair();
+        let signature = checked_signature(&keypair, &body);
         let manifest = ModerationReproManifestV1 {
             body,
             signatures: vec![

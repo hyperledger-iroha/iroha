@@ -910,7 +910,7 @@ def _is_canonical_solana_pubkey_text(value: Any) -> bool:
     verifier = _verify_module()
     try:
         raw = verifier._decode_solana_base58(value)
-    except ValueError:
+    except (TypeError, ValueError):
         return False
     return len(raw) == 32 and any(raw)
 
@@ -2963,7 +2963,12 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                     errors.append(key_error)
                     continue
                 if key not in required_audit_hashes:
-                    errors.append(f"{audit_label} contains unexpected audit field: {key}")
+                    errors.append(
+                        _unexpected_source_adapter_gate_audit_field_error(
+                            audit_label,
+                            key,
+                        )
+                    )
                     continue
                 semantic_audit_hashes[key] = audit_hashes[key]
             for key, value in sorted(semantic_audit_hashes.items()):
@@ -4841,7 +4846,7 @@ def _release_report_bundle_errors(
         f"{label}.native_evm_prover_bundle",
     )
     errors.extend(native_summary_errors)
-    if not native_summary_errors and isinstance(native_summary, dict):
+    if isinstance(native_summary, dict):
         errors.extend(
             _native_evm_prover_binding_bundle_errors(
                 native_summary,
@@ -5620,6 +5625,7 @@ def main(argv: list[str] | None = None) -> int:
     except (
         OSError,
         RuntimeError,
+        TypeError,
         ValueError,
         argparse.ArgumentTypeError,
     ) as exc:

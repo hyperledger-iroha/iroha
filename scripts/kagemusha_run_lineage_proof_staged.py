@@ -187,6 +187,80 @@ def _directory_open_flags() -> int:
     return flags
 
 
+def _file_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _set_private_directory_permissions(path: Path, label: str) -> list[str]:
+    try:
+        dir_fd = os.open(path, _directory_open_flags())
+    except OSError:
+        return [f"{label} permissions could not be set"]
+    try:
+        try:
+            directory_stat = os.fstat(dir_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        try:
+            os.fchmod(dir_fd, 0o700)
+        except OSError:
+            return [f"{label} permissions could not be set"]
+        try:
+            directory_stat = os.fstat(dir_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        if stat.S_IMODE(directory_stat.st_mode) != 0o700:
+            return [f"{label} permissions must be 0700"]
+    finally:
+        os.close(dir_fd)
+    return []
+
+
+def _set_private_file_permissions(
+    path: Path,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
+        file_fd = os.open(path, _file_open_flags())
+    except OSError:
+        return [f"{label} permissions could not be set"]
+    try:
+        try:
+            file_stat = os.fstat(file_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISREG(file_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        if expected_identity is not None and _file_identity(file_stat) != expected_identity:
+            return [f"{label} changed before permissions could be set"]
+        try:
+            os.fchmod(file_fd, 0o600)
+        except OSError:
+            return [f"{label} permissions could not be set"]
+        try:
+            file_stat = os.fstat(file_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISREG(file_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        if expected_identity is not None and _file_identity(file_stat) != expected_identity:
+            return [f"{label} changed before permissions could be set"]
+        if stat.S_IMODE(file_stat.st_mode) != 0o600:
+            return [f"{label} permissions must be 0600"]
+    finally:
+        os.close(file_fd)
+    return []
+
+
 def _sync_output_parent(
     parent: Path,
     label: str,
@@ -468,6 +542,7 @@ def _write_text_atomic(path: Path, text: str, label: str, *, replace: bool) -> l
             return [f"{label} temporary output already exists"]
         with tmp_path.open("xb") as handle:
             tmp_identity = _file_identity(os.fstat(handle.fileno()))
+            os.fchmod(handle.fileno(), 0o600)
             handle.write(expected_bytes)
             handle.flush()
             os.fsync(handle.fileno())
@@ -496,6 +571,8 @@ def _verify_written_text_file(path: Path, expected_bytes: bytes, label: str) -> 
         expected_stat = path.lstat()
     except OSError:
         return [f"{label} metadata could not be read"]
+    if stat.S_IMODE(expected_stat.st_mode) != 0o600:
+        return [f"{label} permissions must be 0600"]
     expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
     try:
         with path.open("rb") as handle:
@@ -579,6 +656,7 @@ def _run_command_to_log(command: list[str], cwd: Path, log_path: Path) -> int:
     """Run the canonical proof command with child output owned by ``log_path``."""
 
     with log_path.open("xb") as log_handle:
+        os.fchmod(log_handle.fileno(), 0o600)
         process = subprocess.Popen(
             command,
             cwd=cwd,
@@ -598,6 +676,16 @@ def _install_log_temp(temp_log: Path, final_log: Path, label: str, *, replace: b
     )
     if temp_identity_errors:
         return temp_identity_errors
+    permission_errors = _set_private_file_permissions(
+        temp_log,
+        f"{label} temporary output",
+        expected_identity=temp_identity,
+    )
+    if permission_errors:
+        return [
+            *permission_errors,
+            *_cleanup_temp_output(temp_log, label, temp_identity),
+        ]
     errors = validate_output_file_path(final_log, label, replace=replace)
     if errors:
         return [
@@ -974,9 +1062,18 @@ def run_staged_lineage_proof(
         return 1, errors
     assert staged_root is not None
     try:
-        args.staged_artifact_dir.mkdir(parents=True, exist_ok=True)
+        args.staged_artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError:
         return 1, ["--staged-artifact-dir could not be created"]
+    if staged_root is not None:
+        for directory, label in (
+            (staged_root, "--staged-root"),
+            (args.staged_artifact_dir.parent, "--staged-artifacts-dir"),
+            (args.staged_artifact_dir, "--staged-artifact-dir"),
+        ):
+            permission_errors = _set_private_directory_permissions(directory, label)
+            if permission_errors:
+                return 1, permission_errors
     errors = validate_directory_path(
         args.staged_artifact_dir,
         "--staged-artifact-dir",

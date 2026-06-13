@@ -957,6 +957,31 @@ function hasKagemushaRecursiveAggregationProofBundleNative(native) {
   );
 }
 
+function hasKagemushaPallasOpenEnvelopeBuilderNative(native) {
+  const abiVersion = kagemushaRecursiveSpendNativeBridgeAbiVersion(native);
+  if (
+    !native ||
+    !Number.isInteger(abiVersion) ||
+    abiVersion < KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION ||
+    typeof native.kagemushaBuildPallasOpenEnvelopesArchive !== "function" ||
+    typeof native.kagemushaBuildPreviousProofOpenEnvelopesArchive !== "function"
+  ) {
+    return false;
+  }
+  return (
+    expectKagemushaNativeProbeRejection(() =>
+      native.kagemushaBuildPallasOpenEnvelopesArchive(
+        KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
+      ),
+    ) &&
+    expectKagemushaNativeProbeRejection(() =>
+      native.kagemushaBuildPreviousProofOpenEnvelopesArchive(
+        KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
+      ),
+    )
+  );
+}
+
 function kagemushaRecursiveSpendNativeBridgeAbiVersion(native) {
   if (typeof native?.connectNoritoBridgeAbiVersion !== "function") {
     return 0;
@@ -1835,6 +1860,14 @@ export function isKagemushaRecursiveAggregationProofBundleNativeAvailable() {
   }
 }
 
+export function isKagemushaPallasOpenEnvelopeBuilderNativeAvailable() {
+  try {
+    return hasKagemushaPallasOpenEnvelopeBuilderNative(resolveNativeBinding());
+  } catch {
+    return false;
+  }
+}
+
 export function kagemushaRecursiveSpendInit(requestArchive) {
   return callKagemushaRecursiveSpendNative(
     "kagemushaRecursiveSpendInit",
@@ -2363,6 +2396,43 @@ export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAnd
   return kagemushaRecursiveSpendOutputToBuffer(
     result,
     "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
+  );
+}
+
+export function kagemushaBuildPallasOpenEnvelopesArchive(recordBundleArchive) {
+  const recordBundle = toOwnedKagemushaArchiveBuffer(
+    recordBundleArchive,
+    "recordBundleArchive",
+  );
+  const native = resolveNativeBinding();
+  if (!hasKagemushaPallasOpenEnvelopeBuilderNative(native)) {
+    throw new Error(
+      "Kagemusha Pallas open-envelope builders require native bridge ABI 7 with Pallas builder symbols",
+    );
+  }
+  const result = native.kagemushaBuildPallasOpenEnvelopesArchive(recordBundle);
+  return kagemushaRecursiveSpendOutputToBuffer(
+    result,
+    "kagemushaBuildPallasOpenEnvelopesArchive",
+  );
+}
+
+export function kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundleArchive) {
+  const previousBundle = toOwnedKagemushaArchiveBuffer(
+    previousBundleArchive,
+    "previousBundleArchive",
+  );
+  const native = resolveNativeBinding();
+  if (!hasKagemushaPallasOpenEnvelopeBuilderNative(native)) {
+    throw new Error(
+      "Kagemusha Pallas open-envelope builders require native bridge ABI 7 with Pallas builder symbols",
+    );
+  }
+  const result =
+    native.kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundle);
+  return kagemushaRecursiveSpendOutputToBuffer(
+    result,
+    "kagemushaBuildPreviousProofOpenEnvelopesArchive",
   );
 }
 

@@ -104,7 +104,7 @@ def _parse_hex_bytes(value: str, *, label: str, byte_length: int) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except ValueError:
+    except (TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -371,7 +371,12 @@ def _rpc_hex_data(result: Any, *, method: str) -> bytes:
         raise RuntimeError(f"{method} returned odd-length hex")
     if any(symbol not in "0123456789abcdef" for symbol in text):
         raise RuntimeError(f"{method} returned non-canonical lowercase 0x hex data")
-    return bytes.fromhex(text)
+    try:
+        return bytes.fromhex(text)
+    except (TypeError, ValueError):
+        raise RuntimeError(
+            f"{method} returned non-canonical lowercase 0x hex data"
+        ) from None
 
 
 def _rpc_fixed_hex_data(
@@ -437,7 +442,7 @@ def _receipt_summary(
             method="eth_getTransactionReceipt transactionHash",
             byte_length=32,
         )
-    except (RuntimeError, TypeError):
+    except (RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             "deployment receipt transactionHash must be a non-zero bytes32"
         ) from None
@@ -456,7 +461,7 @@ def _receipt_summary(
             byte_length=20,
             method="eth_getTransactionReceipt contractAddress",
         )
-    except (RuntimeError, TypeError):
+    except (RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             "deployment receipt contractAddress must be a non-zero 20-byte EVM address"
         ) from None
@@ -471,7 +476,7 @@ def _receipt_summary(
             method="eth_getTransactionReceipt blockHash",
             byte_length=32,
         )
-    except (RuntimeError, TypeError):
+    except (RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             "deployment receipt blockHash must be a non-zero bytes32"
         ) from None
@@ -1738,7 +1743,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.toml:
             sys.stdout.write(render_offline_toml(summary))
             return 0
-    except (OSError, RuntimeError, ValueError, argparse.ArgumentTypeError) as exc:
+    except (
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        argparse.ArgumentTypeError,
+    ) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP EVM source live evidence collection failed",

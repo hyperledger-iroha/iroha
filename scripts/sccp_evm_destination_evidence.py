@@ -2197,7 +2197,7 @@ def main(argv: list[str] | None = None) -> int:
                     sort_keys=True,
                 )
             )
-    except (OSError, TypeError, ValueError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP EVM destination evidence rendering failed",

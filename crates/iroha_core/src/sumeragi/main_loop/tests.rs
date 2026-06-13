@@ -850,7 +850,7 @@ fn seed_commit_votes_for_block_with_roster(
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         insert_test_vote_with_roster(actor, vote, &roster);
         seeded = seeded.saturating_add(1);
@@ -912,7 +912,7 @@ fn seed_verified_commit_votes_for_block_with_roster(
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         insert_test_vote_with_roster(actor, vote, &roster);
         seeded = seeded.saturating_add(1);
@@ -1024,7 +1024,7 @@ fn seed_remote_commit_votes_for_block(
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
         seeded = seeded.saturating_add(1);
@@ -1093,7 +1093,7 @@ fn seed_cached_remote_commit_votes_for_block(
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         insert_test_vote_with_roster(actor, vote, &roster);
         seeded = seeded.saturating_add(1);
@@ -1245,7 +1245,7 @@ fn commit_qc_with_signers(
     let signatures: Vec<Vec<u8>> = signers
         .iter()
         .map(|keypair| {
-            Signature::new(keypair.private_key(), &preimage)
+            checked_signature(keypair.private_key(), &preimage)
                 .payload()
                 .to_vec()
         })
@@ -1542,7 +1542,7 @@ fn sign_vote_for_view_with_seed(
         .find(|kp| kp.public_key() == peer.public_key())
         .expect("matching keypair for signer");
     let preimage = super::vote_preimage(chain, mode_tag, vote);
-    let sig = Signature::new(kp.private_key(), &preimage);
+    let sig = checked_signature(kp.private_key(), &preimage);
     vote.bls_sig = sig.payload().to_vec();
 }
 
@@ -2973,7 +2973,7 @@ fn block_with_da_commitment(manifest_hash: ManifestDigest) -> SignedBlock {
     };
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.into_parts();
-    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     SignedBlock::presigned_with_da(block_signature, header, Vec::new(), Some(bundle))
 }
@@ -3826,7 +3826,7 @@ fn resign_qc_with_chain_order_for_actor(
                 .get(idx)
                 .expect("signer present in QC validator set");
             let keypair = keypair_for_peer(key_pairs, peer);
-            Signature::new(keypair.private_key(), &preimage)
+            checked_signature(keypair.private_key(), &preimage)
                 .payload()
                 .to_vec()
         })
@@ -6853,7 +6853,7 @@ async fn merge_committee_accepts_remote_signature() {
     assert_eq!(candidates.len(), 1);
     let candidate = &candidates[0];
     let message_digest = crate::merge::merge_qc_message_digest(&actor.chain_id, candidate);
-    let signature = Signature::new(harness.key_pairs[1].private_key(), message_digest.as_ref());
+    let signature = checked_signature(harness.key_pairs[1].private_key(), message_digest.as_ref());
     let merge_signature = MergeCommitteeSignature {
         epoch_id: candidate.epoch_id,
         view: 0,
@@ -9791,7 +9791,7 @@ async fn block_sync_update_accepts_uncertified_missing_block_when_behind() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -9913,7 +9913,7 @@ async fn block_sync_update_accepts_uncertified_missing_block_in_npos() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -10225,7 +10225,7 @@ async fn block_sync_update_accepts_uncertified_next_height_in_npos_genesis_boots
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -10326,7 +10326,7 @@ async fn block_sync_update_accepts_uncertified_next_height_in_npos_after_bootstr
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -10481,7 +10481,7 @@ async fn block_sync_update_payload_only_frontier_npos_uses_sender_lane_vote_rost
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("sender lane signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -11496,7 +11496,7 @@ async fn assert_permissioned_unverified_roster_stashes_ready_and_deliver<F>(
     };
     let ready_preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
     let ready_signature =
-        Signature::new(actor.common_config.key_pair.private_key(), &ready_preimage);
+        checked_signature(actor.common_config.key_pair.private_key(), &ready_preimage);
     ready.signature = ready_signature.payload().to_vec();
 
     actor
@@ -11533,7 +11533,7 @@ async fn assert_permissioned_unverified_roster_stashes_ready_and_deliver<F>(
     };
     let deliver_preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let deliver_signature = Signature::new(
+    let deliver_signature = checked_signature(
         actor.common_config.key_pair.private_key(),
         &deliver_preimage,
     );
@@ -13999,7 +13999,7 @@ async fn promote_rbc_session_roster_and_retry_flushes_stashed_ready_and_deliver(
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         if stashed_ready.is_none() {
             stashed_ready = Some(ready.clone());
@@ -14033,7 +14033,7 @@ async fn promote_rbc_session_roster_and_retry_flushes_stashed_ready_and_deliver(
     };
     let deliver_preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let deliver_signature = Signature::new(deliver_kp.private_key(), &deliver_preimage);
+    let deliver_signature = checked_signature(deliver_kp.private_key(), &deliver_preimage);
     deliver.signature = deliver_signature.payload().to_vec();
 
     actor
@@ -14728,7 +14728,7 @@ async fn flush_pending_rbc_if_roster_ready_replays_stashed_ready_and_deliver_wit
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         if stashed_ready.is_none() {
             stashed_ready = Some(ready.clone());
@@ -14758,7 +14758,7 @@ async fn flush_pending_rbc_if_roster_ready_replays_stashed_ready_and_deliver_wit
     };
     let deliver_preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let deliver_signature = Signature::new(deliver_kp.private_key(), &deliver_preimage);
+    let deliver_signature = checked_signature(deliver_kp.private_key(), &deliver_preimage);
     deliver.signature = deliver_signature.payload().to_vec();
 
     let stashed_ready = stashed_ready.expect("stashed ready");
@@ -15592,7 +15592,7 @@ async fn block_sync_update_accepts_pre_activation_qc_epoch_after_mode_flip() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -15763,7 +15763,7 @@ async fn block_sync_update_reuses_cached_qc_when_validation_unavailable() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -16196,7 +16196,7 @@ async fn block_sync_update_drops_qc_height_mismatch() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -16427,7 +16427,7 @@ async fn block_sync_update_drops_qc_epoch_mismatch() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -16564,7 +16564,7 @@ async fn block_sync_update_records_commit_qc_from_cached_qc() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -18517,7 +18517,7 @@ async fn block_sync_update_known_block_reuses_cached_block_signers() {
         let idx = signature_topology
             .position(peer.public_key())
             .expect("signer index in topology");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -24789,8 +24789,8 @@ async fn fetch_pending_block_keeps_rbc_transport_rebuildable_when_da_enabled() {
             .is_none(),
         "RBC INIT rebuild must reject non-canonical payload bytes even when their hash matches"
     );
-    let wrong_key = KeyPair::random();
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block_clone.hash());
+    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block_clone.hash());
     let mut wrong_signed_block = block_clone.clone();
     wrong_signed_block
         .replace_signatures(BTreeSet::from([BlockSignature::new(
@@ -25870,7 +25870,7 @@ async fn block_sync_update_skips_fetch_when_checkpoint_present() {
         view_change_index: 4,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(1, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
 
@@ -26226,7 +26226,7 @@ async fn block_sync_update_drops_mismatched_commit_votes() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -26348,7 +26348,7 @@ async fn block_sync_caches_qc_before_block_known() {
         view_change_index: view,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
 
@@ -26446,7 +26446,7 @@ async fn block_sync_cache_rejects_qc_epoch_mismatch() {
         view_change_index: view,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
 
@@ -26562,7 +26562,7 @@ async fn block_sync_cache_uses_activation_height_mode_tag() {
         view_change_index: view,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
 
@@ -26643,7 +26643,7 @@ async fn process_precommit_qc_allows_realign_on_missing_parent() {
             view_change_index: view,
             confidential_features: None,
         };
-        let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+        let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
         let block_signature = BlockSignature::new(signer_idx, signature);
         SignedBlock::presigned(block_signature, header, Vec::new())
     };
@@ -26741,7 +26741,7 @@ async fn process_precommit_qc_defers_realign_when_locked_payload_missing() {
         view_change_index: 0,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
     let block_hash = block.hash();
@@ -28132,7 +28132,7 @@ async fn quorum_reschedule_near_quorum_replays_votes_without_hydration_on_repeat
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -30126,7 +30126,7 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                 };
                 let preimage = super::vote_preimage(&chain, PERMISSIONED_TAG, &vote);
                 let signature =
-                    Signature::new(actor.common_config.key_pair.private_key(), &preimage);
+                    checked_signature(actor.common_config.key_pair.private_key(), &preimage);
                 vote.bls_sig = signature.payload().to_vec();
                 assert!(
                     !vote.bls_sig.is_empty(),
@@ -49198,7 +49198,7 @@ async fn handle_rbc_ready_drops_on_roster_hash_mismatch() {
     };
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&harness.actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     harness
@@ -49923,7 +49923,7 @@ async fn handle_rbc_ready_when_init_missing_arms_exact_frontier_body_repair() {
     };
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&harness.actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     let _ = take_background_log(&background_log);
@@ -50115,7 +50115,7 @@ async fn handle_rbc_ready_accepts_init_roster_when_derived_missing_permissioned(
     };
     let (_, mode_tag, _prf_seed) = actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -50324,7 +50324,7 @@ async fn handle_rbc_ready_runs_commit_pipeline_when_queue_backlogged() {
     };
     let (_, mode_tag, _) = actor.consensus_context_for_height(height);
     let preimage = super::rbc_ready_preimage(&actor.chain_id, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
     let topology = super::network_topology::Topology::new(roster.clone());
     assert!(
@@ -50455,7 +50455,7 @@ async fn handle_rbc_ready_drops_when_derived_roster_mismatches() {
     };
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&harness.actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     harness
@@ -50579,7 +50579,7 @@ async fn handle_rbc_ready_refreshes_roster_on_unverified_mismatch() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -50688,7 +50688,7 @@ async fn handle_rbc_ready_drops_stale_init_roster_after_derived_refresh() {
     };
     let (_, mode_tag, _prf_seed) = actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -50782,7 +50782,7 @@ async fn handle_rbc_deliver_drops_on_roster_hash_mismatch() {
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let preimage =
         super::rbc_deliver_preimage(&harness.actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     harness
@@ -50890,7 +50890,7 @@ async fn handle_rbc_deliver_refreshes_roster_when_unverified() {
     };
     let preimage =
         super::rbc_deliver_preimage(&harness.actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     harness
@@ -51008,7 +51008,7 @@ async fn handle_rbc_deliver_drops_stale_init_roster_after_derived_refresh() {
     };
     let (_, mode_tag, _prf_seed) = actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -51161,7 +51161,7 @@ async fn handle_rbc_deliver_with_authoritative_payload_still_defers_without_read
         ready_signatures: Vec::new(),
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -51271,7 +51271,7 @@ async fn handle_rbc_deliver_emits_ready_before_deferring_ready_quorum_missing() 
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         ready_signatures.push(crate::sumeragi::consensus::RbcReadySignature {
             sender: ready.sender,
@@ -51297,7 +51297,7 @@ async fn handle_rbc_deliver_emits_ready_before_deferring_ready_quorum_missing() 
         ready_signatures,
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    let signature = checked_signature(deliver_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     let _ = take_background_log(&background_log);
@@ -51400,7 +51400,7 @@ async fn handle_rbc_deliver_rejects_malformed_ready_bundles() {
     let (_, mode_tag, _prf_seed) = actor.consensus_context_for_height(height);
     let resign_deliver = |deliver: &mut crate::sumeragi::consensus::RbcDeliver| {
         let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, deliver);
-        let signature = Signature::new(actor.common_config.key_pair.private_key(), &preimage);
+        let signature = checked_signature(actor.common_config.key_pair.private_key(), &preimage);
         deliver.signature = signature.payload().to_vec();
     };
     let mut cases = Vec::new();
@@ -51527,7 +51527,7 @@ async fn handle_rbc_deliver_drops_when_derived_roster_mismatches() {
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let preimage =
         super::rbc_deliver_preimage(&harness.actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     harness
@@ -58070,7 +58070,7 @@ async fn block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         if stashed_ready.is_none() {
             stashed_ready = Some(ready.clone());
@@ -58114,7 +58114,7 @@ async fn block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_
     };
     let deliver_preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let deliver_signature = Signature::new(deliver_kp.private_key(), &deliver_preimage);
+    let deliver_signature = checked_signature(deliver_kp.private_key(), &deliver_preimage);
     deliver.signature = deliver_signature.payload().to_vec();
 
     actor
@@ -60056,7 +60056,7 @@ async fn handle_rbc_ready_rejects_chunk_root_mismatch() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, actor.mode_tag(), &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -60149,7 +60149,7 @@ async fn handle_rbc_ready_rejects_mismatched_session_metadata() {
     };
     let (_, mode_tag, _) = actor.consensus_context_for_height(height);
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -60237,7 +60237,7 @@ async fn handle_rbc_ready_rejects_forged_leader_signature_metadata() {
     };
     let (_, mode_tag, _) = actor.consensus_context_for_height(height);
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -60343,7 +60343,7 @@ async fn handle_rbc_ready_conflict_invalidates_and_clears_pending_deferrals() {
     };
     let (_, mode_tag, _) = actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -60439,7 +60439,7 @@ async fn handle_rbc_ready_sets_expected_chunk_root_when_missing() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, actor.mode_tag(), &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -60507,7 +60507,7 @@ async fn handle_rbc_ready_emits_local_ready_after_quorum() {
         };
         let preimage =
             super::rbc_ready_preimage(&actor.common_config.chain, actor.mode_tag(), &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
 
         actor.handle_rbc_ready(ready).expect("ready handled");
@@ -60730,7 +60730,7 @@ async fn handle_rbc_deliver_rejects_chunk_root_mismatch() {
     };
     let preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, actor.mode_tag(), &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -60840,7 +60840,7 @@ async fn handle_rbc_deliver_rejects_mismatched_session_metadata() {
         ready_signatures: Vec::new(),
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    let signature = checked_signature(deliver_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -60959,7 +60959,7 @@ async fn handle_rbc_deliver_rejects_forged_leader_signature_metadata() {
         ready_signatures: Vec::new(),
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    let signature = checked_signature(deliver_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -61116,7 +61116,7 @@ async fn handle_rbc_deliver_without_ready_quorum_defers_for_rbc_only_payload() {
     };
     let (_, mode_tag, _) = actor.consensus_context_for_height(height);
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -61214,7 +61214,7 @@ async fn handle_rbc_deliver_force_quorum_one_still_requires_protocol_quorum_for_
         signature: Vec::new(),
     };
     let ready_preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let ready_signature = Signature::new(signer_kp.private_key(), &ready_preimage);
+    let ready_signature = checked_signature(signer_kp.private_key(), &ready_preimage);
     ready.signature = ready_signature.payload().to_vec();
 
     let mut deliver = crate::sumeragi::consensus::RbcDeliver {
@@ -61233,7 +61233,7 @@ async fn handle_rbc_deliver_force_quorum_one_still_requires_protocol_quorum_for_
     };
     let deliver_preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let deliver_signature = Signature::new(signer_kp.private_key(), &deliver_preimage);
+    let deliver_signature = checked_signature(signer_kp.private_key(), &deliver_preimage);
     deliver.signature = deliver_signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -61455,7 +61455,7 @@ async fn handle_rbc_deliver_rejects_missing_chunks_when_local_payload_conflicts_
     };
     let deliver_preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let deliver_signature = Signature::new(deliver_kp.private_key(), &deliver_preimage);
+    let deliver_signature = checked_signature(deliver_kp.private_key(), &deliver_preimage);
     deliver.signature = deliver_signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -61689,7 +61689,7 @@ async fn handle_rbc_deliver_records_payload_bytes_from_complete_rs16_chunks() {
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         assert!(session.record_ready_with_roster_hash(
             ready.sender,
@@ -61787,7 +61787,7 @@ async fn handle_rbc_deliver_records_ready_bundle() {
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         ready_signatures.push(crate::sumeragi::consensus::RbcReadySignature {
             sender: ready.sender,
@@ -61818,7 +61818,7 @@ async fn handle_rbc_deliver_records_ready_bundle() {
         ready_signatures,
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    let signature = checked_signature(deliver_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -61903,7 +61903,7 @@ async fn handle_rbc_deliver_emits_local_ready_after_ready_bundle() {
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         ready_signatures.push(crate::sumeragi::consensus::RbcReadySignature {
             sender: ready.sender,
@@ -61939,7 +61939,7 @@ async fn handle_rbc_deliver_emits_local_ready_after_ready_bundle() {
         ready_signatures,
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    let signature = checked_signature(deliver_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -62032,7 +62032,7 @@ async fn handle_rbc_deliver_relay_ready_bundle_before_deferring() {
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         if deliver_signer.is_none() {
             deliver_signer = Some((peer.clone(), sender));
@@ -62066,7 +62066,7 @@ async fn handle_rbc_deliver_relay_ready_bundle_before_deferring() {
         ready_signatures,
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    let signature = checked_signature(deliver_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -62165,7 +62165,7 @@ async fn rbc_ready_gossips_to_sampled_peers() {
         harness.actor.mode_tag(),
         &ready,
     );
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
     let sender = ready.sender;
 
@@ -62283,7 +62283,7 @@ async fn rbc_ready_uses_session_roster_after_topology_change() {
         harness.actor.mode_tag(),
         &ready,
     );
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     let roster_b: Vec<_> = roster_a
@@ -62418,7 +62418,7 @@ async fn rbc_session_roster_persists_across_restart_with_roster_change() {
         harness.actor.mode_tag(),
         &ready,
     );
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
     let ready_sender = ready.sender;
 
@@ -62837,7 +62837,7 @@ async fn rbc_deliver_bundle_ready_on_incomplete_delivered_session_refreshes_prog
     deliver.ready_signatures = vec![ready_signature.clone()];
     let (_, mode_tag, _) = actor.consensus_context_for_height(height);
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(actor.common_config.key_pair.private_key(), &preimage);
+    let signature = checked_signature(actor.common_config.key_pair.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
@@ -62957,7 +62957,7 @@ async fn rbc_deliver_bundle_conflicting_ready_invalidates_session_and_clears_pen
     deliver.ready_signatures = vec![ready_signature.clone()];
     let (_, mode_tag, _) = actor.consensus_context_for_height(height);
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(actor.common_config.key_pair.private_key(), &preimage);
+    let signature = checked_signature(actor.common_config.key_pair.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
     let total_chunks = session.total_chunks();
     let received_chunks = session.received_chunks();
@@ -63141,7 +63141,7 @@ async fn late_rbc_ready_after_delivery_does_not_refresh_pending_progress_or_reru
     };
     let (_, mode_tag, _) = actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&actor.chain_id, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     let check_at = Instant::now();
@@ -63416,7 +63416,7 @@ async fn rbc_ready_reaching_quorum_after_authoritative_delivery_wakes_commit_pip
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&actor.chain_id, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     let check_at = Instant::now();
@@ -66067,7 +66067,7 @@ fn manifest_block_guard_rejects_hash_mismatch_on_audit_lane() {
     };
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.into_parts();
-    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), Some(bundle));
 
@@ -70296,7 +70296,10 @@ fn block_sync_selection_prefers_matching_validator_checkpoint_history() {
     let state = state_with_peers_and_keys(&roster, &keypairs);
     let block_header = BlockHeader::new(NonZeroU64::new(7).unwrap(), None, None, None, 0, 0);
     let block_hash = block_header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig.clone(), block_header, Vec::new());
     let chain = state.chain_id.clone();
     let topology = super::network_topology::Topology::new(roster.clone());
@@ -70369,7 +70372,10 @@ fn block_sync_selection_prefers_matching_commit_qc_history() {
     let state = state_with_peers_and_keys(std::slice::from_ref(me_peer.id()), &keypairs);
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD0; Hash::LENGTH]));
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0_u32).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, 1);
@@ -70488,7 +70494,7 @@ fn block_sync_selection_prefers_paired_hints() {
     let block = SignedBlock::presigned(
         BlockSignature::new(
             0,
-            SignatureOf::from_hash(me_kp.private_key(), block_header.hash()),
+            checked_signature_of_hash(me_kp.private_key(), block_header.hash()),
         ),
         block_header,
         Vec::new(),
@@ -70551,8 +70557,10 @@ fn block_sync_selection_uses_persisted_commit_roster_snapshot() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_signature =
-        BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_signature = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_signature.clone(), header, Vec::new());
     let signers_bitmap = vec![0b0000_0001];
     let topology = super::network_topology::Topology::new(roster.clone());
@@ -70676,7 +70684,10 @@ fn block_sync_update_uses_journal_roster() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig.clone(), header, Vec::new());
     let roster = vec![me_peer.id().clone()];
     let mut signers = BTreeSet::new();
@@ -70820,7 +70831,10 @@ fn block_sync_update_includes_commit_qc_from_history() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig.clone(), header, Vec::new());
     let roster = vec![me_peer.id().clone()];
     let mut signers = BTreeSet::new();
@@ -70933,7 +70947,10 @@ fn block_sync_update_includes_commit_qc_from_precommit_signers() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig, header, Vec::new());
     let roster = vec![me_peer.id().clone()];
     let mut signers = BTreeSet::new();
@@ -71028,7 +71045,10 @@ fn block_sync_selection_falls_back_to_exact_precommit_signer_history() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig, header, Vec::new());
     let roster = vec![me_peer.id().clone()];
     let signers = BTreeSet::from([ValidatorIndex::try_from(0_u32).expect("signer index fits")]);
@@ -71156,7 +71176,7 @@ fn block_sync_selection_rejects_precommit_signer_history_without_commit_quorum()
     let block_hash = header.hash();
     let block_sig = BlockSignature::new(
         0,
-        SignatureOf::from_hash(keypairs[0].private_key(), block_hash),
+        checked_signature_of_hash(keypairs[0].private_key(), block_hash),
     );
     let block = SignedBlock::presigned(block_sig, header, Vec::new());
     let signers: BTreeSet<_> = [0_u32, 1_u32]
@@ -71237,7 +71257,10 @@ fn block_sync_update_includes_checkpoint_from_history() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig.clone(), header, Vec::new());
     let roster = vec![me_peer.id().clone()];
     let chain = state.chain_id.clone();
@@ -71349,7 +71372,7 @@ fn block_sync_update_canonicalizes_signature_indices_for_roster() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let signature = SignatureOf::from_hash(kp_b.private_key(), block_hash);
+    let signature = checked_signature_of_hash(kp_b.private_key(), block_hash);
     let block_sig = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_sig, header, Vec::new());
 
@@ -71438,7 +71461,7 @@ fn block_sync_update_uses_activation_height_mode_tag() {
         view_change_index: view,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
 
@@ -71510,7 +71533,8 @@ fn block_sync_update_uses_active_roster_for_checkpoint() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(kp_a.private_key(), block_hash));
+    let block_sig =
+        BlockSignature::new(0, checked_signature_of_hash(kp_a.private_key(), block_hash));
     let block = SignedBlock::presigned(block_sig, header, Vec::new());
 
     let selection = select_block_sync_roster(
@@ -71568,7 +71592,7 @@ fn block_sync_selection_npos_uncertified_falls_back_when_live_keys_filter_empty(
     let header = BlockHeader::new(nonzero!(9_u64), None, None, None, 0, 0);
     let block_hash = header.hash();
     let block = SignedBlock::presigned(
-        BlockSignature::new(0, SignatureOf::from_hash(kp_a.private_key(), block_hash)),
+        BlockSignature::new(0, checked_signature_of_hash(kp_a.private_key(), block_hash)),
         header,
         Vec::new(),
     );
@@ -71636,7 +71660,10 @@ fn block_sync_update_uses_history_after_restart_like_path() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig.clone(), header, Vec::new());
     let roster = vec![me_peer.id().clone()];
     let mut signers = BTreeSet::new();
@@ -71807,7 +71834,10 @@ fn block_sync_roster_rejects_invalid_hint_roster() {
     let header = BlockHeader::new(nonzero!(9_u64), None, None, None, 0, 0);
     let block_hash = header.hash();
     let block = SignedBlock::presigned(
-        BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash)),
+        BlockSignature::new(
+            0,
+            checked_signature_of_hash(me_kp.private_key(), block_hash),
+        ),
         header,
         Vec::new(),
     );
@@ -72036,7 +72066,7 @@ fn block_sync_roster_selection_uses_persisted_journal() {
     let block = SignedBlock::presigned(
         BlockSignature::new(
             0,
-            SignatureOf::from_hash(me_kp.private_key(), block_header.hash()),
+            checked_signature_of_hash(me_kp.private_key(), block_header.hash()),
         ),
         block_header,
         Vec::new(),
@@ -72167,7 +72197,7 @@ fn block_sync_roster_recovers_from_roster_sidecar_after_cache_reset() {
     let block = SignedBlock::presigned(
         BlockSignature::new(
             0,
-            SignatureOf::from_hash(me_kp.private_key(), block_header.hash()),
+            checked_signature_of_hash(me_kp.private_key(), block_header.hash()),
         ),
         block_header,
         Vec::new(),
@@ -81319,7 +81349,7 @@ fn block_sync_update_includes_persisted_roster_artifacts() {
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(0, checked_signature_of_hash(kp.private_key(), block_hash));
     let roster = vec![me_peer.id().clone()];
     let keypairs = vec![kp.clone()];
     let world = World::default();
@@ -81432,7 +81462,7 @@ fn block_sync_update_omits_roster_artifacts_without_metadata() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let block = SignedBlock::presigned(
-        BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash)),
+        BlockSignature::new(0, checked_signature_of_hash(kp.private_key(), block_hash)),
         header,
         Vec::new(),
     );
@@ -81471,7 +81501,7 @@ fn block_sync_update_certified_builder_skips_uncertified_roster_fallback() {
     let header = BlockHeader::new(nonzero!(9_u64), None, None, None, 0, 0);
     let block_hash = header.hash();
     let block = SignedBlock::presigned(
-        BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash)),
+        BlockSignature::new(0, checked_signature_of_hash(kp.private_key(), block_hash)),
         header,
         Vec::new(),
     );
@@ -82950,7 +82980,7 @@ fn validate_checkpoint_roster_binds_chain_order() {
         bls_sig: Vec::new(),
     };
     let preimage = super::vote_preimage(&chain, PERMISSIONED_TAG, &vote);
-    let signature = Signature::new(kp.private_key(), &preimage);
+    let signature = checked_signature(kp.private_key(), &preimage);
     let bls_aggregate_signature =
         iroha_crypto::bls_normal_aggregate_signatures(&[signature.payload()])
             .expect("single-signature aggregate succeeds");
@@ -124275,7 +124305,7 @@ fn rebuild_qc_from_votes_rejects_signature_from_wrong_peer() {
         .find(|kp| kp.public_key() != expected_peer.public_key())
         .expect("topology has a different key for mismatch test");
     let preimage_b = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote_b);
-    let sig_b = Signature::new(wrong_key.private_key(), &preimage_b);
+    let sig_b = checked_signature(wrong_key.private_key(), &preimage_b);
     let payload = sig_b.payload().to_vec();
     vote_b.bls_sig = payload;
 
@@ -124551,7 +124581,7 @@ fn vote_signature_valid_accepts_signed_vote() {
         bls_sig: Vec::new(),
     };
     let preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
 
     assert!(super::vote_signature_valid(
@@ -124585,7 +124615,7 @@ fn vote_signature_valid_rejects_invalid_bls_signature() {
         bls_sig: Vec::new(),
     };
     let preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     let payload = signature.payload().to_vec();
     let mut bad_payload = payload.clone();
     bad_payload[0] ^= 0xFF;
@@ -126778,7 +126808,7 @@ fn resign_qc_for_actor(
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("matching keypair for signer");
-        let sig = Signature::new(kp.private_key(), &preimage);
+        let sig = checked_signature(kp.private_key(), &preimage);
         signatures.push(sig.payload().to_vec());
     }
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -132924,7 +132954,7 @@ async fn handle_evidence_uses_subject_height_prf_seed() {
 
     for vote in [&mut vote_a, &mut vote_b] {
         let preimage = super::vote_preimage(&actor.common_config.chain, super::NPOS_TAG, vote);
-        let sig = Signature::new(keypair.private_key(), &preimage);
+        let sig = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = sig.payload().to_vec();
     }
 
@@ -133025,7 +133055,7 @@ async fn handle_evidence_uses_subject_height_mode_tag() {
 
     for vote in [&mut vote_a, &mut vote_b] {
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, vote);
-        let sig = Signature::new(keypair.private_key(), &preimage);
+        let sig = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = sig.payload().to_vec();
     }
 
@@ -133143,7 +133173,7 @@ async fn handle_vote_uses_height_prf_seed() {
     };
     bind_vote_to_actor_chain_order(&mut vote, actor);
     let preimage = super::vote_preimage(&actor.common_config.chain, super::NPOS_TAG, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     let key = vote_log_key_for_vote(&vote);
 
@@ -133338,7 +133368,7 @@ async fn handle_vote_uses_activation_height_mode_tag() {
     };
     bind_vote_to_actor_chain_order(&mut vote, actor);
     let preimage = super::vote_preimage(&actor.common_config.chain, super::NPOS_TAG, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     let key = vote_log_key_for_vote(&vote);
 
@@ -133509,7 +133539,7 @@ async fn handle_qc_uses_height_prf_seed() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("matching keypair for signer");
-        let sig = Signature::new(kp.private_key(), &preimage);
+        let sig = checked_signature(kp.private_key(), &preimage);
         signatures.push(sig.payload().to_vec());
     }
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -133660,7 +133690,7 @@ async fn handle_qc_uses_activation_height_mode_tag() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("matching keypair for signer");
-        let sig = Signature::new(kp.private_key(), &preimage);
+        let sig = checked_signature(kp.private_key(), &preimage);
         signatures.push(sig.payload().to_vec());
     }
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -140811,7 +140841,7 @@ async fn fresh_proposal_defers_when_split_same_height_votes_make_new_branch_non_
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -147344,7 +147374,7 @@ async fn commit_pipeline_emits_local_precommit_with_live_roster_when_cached_rost
         view_change_index: view,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
     let block_hash = block.hash();
@@ -148516,7 +148546,7 @@ async fn precommit_vote_rejects_newer_conflict_even_when_local_vote_would_comple
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
         seeded = seeded.saturating_add(1);
@@ -150673,7 +150703,7 @@ async fn qc_empty_block_with_time_trigger_is_not_dropped() {
     };
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.into_parts();
-    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::<SignedTransaction>::new());
 
@@ -153254,7 +153284,7 @@ async fn exact_frontier_block_created_flushes_ready_stashed_before_body() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&actor.chain_id, mode_tag, &ready);
-    let signature = Signature::new(ready_key.private_key(), &preimage);
+    let signature = checked_signature(ready_key.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("stash ready");
@@ -166922,7 +166952,7 @@ fn derive_block_sync_qc_from_committed_signers() {
     let mut block = BlockBuilder::new(header).build_with_signature(0, leader_kp.private_key());
     for idx in 1..3 {
         let signer_kp = keypair_at_index(&keypairs, &signature_topology, idx);
-        let sig = SignatureOf::from_hash(signer_kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(signer_kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -167240,7 +167270,7 @@ fn validate_block_sync_qc_accepts_npos_rotated_signers_across_views() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("matching keypair for signer");
-        let sig = Signature::new(kp.private_key(), &preimage);
+        let sig = checked_signature(kp.private_key(), &preimage);
         signatures.push(sig.payload().to_vec());
     }
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -168062,7 +168092,7 @@ fn tally_qc_against_votes_rejects_wrong_signature_key() {
         &kp_a
     };
     let preimage_b = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote_b);
-    let sig_b = Signature::new(wrong_kp.private_key(), &preimage_b);
+    let sig_b = checked_signature(wrong_kp.private_key(), &preimage_b);
     vote_b.bls_sig = sig_b.payload().to_vec();
     let canonical_roster = super::roster::canonicalize_roster(topology.as_ref().to_vec());
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
@@ -168941,7 +168971,7 @@ fn validate_block_for_voting_recovers_stale_signature_indices() {
     let genesis_hash = seed_genesis_block_for_state(&state);
     let mut block =
         heartbeat_block_for_state(&state, &chain, 2, 0, Some(genesis_hash), &leader_kp, 0);
-    let leader_sig = SignatureOf::from_hash(leader_kp.private_key(), block.hash());
+    let leader_sig = checked_signature_of_hash(leader_kp.private_key(), block.hash());
     block
         .replace_signatures(BTreeSet::from([BlockSignature::new(1, leader_sig)]))
         .expect("replace signatures");
@@ -169775,7 +169805,7 @@ fn validate_qc_against_votes_rejects_signature_from_wrong_signer_key() {
         prf_seed,
     );
     let bad_preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &mismatched_vote);
-    let bad_sig = Signature::new(wrong_kp.private_key(), &bad_preimage);
+    let bad_sig = checked_signature(wrong_kp.private_key(), &bad_preimage);
     mismatched_vote.bls_sig = bad_sig.payload().to_vec();
     vote_log.insert(vote_log_key_for_vote(&mismatched_vote), mismatched_vote);
 
@@ -169898,7 +169928,7 @@ fn validate_qc_against_votes_records_invalid_signature_reason_for_mismatched_sig
         prf_seed,
     );
     let bad_preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &mismatched_vote);
-    let bad_sig = Signature::new(wrong_kp.private_key(), &bad_preimage);
+    let bad_sig = checked_signature(wrong_kp.private_key(), &bad_preimage);
     mismatched_vote.bls_sig = bad_sig.payload().to_vec();
     vote_log.insert(vote_log_key_for_vote(&mismatched_vote), mismatched_vote);
 
@@ -170069,7 +170099,7 @@ fn validate_qc_against_votes_fuzzes_mismatched_signers_and_tags_telemetry() {
                 bls_sig: Vec::new(),
             };
             let preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote);
-            let sig = Signature::new(kp.private_key(), &preimage);
+            let sig = checked_signature(kp.private_key(), &preimage);
             vote.bls_sig = sig.payload().to_vec();
             vote_log.insert(vote_log_key_for_vote(&vote), vote);
         }
@@ -170643,7 +170673,7 @@ fn rbc_ready_signature_valid_accepts_signed_frame() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&chain, super::PERMISSIONED_TAG, &ready);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     assert!(super::rbc::rbc_ready_signature_valid(
@@ -170677,7 +170707,7 @@ fn rbc_ready_signature_valid_rejects_domain_and_field_replay() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&chain, super::PERMISSIONED_TAG, &ready);
-    let signature = Signature::new(signer.private_key(), &preimage);
+    let signature = checked_signature(signer.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     assert!(super::rbc::rbc_ready_signature_valid(
@@ -170817,7 +170847,7 @@ fn rbc_ready_signature_valid_rejects_invalid_bls_signature() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&chain, super::PERMISSIONED_TAG, &ready);
-    let mut signature = Signature::new(keypair.private_key(), &preimage)
+    let mut signature = checked_signature(keypair.private_key(), &preimage)
         .payload()
         .to_vec();
     signature[0] ^= 0xFF;
@@ -170851,7 +170881,7 @@ fn rbc_deliver_signature_valid_rejects_out_of_range_sender() {
         ready_signatures: Vec::new(),
     };
     let preimage = super::rbc_deliver_preimage(&chain, super::PERMISSIONED_TAG, &deliver);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     // Sender 1 is out of bounds for the topology; validation must fail.
@@ -170884,7 +170914,7 @@ fn rbc_deliver_signature_valid_rejects_invalid_bls_signature() {
         ready_signatures: Vec::new(),
     };
     let preimage = super::rbc_deliver_preimage(&chain, super::PERMISSIONED_TAG, &deliver);
-    let mut signature = Signature::new(keypair.private_key(), &preimage)
+    let mut signature = checked_signature(keypair.private_key(), &preimage)
         .payload()
         .to_vec();
     signature[0] ^= 0xFF;
@@ -170921,7 +170951,7 @@ fn rbc_deliver_signature_valid_rejects_ready_bundle_tamper() {
         }],
     };
     let preimage = super::rbc_deliver_preimage(&chain, super::PERMISSIONED_TAG, &deliver);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     assert!(super::rbc::rbc_deliver_signature_valid(
@@ -170967,7 +170997,7 @@ fn rbc_deliver_signature_valid_rejects_domain_and_field_replay() {
         }],
     };
     let preimage = super::rbc_deliver_preimage(&chain, super::PERMISSIONED_TAG, &deliver);
-    let signature = Signature::new(signer.private_key(), &preimage);
+    let signature = checked_signature(signer.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     assert!(super::rbc::rbc_deliver_signature_valid(
@@ -176145,7 +176175,7 @@ fn background_bypass_formal_gate_matrix() {
                 let key_pair = KeyPair::random();
                 let leader_signature = BlockSignature::new(
                     0,
-                    SignatureOf::from_hash(key_pair.private_key(), block_hash),
+                    checked_signature_of_hash(key_pair.private_key(), block_hash),
                 );
                 BlockMessage::RbcInit(crate::sumeragi::consensus::RbcInit {
                     block_hash,
@@ -176777,7 +176807,7 @@ async fn precommit_vote_broadcast_uses_background_queue() {
         super::PERMISSIONED_TAG,
         &vote,
     );
-    let signature = Signature::new(
+    let signature = checked_signature(
         harness.actor.common_config.key_pair.private_key(),
         &preimage,
     );
@@ -176827,7 +176857,7 @@ async fn qc_vote_post_bypasses_background_queue() {
         super::PERMISSIONED_TAG,
         &vote,
     );
-    let signature = Signature::new(
+    let signature = checked_signature(
         harness.actor.common_config.key_pair.private_key(),
         &preimage,
     );
@@ -177093,7 +177123,7 @@ async fn background_posts_dispatch_inline_when_worker_disabled() {
         super::PERMISSIONED_TAG,
         &vote,
     );
-    let signature = Signature::new(
+    let signature = checked_signature(
         harness.actor.common_config.key_pair.private_key(),
         &preimage,
     );
@@ -177762,7 +177792,7 @@ fn signed_vrf_commit_for_tests(
         .expect("signing peer in topology");
     let (_, mode_tag, _) = actor.consensus_context_for_height(actor.committed_height_snapshot());
     let preimage = vrf_commit_preimage(&actor.common_config.chain, mode_tag, &commit);
-    let signature = Signature::new(
+    let signature = checked_signature(
         keypair_for_peer(key_pairs, signing_peer).private_key(),
         &preimage,
     );
@@ -178416,7 +178446,7 @@ async fn external_vrf_reveal_broadcasts_after_acceptance() {
     let (consensus_mode, mode_tag, _) = harness.actor.consensus_context_for_height(5);
     assert_eq!(consensus_mode, ConsensusMode::Npos);
     let preimage = vrf_reveal_preimage(&harness.actor.common_config.chain, mode_tag, &reveal_msg);
-    let signature = Signature::new(
+    let signature = checked_signature(
         keypair_for_peer(&harness.key_pairs, &signer_peer).private_key(),
         &preimage,
     );
@@ -178519,7 +178549,7 @@ async fn on_block_message_handles_vrf_reveal_before_commit_catchup_finalizes_epo
     let (consensus_mode, mode_tag, _) = actor.consensus_context_for_height(2);
     assert_eq!(consensus_mode, ConsensusMode::Npos);
     let preimage = vrf_reveal_preimage(&actor.common_config.chain, mode_tag, &reveal_msg);
-    let signature = Signature::new(
+    let signature = checked_signature(
         keypair_for_peer(&harness.key_pairs, &signer_peer).private_key(),
         &preimage,
     );
@@ -180274,7 +180304,7 @@ fn empty_block_for_actor(
     };
     let key_pair = actor.common_config.key_pair.clone();
     let (_, private_key) = key_pair.into_parts();
-    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     SignedBlock::presigned(block_signature, header, Vec::<SignedTransaction>::new())
 }
@@ -183629,7 +183659,7 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_validation_inflight(
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -184319,7 +184349,7 @@ async fn reschedule_defers_near_commit_quorum_while_rbc_chunks_arrive() {
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -184439,7 +184469,7 @@ async fn reschedule_defers_near_commit_quorum_while_block_queue_backlogged() {
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -184559,7 +184589,7 @@ async fn reschedule_defers_near_commit_quorum_with_recent_progress_without_backl
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -184747,7 +184777,7 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -184863,7 +184893,7 @@ async fn reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog()
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -185311,7 +185341,7 @@ async fn reschedule_ignores_vote_backed_quorum_timeout_rbc_queue_backlog() {
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -185425,7 +185455,7 @@ async fn reschedule_skips_vote_backed_quorum_timeout_while_progress_is_recent() 
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -185519,7 +185549,7 @@ async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_heigh
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -185668,7 +185698,7 @@ async fn reschedule_preemptively_retransmits_single_vote_frontier_once_fast_wind
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -185803,7 +185833,7 @@ async fn reschedule_single_vote_frontier_retransmits_before_full_quorum_timeout(
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -185949,7 +185979,7 @@ async fn reschedule_vote_backed_frontier_retransmits_block_created_to_missing_vo
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
     let local_peer = actor.common_config.peer.id().clone();
@@ -186112,7 +186142,7 @@ async fn reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_w
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -186280,7 +186310,7 @@ async fn reschedule_skips_vote_backed_retransmit_while_same_height_rbc_sender_ac
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -186814,7 +186844,7 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogge
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -191446,7 +191476,7 @@ fn empty_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> S
     };
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.into_parts();
-    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     SignedBlock::presigned(block_signature, header, Vec::<SignedTransaction>::new())
 }
@@ -191683,7 +191713,7 @@ fn block_with_txs(
     };
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.into_parts();
-    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     SignedBlock::presigned(block_signature, header, txs)
 }
@@ -191874,7 +191904,7 @@ fn add_commit_quorum_signatures_for_actor(
             .iter()
             .find(|key_pair| key_pair.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let signature = SignatureOf::from_hash(key_pair.private_key(), block.header().hash());
+        let signature = checked_signature_of_hash(key_pair.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(idx_u64, signature))
             .expect("signature added");
@@ -191891,7 +191921,7 @@ fn block_payload_bytes_ignores_results_and_extra_signatures() {
 
     let extra_key = KeyPair::random();
     let (_, extra_private) = extra_key.into_parts();
-    let extra_sig = SignatureOf::from_hash(&extra_private, block.header().hash());
+    let extra_sig = checked_signature_of_hash(&extra_private, block.header().hash());
     block
         .add_signature(BlockSignature::new(1, extra_sig))
         .expect("add signature");
@@ -191921,7 +191951,7 @@ fn block_payload_bytes_ignores_missing_leader_signature() {
 
     let extra_key = KeyPair::random();
     let (_, extra_private) = extra_key.into_parts();
-    let extra_sig = SignatureOf::from_hash(&extra_private, block.header().hash());
+    let extra_sig = checked_signature_of_hash(&extra_private, block.header().hash());
     let mut signatures = BTreeSet::new();
     signatures.insert(BlockSignature::new(1, extra_sig));
     block
@@ -192093,7 +192123,7 @@ fn payload_canonical_stale_header_block(tx: SignedTransaction, seed: u8) -> Sign
         &payload_canonical_previous_roster_evidence(seed),
     )));
     header.set_npos_effects_hash(Some(HashOf::new(&payload_canonical_npos_effects(seed))));
-    let signature = SignatureOf::from_hash(ALICE_KEYPAIR.private_key(), header.hash());
+    let signature = checked_signature_of_hash(ALICE_KEYPAIR.private_key(), header.hash());
     let payload = BlockPayload {
         header,
         transactions: vec![tx.clone()],
@@ -192135,7 +192165,7 @@ fn block_payload_bytes_matches_canonicalization_formal_gate() {
         .expect("test block entrypoint hash should match payload");
 
     let extra_key = KeyPair::random();
-    let extra_signature = SignatureOf::from_hash(extra_key.private_key(), base.header().hash());
+    let extra_signature = checked_signature_of_hash(extra_key.private_key(), base.header().hash());
     let mut extra_signature_block = base.clone();
     extra_signature_block
         .add_signature(BlockSignature::new(1, extra_signature))
@@ -192143,7 +192173,7 @@ fn block_payload_bytes_matches_canonicalization_formal_gate() {
 
     let replacement_key = KeyPair::random();
     let replacement_signature =
-        SignatureOf::from_hash(replacement_key.private_key(), base.header().hash());
+        checked_signature_of_hash(replacement_key.private_key(), base.header().hash());
     let mut missing_leader_signature = base.clone();
     missing_leader_signature
         .replace_signatures(BTreeSet::from([BlockSignature::new(
@@ -193307,7 +193337,7 @@ async fn block_sync_update_accepts_stale_view_when_missing_block_requested() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits"),
@@ -195985,7 +196015,7 @@ async fn block_sync_update_drops_stale_view_without_missing_request() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits"),
@@ -196094,7 +196124,7 @@ async fn block_sync_update_accepts_stale_view_with_commit_qc() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits"),
@@ -196351,7 +196381,7 @@ async fn block_sync_update_accepts_stale_view_with_commit_votes() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits"),
@@ -196469,7 +196499,7 @@ async fn block_sync_update_same_height_conflict_with_block_quorum_stays_passive_
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair");
-        let sig = SignatureOf::from_hash(kp.private_key(), conflicting_block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), conflicting_block.header().hash());
         conflicting_block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits"),

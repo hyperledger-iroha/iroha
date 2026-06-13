@@ -282,31 +282,34 @@ def sample_full_toml_cli_args(*, include_route_canary=True):
 def test_tron_source_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
-    def fail_apply(_args):
-        raise ValueError("secret-token /tmp/operator/private-path")
+    for exception_type in (RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module, "apply_runtime_bytecode_hashes", fail_apply)
+        def fail_apply(_args, exception_type=exception_type):
+            raise exception_type("secret-token /tmp/operator/private-path")
 
-    try:
-        module.main(
-            [
-                "--bridge-address",
-                "0x1111111111111111111111111111111111111111",
-                "--owner-address",
-                "0x2222222222222222222222222222222222222222",
-                "--network-id",
-                "0x" + "33" * 32,
-            ]
-        )
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("TRON source CLI accepted top-level render failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "apply_runtime_bytecode_hashes", fail_apply)
+            try:
+                module.main(
+                    [
+                        "--bridge-address",
+                        "0x1111111111111111111111111111111111111111",
+                        "--owner-address",
+                        "0x2222222222222222222222222222222222222222",
+                        "--network-id",
+                        "0x" + "33" * 32,
+                    ]
+                )
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError("TRON source CLI accepted top-level render failure")
 
-    captured = capsys.readouterr()
-    assert "SCCP TRON source bridge evidence rendering failed" in captured.err
-    assert "secret-token" not in captured.err
-    assert "private-path" not in captured.err
+            captured = capsys.readouterr()
+            assert "SCCP TRON source bridge evidence rendering failed" in captured.err
+            assert "secret-token" not in captured.err
+            assert "private-path" not in captured.err
+            assert exception_type.__name__ not in captured.err
 
 
 def sample_runtime_full_toml_args(module):
@@ -989,6 +992,51 @@ def test_tron_source_bridge_direct_parsers_redact_parser_causes(tmp_path):
             assert exc.__suppress_context__ is True
         else:
             raise AssertionError("TRON source bridge parser leaked nested details")
+
+
+def test_tron_source_bridge_direct_parsers_redact_typeerror_parser_causes(
+    monkeypatch,
+):
+    module = load_evidence_module()
+
+    class SecretBytes:
+        @staticmethod
+        def fromhex(_text):
+            raise TypeError("secret-token TRON source hex TypeError detail")
+
+    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+
+    for parser, value, label, kwargs in (
+        (
+            module.parse_hex_bytes,
+            "0x" + "33" * 32,
+            "network id",
+            {"byte_length": 32},
+        ),
+        (
+            module.parse_runtime_bytecode_hex,
+            "0x" + TRON_SOURCE_RUNTIME_BYTECODE,
+            "source bridge runtime bytecode",
+            {},
+        ),
+        (
+            module.parse_tron_address,
+            "0x" + "11" * 20,
+            "source bridge address",
+            {},
+        ),
+    ):
+        try:
+            parser(value, label=label, **kwargs)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == f"{label} must be hex"
+            assert "secret-token" not in rendered
+            assert "TypeError" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"{label} parser TypeError was accepted")
 
 
 def test_parse_runtime_bytecode_hex_rejects_padded_inline_text(tmp_path):

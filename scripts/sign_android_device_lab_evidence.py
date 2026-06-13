@@ -65,7 +65,7 @@ def _validate_json_output_path(path: Path, label: str) -> list[str]:
         return errors
     if not parent_exists:
         try:
-            parent.mkdir(parents=True, exist_ok=True)
+            parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         except OSError:
             errors.append(f"{label} parent directory could not be created")
     if errors:
@@ -88,6 +88,12 @@ def _validate_json_output_path(path: Path, label: str) -> list[str]:
     )
     if errors:
         return errors
+    permission_errors = _set_private_directory_permissions(
+        parent,
+        f"{label} parent directory",
+    )
+    if permission_errors:
+        return permission_errors
 
     try:
         mode = path.lstat().st_mode
@@ -146,6 +152,35 @@ def _directory_open_flags() -> int:
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     return flags
+
+
+def _set_private_directory_permissions(path: Path, label: str) -> list[str]:
+    try:
+        dir_fd = os.open(path, _directory_open_flags())
+    except OSError:
+        return [f"{label} permissions could not be set"]
+    try:
+        try:
+            directory_stat = os.fstat(dir_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        try:
+            os.fchmod(dir_fd, 0o700)
+        except OSError:
+            return [f"{label} permissions could not be set"]
+        try:
+            directory_stat = os.fstat(dir_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        if stat.S_IMODE(directory_stat.st_mode) != 0o700:
+            return [f"{label} permissions must be 0700"]
+    finally:
+        os.close(dir_fd)
+    return []
 
 
 def _sync_output_parent(
@@ -207,6 +242,8 @@ def _validate_existing_json_output_path(path: Path, label: str) -> list[str]:
         return [f"{label} must not be a symlink"]
     if not stat.S_ISREG(mode):
         return [f"{label} must be a regular file"]
+    if stat.S_IMODE(mode) != 0o600:
+        return [f"{label} permissions must be 0600"]
     try:
         link_count = path.stat().st_nlink
     except OSError:
@@ -394,6 +431,7 @@ def _write_text_atomic(
         ) as handle:
             tmp_path = Path(handle.name)
             tmp_identity = _file_identity(os.fstat(handle.fileno()))
+            os.fchmod(handle.fileno(), 0o600)
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())

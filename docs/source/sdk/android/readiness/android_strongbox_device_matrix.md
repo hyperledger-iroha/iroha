@@ -119,6 +119,13 @@ Production release criteria:
 	  signed-evidence payload fields, and signed-evidence artifact digests.
 	  The raw puller and slot assembler enforce the same non-zero digest rule
 	  before installing raw device output or publishing signed slot metadata.
+	  The signed-slot assembler, attestation-report writer, and signed-evidence
+	  helper also force the device-lab root, report output parent, staging
+	  directories, published slot directories, copied artifacts,
+	  `attestation/report.json`, `slot.json`, `sha256sum.txt`, and
+	  `evidence/signed-evidence.json` to private host permissions (`0700` for
+	  directories and `0600` for files), then verify those modes before success
+	  so production evidence confidentiality does not depend on the host umask.
 	  Direct slot-file discovery reports unreadable slot-root and
 	  artifact-directory metadata through caller error lists, returns no artifacts
 	  for secret-looking slot paths, symlinked slot ancestors, missing roots,

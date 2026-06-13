@@ -2278,7 +2278,7 @@ def test_all_lanes_cli_redacts_top_level_exception_details(
 ):
     module = load_evidence_module()
 
-    for exception_type in (RuntimeError, TypeError):
+    for exception_type in (RuntimeError, TypeError, ValueError):
 
         def fail_load(_paths, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")
@@ -5603,6 +5603,44 @@ def test_all_lanes_base64_helper_redacts_parser_causes(monkeypatch):
                 raise AssertionError("all-lanes base64 helper accepted invalid base64")
 
 
+def test_all_lanes_hex_helpers_redact_typeerror_parser_causes(monkeypatch):
+    module = load_evidence_module()
+
+    class SecretBytes:
+        @staticmethod
+        def fromhex(_text):
+            raise TypeError("secret-token all-lanes hex TypeError detail")
+
+    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+
+    assert module._hex_bytes("0x" + "11" * 32, byte_length=32) is None
+    assert module._exact_hex_bytes("0x" + "22" * 32, byte_length=32) is None
+
+    for helper, field, expected_message in (
+        (
+            module._required_hex_bytes,
+            "source_verifier_material_hash",
+            "source_verifier_material_hash must be a 32-byte hex value",
+        ),
+        (
+            module._required_exact_hex_bytes,
+            "destination_binding_hash",
+            "destination_binding_hash must be an exact 32-byte hex value",
+        ),
+    ):
+        try:
+            helper({field: "0x" + "33" * 32}, field, byte_length=32)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert "TypeError" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is False
+        else:
+            raise AssertionError(f"{field} helper TypeError was accepted")
+
+
 def test_all_lanes_rejects_solana_programdata_invalid_executable_base64():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -5678,6 +5716,50 @@ def test_all_lanes_redacts_solana_route_canary_base64_comment_failures():
     assert "secret-token" not in rendered
     assert "must be base64" not in rendered
     assert "canonical base64" not in rendered
+
+
+def test_all_lanes_solana_base64_callers_redact_typeerror_helper_causes(
+    monkeypatch,
+) -> None:
+    """Solana all-lanes base64 callers must not leak helper TypeErrors."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    sol_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_SOL)
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_SOL]
+    material = records["sccp_source_verifier_materials"][sol_index]
+    deployment = records["sccp_source_adapter_engine_deployments"][sol_index]
+    destination = records["sccp_destination_rollouts"][sol_index]
+    route = records["sccp_route_allowlists"][sol_index]
+    source_hashes = module._canonical_source_record_hashes(
+        profile,
+        material,
+        deployment,
+    )
+
+    def fail_base64(_value, *, label):
+        raise TypeError(f"secret-token all-lanes {label} TypeError detail")
+
+    monkeypatch.setattr(module, "_decode_canonical_base64", fail_base64)
+
+    destination_errors = module._check_solana_live_programdata_evidence(destination)
+    route_errors = module._check_solana_route_canary_live_program_evidence(
+        route,
+        destination_record=destination,
+        source_record_hashes=source_hashes,
+        evidence_hash=raw_hex(route["_comment_route_canary_evidence_hash"]),
+        route_allowlist_hash=raw_hex(route["route_allowlist_hash"]),
+        destination_binding_hash=raw_hex(destination["destination_binding_hash"]),
+        canary={},
+    )
+    rendered = "\n".join([*destination_errors, *route_errors])
+
+    assert "Solana Program account data base64 metadata is invalid" in destination_errors
+    assert "Solana ProgramData metadata base64 metadata is invalid" in destination_errors
+    assert "Solana route canary Program account data is invalid" in route_errors
+    assert "Solana route canary ProgramData metadata is invalid" in route_errors
+    assert "secret-token" not in rendered
+    assert "TypeError" not in rendered
 
 
 def test_all_lanes_redacts_solana_programdata_parser_failures(

@@ -4576,6 +4576,124 @@ fn is_kagemusha_recursive_compact_unavailable_error(err: &str) -> bool {
     )
 }
 
+fn kagemusha_sample_pallas_coeffs(n: usize) -> Vec<iroha_zkp_halo2::pallas::Scalar> {
+    (0..n)
+        .map(|index| iroha_zkp_halo2::pallas::Scalar::from((index + 1) as u64))
+        .collect()
+}
+
+fn kagemusha_build_pallas_open_envelope_with_metadata(
+    n: usize,
+    label: &str,
+    metadata: iroha_zkp_halo2::PolyOpenTranscriptMetadata,
+) -> PyResult<iroha_zkp_halo2::OpenVerifyEnvelope> {
+    let params = iroha_zkp_halo2::pallas::Params::new(n).map_err(|err| {
+        PyRuntimeError::new_err(format!("failed to build Pallas opening parameters: {err}"))
+    })?;
+    let poly = iroha_zkp_halo2::pallas::Polynomial::from_coeffs(kagemusha_sample_pallas_coeffs(n));
+    let commitment = poly.commit(&params).map_err(|err| {
+        PyRuntimeError::new_err(format!("failed to commit Pallas opening polynomial: {err}"))
+    })?;
+    let z = iroha_zkp_halo2::pallas::Scalar::from(5_u64);
+    let mut transcript = iroha_zkp_halo2::Transcript::new(label);
+    let (proof, t) = poly
+        .open_with_metadata(&params, &mut transcript, z, commitment, metadata)
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!("failed to build Pallas opening proof: {err}"))
+        })?;
+    Ok(iroha_zkp_halo2::OpenVerifyEnvelope {
+        params: iroha_zkp_halo2::norito_helpers::params_to_wire(&params),
+        public: iroha_zkp_halo2::norito_helpers::poly_open_public::<
+            iroha_zkp_halo2::pallas::PallasBackend,
+        >(params.n(), z, t, commitment),
+        proof: iroha_zkp_halo2::norito_helpers::proof_to_wire(&proof),
+        transcript_label: label.to_owned(),
+        vk_commitment: metadata.vk_commitment,
+        public_inputs_schema_hash: metadata.public_inputs_schema_hash,
+        domain_tag: metadata.domain_tag,
+    })
+}
+
+fn kagemusha_pallas_open_envelopes_from_record_bundle(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+) -> PyResult<Vec<iroha_zkp_halo2::OpenVerifyEnvelope>> {
+    let n = usize::try_from(iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN)
+        .map_err(|_| {
+            PyRuntimeError::new_err("unsupported Kagemusha recursive compact opening length")
+        })?;
+    let mut envelopes = Vec::with_capacity(record_bundle.bundle.steps.len());
+    for (hop_index, step) in record_bundle.bundle.steps.iter().enumerate() {
+        let metadata = iroha_core::zk::kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+            &record_bundle.bundle.chain_id,
+            &record_bundle.bundle.asset,
+            hop_index,
+            step,
+        )
+        .map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid Kagemusha record bundle for Pallas open envelopes: {err}"
+            ))
+        })?;
+        let label = format!("kagemusha-recursive-spend-hop-open-v1-{hop_index}");
+        envelopes.push(kagemusha_build_pallas_open_envelope_with_metadata(
+            n, &label, metadata,
+        )?);
+    }
+    Ok(envelopes)
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_build_pallas_open_envelopes_archive")]
+fn kagemusha_build_pallas_open_envelopes_archive_py(
+    py: Python<'_>,
+    record_bundle_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
+        decode_kagemusha_recursive_archive(record_bundle_archive, "Kagemusha record bundle")?;
+    let envelopes = kagemusha_pallas_open_envelopes_from_record_bundle(&record_bundle)?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &envelopes,
+        "failed to encode Kagemusha Pallas open-envelope archive",
+    )
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_build_previous_proof_open_envelopes_archive")]
+fn kagemusha_build_previous_proof_open_envelopes_archive_py(
+    py: Python<'_>,
+    previous_bundle_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let previous_bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 =
+        decode_kagemusha_recursive_archive(
+            previous_bundle_archive,
+            "Kagemusha recursive spend previous bundle",
+        )?;
+    let metadata =
+        iroha_data_model::offline::kagemusha_recursive_previous_proof_open_envelope_metadata(
+            &previous_bundle,
+        )
+        .map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid Kagemusha recursive spend previous bundle for Pallas open envelopes: {err}"
+            ))
+        })?;
+    let n = usize::try_from(iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN)
+        .map_err(|_| {
+            PyRuntimeError::new_err("unsupported Kagemusha recursive compact opening length")
+        })?;
+    let envelope = kagemusha_build_pallas_open_envelope_with_metadata(
+        n,
+        "kagemusha-recursive-spend-previous-open-v1",
+        metadata,
+    )?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &vec![envelope],
+        "failed to encode Kagemusha previous proof open-envelope archive",
+    )
+}
+
 #[pyfunction]
 #[pyo3(name = "kagemusha_prove_verified_compact_payment_token_with_records")]
 fn kagemusha_prove_verified_compact_payment_token_with_records_py(
@@ -21921,6 +22039,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         build_confidential_asset_hidden_transfer_proof_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_build_pallas_open_envelopes_archive_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_build_previous_proof_open_envelopes_archive_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

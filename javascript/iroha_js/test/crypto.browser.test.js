@@ -274,6 +274,11 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
       `${label} browser build must not expose native recursive aggregation prover`,
     );
     assert.equal(
+      crypto.isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(),
+      false,
+      `${label} browser build must not expose native Pallas open-envelope builders`,
+    );
+    assert.equal(
       crypto.isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable(),
       false,
       `${label} browser build must not expose native recursive spend compact projection`,
@@ -299,6 +304,16 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
         crypto.kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(),
       /unavailable in browser-only crypto builds/,
       `${label} recursive compact prover must be native-only`,
+    );
+    assert.throws(
+      () => crypto.kagemushaBuildPallasOpenEnvelopesArchive(),
+      /unavailable in browser-only crypto builds/,
+      `${label} Pallas open-envelope builder must be native-only`,
+    );
+    assert.throws(
+      () => crypto.kagemushaBuildPreviousProofOpenEnvelopesArchive(),
+      /unavailable in browser-only crypto builds/,
+      `${label} previous proof open-envelope builder must be native-only`,
     );
     assert.throws(
       () => crypto.kagemushaRecursiveSpendCompactPaymentTokenFromBundle(),

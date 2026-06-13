@@ -85,7 +85,7 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
+    except (TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -105,7 +105,7 @@ def parse_code_boc_hex(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must have an even hex length")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
+    except (TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
@@ -124,7 +124,7 @@ def parse_code_boc_base64(value: str, *, label: str) -> bytes:
         raw = base64.b64decode(text, validate=True)
         if base64.b64encode(raw).decode("ascii") != text:
             raise argparse.ArgumentTypeError(f"{label} must be canonical base64")
-    except binascii.Error:
+    except (TypeError, ValueError, binascii.Error):
         if any(symbol not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=" for symbol in text):
             raise argparse.ArgumentTypeError(
                 f"{label} must be base64 or base64url"
@@ -132,7 +132,7 @@ def parse_code_boc_base64(value: str, *, label: str) -> bytes:
         padded = text + ("=" * ((4 - len(text) % 4) % 4))
         try:
             raw = base64.urlsafe_b64decode(padded)
-        except binascii.Error as exc:
+        except (TypeError, ValueError, binascii.Error):
             raise argparse.ArgumentTypeError(
                 f"{label} must be base64 or base64url"
             ) from None
@@ -1777,7 +1777,7 @@ def main(argv: list[str] | None = None) -> int:
                     indent=2,
                 )
             )
-    except (OSError, ValueError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP TON destination evidence rendering failed",

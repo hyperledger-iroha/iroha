@@ -1252,9 +1252,14 @@ TEXT_REQUIREMENTS = {
         'if ".." in path.parts:\n        return [f"{label} must be canonical"]',
         '    parent_exists, parent_errors = _validate_json_output_parent(path, label)\n    errors.extend(parent_errors)\n    if errors:\n        return errors\n',
         '    errors.extend(\n        device_lab.validate_no_symlink_ancestors(\n            path,\n            f"{label} ancestor directory",\n        )\n    )\n    if errors:\n        return errors\n    if not parent_exists:\n',
-        '    if not parent_exists:\n        try:\n            parent.mkdir(parents=True, exist_ok=True)\n        except OSError:\n            errors.append(f"{label} parent directory could not be created")\n',
+        '    if not parent_exists:\n        try:\n            parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n        except OSError:\n            errors.append(f"{label} parent directory could not be created")\n',
         '    parent_exists, parent_errors = _validate_json_output_parent(\n        path,\n        label,\n        missing_error=f"{label} parent must be a directory",\n    )\n    errors.extend(parent_errors)\n    if not parent_exists and not errors:\n        errors.append(f"{label} parent must be a directory")\n',
-        '        try:\n            parent.mkdir(parents=True, exist_ok=True)\n        except OSError:\n            errors.append(f"{label} parent directory could not be created")\n',
+        "def _set_private_directory_permissions",
+        "os.fchmod(dir_fd, 0o700)",
+        "stat.S_IMODE(directory_stat.st_mode) != 0o700",
+        "os.fchmod(handle.fileno(), 0o600)",
+        'if stat.S_IMODE(mode) != 0o600:',
+        '        try:\n            parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n        except OSError:\n            errors.append(f"{label} parent directory could not be created")\n',
         'def _validate_json_output_parent(\n    path: Path,\n    label: str,\n    *,\n    missing_error: str | None = None,\n) -> tuple[bool, list[str]]:\n    """Classify a signer-controlled output parent without following aliases."""\n\n    parent = path.parent\n    try:\n        parent_mode = parent.lstat().st_mode\n    except FileNotFoundError:\n        if missing_error is None:\n            return False, []\n        return False, [missing_error]\n    except OSError:\n        return False, [f"{label} parent directory metadata could not be read"]\n',
         '    if stat.S_ISLNK(parent_mode):\n        return True, [f"{label} parent directory must not be a symlink"]\n    if not stat.S_ISDIR(parent_mode):\n        return True, [f"{label} parent must be a directory"]\n    return True, []\n',
         '    try:\n        mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return errors\n    except OSError:\n        errors.append(f"{label} file metadata could not be read")\n        return errors\n    if stat.S_ISLNK(mode):\n        errors.append(f"{label} must not be a symlink")\n',
@@ -1391,6 +1396,9 @@ TEXT_REQUIREMENTS = {
         "expected_device_model=facts[\"device_model\"]",
         "expected_device_codename=facts[\"device_codename\"]",
         "device_lab.validate_no_symlink_ancestors(",
+        "def _set_private_directory_permissions",
+        "os.fchmod(dir_fd, 0o700)",
+        "stat.S_IMODE(directory_stat.st_mode) != 0o700",
         'f"{label} path must not contain control characters"',
         'f"{label} path must not contain backslashes"',
         'f"{label} path must be canonical"',
@@ -1404,8 +1412,10 @@ TEXT_REQUIREMENTS = {
         "verify_errors = _verify_copied_file(",
         "if verify_errors:",
         "def _write_json(",
+        "path.parent.mkdir(mode=0o700",
         "def _cleanup_temp_output(",
         "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "os.fchmod(handle.fileno(), 0o600)",
         "_file_identity(temp_stat) != expected_identity",
         "os.unlink(path.name, dir_fd=parent_fd)",
         "temporary output changed before cleanup",
@@ -1415,6 +1425,7 @@ TEXT_REQUIREMENTS = {
         "def _verify_written_bytes(",
         "return _verify_written_bytes(path, encoded, label)",
         "changed after write",
+        "permissions must be 0600",
         "def _single_safe_slot_id(slot_id: str) -> str | None:",
         "candidate.as_posix() != slot_id",
         'or "\\\\" in slot_id',
@@ -1429,6 +1440,10 @@ TEXT_REQUIREMENTS = {
         "src_dir_fd=temp_parent_fd",
         "dst_dir_fd=root_fd",
         "os.fsync(root_fd)",
+        "root.mkdir(mode=0o700)",
+        "stage_slot.mkdir(mode=0o700)",
+        "destination.parent.mkdir(mode=0o700",
+        "os.fchmod(out.fileno(), 0o600)",
         "slot root directory changed before publish",
         "staged slot directory changed before publish",
         "def _cleanup_temp_parent(",
@@ -1577,6 +1592,7 @@ TEXT_REQUIREMENTS = {
         "raw latest-slot output must not be a symlink after writing",
         "raw latest-slot output must not be hardlinked after writing",
         "raw latest-slot output changed while being read back",
+        "raw latest-slot output permissions must be 0600",
         "expected_identity=root_identity",
         "def _cleanup_temp_output(",
         "temp_identity = _file_identity(os.fstat(output.fileno()))",
@@ -1666,6 +1682,7 @@ TEXT_REQUIREMENTS = {
         "raw pull summary output must not be a symlink after writing",
         "raw pull summary output must not be hardlinked after writing",
         "raw pull summary output changed while being read back",
+        "raw pull summary output permissions must be 0600",
         "expected_identity = _file_identity(expected_stat)",
         "with path.open(\"rb\") as readback_handle:",
         "_file_identity(final_stat) != expected_identity",
@@ -1759,7 +1776,12 @@ TEXT_REQUIREMENTS = {
         "attestation certificate chain path must be canonical",
         "device_lab.ATTESTATION_REPORT_SCHEMA",
         "device_lab.validate_summary_output_path(path, label)",
+        "def _set_private_directory_permissions",
+        "os.fchmod(dir_fd, 0o700)",
+        "stat.S_IMODE(directory_stat.st_mode) != 0o700",
         "tmp_identity = device_lab._file_identity(os.fstat(handle.fileno()))",
+        "os.fchmod(handle.fileno(), 0o600)",
+        "stat.S_IMODE(expected_stat.st_mode) != 0o600",
         "write_errors.extend(_cleanup_temp_output(tmp_path, label, tmp_identity))",
         "temporary file changed before cleanup",
         "device_lab._file_identity(temp_stat) != expected_identity",
@@ -2246,6 +2268,7 @@ TEXT_REQUIREMENTS = {
         "_file_identity(temp_stat) != expected_identity",
         "os.unlink(path.name, dir_fd=parent_fd)",
         "tempfile.NamedTemporaryFile(",
+        "os.fchmod(handle.fileno(), 0o600)",
         "handle.flush()",
         "os.fsync(handle.fileno())",
         "os.replace(tmp_path, path)",
@@ -2253,6 +2276,8 @@ TEXT_REQUIREMENTS = {
         "summary_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "summary_open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "--summary-out changed while being read",
+        "stat.S_IMODE(open_stat.st_mode) != 0o600",
+        "--summary-out permissions must be 0600",
         "if open_stat.st_size > MAX_READINESS_SUMMARY_JSON_BYTES:",
         "if size > MAX_READINESS_SUMMARY_JSON_BYTES:",
         'f"--summary-out must be no more than {MAX_READINESS_SUMMARY_JSON_BYTES} bytes"',
@@ -2352,7 +2377,7 @@ TEXT_REQUIREMENTS = {
         "preflight_output_path",
         'def preflight_output_path(path: Path, label: str) -> list[str]:\n    """Reject aliased output paths before evidence inputs are read."""\n\n    secret_error = _secret_path_error(str(path), label)\n    if secret_error is not None:\n        return [secret_error]\n',
         '    parent_exists, parent_errors = _validate_output_parent(path, label)\n    if parent_errors:\n        return parent_errors\n',
-        '    output_ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if output_ancestor_errors:\n        return output_ancestor_errors\n    if not parent_exists:\n        try:\n            parent.mkdir(parents=True, exist_ok=True)\n        except OSError:\n            return [f"{label} parent directory could not be created"]\n',
+        '    output_ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if output_ancestor_errors:\n        return output_ancestor_errors\n    if not parent_exists:\n        try:\n            parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n        except OSError:\n            return [f"{label} parent directory could not be created"]\n',
         '    parent_exists, parent_errors = _validate_output_parent(\n        path,\n        label,\n        missing_error=f"{label} parent must be a directory",\n    )\n    if parent_errors:\n        return parent_errors\n    if not parent_exists:\n        return [f"{label} parent must be a directory"]\n',
         '    try:\n        output_mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return []\n    except OSError:\n        return [f"{label} file metadata could not be read"]\n',
         "if stat.S_ISLNK(output_mode):",
@@ -2361,7 +2386,7 @@ TEXT_REQUIREMENTS = {
         'def _validate_output_parent(\n    path: Path,\n    label: str,\n    *,\n    missing_error: str | None = None,\n) -> tuple[bool, list[str]]:\n    """Classify an output parent without following symlink aliases."""\n\n    parent = path.parent\n    try:\n        parent_mode = parent.lstat().st_mode\n    except FileNotFoundError:\n        if missing_error is None:\n            return False, []\n        return False, [missing_error]\n    except OSError:\n        return False, [f"{label} parent directory metadata could not be read"]\n',
         '    if stat.S_ISLNK(parent_mode):\n        return True, [f"{label} parent directory must not be a symlink"]\n    if not stat.S_ISDIR(parent_mode):\n        return True, [f"{label} parent must be a directory"]\n    return True, []\n',
         "validate_output_path",
-        '    errors = preflight_output_path(path, label)\n    if errors:\n        return errors\n    parent = path.parent\n    parent_exists, parent_errors = _validate_output_parent(path, label)\n    if parent_errors:\n        return parent_errors\n    if not parent_exists:\n        try:\n            parent.mkdir(parents=True, exist_ok=True)\n        except OSError:\n            return [f"{label} parent directory could not be created"]\n    return preflight_output_path(path, label)\n',
+        '    errors = preflight_output_path(path, label)\n    if errors:\n        return errors\n    parent = path.parent\n    parent_exists, parent_errors = _validate_output_parent(path, label)\n    if parent_errors:\n        return parent_errors\n    if not parent_exists:\n        try:\n            parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n        except OSError:\n            return [f"{label} parent directory could not be created"]\n    permission_errors = _set_private_directory_permissions(parent, f"{label} parent")\n    if permission_errors:\n        return permission_errors\n    return preflight_output_path(path, label)\n',
         'early_output_errors = preflight_output_path(out_path, "--out")',
         "--artifact-dir must not be a symlink",
         'f"{label} ancestor directory"',
@@ -2410,7 +2435,14 @@ TEXT_REQUIREMENTS = {
         "missing lineage artifact",
         "wrote evidence",
         "pre_create_dir_errors = validate_artifact_dir_path(artifact_dir)",
-        '    try:\n        artifact_dir.mkdir(parents=True, exist_ok=True)\n    except OSError:\n        return ["--artifact-dir could not be created for evidence validation"]\n',
+        '    try:\n        artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)\n    except OSError:\n        return ["--artifact-dir could not be created for evidence validation"]\n',
+        "def _set_private_directory_permissions",
+        "os.fchmod(dir_fd, 0o700)",
+        "stat.S_IMODE(directory_stat.st_mode) != 0o700",
+        "permission_errors = _set_private_directory_permissions(",
+        "os.fchmod(handle.fileno(), 0o600)",
+        "stat.S_IMODE(expected_stat.st_mode) != 0o600",
+        "--out permissions must be 0600",
         '    except ValueError:\n        return ["lineage proof evidence validation file is not strict JSON"]\n',
         "len(evidence_text.encode(\"utf-8\")) > readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
         "max_bytes=readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
@@ -2490,7 +2522,7 @@ TEXT_REQUIREMENTS = {
         'out_secret_error = _secret_path_error(str(out_path), "--out")',
         'artifact_dir_secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")',
         "pre_create_dir_errors = validate_artifact_dir_path(artifact_dir)",
-        "artifact_dir.mkdir(parents=True, exist_ok=True)",
+        "artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)",
         "post_create_dir_errors = validate_artifact_dir_path(artifact_dir)",
         "--artifact-dir could not be created for evidence validation",
         '    except ValueError:\n        return ["recursive compact key evidence validation file is not strict JSON"]\n',
@@ -2504,7 +2536,14 @@ TEXT_REQUIREMENTS = {
         "preflight_output_path",
         "validate_output_corridor",
         'path_errors.extend(preflight_output_path(out_path, "--out"))',
-        '    if not parent_exists:\n        try:\n            parent.mkdir(parents=True, exist_ok=True)\n        except OSError:\n            return [f"{label} parent directory could not be created"]\n',
+        '    if not parent_exists:\n        try:\n            parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n        except OSError:\n            return [f"{label} parent directory could not be created"]\n',
+        "def _set_private_directory_permissions",
+        "os.fchmod(dir_fd, 0o700)",
+        "stat.S_IMODE(directory_stat.st_mode) != 0o700",
+        "permission_errors = _set_private_directory_permissions(",
+        "os.fchmod(handle.fileno(), 0o600)",
+        "stat.S_IMODE(expected_stat.st_mode) != 0o600",
+        "--out permissions must be 0600",
         '    try:\n        output_mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return []\n    except OSError:\n        return [f"{label} file metadata could not be read"]\n',
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
         "validate_output_path",
@@ -2578,6 +2617,14 @@ TEXT_REQUIREMENTS = {
         "CONTROL_EXIT_MARKER_REDACTION",
         "SECRET_EXIT_MARKER_REDACTION",
         "def _secret_path_error",
+        "def _set_private_directory_permissions",
+        "os.fchmod(dir_fd, 0o700)",
+        "stat.S_IMODE(directory_stat.st_mode) != 0o700",
+        "destination.parent.mkdir(mode=0o700",
+        "os.fchmod(dst.fileno(), 0o600)",
+        "stat.S_IMODE(copied_stat.st_mode) != 0o600",
+        "artifact_dir.mkdir(mode=0o700",
+        "stage_dir.mkdir(mode=0o700",
         'if device_lab._contains_control_character(path_text):\n        return f"{label} must not contain control characters"',
         'if "\\\\" in path_text:\n        return f"{label} must not contain backslashes"',
         'if ".." in path.parts:\n        return f"{label} must be canonical"',
@@ -2658,6 +2705,14 @@ TEXT_REQUIREMENTS = {
         "SECRET_EXIT_MARKER_REDACTION",
         "CANONICAL_ELAPSED_SECONDS_RE",
         "def _secret_path_error",
+        "def _set_private_directory_permissions",
+        "os.fchmod(dir_fd, 0o700)",
+        "stat.S_IMODE(directory_stat.st_mode) != 0o700",
+        "destination.parent.mkdir(mode=0o700",
+        "os.fchmod(dst.fileno(), 0o600)",
+        "stat.S_IMODE(copied_stat.st_mode) != 0o600",
+        "artifact_dir.mkdir(mode=0o700",
+        "stage_dir.mkdir(mode=0o700",
         'if device_lab._contains_control_character(path_text):\n        return f"{label} must not contain control characters"',
         'if "\\\\" in path_text:\n        return f"{label} must not contain backslashes"',
         'if ".." in path.parts:\n        return f"{label} must be canonical"',
@@ -2773,7 +2828,14 @@ TEXT_REQUIREMENTS = {
         "already exists; refuse to overwrite without --replace",
         "def _file_identity",
         "def _directory_open_flags",
+        "def _file_open_flags",
+        "def _set_private_directory_permissions",
+        "def _set_private_file_permissions",
         "O_NOFOLLOW",
+        "os.fchmod(dir_fd, 0o700)",
+        "stat.S_IMODE(directory_stat.st_mode) != 0o700",
+        "os.fchmod(file_fd, 0o600)",
+        "stat.S_IMODE(file_stat.st_mode) != 0o600",
         "def _sync_output_parent",
         "expected_identity=parent_identity",
         "log_parent_identity = _file_identity(log_parent_stat)",
@@ -2787,9 +2849,11 @@ TEXT_REQUIREMENTS = {
         "os.unlink(path.name, dir_fd=parent_fd)",
         "temporary output changed before cleanup",
         "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "os.fchmod(handle.fileno(), 0o600)",
         "_unlink_output_for_replace(path, label)",
         "_verify_written_text_file",
         "return _verify_written_text_file(path, expected_bytes, label)",
+        "stat.S_IMODE(expected_stat.st_mode) != 0o600",
         "changed after write",
         "data = handle.read(len(expected_bytes) + 1)",
         "_run_lineage_key_artifact_command",
@@ -2806,9 +2870,11 @@ TEXT_REQUIREMENTS = {
         "subprocess.Popen(",
         "stdout=log_handle",
         "stderr=subprocess.STDOUT",
+        "os.fchmod(log_handle.fileno(), 0o600)",
         "os.fsync(log_handle.fileno())",
         "shlex.split(DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND)",
         "readiness.validate_lineage_proof_command(",
+        "args.staged_artifact_dir.mkdir(mode=0o700",
         "_write_exit_marker",
         "f\"{exit_code}\\n\"",
         "staged lineage proof exit marker",
@@ -2854,7 +2920,14 @@ TEXT_REQUIREMENTS = {
         "staged recursive compact key execution report",
         "def _file_identity",
         "def _directory_open_flags",
+        "def _file_open_flags",
+        "def _set_private_directory_permissions",
+        "def _set_private_file_permissions",
         "O_NOFOLLOW",
+        "os.fchmod(dir_fd, 0o700)",
+        "stat.S_IMODE(directory_stat.st_mode) != 0o700",
+        "os.fchmod(file_fd, 0o600)",
+        "stat.S_IMODE(file_stat.st_mode) != 0o600",
         "def _sync_output_parent",
         "expected_identity=parent_identity",
         "log_parent_identity = _file_identity(log_parent_stat)",
@@ -2868,9 +2941,11 @@ TEXT_REQUIREMENTS = {
         "os.unlink(path.name, dir_fd=parent_fd)",
         "temporary output changed before cleanup",
         "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
+        "os.fchmod(handle.fileno(), 0o600)",
         "_unlink_output_for_replace(path, label)",
         "_verify_written_text_file",
         "return _verify_written_text_file(path, expected_bytes, label)",
+        "stat.S_IMODE(expected_stat.st_mode) != 0o600",
         "changed after write",
         "data = handle.read(len(expected_bytes) + 1)",
         "_write_execution_report",
@@ -2887,9 +2962,11 @@ TEXT_REQUIREMENTS = {
         "subprocess.Popen(",
         "stdout=log_handle",
         "stderr=subprocess.STDOUT",
+        "os.fchmod(log_handle.fileno(), 0o600)",
         "os.fsync(log_handle.fileno())",
         "shlex.split(DEFAULT_COMPACT_KEY_COMMAND)",
         "readiness.validate_compact_key_command(DEFAULT_COMPACT_KEY_COMMAND)",
+        "args.staged_artifact_dir.mkdir(mode=0o700",
         'f"{exit_code}\\n"',
         "staged keygen exit marker",
         "--staged-artifact-dir must end with artifacts/kagemusha",
@@ -3215,6 +3292,7 @@ TEXT_REQUIREMENTS = {
         "--out must not be a symlink",
         "--out must not be hardlinked",
         "tempfile.NamedTemporaryFile",
+        "os.fchmod(handle.fileno(), 0o600)",
         "os.fsync(handle.fileno())",
         "os.replace(tmp_path, path)",
         "_cleanup_temp_output",
@@ -3236,6 +3314,8 @@ TEXT_REQUIREMENTS = {
         "output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "--out changed while being read",
+        "stat.S_IMODE(open_stat.st_mode) != 0o600",
+        "--out permissions must be 0600",
         "if open_stat.st_size > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:",
         "if size > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:",
         'f"--out must be no more than {MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES} bytes"',
@@ -3257,6 +3337,7 @@ TEXT_REQUIREMENTS = {
     "scripts/tests/check_android_device_lab_slot_test.py": (
         "test_checked_in_sample_slot_passes_default_validation",
         "test_kagemusha_slot_assembler_builds_signed_production_slot",
+        "test_kagemusha_slot_assembler_installs_private_permissions",
         "test_kagemusha_slot_metadata_rejects_missing_source_policy_digest",
         "test_kagemusha_slot_assembler_requires_signing_by_default",
         "test_kagemusha_slot_assembler_rejects_control_root_before_classify",
@@ -3299,6 +3380,7 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_slot_assembler_rejects_alias_root_before_classify",
         "test_kagemusha_slot_assembler_source_path_validators_reject_aliases_before_metadata",
         "test_kagemusha_attestation_report_writer_temp_cleanup_rejects_swap",
+        "test_kagemusha_attestation_report_writer_installs_private_permissions",
         "test_kagemusha_attestation_report_writer_rejects_control_chain_source_path_before_ancestor_check",
         "test_kagemusha_attestation_report_writer_rejects_alias_chain_source_path_before_metadata",
         "test_kagemusha_attestation_report_writer_rejects_alias_harness_result_path_before_metadata",
@@ -3341,15 +3423,19 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_reports_temp_cleanup_failure",
         "test_kagemusha_android_raw_puller_install_sync_rejects_identity_mismatch",
         "test_kagemusha_android_raw_puller_latest_writer_syncs_parent_identity",
+        "test_kagemusha_android_raw_puller_latest_writer_installs_private_permissions",
         "test_kagemusha_android_raw_puller_latest_writer_rejects_symlink_after_replace",
         "test_kagemusha_android_raw_puller_latest_writer_rejects_hardlink_after_replace",
+        "test_kagemusha_android_raw_puller_latest_writer_rejects_permissive_mode_after_replace",
         "test_kagemusha_android_raw_puller_latest_writer_rejects_readback_path_swap",
         "test_kagemusha_android_raw_puller_latest_writer_reports_temp_cleanup_failure",
         "test_kagemusha_android_raw_puller_latest_writer_temp_cleanup_rejects_swap",
         "test_kagemusha_android_raw_puller_summary_rejects_nonfinite_json_before_tempfile",
         "test_kagemusha_android_raw_puller_summary_rejects_oversized_json_before_tempfile",
+        "test_kagemusha_android_raw_puller_summary_installs_private_permissions",
         "test_kagemusha_android_raw_puller_summary_rejects_symlink_after_replace",
         "test_kagemusha_android_raw_puller_summary_rejects_hardlink_after_replace",
+        "test_kagemusha_android_raw_puller_summary_rejects_permissive_mode_after_replace",
         "test_kagemusha_android_raw_puller_summary_rejects_readback_path_swap",
         "test_kagemusha_android_raw_puller_summary_reports_temp_cleanup_failure",
         "test_kagemusha_android_raw_puller_summary_temp_cleanup_rejects_swap",
@@ -4108,6 +4194,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_finalizer_reports_partial_publish_cleanup_failure",
         "test_compact_key_staged_finalizer_unlink_preserves_swapped_published_file",
         "test_compact_key_staged_finalizer_verifies_published_stage_bytes",
+        "test_compact_key_staged_finalizer_publish_outputs_private_permissions",
         "test_compact_key_staged_finalizer_reports_temp_parent_cleanup_failure",
         "test_compact_key_staged_runner_outputs_finalize_successfully",
         "test_compact_key_staged_runner_resume_reuses_complete_keygen",
@@ -4120,8 +4207,11 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_runner_main_reports_nonzero_conventionally",
         "test_compact_key_staged_runner_main_errors_exit_conventionally",
         "test_compact_key_staged_runner_atomic_write_verifies_installed_bytes",
+        "test_compact_key_staged_runner_atomic_write_installs_private_file",
         "test_compact_key_staged_runner_resume_cleanup_preserves_swapped_output",
         "test_compact_key_staged_runner_temp_cleanup_preserves_swapped_output",
+        "test_compact_key_staged_runner_log_install_installs_private_file",
+        "test_compact_key_staged_runner_creates_private_staging_outputs",
         "test_compact_key_staged_runner_rejects_symlinked_exit_marker",
         "test_compact_key_staged_runner_writes_child_output_directly_to_log_file",
         "fsync_fds",
@@ -4156,6 +4246,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_finalizer_reports_partial_publish_cleanup_failure",
         "test_lineage_proof_staged_finalizer_unlink_preserves_swapped_published_file",
         "test_lineage_proof_staged_finalizer_verifies_published_stage_bytes",
+        "test_lineage_proof_staged_finalizer_publish_outputs_private_permissions",
         "test_lineage_proof_staged_finalizer_reports_temp_parent_cleanup_failure",
         "test_lineage_proof_staged_runner_outputs_finalize_successfully",
         "test_lineage_proof_staged_runner_resume_reuses_completed_init_phase",
@@ -4169,8 +4260,11 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_runner_main_reports_nonzero_without_success_paths",
         "test_lineage_proof_staged_runner_main_errors_exit_conventionally",
         "test_lineage_proof_staged_runner_atomic_write_verifies_installed_bytes",
+        "test_lineage_proof_staged_runner_atomic_write_installs_private_file",
         "test_lineage_proof_staged_runner_resume_cleanup_preserves_swapped_output",
         "test_lineage_proof_staged_runner_temp_cleanup_preserves_swapped_output",
+        "test_lineage_proof_staged_runner_log_install_installs_private_file",
+        "test_lineage_proof_staged_runner_creates_private_staging_outputs",
         "test_lineage_proof_staged_runner_rejects_symlinked_exit_marker",
         "test_lineage_proof_staged_runner_writes_child_output_directly_to_log_file",
         "test_lineage_proof_staged_runner_removes_temp_log_on_spawn_failure",
@@ -4213,6 +4307,8 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_write_evidence_rejects_write_failure_after_preflight",
         "test_compact_key_write_evidence_rejects_nonfinite_json_before_write",
         "test_compact_key_write_evidence_rejects_oversized_json_before_write",
+        "test_compact_key_write_evidence_installs_private_permissions",
+        "test_compact_key_validate_evidence_document_installs_private_scratch_permissions",
         "test_compact_key_write_evidence_preserves_existing_output_on_replace_failure",
         "test_compact_key_write_evidence_reports_temp_cleanup_failure_after_write_failure",
         "test_compact_key_write_evidence_reports_temp_cleanup_failure_after_post_stage_validation_failure",
@@ -4535,6 +4631,7 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_rejects_outside_evidence_before_scanners",
         "test_kagemusha_release_bundle_rejects_output_overwriting_evidence",
         "test_write_release_bundle_preserves_existing_output_on_replace_failure",
+        "test_write_release_bundle_installs_private_file_permissions",
         "test_write_release_bundle_reports_temp_cleanup_failure_after_write_failure",
         "test_write_release_bundle_reports_temp_cleanup_failure_after_post_stage_validation_failure",
         "test_write_release_bundle_temp_cleanup_rejects_swapped_temp_file",
@@ -4657,6 +4754,8 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_output_preflight_rejects_file_metadata_failure_before_write",
         "test_lineage_proof_output_preflight_rejects_hardlink_metadata_failure_before_write",
         "test_lineage_proof_write_evidence_rejects_secret_output_path_before_write",
+        "test_lineage_proof_write_evidence_installs_private_permissions",
+        "test_lineage_proof_validate_evidence_document_installs_private_scratch_permissions",
         "test_lineage_proof_write_evidence_rejects_write_failure_after_preflight",
         "test_lineage_proof_write_evidence_rejects_nonfinite_json_before_write",
         "test_lineage_proof_write_evidence_rejects_oversized_json_before_write",
@@ -4749,7 +4848,9 @@ TEXT_REQUIREMENTS = {
         "test_write_summary_rejects_parent_directory_sync_failure_after_replace",
         "test_write_summary_rejects_parent_directory_identity_swap_before_sync",
         "test_write_summary_rejects_symlink_swap_before_replace",
+        "test_write_summary_installs_private_file_permissions",
         "test_write_summary_rejects_readback_mismatch",
+        "test_write_summary_rejects_permissive_mode_after_replace",
         "test_write_summary_rejects_readback_failure",
         "test_write_summary_rejects_regular_file_swap_before_readback",
         "test_write_summary_rejects_symlink_swap_after_replace",
@@ -5021,6 +5122,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-symlink",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-hardlink",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-open-path",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-inventory",
@@ -5287,6 +5389,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-physical-device",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-overwrite",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-no-overwrite",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-top-level",
@@ -5328,10 +5431,12 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-symlink",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-hardlink",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-directory-collision",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-entry-cap",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-private-permissions",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-slot-required",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-chain-digest-required",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-challenge-digest-required",
@@ -5417,6 +5522,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-open-path-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-write-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure",
@@ -5463,6 +5569,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-post-write-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-parent-create-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-file-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-hardlink-metadata-failure",
@@ -5476,6 +5583,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-post-write-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-dir-create-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-write-failure",
@@ -5498,6 +5606,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-log-install-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-cleanup-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-private-permissions",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-child-log-file",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-child-log-file",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
@@ -5515,6 +5625,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-timestamp-raw",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-future-skew",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-future-skew",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-private-permissions",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-readback",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-readback",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-rollback-identity",
@@ -5596,6 +5708,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-open-path-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-parent-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-post-write-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-control-path-preflight",
@@ -6181,6 +6294,17 @@ if mode == "--negative-control-android-device-lab-raw-puller-summary-readback-id
             "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
             "raw pull summary output changed while being read back",
             "raw pull summary output path swaps are accepted during readback",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-summary-private-permissions":
+    run_negative_control(
+        "Android raw puller summary private permissions gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw pull summary output permissions must be 0600",
+            "raw pull summary output may be world-readable",
         ),
     )
     raise SystemExit(0)
@@ -9149,6 +9273,24 @@ if mode == "--negative-control-android-device-lab-attestation-report-writer-temp
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-attestation-report-writer-private-permissions":
+    run_negative_control(
+        "Android attestation report writer private permissions gate",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_android_attestation_report.py",
+                "os.fchmod(dir_fd, 0o700)",
+                "os.fstat(dir_fd)",
+            ),
+            override_text(
+                "scripts/kagemusha_android_attestation_report.py",
+                "os.fchmod(handle.fileno(), 0o600)",
+                "handle.fileno()",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-raw-puller-overwrite":
     run_negative_control(
         "Android raw puller overwrite refusal gate",
@@ -9594,6 +9736,17 @@ if mode == "--negative-control-android-device-lab-raw-puller-latest-write-readba
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-raw-puller-latest-write-private-permissions":
+    run_negative_control(
+        "Android raw puller latest-slot writer private permissions gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "raw latest-slot output permissions must be 0600",
+            "raw latest-slot output may be world-readable",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity":
     run_negative_control(
         "Android raw puller latest-slot writer temp cleanup identity gate",
@@ -9640,6 +9793,29 @@ if mode == "--negative-control-android-device-lab-raw-puller-private-permissions
                 "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
                 "os.fchmod(output.fileno(), 0o600)",
                 "output.fileno()",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-private-permissions":
+    run_negative_control(
+        "Android slot assembler private published-artifact permissions gate",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_android_device_lab_slot.py",
+                "os.fchmod(dir_fd, 0o700)",
+                "os.fstat(dir_fd)",
+            ),
+            override_text(
+                "scripts/kagemusha_android_device_lab_slot.py",
+                "os.fchmod(out.fileno(), 0o600)",
+                "out.fileno()",
+            ),
+            override_text(
+                "scripts/sign_android_device_lab_evidence.py",
+                "os.fchmod(handle.fileno(), 0o600)",
+                "handle.fileno()",
             ),
         ),
     )
@@ -10512,6 +10688,17 @@ if mode == "--negative-control-kagemusha-readiness-summary-output-readback-open-
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-kagemusha-readiness-summary-output-private-permissions":
+    run_negative_control(
+        "Kagemusha readiness summary output private permissions",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "os.fchmod(handle.fileno(), 0o600)",
+            "handle.fileno()",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-kagemusha-readiness-summary-output-parent-sync-identity":
     run_negative_control(
         "Kagemusha readiness summary output parent sync identity gate",
@@ -10973,6 +11160,17 @@ if mode == "--negative-control-release-bundle-output-readback-open-path-binding"
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-release-bundle-output-private-permissions":
+    run_negative_control(
+        "Kagemusha release bundle output private permissions",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "os.fchmod(handle.fileno(), 0o600)",
+            "handle.fileno()",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-release-bundle-output-parent-sync-identity":
     run_negative_control(
         "Kagemusha release bundle output parent sync identity gate",
@@ -11253,8 +11451,8 @@ if mode == "--negative-control-lineage-proof-helper-output-parent-create-failure
         "Reserved-lineage proof evidence helper output parent-create failure gate",
         lambda: override_text(
             "scripts/kagemusha_lineage_proof_evidence.py",
-            '    if not parent_exists:\n        try:\n            parent.mkdir(parents=True, exist_ok=True)\n        except OSError:\n            return [f"{label} parent directory could not be created"]\n',
-            "    if not parent_exists:\n        parent.mkdir(parents=True, exist_ok=True)\n",
+            '    if not parent_exists:\n        try:\n            parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n        except OSError:\n            return [f"{label} parent directory could not be created"]\n',
+            "    if not parent_exists:\n        parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n",
         ),
     )
     raise SystemExit(0)
@@ -11275,8 +11473,8 @@ if mode == "--negative-control-lineage-proof-helper-output-validate-parent-creat
         "Reserved-lineage proof evidence helper output validator parent-create failure gate",
         lambda: override_text(
             "scripts/kagemusha_lineage_proof_evidence.py",
-            '    errors = preflight_output_path(path, label)\n    if errors:\n        return errors\n    parent = path.parent\n    parent_exists, parent_errors = _validate_output_parent(path, label)\n    if parent_errors:\n        return parent_errors\n    if not parent_exists:\n        try:\n            parent.mkdir(parents=True, exist_ok=True)\n        except OSError:\n            return [f"{label} parent directory could not be created"]\n    return preflight_output_path(path, label)\n',
-            '    errors = preflight_output_path(path, label)\n    if errors:\n        return errors\n    parent = path.parent\n    parent_exists, parent_errors = _validate_output_parent(path, label)\n    if parent_errors:\n        return parent_errors\n    if not parent_exists:\n        parent.mkdir(parents=True, exist_ok=True)\n    return preflight_output_path(path, label)\n',
+            '    errors = preflight_output_path(path, label)\n    if errors:\n        return errors\n    parent = path.parent\n    parent_exists, parent_errors = _validate_output_parent(path, label)\n    if parent_errors:\n        return parent_errors\n    if not parent_exists:\n        try:\n            parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n        except OSError:\n            return [f"{label} parent directory could not be created"]\n    permission_errors = _set_private_directory_permissions(parent, f"{label} parent")\n    if permission_errors:\n        return permission_errors\n    return preflight_output_path(path, label)\n',
+            '    errors = preflight_output_path(path, label)\n    if errors:\n        return errors\n    parent = path.parent\n    parent_exists, parent_errors = _validate_output_parent(path, label)\n    if parent_errors:\n        return parent_errors\n    if not parent_exists:\n        parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n    permission_errors = _set_private_directory_permissions(parent, f"{label} parent")\n    if permission_errors:\n        return permission_errors\n    return preflight_output_path(path, label)\n',
         ),
     )
     raise SystemExit(0)
@@ -11402,6 +11600,24 @@ if mode == "--negative-control-lineage-proof-helper-output-post-write-preflight"
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-lineage-proof-helper-output-private-permissions":
+    run_negative_control(
+        "Reserved-lineage proof evidence helper private output permissions",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_lineage_proof_evidence.py",
+                "os.fchmod(dir_fd, 0o700)",
+                "os.fstat(dir_fd)",
+            ),
+            override_text_all(
+                "scripts/kagemusha_lineage_proof_evidence.py",
+                "os.fchmod(handle.fileno(), 0o600)",
+                "handle.fileno()",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-lineage-proof-helper-artifact-open-path-binding":
     run_negative_control(
         "Reserved-lineage proof evidence helper artifact open path binding",
@@ -11445,8 +11661,8 @@ if mode == "--negative-control-compact-key-helper-output-early-preflight":
 if mode == "--negative-control-compact-key-helper-output-parent-create-failure":
     def mutate_compact_key_output_parent_create_failure() -> None:
         target = "scripts/kagemusha_recursive_compact_key_evidence.py"
-        old = '    if not parent_exists:\n        try:\n            parent.mkdir(parents=True, exist_ok=True)\n        except OSError:\n            return [f"{label} parent directory could not be created"]\n'
-        new = '    if not parent_exists:\n        parent.mkdir(parents=True, exist_ok=True)\n'
+        old = '    if not parent_exists:\n        try:\n            parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n        except OSError:\n            return [f"{label} parent directory could not be created"]\n'
+        new = '    if not parent_exists:\n        parent.mkdir(mode=0o700, parents=True, exist_ok=True)\n'
         text = read_text(target)
         if old not in text:
             raise SystemExit(f"negative control setup failed: `{old}` not found in {target}")
@@ -11579,6 +11795,24 @@ if mode == "--negative-control-compact-key-helper-output-post-write-preflight":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-compact-key-helper-output-private-permissions":
+    run_negative_control(
+        "ABI-7 recursive compact key evidence helper private output permissions",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_recursive_compact_key_evidence.py",
+                "os.fchmod(dir_fd, 0o700)",
+                "os.fstat(dir_fd)",
+            ),
+            override_text_all(
+                "scripts/kagemusha_recursive_compact_key_evidence.py",
+                "os.fchmod(handle.fileno(), 0o600)",
+                "handle.fileno()",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-compact-key-helper-artifact-open-path-binding":
     run_negative_control(
         "ABI-7 recursive compact key evidence helper artifact open path binding",
@@ -11613,8 +11847,8 @@ if mode == "--negative-control-compact-key-helper-validation-dir-create-failure"
         "ABI-7 recursive compact key evidence helper validation dir create-failure gate",
         lambda: override_text(
             "scripts/kagemusha_recursive_compact_key_evidence.py",
-            '    try:\n        artifact_dir.mkdir(parents=True, exist_ok=True)\n    except OSError:\n        return ["--artifact-dir could not be created for evidence validation"]\n',
-            '    artifact_dir.mkdir(parents=True, exist_ok=True)\n',
+            '    try:\n        artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)\n    except OSError:\n        return ["--artifact-dir could not be created for evidence validation"]\n',
+            '    artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)\n',
         ),
     )
     raise SystemExit(0)
@@ -11887,8 +12121,8 @@ if mode == "--negative-control-lineage-proof-helper-validation-dir-create-failur
         "Reserved-lineage proof evidence helper validation dir create-failure gate",
         lambda: override_text(
             "scripts/kagemusha_lineage_proof_evidence.py",
-            '    try:\n        artifact_dir.mkdir(parents=True, exist_ok=True)\n    except OSError:\n        return ["--artifact-dir could not be created for evidence validation"]\n',
-            '    artifact_dir.mkdir(parents=True, exist_ok=True)\n',
+            '    try:\n        artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)\n    except OSError:\n        return ["--artifact-dir could not be created for evidence validation"]\n',
+            '    artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)\n',
         ),
     )
     raise SystemExit(0)
@@ -12076,6 +12310,42 @@ if mode == "--negative-control-lineage-proof-finalizer-publish-readback":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-compact-key-finalizer-private-permissions":
+    run_negative_control(
+        "ABI-7 recursive compact key staged finalizer private output permissions",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
+                "os.fchmod(dir_fd, 0o700)",
+                "os.fstat(dir_fd)",
+            ),
+            override_text(
+                "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
+                "os.fchmod(dst.fileno(), 0o600)",
+                "dst.fileno()",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-finalizer-private-permissions":
+    run_negative_control(
+        "Reserved-lineage proof staged finalizer private output permissions",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+                "os.fchmod(dir_fd, 0o700)",
+                "os.fstat(dir_fd)",
+            ),
+            override_text(
+                "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+                "os.fchmod(dst.fileno(), 0o600)",
+                "dst.fileno()",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-compact-key-finalizer-publish-rollback-identity":
     run_negative_control(
         "ABI-7 recursive compact key staged finalizer publish rollback identity",
@@ -12237,6 +12507,62 @@ if mode == "--negative-control-lineage-proof-staged-runner-cleanup-identity":
             "scripts/kagemusha_run_lineage_proof_staged.py",
             "_file_identity(path_stat) != expected_identity",
             "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-staged-runner-private-permissions":
+    run_negative_control(
+        "Reserved-lineage proof staged runner private output permissions",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "os.fchmod(dir_fd, 0o700)",
+                "os.fstat(dir_fd)",
+            ),
+            override_text(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "os.fchmod(file_fd, 0o600)",
+                "os.fstat(file_fd)",
+            ),
+            override_text(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "os.fchmod(handle.fileno(), 0o600)",
+                "handle.fileno()",
+            ),
+            override_text(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "os.fchmod(log_handle.fileno(), 0o600)",
+                "log_handle.fileno()",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-private-permissions":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner private output permissions",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "os.fchmod(dir_fd, 0o700)",
+                "os.fstat(dir_fd)",
+            ),
+            override_text(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "os.fchmod(file_fd, 0o600)",
+                "os.fstat(file_fd)",
+            ),
+            override_text(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "os.fchmod(handle.fileno(), 0o600)",
+                "handle.fileno()",
+            ),
+            override_text(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "os.fchmod(log_handle.fileno(), 0o600)",
+                "log_handle.fileno()",
+            ),
         ),
     )
     raise SystemExit(0)

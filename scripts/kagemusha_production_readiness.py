@@ -4102,6 +4102,8 @@ def _read_summary_output_text(
                 ]
             if open_stat.st_nlink > 1:
                 return None, [_summary_out_blocker("--summary-out must not be hardlinked")]
+            if stat.S_IMODE(open_stat.st_mode) != 0o600:
+                return None, [_summary_out_blocker("--summary-out permissions must be 0600")]
             if open_stat.st_size > MAX_READINESS_SUMMARY_JSON_BYTES:
                 return None, [
                     _summary_out_blocker(
@@ -4278,6 +4280,7 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
+            os.fchmod(handle.fileno(), 0o600)
             tmp_identity = _file_identity(os.fstat(handle.fileno()))
             handle.write(summary_text)
             handle.flush()

@@ -160,7 +160,7 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
+    except (TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -190,7 +190,7 @@ def _parse_runtime_bytecode_text(
         raise argparse.ArgumentTypeError(f"{label} must have an even hex length")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
+    except (TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
@@ -336,7 +336,7 @@ def parse_tron_address(value: str, *, label: str) -> bytes:
             raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
         try:
             raw = bytes.fromhex(hex_text)
-        except ValueError as exc:
+        except (TypeError, ValueError):
             raise argparse.ArgumentTypeError(f"{label} must be hex") from None
         if len(raw) == 21:
             if raw[0] != 0x41:
@@ -3163,7 +3163,7 @@ def main(argv: list[str] | None = None) -> int:
                             and not _missing_full_toml_runtime_preimages(args)
                         )
             print(json.dumps(summary, indent=2, sort_keys=True))
-    except (OSError, ValueError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP TRON source bridge evidence rendering failed",

@@ -303,7 +303,12 @@ def _rpc_hex_data(result: Any, *, method: str) -> bytes:
         raise RuntimeError(f"{method} returned odd-length hex")
     if any(symbol not in "0123456789abcdef" for symbol in text):
         raise RuntimeError(f"{method} returned non-canonical lowercase 0x hex data")
-    return bytes.fromhex(text)
+    try:
+        return bytes.fromhex(text)
+    except (TypeError, ValueError):
+        raise RuntimeError(
+            f"{method} returned non-canonical lowercase 0x hex data"
+        ) from None
 
 
 def _rpc_quantity(result: Any, *, method: str) -> int:
@@ -335,7 +340,10 @@ def _parse_exact_hex_blob(value: Any, *, label: str, nonzero: bool = True) -> by
         raise RuntimeError(f"{label} must not contain whitespace")
     if any(symbol not in "0123456789abcdef" for symbol in text):
         raise RuntimeError(f"{label} must be canonical lowercase 0x hex")
-    parsed = bytes.fromhex(text)
+    try:
+        parsed = bytes.fromhex(text)
+    except (TypeError, ValueError):
+        raise RuntimeError(f"{label} must be canonical lowercase 0x hex") from None
     if nonzero and not any(parsed):
         raise RuntimeError(f"{label} must not be zero")
     return parsed
@@ -2429,7 +2437,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.full_toml:
             sys.stdout.write(render_offline_toml(summary))
             return 0
-    except (OSError, RuntimeError, ValueError, argparse.ArgumentTypeError) as exc:
+    except (
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        argparse.ArgumentTypeError,
+    ) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP EVM live evidence collection failed",
