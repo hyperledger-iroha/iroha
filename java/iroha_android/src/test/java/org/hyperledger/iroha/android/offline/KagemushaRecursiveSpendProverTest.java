@@ -61,6 +61,7 @@ public final class KagemushaRecursiveSpendProverTest {
     typedRequestCodecsRoundTripSharedFixtureArchives();
     typedRequestCodecsUseRustCompatibleCompactFieldLayouts();
     typedEvidenceHelpersAssembleCheckedProofArchives();
+    typedEvidenceHelpersRejectAdversarialHopBindings();
     typedRequestCodecsRejectMalformedInputsBeforeNativeDispatch();
     typedEvidenceHelpersRejectUnsafeProofOnlyInputs();
     rejectsEmptyArchivesBeforeNativeDispatch();
@@ -1401,22 +1402,7 @@ public final class KagemushaRecursiveSpendProverTest {
     final byte[] rootBefore = repeat((byte) 0x31, 32);
     final byte[] rootAfter = repeat((byte) 0x32, 32);
     final ProofFixture transferFixture =
-        proofFixture(
-            KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA,
-            "confidential-transfer-v2",
-            "buildConfidentialTransferProofV2",
-            zk1Proof(
-                Arrays.asList(
-                    repeat((byte) 0x41, 32),
-                    repeat((byte) 0x42, 32),
-                    repeat((byte) 0x43, 32),
-                    new byte[32],
-                    repeat((byte) 0x44, 32),
-                    new byte[32],
-                    rootBefore,
-                    repeat((byte) 0x45, 32),
-                    repeat((byte) 0x46, 32))));
+        transferProofFixture(rootBefore);
     final String asset = sampleAssetDefinition();
     final KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence evidence =
         new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
@@ -1500,6 +1486,100 @@ public final class KagemushaRecursiveSpendProverTest {
         compactPayload(recordBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
         appendFields.get(1));
     assert Arrays.equals(pallasOpenEnvelopes, readBytesVecPayload(appendFields.get(2)));
+  }
+
+  private static void typedEvidenceHelpersRejectAdversarialHopBindings() {
+    final String asset = sampleAssetDefinition();
+    final String otherAsset = sampleAssetDefinition((byte) 0x41);
+    final ProofFixture first = transferProofFixture(repeat((byte) 0x61, 32));
+    final ProofFixture secondLinked = transferProofFixture(repeat((byte) 0x62, 32));
+    final ProofFixture secondUnlinked = transferProofFixture(repeat((byte) 0x63, 32));
+
+    final IllegalArgumentException extraColumnError =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+                    Arrays.asList(
+                        new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
+                            transferProofFixture(
+                                    repeat((byte) 0x70, 32),
+                                    repeat((byte) 0x71, 32))
+                                .proofOutputArchive,
+                            first.verifierRecordRef,
+                            "kagemusha-test-chain",
+                            asset,
+                            repeat((byte) 0x72, 32)))));
+    assert extraColumnError.getMessage().contains("exactly 9 single-row");
+
+    final IllegalArgumentException sameRootError =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+                    Arrays.asList(
+                        new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
+                            secondLinked.proofOutputArchive,
+                            secondLinked.verifierRecordRef,
+                            "kagemusha-test-chain",
+                            asset,
+                            repeat((byte) 0x62, 32)))));
+    assert sameRootError.getMessage().contains("rootAfter must differ");
+
+    final IllegalArgumentException rootContinuityError =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+                    Arrays.asList(
+                        new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
+                            first.proofOutputArchive,
+                            first.verifierRecordRef,
+                            "kagemusha-test-chain",
+                            asset,
+                            repeat((byte) 0x62, 32)),
+                        new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
+                            secondUnlinked.proofOutputArchive,
+                            secondUnlinked.verifierRecordRef,
+                            "kagemusha-test-chain",
+                            asset,
+                            repeat((byte) 0x64, 32)))));
+    assert rootContinuityError.getMessage().contains("rootBefore must equal previous hop rootAfter");
+
+    final IllegalArgumentException chainError =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+                    Arrays.asList(
+                        new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
+                            first.proofOutputArchive,
+                            first.verifierRecordRef,
+                            "kagemusha-test-chain",
+                            asset,
+                            repeat((byte) 0x62, 32)),
+                        new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
+                            secondLinked.proofOutputArchive,
+                            secondLinked.verifierRecordRef,
+                            "kagemusha-other-chain",
+                            asset,
+                            repeat((byte) 0x63, 32)))));
+    assert chainError.getMessage().contains("chainId does not match");
+
+    final IllegalArgumentException assetError =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+                    Arrays.asList(
+                        new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
+                            first.proofOutputArchive,
+                            first.verifierRecordRef,
+                            "kagemusha-test-chain",
+                            asset,
+                            repeat((byte) 0x62, 32)),
+                        new KagemushaRecursiveSpendRequestCodecs.VerifiedFoldHopEvidence(
+                            secondLinked.proofOutputArchive,
+                            secondLinked.verifierRecordRef,
+                            "kagemusha-test-chain",
+                            otherAsset,
+                            repeat((byte) 0x63, 32)))));
+    assert assetError.getMessage().contains("asset does not match");
   }
 
   private static void typedEvidenceHelpersRejectUnsafeProofOnlyInputs() {
@@ -2118,6 +2198,29 @@ public final class KagemushaRecursiveSpendProverTest {
         commitment);
   }
 
+  private static ProofFixture transferProofFixture(
+      final byte[] rootBefore, final byte[]... extraColumns) {
+    final List<byte[]> columns =
+        new ArrayList<>(
+            Arrays.asList(
+                repeat((byte) 0x41, 32),
+                repeat((byte) 0x42, 32),
+                repeat((byte) 0x43, 32),
+                new byte[32],
+                repeat((byte) 0x44, 32),
+                new byte[32],
+                rootBefore,
+                repeat((byte) 0x45, 32),
+                repeat((byte) 0x46, 32)));
+    columns.addAll(Arrays.asList(extraColumns));
+    return proofFixture(
+        KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+        CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA,
+        "confidential-transfer-v2",
+        "buildConfidentialTransferProofV2",
+        zk1Proof(columns));
+  }
+
   private static byte[] privacyBuildResultArchive(
       final String algorithmId,
       final String entrypoint,
@@ -2294,7 +2397,14 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static String sampleAssetDefinition() {
-    final byte[] bytes = incrementingBytes(16);
+    return sampleAssetDefinition((byte) 0x01);
+  }
+
+  private static String sampleAssetDefinition(final byte seed) {
+    final byte[] bytes = new byte[16];
+    for (int i = 0; i < bytes.length; i++) {
+      bytes[i] = (byte) (seed + i);
+    }
     bytes[6] = (byte) ((bytes[6] & 0x0F) | 0x40);
     bytes[8] = (byte) ((bytes[8] & 0x3F) | 0x80);
     return AssetDefinitionIdEncoder.encodeFromBytes(bytes);

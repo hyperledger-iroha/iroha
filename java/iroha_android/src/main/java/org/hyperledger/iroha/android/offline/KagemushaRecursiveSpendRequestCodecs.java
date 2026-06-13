@@ -1139,11 +1139,11 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
   private static TransferPublicInputs parseTransferPublicInputs(final byte[] proofBytes, final String label) {
     final List<List<byte[]>> columns = parseZk1InstanceColumns(proofBytes, label);
-    boolean singleRow = columns.size() >= 9;
-    for (int i = 0; singleRow && i < 9; i++) {
-      singleRow = columns.get(i).size() == 1;
+    boolean exactSingleRow = columns.size() == 9;
+    for (int i = 0; exactSingleRow && i < columns.size(); i++) {
+      exactSingleRow = columns.get(i).size() == 1;
     }
-    require(singleRow, label + " transfer proof must expose 9 single-row instance columns");
+    require(exactSingleRow, label + " transfer proof must expose exactly 9 single-row instance columns");
     final List<byte[]> inputNullifiers = nonZeroSorted(
         Arrays.asList(columns.get(2).get(0), columns.get(3).get(0)), label + " input nullifiers");
     final List<byte[]> outputCommitments = nonZeroSorted(

@@ -232,25 +232,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     fun `verified fold record bundle builder assembles explicit hop evidence`() {
         val rootBefore = fixedBytes(0x31)
         val rootAfter = fixedBytes(0x32)
-        val fixture = proofFixture(
-            circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            schema = CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA,
-            algorithmId = "confidential-transfer-v2",
-            entrypoint = "buildConfidentialTransferProofV2",
-            proofBytes = zk1Proof(
-                listOf(
-                    fixedBytes(0x41),
-                    fixedBytes(0x42),
-                    fixedBytes(0x43),
-                    ByteArray(32),
-                    fixedBytes(0x44),
-                    ByteArray(32),
-                    rootBefore,
-                    fixedBytes(0x45),
-                    fixedBytes(0x46),
-                ),
-            ),
-        )
+        val fixture = transferProofFixture(rootBefore)
         val asset = sampleAssetDefinition()
 
         val recordBundle = KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
@@ -292,6 +274,114 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             compactPayload(fixture.verifierRecordRef.recordBytes, KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD),
             recordFields[1],
         )
+    }
+
+    @Test
+    fun `verified fold record bundle rejects adversarial hop continuity and public input shapes`() {
+        val asset = sampleAssetDefinition()
+        val otherAsset = sampleAssetDefinition(seed = 0x41)
+        val first = transferProofFixture(fixedBytes(0x61))
+        val secondLinked = transferProofFixture(fixedBytes(0x62))
+        val secondUnlinked = transferProofFixture(fixedBytes(0x63))
+
+        val extraColumnError = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+                listOf(
+                    VerifiedFoldHopEvidence(
+                        proofOutputArchive = transferProofFixture(
+                            fixedBytes(0x70),
+                            extraColumns = listOf(fixedBytes(0x71)),
+                        ).proofOutputArchive,
+                        verifierRecord = first.verifierRecordRef,
+                        chainId = "kagemusha-test-chain",
+                        asset = asset,
+                        rootAfter = fixedBytes(0x72),
+                    ),
+                ),
+            )
+        }
+        assertTrue(extraColumnError.message.orEmpty().contains("exactly 9 single-row"))
+
+        val sameRootError = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+                listOf(
+                    VerifiedFoldHopEvidence(
+                        proofOutputArchive = secondLinked.proofOutputArchive,
+                        verifierRecord = secondLinked.verifierRecordRef,
+                        chainId = "kagemusha-test-chain",
+                        asset = asset,
+                        rootAfter = fixedBytes(0x62),
+                    ),
+                ),
+            )
+        }
+        assertTrue(sameRootError.message.orEmpty().contains("rootAfter must differ"))
+
+        val rootContinuityError = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+                listOf(
+                    VerifiedFoldHopEvidence(
+                        proofOutputArchive = first.proofOutputArchive,
+                        verifierRecord = first.verifierRecordRef,
+                        chainId = "kagemusha-test-chain",
+                        asset = asset,
+                        rootAfter = fixedBytes(0x62),
+                    ),
+                    VerifiedFoldHopEvidence(
+                        proofOutputArchive = secondUnlinked.proofOutputArchive,
+                        verifierRecord = secondUnlinked.verifierRecordRef,
+                        chainId = "kagemusha-test-chain",
+                        asset = asset,
+                        rootAfter = fixedBytes(0x64),
+                    ),
+                ),
+            )
+        }
+        assertTrue(rootContinuityError.message.orEmpty().contains("rootBefore must equal previous hop rootAfter"))
+
+        val chainError = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+                listOf(
+                    VerifiedFoldHopEvidence(
+                        proofOutputArchive = first.proofOutputArchive,
+                        verifierRecord = first.verifierRecordRef,
+                        chainId = "kagemusha-test-chain",
+                        asset = asset,
+                        rootAfter = fixedBytes(0x62),
+                    ),
+                    VerifiedFoldHopEvidence(
+                        proofOutputArchive = secondLinked.proofOutputArchive,
+                        verifierRecord = secondLinked.verifierRecordRef,
+                        chainId = "kagemusha-other-chain",
+                        asset = asset,
+                        rootAfter = fixedBytes(0x63),
+                    ),
+                ),
+            )
+        }
+        assertTrue(chainError.message.orEmpty().contains("chainId does not match"))
+
+        val assetError = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
+                listOf(
+                    VerifiedFoldHopEvidence(
+                        proofOutputArchive = first.proofOutputArchive,
+                        verifierRecord = first.verifierRecordRef,
+                        chainId = "kagemusha-test-chain",
+                        asset = asset,
+                        rootAfter = fixedBytes(0x62),
+                    ),
+                    VerifiedFoldHopEvidence(
+                        proofOutputArchive = secondLinked.proofOutputArchive,
+                        verifierRecord = secondLinked.verifierRecordRef,
+                        chainId = "kagemusha-test-chain",
+                        asset = otherAsset,
+                        rootAfter = fixedBytes(0x63),
+                    ),
+                ),
+            )
+        }
+        assertTrue(assetError.message.orEmpty().contains("asset does not match"))
     }
 
     @Test
@@ -664,6 +754,30 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         )
     }
 
+    private fun transferProofFixture(
+        rootBefore: ByteArray,
+        extraColumns: List<ByteArray> = emptyList(),
+    ): ProofFixture =
+        proofFixture(
+            circuitId = KagemushaRecursiveSpendRequestCodecs.CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            schema = CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA,
+            algorithmId = "confidential-transfer-v2",
+            entrypoint = "buildConfidentialTransferProofV2",
+            proofBytes = zk1Proof(
+                listOf(
+                    fixedBytes(0x41),
+                    fixedBytes(0x42),
+                    fixedBytes(0x43),
+                    ByteArray(32),
+                    fixedBytes(0x44),
+                    ByteArray(32),
+                    rootBefore,
+                    fixedBytes(0x45),
+                    fixedBytes(0x46),
+                ) + extraColumns,
+            ),
+        )
+
     private fun privacyBuildResultArchive(
         algorithmId: String,
         entrypoint: String,
@@ -863,8 +977,8 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
     private fun fixedBytes(seed: Int): ByteArray = ByteArray(32) { seed.toByte() }
 
-    private fun sampleAssetDefinition(): String {
-        val bytes = ByteArray(16) { (it + 1).toByte() }
+    private fun sampleAssetDefinition(seed: Int = 0x01): String {
+        val bytes = ByteArray(16) { (it + seed).toByte() }
         bytes[6] = ((bytes[6].toInt() and 0x0f) or 0x40).toByte()
         bytes[8] = ((bytes[8].toInt() and 0x3f) or 0x80).toByte()
         return AssetDefinitionIdEncoder.encodeFromBytes(bytes)

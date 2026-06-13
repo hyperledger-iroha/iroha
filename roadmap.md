@@ -45,6 +45,10 @@ and completed history lives in [`status.md`](./status.md).
   bundles, record bundles, proof attachments, verifier records, and lineage
   witnesses at construction time; keep this fail-fast contract for wallet
   request assembly instead of relying on later encode or native dispatch errors.
+  The explicit hop-evidence builders must also keep confidential-transfer-v2
+  public-instance shape exact: exactly nine single-row ZK1 columns, no extra
+  public columns, nonzero root transitions, continuous multi-hop roots, and
+  stable chain/asset binding across every folded hop.
 - Confidential-v2 JVM/Android proof assembly now has typed transfer and
   unshield witness/request codecs for the production native bridge. Keep wallet
   integrations on these builders instead of raw witness bytes so canonical

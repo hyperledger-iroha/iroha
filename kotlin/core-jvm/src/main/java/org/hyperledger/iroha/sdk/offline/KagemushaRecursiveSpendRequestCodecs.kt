@@ -1064,8 +1064,8 @@ object KagemushaRecursiveSpendRequestCodecs {
 
     private fun parseTransferPublicInputs(proofBytes: ByteArray, label: String): TransferPublicInputs {
         val columns = parseZk1InstanceColumns(proofBytes, label)
-        require(columns.size >= 9 && columns.take(9).all { it.size == 1 }) {
-            "$label transfer proof must expose 9 single-row instance columns"
+        require(columns.size == 9 && columns.all { it.size == 1 }) {
+            "$label transfer proof must expose exactly 9 single-row instance columns"
         }
         val inputNullifiers = nonZeroSorted(
             listOf(columns[2][0], columns[3][0]),

@@ -173933,3 +173933,16 @@ Last updated: 2026-06-13
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
   - `cargo fmt --all --check`
+
+## 2026-06-13 - Recursive Spend Hop Evidence Shape Hardening
+
+- Hardened Kotlin/JVM and Java Android recursive-spend hop-evidence builders
+  so confidential-transfer-v2 ZK1 proof bytes must expose exactly the nine
+  single-row public-instance columns declared by the canonical public-input
+  schema; extra columns are rejected before a fold-record bundle can be emitted.
+- Added adversarial SDK coverage for extra public columns, root-after equal to
+  root-before, broken multi-hop root continuity, cross-hop chain-id drift, and
+  cross-hop asset drift.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
