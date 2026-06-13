@@ -7,9 +7,15 @@ import org.bouncycastle.crypto.agreement.X25519Agreement;
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
 
-/** X25519/XChaCha20-Poly1305 encrypted note payload carried by {@code zk::Shield}. */
+/**
+ * X25519/XChaCha20-Poly1305 encrypted note payload carried by {@code zk::Shield}.
+ *
+ * <p>Ciphertext is capped at {@link #MAX_CIPHERTEXT_BYTES} because the encrypted payload is a
+ * compact note descriptor, not an arbitrary attachment channel.
+ */
 public final class ConfidentialEncryptedPayload {
   public static final int VERSION_V1 = 1;
+  public static final int MAX_CIPHERTEXT_BYTES = 64 * 1024;
   private static final byte[] LOW_ORDER_X25519_CHECK_PRIVATE_KEY = fill((byte) 1, 32);
 
   private final int version;
@@ -38,6 +44,10 @@ public final class ConfidentialEncryptedPayload {
     }
     this.nonce = ZkInstructionUtils.fixedBytes(nonce, 24, "nonce");
     this.ciphertext = ZkInstructionUtils.copyNonEmpty(ciphertext, "ciphertext");
+    if (this.ciphertext.length > MAX_CIPHERTEXT_BYTES) {
+      throw new IllegalArgumentException(
+          "ciphertext must not exceed " + MAX_CIPHERTEXT_BYTES + " bytes");
+    }
   }
 
   public int version() {
@@ -81,6 +91,10 @@ public final class ConfidentialEncryptedPayload {
     final byte[] ephemeral = Arrays.copyOfRange(bytes, 1, 33);
     final byte[] nonce = Arrays.copyOfRange(bytes, 33, 57);
     final Varint ciphertextLength = readCompactVarint(bytes, 57);
+    if (ciphertextLength.value > MAX_CIPHERTEXT_BYTES) {
+      throw new IllegalArgumentException(
+          "ciphertext must not exceed " + MAX_CIPHERTEXT_BYTES + " bytes");
+    }
     final int ciphertextStart = 57 + ciphertextLength.encodedBytes;
     final int ciphertextEnd = ciphertextStart + ciphertextLength.value;
     if (ciphertextEnd > bytes.length) {

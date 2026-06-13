@@ -46,6 +46,12 @@ public final class ZkAssetInstructionsTest {
     expectThrows(() -> new ConfidentialEncryptedPayload(fill(1, 31), fill(2, 24), new byte[] {3}));
     expectThrows(() -> new ConfidentialEncryptedPayload(fill(1, 32), fill(2, 23), new byte[] {3}));
     expectThrows(() -> new ConfidentialEncryptedPayload(fill(1, 32), fill(2, 24), new byte[0]));
+    expectThrows(
+        () ->
+            new ConfidentialEncryptedPayload(
+                fill(1, 32),
+                fill(2, 24),
+                new byte[ConfidentialEncryptedPayload.MAX_CIPHERTEXT_BYTES + 1]));
   }
 
   private static void confidentialEncryptedPayloadMatchesRustWireFixture() {
@@ -80,6 +86,14 @@ public final class ZkAssetInstructionsTest {
     expectThrows(
         () -> ConfidentialEncryptedPayload.fromWireBytes(
             concat(new byte[] {1}, ephemeral, nonce, new byte[] {(byte) 0x95, 0}, ciphertext)));
+    expectThrows(
+        () ->
+            ConfidentialEncryptedPayload.fromWireBytes(
+                concat(
+                    new byte[] {1},
+                    ephemeral,
+                    nonce,
+                    new byte[] {(byte) 0x81, (byte) 0x80, 0x04})));
   }
 
   private static void proofAttachmentValidatesBackendAndJsonShape() {

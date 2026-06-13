@@ -71,6 +71,13 @@ class ZkAssetInstructionsTest {
                 ciphertext = ByteArray(0),
             )
         }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialEncryptedPayload(
+                ephemeralPublicKey = fill(1, 32),
+                nonce = fill(2, 24),
+                ciphertext = ByteArray(ConfidentialEncryptedPayload.MAX_CIPHERTEXT_BYTES + 1),
+            )
+        }
     }
 
     @Test
@@ -109,6 +116,12 @@ class ZkAssetInstructionsTest {
         assertFailsWith<IllegalArgumentException> {
             ConfidentialEncryptedPayload.fromWireBytes(
                 byteArrayOf(1) + ephemeral + nonce + byteArrayOf(0x95.toByte(), 0) + ciphertext,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialEncryptedPayload.fromWireBytes(
+                byteArrayOf(1) + ephemeral + nonce +
+                    byteArrayOf(0x81.toByte(), 0x80.toByte(), 0x04),
             )
         }
     }

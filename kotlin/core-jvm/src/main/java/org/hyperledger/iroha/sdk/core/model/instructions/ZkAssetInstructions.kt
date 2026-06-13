@@ -27,7 +27,12 @@ enum class ZkAssetMode(@JvmField val bridgeCode: Int, @JvmField val wireName: St
     }
 }
 
-/** X25519/XChaCha20-Poly1305 encrypted note payload carried by `zk::Shield`. */
+/**
+ * X25519/XChaCha20-Poly1305 encrypted note payload carried by `zk::Shield`.
+ *
+ * Ciphertext is capped at [MAX_CIPHERTEXT_BYTES] because the encrypted payload
+ * is a compact note descriptor, not an arbitrary attachment channel.
+ */
 class ConfidentialEncryptedPayload @JvmOverloads constructor(
     version: Int = VERSION_V1,
     ephemeralPublicKey: ByteArray,
@@ -43,6 +48,9 @@ class ConfidentialEncryptedPayload @JvmOverloads constructor(
 
     init {
         require(version == VERSION_V1) { "version must be $VERSION_V1" }
+        require(_ciphertext.size <= MAX_CIPHERTEXT_BYTES) {
+            "ciphertext must not exceed $MAX_CIPHERTEXT_BYTES bytes"
+        }
         require(!isLowOrderX25519PublicKey(_ephemeralPublicKey)) {
             "ephemeralPublicKey must not be low-order"
         }
@@ -89,6 +97,7 @@ class ConfidentialEncryptedPayload @JvmOverloads constructor(
 
     companion object {
         const val VERSION_V1: Int = 1
+        const val MAX_CIPHERTEXT_BYTES: Int = 64 * 1024
 
         @JvmStatic
         fun fromWireBytes(bytes: ByteArray?): ConfidentialEncryptedPayload {
@@ -98,6 +107,9 @@ class ConfidentialEncryptedPayload @JvmOverloads constructor(
             val ephemeral = bytes.copyOfRange(1, 33)
             val nonce = bytes.copyOfRange(33, 57)
             val (ciphertextLength, lengthBytes) = readCompactVarint(bytes, 57)
+            require(ciphertextLength <= MAX_CIPHERTEXT_BYTES) {
+                "ciphertext must not exceed $MAX_CIPHERTEXT_BYTES bytes"
+            }
             val ciphertextStart = 57 + lengthBytes
             val ciphertextEnd = ciphertextStart + ciphertextLength
             require(ciphertextEnd <= bytes.size) { "confidential encrypted payload ciphertext is truncated" }

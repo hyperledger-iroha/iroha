@@ -2,6 +2,20 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Confidential encrypted payload ciphertext cap
+
+- Capped confidential encrypted note ciphertexts at 64 KiB in the Rust data
+  model, Kotlin/JVM SDK, and Android Java SDK so shield payloads cannot become
+  unbounded transaction or wallet-memory inputs.
+- Rust validation, serialization, and decode paths now reject oversized
+  ciphertexts; SDK constructors and wire decoders reject the same limit before
+  caller code can hand oversized encrypted notes to transaction builders.
+- Focused validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_data_model encrypted_payload --lib`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
 ## 2026-06-13 ZK Asset Merkle Path Provider Verification
 
 - Hardened Kotlin/JVM and Android Java Merkle path models so direction bytes
