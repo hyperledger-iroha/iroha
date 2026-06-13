@@ -2827,12 +2827,17 @@ mod chained {
             self
         }
 
-        /// Sign this block and get [`NewBlock`] using the provided validator index.
-        pub fn sign_with_index(
+        /// Fallibly sign this block and get [`NewBlock`] using the provided validator index.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`iroha_crypto::Error::Signing`] when the signing backend
+        /// rejects the private key or block-header payload.
+        pub fn try_sign_with_index(
             self,
             private_key: &PrivateKey,
             signatory_idx: u64,
-        ) -> WithEvents<NewBlock> {
+        ) -> Result<WithEvents<NewBlock>, iroha_crypto::Error> {
             let mut builder = self;
             if builder.0.da_proof_policies.is_none()
                 && builder.0.header.da_proof_policies_hash().is_none()
@@ -2862,10 +2867,10 @@ mod chained {
             }
             let signature = BlockSignature::new(
                 signatory_idx,
-                SignatureOf::from_hash(private_key, builder.0.header.hash()),
+                SignatureOf::try_from_hash(private_key, builder.0.header.hash())?,
             );
 
-            WithEvents::new(NewBlock {
+            Ok(WithEvents::new(NewBlock {
                 signature,
                 header: builder.0.header,
                 transactions: builder.0.transactions,
@@ -2875,12 +2880,36 @@ mod chained {
                 previous_roster_evidence: builder.0.previous_roster_evidence,
                 npos_consensus_effects: builder.0.npos_consensus_effects,
                 execution_context: builder.0.execution_context,
-            })
+            }))
+        }
+
+        /// Sign this block and get [`NewBlock`] using the provided validator index.
+        pub fn sign_with_index(
+            self,
+            private_key: &PrivateKey,
+            signatory_idx: u64,
+        ) -> WithEvents<NewBlock> {
+            self.try_sign_with_index(private_key, signatory_idx)
+                .expect("block signing should succeed for a valid private key and header hash")
+        }
+
+        /// Fallibly sign this block and get [`NewBlock`] using validator index 0.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`iroha_crypto::Error::Signing`] when the signing backend
+        /// rejects the private key or block-header payload.
+        pub fn try_sign(
+            self,
+            private_key: &PrivateKey,
+        ) -> Result<WithEvents<NewBlock>, iroha_crypto::Error> {
+            self.try_sign_with_index(private_key, 0)
         }
 
         /// Sign this block and get [`NewBlock`] using validator index 0.
         pub fn sign(self, private_key: &PrivateKey) -> WithEvents<NewBlock> {
-            self.sign_with_index(private_key, 0)
+            self.try_sign(private_key)
+                .expect("block signing should succeed for a valid private key and header hash")
         }
     }
 }
@@ -3073,6 +3102,33 @@ mod new {
                 .unpack(|_| {});
 
             assert_eq!(new_block.signature().index(), signatory_idx);
+        }
+
+        #[test]
+        fn block_builder_try_sign_with_index_sets_verifiable_signature() {
+            let chain: ChainId = "new-block-try-sign-index".parse().expect("valid chain id");
+            let (authority, keypair) = gen_account_in("wonderland");
+            let tx = TransactionBuilder::new(chain, authority)
+                .with_instructions([Log::new(Level::INFO, "try-signed".to_owned())])
+                .sign(keypair.private_key());
+
+            let accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))];
+            let builder = BlockBuilder::new(accepted);
+            let signer = KeyPair::random();
+            let signatory_idx = 11_u64;
+
+            let new_block = builder
+                .chain(0, None)
+                .try_sign_with_index(signer.private_key(), signatory_idx)
+                .expect("fallible block signing succeeds")
+                .unpack(|_| {});
+
+            assert_eq!(new_block.signature().index(), signatory_idx);
+            new_block
+                .signature()
+                .signature()
+                .verify_hash(signer.public_key(), new_block.header().hash())
+                .expect("fallibly signed block signature verifies");
         }
 
         #[test]
@@ -11781,14 +11837,30 @@ pub(crate) mod valid {
             Ok(())
         }
 
-        /// Add additional signatures for [`Self`].
-        pub fn sign(&mut self, key_pair: &KeyPair, topology: &Topology) {
+        /// Fallibly add additional signatures for [`Self`].
+        ///
+        /// # Errors
+        ///
+        /// Returns [`iroha_crypto::Error::Signing`] when the configured signing
+        /// backend rejects the private-key material or finalized block header hash.
+        pub fn try_sign(
+            &mut self,
+            key_pair: &KeyPair,
+            topology: &Topology,
+        ) -> Result<(), iroha_crypto::Error> {
             let signatory_idx = topology
                 .position(key_pair.public_key())
                 .expect("INTERNAL BUG: Node is not in topology");
 
-            self.block.sign(key_pair.private_key(), signatory_idx);
+            self.block.try_sign(key_pair.private_key(), signatory_idx)?;
             self.clear_signatures_verified();
+            Ok(())
+        }
+
+        /// Add additional signatures for [`Self`].
+        pub fn sign(&mut self, key_pair: &KeyPair, topology: &Topology) {
+            self.try_sign(key_pair, topology)
+                .expect("signing should succeed for a valid validator key and block header");
         }
 
         #[cfg(test)]
@@ -12267,7 +12339,7 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn signature_changes_clear_verified_flag() {
+        fn try_sign_adds_verifiable_signature_and_clears_verified_flag() {
             let key_pairs =
                 core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
                     .take(2)
@@ -12278,7 +12350,19 @@ pub(crate) mod valid {
             block.mark_signatures_verified();
             assert!(block.signatures_verified_for_tests());
 
-            block.sign(&key_pairs[1], &topology);
+            block
+                .try_sign(&key_pairs[1], &topology)
+                .expect("checked valid-block signing succeeds");
+
+            let signature = block
+                .as_ref()
+                .signatures()
+                .find(|signature| signature.index() == 1)
+                .expect("signature for requested validator is present");
+            signature
+                .signature()
+                .verify_hash(key_pairs[1].public_key(), block.as_ref().hash())
+                .expect("checked valid-block signature verifies");
             assert!(!block.signatures_verified_for_tests());
         }
 

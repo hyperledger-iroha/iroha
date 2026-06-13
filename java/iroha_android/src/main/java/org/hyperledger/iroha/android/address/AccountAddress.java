@@ -728,11 +728,13 @@ public final class AccountAddress {
   // -- Encoding helpers --
 
   private static byte curveIdForAlgorithm(final String algorithm) throws AccountAddressException {
-    final String normalized = algorithm.trim().toLowerCase(Locale.ROOT);
-    if (!isPrintableAscii(normalized)) {
+    if (algorithm.isEmpty()
+        || !algorithm.equals(algorithm.trim())
+        || !isPrintableAscii(algorithm)) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ALGORITHM, "unsupported signing algorithm: " + algorithm);
     }
+    final String normalized = algorithm.toLowerCase(Locale.ROOT);
     final int curveId;
     switch (normalized) {
       case "ed25519":

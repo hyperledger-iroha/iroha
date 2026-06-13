@@ -61,8 +61,8 @@ def _decode_hash_text(value: Any, *, label: str) -> bytes:
         padded = text + "=" * ((4 - len(text) % 4) % 4)
         try:
             raw = base64.b64decode(padded, altchars=b"-_", validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise RuntimeError(f"{label} must be 32-byte hex or base64") from exc
+        except (binascii.Error, ValueError):
+            raise RuntimeError(f"{label} must be 32-byte hex or base64") from None
         canonical_base64 = base64.b64encode(raw).decode("ascii")
         canonical_base64url = base64.urlsafe_b64encode(raw).decode("ascii")
         if text not in {
@@ -104,8 +104,8 @@ def _read_api_key(args: argparse.Namespace) -> str | None:
         return None
     try:
         token = Path(args.api_key_file).expanduser().read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ValueError("--api-key-file cannot be read") from exc
+    except OSError:
+        raise ValueError("--api-key-file cannot be read") from None
     return _api_key_token(
         token.rstrip("\r\n"),
         label="--api-key-file",
@@ -156,9 +156,11 @@ def _http_get_json(
         with opener(request, timeout=timeout) as response:
             raw = response.read(TON_ACCOUNT_STATES_MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"TON accountStates failed with HTTP {exc.code}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError("TON accountStates request failed") from exc
+        raise RuntimeError(
+            f"TON accountStates failed with HTTP {exc.code}"
+        ) from None
+    except urllib.error.URLError:
+        raise RuntimeError("TON accountStates request failed") from None
     if len(raw) > TON_ACCOUNT_STATES_MAX_RESPONSE_BYTES:
         raise RuntimeError(
             "TON accountStates response exceeds "
@@ -169,14 +171,14 @@ def _http_get_json(
             raw.decode("utf-8"),
             object_pairs_hook=_json_object_without_duplicate_keys,
         )
-    except UnicodeDecodeError as exc:
-        raise RuntimeError("TON accountStates returned invalid JSON") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("TON accountStates returned invalid JSON") from exc
+    except UnicodeDecodeError:
+        raise RuntimeError("TON accountStates returned invalid JSON") from None
+    except json.JSONDecodeError:
+        raise RuntimeError("TON accountStates returned invalid JSON") from None
     except ValueError as exc:
         if str(exc) == "TON accountStates returned duplicate JSON keys":
             raise RuntimeError("TON accountStates returned duplicate JSON keys") from None
-        raise RuntimeError("TON accountStates returned invalid JSON") from exc
+        raise RuntimeError("TON accountStates returned invalid JSON") from None
     if not isinstance(decoded, dict):
         raise RuntimeError("TON accountStates returned a non-object response")
     if decoded.get("error") is not None:
@@ -249,7 +251,7 @@ def collect_live_evidence(
     except argparse.ArgumentTypeError as exc:
         raise RuntimeError(
             "TON accountStates account address must be a canonical raw address"
-        ) from exc
+        ) from None
     if normalized_account_address != verifier:
         raise RuntimeError("TON accountStates account address does not match verifier contract")
     status = account.get("status")
@@ -274,8 +276,8 @@ def collect_live_evidence(
     try:
         code_boc_bytes = evidence.parse_code_boc_base64(code_boc, label="code_boc")
         code_boc_hash = evidence.ton_boc_single_root_hash(code_boc_bytes)
-    except (argparse.ArgumentTypeError, ValueError) as exc:
-        raise RuntimeError("TON verifier account code_boc is invalid") from exc
+    except (argparse.ArgumentTypeError, ValueError):
+        raise RuntimeError("TON verifier account code_boc is invalid") from None
     if code_boc_hash != code_hash:
         raise RuntimeError(
             "TON verifier account code_boc root hash does not match code_hash: "
@@ -360,8 +362,8 @@ def _validate_live_evidence(
             label="code_boc_base64",
         )
         derived_code_boc_root_hash = evidence.ton_boc_single_root_hash(code_boc_bytes)
-    except (argparse.ArgumentTypeError, ValueError) as exc:
-        raise ValueError("TON live code BoC base64 metadata is invalid") from exc
+    except (argparse.ArgumentTypeError, ValueError):
+        raise ValueError("TON live code BoC base64 metadata is invalid") from None
     if derived_code_boc_root_hash != code_boc_root_hash:
         raise ValueError("TON live code BoC bytes must match code_boc_root_hash")
 

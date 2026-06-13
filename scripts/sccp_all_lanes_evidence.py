@@ -81,6 +81,7 @@ class LaneProfile:
     source_bridge_emitter_id: str = ""
     destination_verifier_key_hash_required: bool = False
     eth_source_bridge_config_required: bool = False
+    evm_source_gate_required: bool = False
     tron_source_bridge_config_required: bool = False
     solana_full_light_client_audit_required: bool = False
     ton_full_light_client_audit_required: bool = False
@@ -113,6 +114,7 @@ LANE_PROFILES: dict[int, LaneProfile] = {
         source_bridge_emitter_id="sccp:eth:source-bridge-emitter:ethereum-mainnet:v1",
         destination_verifier_key_hash_required=True,
         eth_source_bridge_config_required=True,
+        evm_source_gate_required=True,
     ),
     SCCP_DOMAIN_BSC: LaneProfile(
         domain=SCCP_DOMAIN_BSC,
@@ -130,6 +132,7 @@ LANE_PROFILES: dict[int, LaneProfile] = {
         route_allowlist_id="sccp:bsc:route-allowlist:bsc-mainnet:v1",
         source_bridge_emitter_id="sccp:bsc:source-bridge-emitter:bsc-mainnet:v1",
         destination_verifier_key_hash_required=True,
+        evm_source_gate_required=True,
     ),
     SCCP_DOMAIN_SOL: LaneProfile(
         domain=SCCP_DOMAIN_SOL,
@@ -210,6 +213,7 @@ TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS = (
     "ton_shard_accounts_dictionary_verifier_hash",
     "ton_full_light_client_gate_hash",
 )
+EVM_SOURCE_GATE_FIELDS = ("evm_source_gate_hash",)
 TRON_DPOS_SOURCE_GATE_FIELDS = ("tron_dpos_source_gate_hash",)
 EVM_SOURCE_BRIDGE_LIVE_COMMENT_FIELDS = (
     "_comment_evm_source_rpc_chain_id",
@@ -324,6 +328,7 @@ SOURCE_ADAPTER_DEPLOYMENT_ROLE_HASH_FIELDS = (
     "adapter_verifier_vk_hash",
     "deployment_receipt_hash",
 )
+EVM_SOURCE_GATE_ROLE_HASH_FIELDS = ("evm_source_gate_hash",)
 SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS = (
     "solana_tower_replay_verifier_hash",
     "solana_full_accountsdb_lattice_verifier_hash",
@@ -393,6 +398,7 @@ SOURCE_DEPLOYMENT_FIELDS = frozenset(
         "_comment_source_adapter_engine_deployment_hash",
         *SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS,
         *TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS,
+        *EVM_SOURCE_GATE_FIELDS,
         *TRON_DPOS_SOURCE_GATE_FIELDS,
     )
 )
@@ -992,11 +998,45 @@ def _is_nonempty_string(value: Any) -> bool:
 def _decode_canonical_base64(value: str, *, label: str) -> bytes:
     try:
         raw = base64.b64decode(value, validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise ValueError(f"{label} must be base64") from exc
+    except (ValueError, binascii.Error):
+        raise ValueError(f"{label} must be base64") from None
     if base64.b64encode(raw).decode("ascii") != value:
         raise ValueError(f"{label} must be canonical base64")
     return raw
+
+
+MARKDOWN_UNSAFE_BLOCKER_CHARACTERS = frozenset("|`<>")
+SENSITIVE_PUBLIC_BLOCKER_MARKERS = (
+    "secret-token",
+    "private-key",
+    "private_key",
+    "password",
+    "passphrase",
+    "bearer",
+    "authorization",
+    "access-key",
+    "access_key",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "session",
+    "token",
+)
+
+
+def _blocker_text_issue(blocker: Any) -> str | None:
+    if not isinstance(blocker, str) or not blocker or blocker.strip() != blocker:
+        return "must be a non-empty canonical string"
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in blocker):
+        return "contains control character"
+    if not blocker.isascii():
+        return "contains non-ASCII character"
+    if any(character in MARKDOWN_UNSAFE_BLOCKER_CHARACTERS for character in blocker):
+        return "contains Markdown-unsafe character"
+    if any(marker in blocker.lower() for marker in SENSITIVE_PUBLIC_BLOCKER_MARKERS):
+        return "contains sensitive name"
+    return None
 
 
 def _blocker_list_errors(record: dict[str, Any], label: str) -> list[str]:
@@ -1005,14 +1045,9 @@ def _blocker_list_errors(record: dict[str, Any], label: str) -> list[str]:
         return [f"{label} blockers must be a list of non-empty canonical strings"]
     errors: list[str] = []
     for index, blocker in enumerate(blockers):
-        if (
-            not isinstance(blocker, str)
-            or not blocker
-            or blocker.strip() != blocker
-        ):
-            errors.append(
-                f"{label} blockers[{index}] must be a non-empty canonical string"
-            )
+        issue = _blocker_text_issue(blocker)
+        if issue is not None:
+            errors.append(f"{label} blockers[{index}] {issue}")
     if blockers:
         errors.append(f"{label} blockers must be empty")
     return errors
@@ -1027,14 +1062,9 @@ def _canonical_blocker_list(
     blockers: list[str] = []
     errors: list[str] = []
     for index, blocker in enumerate(value):
-        if (
-            not isinstance(blocker, str)
-            or not blocker
-            or blocker.strip() != blocker
-        ):
-            errors.append(
-                f"{label} blockers[{index}] must be a non-empty canonical string"
-            )
+        issue = _blocker_text_issue(blocker)
+        if issue is not None:
+            errors.append(f"{label} blockers[{index}] {issue}")
         else:
             blockers.append(blocker)
     return blockers, errors
@@ -1124,9 +1154,9 @@ def _reject_unknown_fields(
     record: dict[str, Any],
     allowed_fields: frozenset[str],
 ) -> None:
-    for field in sorted(record):
+    for field in sorted(record, key=lambda item: str(item)):
         if field not in allowed_fields:
-            errors.append(f"unexpected field {field}")
+            errors.append(_unexpected_record_field_detail(field))
 
 
 def _reject_lane_foreign_fields(
@@ -1184,8 +1214,8 @@ def _load_toml(text: str, *, label: str) -> dict[str, Any]:
         return _load_toml_minimal(text, label=label)
     try:
         return tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:  # type: ignore[union-attr]
-        raise ValueError(f"{label}: invalid TOML") from exc
+    except tomllib.TOMLDecodeError:  # type: ignore[union-attr]
+        raise ValueError(f"{label}: invalid TOML") from None
 
 
 def _parse_minimal_toml_value(value: str, *, label: str, line_number: int) -> Any:
@@ -1195,13 +1225,13 @@ def _parse_minimal_toml_value(value: str, *, label: str, line_number: int) -> An
     if text.startswith('"'):
         try:
             return json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{label}:{line_number}: invalid string") from exc
+        except json.JSONDecodeError:
+            raise ValueError(f"{label}:{line_number}: invalid string") from None
     if text.startswith("["):
         try:
             parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{label}:{line_number}: invalid array") from exc
+        except json.JSONDecodeError:
+            raise ValueError(f"{label}:{line_number}: invalid array") from None
         if not isinstance(parsed, list) or not all(
             isinstance(item, str) for item in parsed
         ):
@@ -1218,6 +1248,101 @@ def _parse_minimal_toml_value(value: str, *, label: str, line_number: int) -> An
     ):
         raise ValueError(f"{label}:{line_number}: unsupported TOML value")
     return int(text, 10)
+
+
+MINIMAL_TOML_SAFE_KEY_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+)
+SENSITIVE_MINIMAL_TOML_KEY_MARKERS = (
+    "secret",
+    "token",
+    "private",
+    "password",
+    "passphrase",
+    "bearer",
+    "authorization",
+    "access-key",
+    "access_key",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "session",
+)
+
+
+def _minimal_toml_duplicate_key_detail(key: str) -> str:
+    lowered = key.lower()
+    if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
+        return "duplicate key with sensitive name"
+    if (
+        not key
+        or not key.isascii()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in key)
+        or any(ch not in MINIMAL_TOML_SAFE_KEY_CHARS for ch in key)
+    ):
+        return "duplicate key with malformed name"
+    return f"duplicate key {key}"
+
+
+def _toml_unsupported_section_detail(name: str) -> str:
+    lowered = name.lower()
+    if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
+        return "unsupported zk section with sensitive name"
+    if (
+        not name
+        or not name.isascii()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in name)
+        or any(ch not in MINIMAL_TOML_SAFE_KEY_CHARS for ch in name)
+    ):
+        return "unsupported zk section with malformed name"
+    return f"unsupported zk section {name}"
+
+
+def _evidence_unsupported_section_detail(name: str) -> str:
+    lowered = name.lower()
+    if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
+        return "unsupported evidence section with sensitive name"
+    if (
+        not name
+        or not name.isascii()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in name)
+        or any(ch not in MINIMAL_TOML_SAFE_KEY_CHARS for ch in name)
+    ):
+        return "unsupported evidence section with malformed name"
+    return f"unsupported evidence section {name}"
+
+
+def _unexpected_record_field_detail(field: object) -> str:
+    if not isinstance(field, str):
+        return "unexpected non-string field name"
+    lowered = field.lower()
+    if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
+        return "unexpected field with sensitive name"
+    if (
+        not field
+        or not field.isascii()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in field)
+        or any(ch not in MINIMAL_TOML_SAFE_KEY_CHARS for ch in field)
+    ):
+        return "unexpected field with malformed name"
+    return f"unexpected field {field}"
+
+
+def _unexpected_audit_hash_field_detail(field: object) -> str:
+    if not isinstance(field, str):
+        return "source adapter gate audit hashes contains non-string field name"
+    lowered = field.lower()
+    if any(marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS):
+        return "source adapter gate audit hashes contains unexpected field with sensitive name"
+    if (
+        not field
+        or not field.isascii()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in field)
+        or any(ch not in MINIMAL_TOML_SAFE_KEY_CHARS for ch in field)
+    ):
+        return "source adapter gate audit hashes contains unexpected field with malformed name"
+    return f"source adapter gate audit hashes contains unexpected field: {field}"
 
 
 def _is_canonical_decimal_text(value: object, *, positive: bool) -> bool:
@@ -1243,7 +1368,8 @@ def _load_toml_minimal(text: str, *, label: str) -> dict[str, Any]:
                 raise ValueError(f"{label}:{line_number}: expected [[zk.*]] section")
             name = section.removeprefix("zk.")
             if name not in SECTION_NAMES:
-                raise ValueError(f"{label}:{line_number}: unsupported zk section {name}")
+                detail = _toml_unsupported_section_detail(name)
+                raise ValueError(f"{label}:{line_number}: {detail}")
             current = {}
             document["zk"][name].append(current)
             continue
@@ -1254,7 +1380,8 @@ def _load_toml_minimal(text: str, *, label: str) -> dict[str, Any]:
         key, value = line.split("=", 1)
         key = key.strip()
         if key in current:
-            raise ValueError(f"{label}:{line_number}: duplicate key {key}")
+            detail = _minimal_toml_duplicate_key_detail(key)
+            raise ValueError(f"{label}:{line_number}: {detail}")
         current[key] = _parse_minimal_toml_value(
             value,
             label=label,
@@ -1266,8 +1393,8 @@ def _load_toml_minimal(text: str, *, label: str) -> dict[str, Any]:
 def _comment_toml_value(value: str, *, label: str, line_number: int) -> str:
     try:
         parsed = json.loads(value.strip())
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{label}:{line_number}: invalid metadata comment") from exc
+    except json.JSONDecodeError:
+        raise ValueError(f"{label}:{line_number}: invalid metadata comment") from None
     if not isinstance(parsed, str):
         raise ValueError(f"{label}:{line_number}: metadata comment must be a string")
     return parsed
@@ -1394,7 +1521,8 @@ def load_evidence_bundle(paths: list[Path]) -> dict[str, list[dict[str, Any]]]:
             raise ValueError(f"{label}: [zk] must be a TOML table")
         for section in sorted(zk):
             if section not in SECTION_NAMES:
-                raise ValueError(f"{label}: unsupported zk section {section}")
+                detail = _toml_unsupported_section_detail(section)
+                raise ValueError(f"{label}: {detail}")
         for section in SECTION_NAMES:
             records = zk.get(section, [])
             if records is None:
@@ -1913,7 +2041,15 @@ def _check_deployment(
 
     if profile.eth_source_bridge_config_required:
         errors.extend(_check_eth_source_bridge_config_hash(material))
-    elif profile.tron_source_bridge_config_required:
+    if profile.evm_source_gate_required:
+        for field in EVM_SOURCE_GATE_FIELDS:
+            _expect_nonzero_hex(errors, record, field)
+        errors.extend(_check_evm_source_gate(profile, material, record))
+    else:
+        for field in EVM_SOURCE_GATE_FIELDS:
+            _expect_empty_hex_or_absent(errors, record, field)
+
+    if profile.tron_source_bridge_config_required:
         errors.extend(_check_tron_source_bridge_config_hash(material))
         for field in TRON_DPOS_SOURCE_GATE_FIELDS:
             _expect_nonzero_hex(errors, record, field)
@@ -1923,6 +2059,8 @@ def _check_deployment(
             _expect_empty_hex_or_absent(errors, record, field)
 
     deployment_role_hash_fields = SOURCE_ADAPTER_DEPLOYMENT_ROLE_HASH_FIELDS
+    if profile.evm_source_gate_required:
+        deployment_role_hash_fields += EVM_SOURCE_GATE_ROLE_HASH_FIELDS
     if profile.solana_full_light_client_audit_required:
         deployment_role_hash_fields += SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS
     if profile.ton_full_light_client_audit_required:
@@ -2341,6 +2479,36 @@ def _expected_route_allowlist_hash(
     )
 
 
+def _check_evm_source_gate(
+    profile: LaneProfile,
+    material: dict[str, Any],
+    deployment: dict[str, Any],
+) -> list[str]:
+    try:
+        module_name = (
+            "sccp_eth_source_bridge_evidence.py"
+            if profile.domain == SCCP_DOMAIN_ETH
+            else "sccp_bsc_source_bridge_evidence.py"
+        )
+        module = _load_sibling_module(module_name)
+        args = _evm_source_bridge_args(material, deployment)
+        expected = (
+            module.eth_source_gate_hash(args)
+            if profile.domain == SCCP_DOMAIN_ETH
+            else module.bsc_source_gate_hash(args)
+        )
+        configured = _required_hex_bytes(
+            deployment,
+            "evm_source_gate_hash",
+            byte_length=32,
+        )
+    except (SystemExit, ValueError, RuntimeError):
+        return ["EVM source gate cannot be recomputed"]
+    if expected != configured:
+        return ["evm_source_gate_hash does not match source and deployment material"]
+    return []
+
+
 def _check_solana_full_light_client_gate(
     material: dict[str, Any],
     deployment: dict[str, Any],
@@ -2447,7 +2615,15 @@ def _source_adapter_gate_summary(
     required_fields: tuple[str, ...]
     gate_field: str
     gate_checker: Callable[[dict[str, Any], dict[str, Any]], list[str]]
-    if profile.solana_full_light_client_audit_required:
+    if profile.evm_source_gate_required:
+        required_fields = EVM_SOURCE_GATE_FIELDS
+        gate_field = "evm_source_gate_hash"
+        gate_checker = lambda material, deployment: _check_evm_source_gate(
+            profile,
+            material,
+            deployment,
+        )
+    elif profile.solana_full_light_client_audit_required:
         required_fields = SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS
         gate_field = "solana_full_light_client_gate_hash"
         gate_checker = _check_solana_full_light_client_gate
@@ -5998,6 +6174,8 @@ def _source_adapter_gate_requirements(
     profile = LANE_PROFILES.get(domain)
     if profile is None:
         return "", ()
+    if profile.evm_source_gate_required:
+        return "evm_source_gate_hash", EVM_SOURCE_GATE_FIELDS
     if profile.solana_full_light_client_audit_required:
         return "solana_full_light_client_gate_hash", SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS
     if profile.ton_full_light_client_audit_required:
@@ -6055,10 +6233,11 @@ def _source_adapter_gate_release_metadata_blockers(
         blockers.append(
             f"{lane_label}: source adapter gate audit hashes must not be empty when required"
         )
-    for field in sorted(set(audit_hashes) - set(expected_audit_fields)):
-        blockers.append(
-            f"{lane_label}: source adapter gate audit hashes contains unexpected field: {field}"
-        )
+    for field in sorted(
+        set(audit_hashes) - set(expected_audit_fields),
+        key=lambda item: str(item),
+    ):
+        blockers.append(f"{lane_label}: {_unexpected_audit_hash_field_detail(field)}")
     for field in expected_audit_fields:
         value = audit_hashes.get(field)
         parsed = _hex_bytes(value, byte_length=32)
@@ -6125,8 +6304,11 @@ def _source_adapter_gate_release_metadata_blockers(
         ),
     ]
     role_fields.extend(
-        (f"audit_hashes.{field}", _hex_bytes(value, byte_length=32))
-        for field, value in sorted(audit_hashes.items())
+        (
+            f"audit_hashes.{field}",
+            _hex_bytes(audit_hashes.get(field), byte_length=32),
+        )
+        for field in sorted(expected_audit_fields)
     )
     _expect_distinct_byte_values(
         blockers,
@@ -6435,7 +6617,7 @@ def _evidence_bundle_root_errors(records: Any) -> tuple[dict[str, Any], list[str
         if not isinstance(section, str):
             errors.append(f"evidence section name must be a string: {section!r}")
         elif section not in SECTION_NAMES:
-            errors.append(f"unsupported evidence section {section}")
+            errors.append(_evidence_unsupported_section_detail(section))
     return records, errors
 
 

@@ -28,6 +28,7 @@ public final class AccountAddressTests {
     curveSupportDefaults();
     curveSupportConfigurationToggle();
     fullCryptoCurveRegistry();
+    curveAlgorithmAliasesRejectBlankAndPaddedLabels();
     curveAlgorithmAliasesRejectControlsAndUnicodeConfusables();
     longGostLabelsAcceptedWhenEnabled();
     singleKeyPayloadExtraction();
@@ -309,6 +310,30 @@ public final class AccountAddressTests {
           "\u0435d25519",
           "ml\uFF0Ddsa",
           "gost256\u0430",
+        }) {
+      boolean threw = false;
+      try {
+        AccountAddress.fromAccount(key, algorithm);
+      } catch (final AccountAddress.AccountAddressException ex) {
+        threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ALGORITHM;
+      }
+      assert threw : "expected unsupported curve algorithm for " + algorithm;
+    }
+  }
+
+  private static void curveAlgorithmAliasesRejectBlankAndPaddedLabels() {
+    final byte[] key = new byte[32];
+    Arrays.fill(key, (byte) 0x11);
+    for (final String algorithm :
+        new String[] {
+          "",
+          " ",
+          " ed25519",
+          "ed25519 ",
+          "\ted25519",
+          "ed25519\n",
+          "\u00A0ed25519",
+          "ed25519\u00A0",
         }) {
       boolean threw = false;
       try {

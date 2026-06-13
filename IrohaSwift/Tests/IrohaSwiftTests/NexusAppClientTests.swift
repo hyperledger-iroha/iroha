@@ -97,6 +97,34 @@ final class NexusAppClientTests: XCTestCase {
         XCTAssertEqual(torii.submittedHash, expectedTransactionHash)
     }
 
+    func testFinalizeAndSubmitAcceptsExactZeroSignatureAlgorithmAlias() async throws {
+        let fixture = try Self.loadNexusFixture()
+        let expected = try XCTUnwrap(fixture["expected"] as? [String: Any])
+        let expectedTransactionHash = try XCTUnwrap(expected["signed_transaction_hash_hex"] as? String)
+        let torii = FakeToriiSubmitter()
+        let client = NexusAppClient(
+            config: NexusAppConfig(chainId: "test-chain",
+                                   authority: Self.accountID,
+                                   signingPublicKey: Self.publicKey),
+            toriiSubmitter: torii
+        )
+        let draft = try client.buildTransferDraft(input: sampleInput())
+        let signable = NexusSignableTransaction(payloadBytes: draft.signable.payloadBytes,
+                                                payloadHashHex: draft.signable.payloadHashHex,
+                                                authority: draft.signable.authority,
+                                                signingPublicKey: draft.signable.signingPublicKey,
+                                                signatureAlgorithm: "0")
+
+        let receipt = try await client.finalizeAndSubmit(
+            signable: signable,
+            signature: NexusWalletSignature(signature: Self.walletSignature, algorithm: "0"),
+            options: NexusFinalizeOptions(waitForFinalStatus: false)
+        )
+
+        XCTAssertEqual(receipt.transactionHashHex, expectedTransactionHash)
+        XCTAssertEqual(torii.submittedHash, expectedTransactionHash)
+    }
+
     func testFinalizeAndSubmitRejectsUnsupportedSignatureAlgorithm() async throws {
         let client = NexusAppClient(
             config: NexusAppConfig(chainId: "test-chain",
@@ -107,8 +135,26 @@ final class NexusAppClientTests: XCTestCase {
         let draft = try client.buildTransferDraft(input: sampleInput())
 
         for algorithm in [
+            "",
+            " ",
+            "\t",
+            "\n",
+            "\u{00A0}",
+            "ed25519 ",
+            " ed25519",
+            "\ted25519",
+            "ed25519\n",
+            "ed25519\u{00A0}",
+            "0 ",
+            " 0",
+            "\t0",
+            "00",
+            "\u{FF10}",
             "secp256k1",
             "ed\t25519",
+            "ed\u{0000}25519",
+            "ed\u{001F}25519",
+            "ed\u{007F}25519",
             "ed\u{200B}25519",
             "\u{0435}d25519",
             "ed\u{FF0D}25519",
@@ -124,21 +170,80 @@ final class NexusAppClientTests: XCTestCase {
                 )
             }
 
-            XCTAssertEqual(error.code, "unsupported_signature_algorithm")
+            XCTAssertEqual(error.code, "unsupported_signature_algorithm", String(reflecting: algorithm))
         }
 
-        let signable = NexusSignableTransaction(payloadBytes: draft.signable.payloadBytes,
-                                                payloadHashHex: draft.signable.payloadHashHex,
-                                                authority: draft.signable.authority,
-                                                signingPublicKey: draft.signable.signingPublicKey,
-                                                signatureAlgorithm: "ed\u{200B}25519")
-        let signableError = await expectNexusErrorAsync {
-            _ = try await client.finalizeAndSubmit(
-                signable: signable,
-                signature: NexusWalletSignature(signature: Data(repeating: 0x07, count: 64))
-            )
+        for algorithm in [
+            "",
+            " ",
+            "ed25519 ",
+            " ed25519",
+            "0 ",
+            " 0",
+            "00",
+            "ED25519",
+            "ed\u{0000}25519",
+            "ed\u{200B}25519",
+            "\u{0435}d25519",
+        ] {
+            let signable = NexusSignableTransaction(payloadBytes: draft.signable.payloadBytes,
+                                                    payloadHashHex: draft.signable.payloadHashHex,
+                                                    authority: draft.signable.authority,
+                                                    signingPublicKey: draft.signable.signingPublicKey,
+                                                    signatureAlgorithm: algorithm)
+            let signableError = await expectNexusErrorAsync {
+                _ = try await client.finalizeAndSubmit(
+                    signable: signable,
+                    signature: NexusWalletSignature(signature: Self.walletSignature)
+                )
+            }
+            XCTAssertEqual(signableError.code, "unsupported_signature_algorithm", String(reflecting: algorithm))
         }
-        XCTAssertEqual(signableError.code, "unsupported_signature_algorithm")
+    }
+
+    func testRequestSignatureRejectsUnsupportedSignatureAlgorithmsAtTransportBoundary() async throws {
+        let session = NexusConnectSession(sessionID: "session-1",
+                                          walletLaunchURI: URL(string: "sora://wallet/connect")!,
+                                          approvedAccount: Self.accountID,
+                                          signingPublicKey: Self.publicKey)
+        let signable = NexusSignableTransaction(payloadBytes: Data([0x01, 0x02, 0x03]),
+                                                payloadHashHex: String(repeating: "0", count: 64),
+                                                authority: Self.accountID,
+                                                signingPublicKey: Self.publicKey)
+
+        for algorithm in ["", "ed25519 ", " 0", "ED25519", "ed\u{200B}25519"] {
+            let connect = SignatureConnect(signature: Self.walletSignature)
+            let client = NexusAppClient(config: NexusAppConfig(chainId: "test-chain"),
+                                        connectTransport: connect)
+            let badSignable = NexusSignableTransaction(payloadBytes: signable.payloadBytes,
+                                                       payloadHashHex: signable.payloadHashHex,
+                                                       authority: signable.authority,
+                                                       signingPublicKey: signable.signingPublicKey,
+                                                       signatureAlgorithm: algorithm)
+
+            let error = await expectNexusErrorAsync {
+                _ = try await client.requestSignature(session: session, signable: badSignable)
+            }
+
+            XCTAssertEqual(error.code, "unsupported_signature_algorithm", String(reflecting: algorithm))
+            XCTAssertNil(connect.lastSignable)
+        }
+
+        for algorithm in ["ed25519 ", " 0", "\u{FF10}", "ed\u{0000}25519", "\u{0435}d25519"] {
+            let connect = SignatureConnect(
+                signature: Self.walletSignature,
+                algorithm: algorithm
+            )
+            let client = NexusAppClient(config: NexusAppConfig(chainId: "test-chain"),
+                                        connectTransport: connect)
+
+            let error = await expectNexusErrorAsync {
+                _ = try await client.requestSignature(session: session, signable: signable)
+            }
+
+            XCTAssertEqual(error.code, "unsupported_signature_algorithm", String(reflecting: algorithm))
+            XCTAssertNotNil(connect.lastSignable)
+        }
     }
 
     func testAwaitApprovalRejectsMissingAccountAndSigningKey() async throws {
@@ -394,6 +499,36 @@ final class NexusAppClientTests: XCTestCase {
             lastSignable = signable
             XCTAssertEqual(signable.signatureAlgorithm, NexusSignatureAlgorithmEd25519)
             return NexusWalletSignature(signature: NexusAppClientTests.walletSignature)
+        }
+    }
+
+    private final class SignatureConnect: NexusConnectTransport {
+        private(set) var lastSignable: NexusSignableTransaction?
+        private let signature: Data
+        private let algorithm: String
+
+        init(signature: Data, algorithm: String = NexusSignatureAlgorithmEd25519) {
+            self.signature = signature
+            self.algorithm = algorithm
+        }
+
+        func startConnect(options: NexusConnectOptions,
+                          config: NexusAppConfig) async throws -> NexusConnectSession {
+            NexusConnectSession(sessionID: "session-1",
+                                walletLaunchURI: URL(string: "sora://wallet/connect")!)
+        }
+
+        func awaitApproval(session: NexusConnectSession,
+                           config: NexusAppConfig) async throws -> NexusApprovedAccount {
+            NexusApprovedAccount(accountID: NexusAppClientTests.accountID,
+                                 signingPublicKey: NexusAppClientTests.publicKey)
+        }
+
+        func requestSignature(session: NexusConnectSession,
+                              signable: NexusSignableTransaction,
+                              config: NexusAppConfig) async throws -> NexusWalletSignature {
+            lastSignable = signable
+            return NexusWalletSignature(signature: signature, algorithm: algorithm)
         }
     }
 

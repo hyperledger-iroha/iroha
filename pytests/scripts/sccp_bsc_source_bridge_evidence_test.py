@@ -241,6 +241,56 @@ def test_bsc_hash_parser_rejects_zero_and_wrong_width():
         raise AssertionError("short BSC component hash was accepted")
 
 
+def test_bsc_source_bridge_direct_parsers_redact_parser_causes(tmp_path):
+    module = load_evidence_module()
+
+    fixed_payload = "secret-token-bsc-source-hex"
+    try:
+        module.parse_hex_bytes(
+            "0x" + fixed_payload + ("a" * (64 - len(fixed_payload))),
+            label="source trust anchor hash",
+            byte_length=32,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "source trust anchor hash must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret BSC source bridge fixed hex was accepted")
+
+    runtime_payload = "secret-token-bsc-source-runtime0"
+    try:
+        module.parse_runtime_bytecode_hex(
+            "0x" + runtime_payload,
+            label="source bridge runtime bytecode",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "source bridge runtime bytecode must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret BSC source bridge runtime hex was accepted")
+
+    secret_path = tmp_path / "secret-token-bsc-source-file-path.hex"
+    try:
+        module.parse_runtime_bytecode_file(
+            str(secret_path),
+            label="source bridge runtime bytecode",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "source bridge runtime bytecode file cannot be read"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("missing secret BSC source bridge runtime file was accepted")
+
+
 def test_bsc_source_numeric_parsers_require_canonical_ascii_decimal():
     module = load_evidence_module()
 
@@ -253,6 +303,17 @@ def test_bsc_source_numeric_parsers_require_canonical_ascii_decimal():
     assert module.parse_bsc_network("bsc-testnet") == "testnet"
     assert module.parse_bsc_network("chapel") == "testnet"
     assert module.parse_bsc_network("97") == "testnet"
+
+    try:
+        module.parse_bsc_network("secret-token-bsc-source-network")
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "BSC network must be mainnet or testnet"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret BSC source network was accepted")
 
     for value in ("02", "0x2", "+2", " 2 ", "٢"):
         try:
@@ -497,6 +558,10 @@ def test_bsc_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
         in rendered
     )
     assert 'deployment_receipt_hash = "0x' + "aa" * 32 + '"' in rendered
+    assert (
+        'evm_source_gate_hash = "0x' + module.bsc_source_gate_hash(args).hex() + '"'
+        in rendered
+    )
     assert "source_bridge_network_id" not in rendered
     assert "source_bridge_owner_address" not in rendered
     assert "source_bridge_config_hash" not in rendered
@@ -518,6 +583,7 @@ def test_bsc_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
 
     testnet_rendered = module.render_toml(testnet_args)
     assert '# sccp_evm_source_rpc_chain_id = "97"' in testnet_rendered
+    assert "evm_source_gate_hash" not in testnet_rendered
     assert 'source_chain = "bsc-testnet"' in testnet_rendered
     assert (
         'source_trust_anchor_id = "sccp:bsc:source-trust-anchor:'

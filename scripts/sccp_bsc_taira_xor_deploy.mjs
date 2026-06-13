@@ -409,8 +409,12 @@ function parseArgs(argv) {
   return args;
 }
 
-const parseBoolean = (value) =>
-  ["1", "true", "yes", "on"].includes(trim(value).toLowerCase());
+function parseBoolean(value, label = "boolean option") {
+  if (value === undefined || value === null || value === "") return false;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`${label} must be true or false.`);
+}
 
 export function normalizeBscNetworkProfile(value = "testnet") {
   const normalized = trim(value || "testnet")
@@ -687,7 +691,10 @@ function requireBscNetworkConfirmation(options, profile, action) {
       `${action} requires --confirm-network ${profile.confirmNetwork}.`,
     );
   }
-  if (profile.key === "mainnet" && !parseBoolean(options["confirm-mainnet"])) {
+  if (
+    profile.key === "mainnet" &&
+    !parseBoolean(options["confirm-mainnet"], "--confirm-mainnet")
+  ) {
     throw new Error(`${action} requires --confirm-mainnet true.`);
   }
 }
@@ -1746,6 +1753,48 @@ function normalizeNonEmptyText(value, label) {
     throw new Error(`${label} is required.`);
   }
   return normalized;
+}
+
+function normalizeCanonicalManifestText(value, label) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.trim() !== value
+  ) {
+    throw new Error(`${label} must be a non-empty canonical string.`);
+  }
+  return value;
+}
+
+function readOptionalCanonicalManifestText(
+  record,
+  keys,
+  label,
+  { allowNull = false } = {},
+) {
+  let selected;
+  let selectedKey = "";
+  for (const key of keys) {
+    if (!hasOwn(record, key)) {
+      continue;
+    }
+    const value = ownValue(record, key);
+    if (value === undefined) {
+      continue;
+    }
+    const normalized =
+      value === null && allowNull
+        ? null
+        : normalizeCanonicalManifestText(value, label);
+    if (selected !== undefined && selected !== normalized) {
+      throw new Error(
+        `${label} aliases disagree: ${selectedKey}=${selected} but ${key}=${normalized}.`,
+      );
+    }
+    selected = normalized;
+    selectedKey = key;
+  }
+  return selected === undefined ? null : selected;
 }
 
 function normalizeCanonicalStringList(value, label) {
@@ -5459,18 +5508,11 @@ function normalizeRouteManifestForConfig(manifest) {
       offlineFullTomlSha256: offlineFullTomlSha256 || null,
     };
   }
-  const disabledReasonValue = readFirstValue(
+  const explicitDisabledReason = readOptionalCanonicalManifestText(
     record,
-    "disabledReason",
-    "disabled_reason",
+    ["disabledReason", "disabled_reason"],
+    "route manifest disabledReason",
   );
-  const explicitDisabledReason =
-    disabledReasonValue === undefined
-      ? null
-      : normalizeNonEmptyText(
-          disabledReasonValue,
-          "route manifest disabledReason",
-        );
   if (productionReady && explicitDisabledReason) {
     throw new Error(
       "route manifest productionReady cannot be true when disabledReason is set.",
@@ -5527,24 +5569,18 @@ function normalizeRouteManifestForConfig(manifest) {
       "route manifest tairaXorBurnRecord.vkRef.name",
     ),
     gasLimit,
-    settlementContractAddress:
-      readFirstValue(settlement, "contractAddress", "contract_address") ===
-        undefined ||
-      readFirstValue(settlement, "contractAddress", "contract_address") === null
-        ? null
-        : normalizeNonEmptyText(
-            readFirstValue(settlement, "contractAddress", "contract_address"),
-            "route manifest settlement.contractAddress",
-          ),
-    settlementContractAlias:
-      readFirstValue(settlement, "contractAlias", "contract_alias") ===
-        undefined ||
-      readFirstValue(settlement, "contractAlias", "contract_alias") === null
-        ? null
-        : normalizeNonEmptyText(
-            readFirstValue(settlement, "contractAlias", "contract_alias"),
-            "route manifest settlement.contractAlias",
-          ),
+    settlementContractAddress: readOptionalCanonicalManifestText(
+      settlement,
+      ["contractAddress", "contract_address"],
+      "route manifest settlement.contractAddress",
+      { allowNull: true },
+    ),
+    settlementContractAlias: readOptionalCanonicalManifestText(
+      settlement,
+      ["contractAlias", "contract_alias"],
+      "route manifest settlement.contractAlias",
+      { allowNull: true },
+    ),
     postDeployLiveEvidence: normalizedPostDeployLiveEvidence,
   };
 }
@@ -5821,7 +5857,7 @@ async function commandCompile(options) {
 
 async function commandDeploy(options) {
   const profile = bscNetworkProfileFromOptions(options);
-  if (!parseBoolean(options.broadcast)) {
+  if (!parseBoolean(options.broadcast, "--broadcast")) {
     throw new Error(
       `deploy requires --broadcast true and --confirm-network ${profile.confirmNetwork}.`,
     );
@@ -5830,6 +5866,10 @@ async function commandDeploy(options) {
   if (!options.verifier) {
     throw new Error("deploy requires --verifier <verifier-key.json>.");
   }
+  const allowDiagnosticVerifier = parseBoolean(
+    options["allow-diagnostic-verifier"],
+    "--allow-diagnostic-verifier",
+  );
   const verifierMaterial = normalizeVerifierMaterial(
     await readJson(options.verifier),
     profile,
@@ -5841,7 +5881,7 @@ async function commandDeploy(options) {
   }
   if (
     verifierMaterial.diagnosticVerifierReasons.length > 0 &&
-    !parseBoolean(options["allow-diagnostic-verifier"])
+    !allowDiagnosticVerifier
   ) {
     throw new Error(
       `deploy refuses diagnostic BSC verifier material without --allow-diagnostic-verifier true: ${verifierMaterial.diagnosticVerifierReasons.join("; ")}.`,
@@ -5855,7 +5895,7 @@ async function commandDeploy(options) {
   const rpcUrl = normalizeBscRpcUrl(
     options["rpc-url"] ?? defaultBscRpcUrl(profile),
     {
-      allowLocal: parseBoolean(options["allow-local-rpc"]),
+      allowLocal: parseBoolean(options["allow-local-rpc"], "--allow-local-rpc"),
     },
   );
   const ethers = requireOptionalPackage("ethers");
@@ -5982,7 +6022,7 @@ async function commandEvidence(options) {
   const rpcUrl = normalizeBscRpcUrl(
     options["rpc-url"] ?? defaultBscRpcUrl(profile),
     {
-      allowLocal: parseBoolean(options["allow-local-rpc"]),
+      allowLocal: parseBoolean(options["allow-local-rpc"], "--allow-local-rpc"),
     },
   );
   const ethers = requireOptionalPackage("ethers");

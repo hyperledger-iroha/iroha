@@ -1299,18 +1299,29 @@ fn build_signable_transaction_b64(
     chain_id: &iroha_data_model::ChainId,
     authority: &iroha_data_model::account::AccountId,
     instructions: Vec<iroha_data_model::isi::InstructionBox>,
-) -> String {
+) -> Result<String, crate::Error> {
+    let dummy_key_pair = iroha_crypto::KeyPair::try_from_seed(
+        b"torii-governance-signable-payload-dummy-signer-v1".to_vec(),
+        iroha_crypto::Algorithm::Ed25519,
+    )
+    .map_err(|err| {
+        crate::Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "failed to derive governance signable-payload dummy signer: {err}"
+        )))
+    })?;
     let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
         chain_id.clone(),
         authority.clone(),
     )
     .with_instructions(instructions)
-    .sign(
-        iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-            .private_key(),
-    )
+    .try_sign(dummy_key_pair.private_key())
+    .map_err(|err| {
+        crate::Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "failed to build governance signable transaction payload: {err}"
+        )))
+    })?
     .with_authority(authority.clone());
-    base64::engine::general_purpose::STANDARD.encode(tx.payload().encode())
+    Ok(base64::engine::general_purpose::STANDARD.encode(tx.payload().encode()))
 }
 
 fn canonical_hex32(value: &str, field: &str) -> Result<(String, [u8; 32]), crate::Error> {
@@ -1876,7 +1887,7 @@ pub async fn handle_gov_protected_set(
             chain_id.as_ref(),
             &authority_id,
             vec![instruction],
-        ))
+        )?)
     } else {
         None
     };
@@ -2149,7 +2160,7 @@ pub async fn handle_ministry_agenda_proposal_draft(
         chain_id.as_ref(),
         &authority_id,
         vec![iroha_data_model::isi::InstructionBox::from(instr)],
-    );
+    )?;
 
     Ok(MinistryAgendaProposalDraftOutcome::Draft(
         MinistryAgendaProposalDraftResponse {
@@ -3560,6 +3571,41 @@ mod tests {
             .0;
         assert!(!after.found);
         assert!(after.namespaces.is_empty());
+    }
+
+    #[tokio::test]
+    async fn protected_namespaces_set_returns_checked_signable_payload_for_authority() {
+        let harness = mk_governance_harness(false);
+        let response = handle_gov_protected_set(
+            harness.chain_id.clone(),
+            harness.state.clone(),
+            MaybeTelemetry::disabled(),
+            NoritoJson(ProtectedNamespacesDto {
+                namespaces: vec!["apps".to_owned(), "system".to_owned()],
+                authority: Some(harness.authority.to_string()),
+            }),
+        )
+        .await
+        .expect("protected namespaces signable draft")
+        .0;
+
+        assert!(response.ok);
+        assert!(!response.submitted);
+        assert_eq!(response.namespace_count, 2);
+        assert_eq!(response.tx_instructions.len(), 1);
+        let signable_payload = response
+            .signable_transaction_b64
+            .expect("authority should produce a signable transaction payload");
+        let tx_bytes = base64::engine::general_purpose::STANDARD
+            .decode(signable_payload.as_bytes())
+            .expect("decode signable payload");
+        let payload: iroha_data_model::transaction::signed::TransactionPayload = {
+            let _guard = norito::core::PayloadCtxGuard::enter(&tx_bytes);
+            let mut cursor = std::io::Cursor::new(tx_bytes.as_slice());
+            norito::codec::Decode::decode(&mut cursor).expect("decode transaction payload")
+        };
+        assert_eq!(payload.authority, harness.authority);
+        assert_eq!(payload.instructions.instruction_count(), 1);
     }
 
     #[tokio::test]

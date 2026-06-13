@@ -506,6 +506,46 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn sign_ivm_transaction_checked_helper_verifies() -> Result<()> {
+        let key_pair = iroha_crypto::KeyPair::random();
+        let authority = AccountId::of(key_pair.public_key().clone());
+
+        let tx = sign_ivm_transaction(
+            &ChainId::from("ivm-contract-deploy-sign-test"),
+            &authority,
+            key_pair.private_key(),
+            Some(Duration::from_millis(1_000)),
+            Metadata::default(),
+            vec![0x13, 0x37],
+        )?;
+
+        tx.verify_signature()
+            .wrap_err("verify IVM deploy helper signature")?;
+        assert_eq!(tx.authority(), &authority);
+        Ok(())
+    }
+
+    #[test]
+    fn sign_instruction_transaction_checked_helper_verifies() -> Result<()> {
+        let key_pair = iroha_crypto::KeyPair::random();
+        let authority = AccountId::of(key_pair.public_key().clone());
+
+        let tx = sign_instruction_transaction(
+            &ChainId::from("ivm-contract-deploy-instruction-sign-test"),
+            &authority,
+            key_pair.private_key(),
+            None,
+            Metadata::default(),
+            Vec::<InstructionBox>::new(),
+        )?;
+
+        tx.verify_signature()
+            .wrap_err("verify IVM deploy instruction helper signature")?;
+        assert_eq!(tx.authority(), &authority);
+        Ok(())
+    }
+
+    #[test]
     fn staged_copy_program_reconstructs_register_request_tlv() {
         let request = RegisterSmartContractBytes {
             code_hash: Hash::new(b"stage-test"),
@@ -679,7 +719,7 @@ fn sign_ivm_transaction(
     transaction_ttl: Option<Duration>,
     metadata: Metadata,
     program: Vec<u8>,
-) -> SignedTransaction {
+) -> Result<SignedTransaction> {
     let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
     if let Some(transaction_ttl) = transaction_ttl {
         builder.set_ttl(transaction_ttl);
@@ -687,7 +727,8 @@ fn sign_ivm_transaction(
     builder
         .with_metadata(metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
-        .sign(private_key)
+        .try_sign(private_key)
+        .wrap_err("failed to sign IVM transaction")
 }
 
 fn sign_instruction_transaction(
@@ -697,7 +738,7 @@ fn sign_instruction_transaction(
     transaction_ttl: Option<Duration>,
     metadata: Metadata,
     instructions: impl IntoIterator<Item = InstructionBox>,
-) -> SignedTransaction {
+) -> Result<SignedTransaction> {
     let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
     if let Some(transaction_ttl) = transaction_ttl {
         builder.set_ttl(transaction_ttl);
@@ -705,7 +746,8 @@ fn sign_instruction_transaction(
     builder
         .with_metadata(metadata)
         .with_instructions(instructions)
-        .sign(private_key)
+        .try_sign(private_key)
+        .wrap_err("failed to sign instruction transaction")
 }
 
 fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathBuf, usize)> {
@@ -770,7 +812,10 @@ fn main() -> Result<()> {
         fs::read(&args.code_file).wrap_err_with(|| format!("read {}", args.code_file.display()))?;
     let verified = ivm::verify_contract_artifact(&code)
         .map_err(|err| eyre!("verify contract artifact: {err}"))?;
-    let manifest = verified.manifest.signed(&key_pair);
+    let manifest = verified
+        .manifest
+        .try_signed(&key_pair)
+        .wrap_err("failed to sign contract manifest")?;
     let code_hash = verified.code_hash;
     let transaction_ttl = args.transaction_ttl_ms.map(Duration::from_millis);
     let tx_metadata = ivm_transaction_metadata(args.gas_asset_id.as_deref(), args.gas_limit)?;
@@ -790,7 +835,7 @@ fn main() -> Result<()> {
         transaction_ttl,
         tx_metadata.clone(),
         register_bytes_program,
-    );
+    )?;
     let direct_register_bytes_tx_size = direct_register_bytes_tx.encode_versioned().len();
     let use_staged_register = !args.force_direct_register
         && direct_register_bytes_tx_size > args.max_direct_register_bytes_tx_bytes;
@@ -812,7 +857,7 @@ fn main() -> Result<()> {
                 transaction_ttl,
                 tx_metadata.clone(),
                 chunk_program,
-            );
+            )?;
             register_stage_tx_hashes.push(chunk_tx.hash().to_string());
             register_plans.push((
                 format!("stage_register_bytes_chunk_{index:03}"),
@@ -829,7 +874,7 @@ fn main() -> Result<()> {
             transaction_ttl,
             tx_metadata.clone(),
             staged_register_program,
-        );
+        )?;
         register_bytes_tx_hash = staged_register_tx.hash();
         register_bytes_tx_strategy = "staged_state_chunks";
         register_plans.push((
@@ -860,7 +905,7 @@ fn main() -> Result<()> {
         transaction_ttl,
         tx_metadata,
         register_manifest_program,
-    );
+    )?;
 
     let nonce_key =
         Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY).expect("static metadata key is valid");
@@ -895,7 +940,7 @@ fn main() -> Result<()> {
         transaction_ttl,
         instruction_transaction_metadata(args.gas_asset_id.as_deref(), &contract_address)?,
         activate_instructions,
-    );
+    )?;
 
     let register_manifest_tx_hash = register_manifest_tx.hash();
     let activate_tx_hash = activate_tx.hash();

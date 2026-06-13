@@ -743,7 +743,8 @@ impl RechainVote {
     /// # Errors
     ///
     /// Returns [`VNextSignatureError::CanonicalEncoding`] if the signing body
-    /// cannot be encoded.
+    /// cannot be encoded, or [`VNextSignatureError::Signing`] if the signing
+    /// backend rejects the private key or preimage.
     pub fn sign(
         &mut self,
         chain_id: &ChainId,
@@ -751,7 +752,10 @@ impl RechainVote {
         private_key: &PrivateKey,
     ) -> Result<(), VNextSignatureError> {
         let preimage = self.signing_preimage(chain_id, mode_tag)?;
-        self.signature = Signature::new(private_key, &preimage).payload().to_vec();
+        self.signature = Signature::try_new(private_key, &preimage)
+            .map_err(|_| VNextSignatureError::Signing)?
+            .payload()
+            .to_vec();
         Ok(())
     }
 }
@@ -903,7 +907,8 @@ impl ViewChangeVote {
     /// # Errors
     ///
     /// Returns [`VNextSignatureError::CanonicalEncoding`] if the signing body
-    /// cannot be encoded.
+    /// cannot be encoded, or [`VNextSignatureError::Signing`] if the signing
+    /// backend rejects the private key or preimage.
     pub fn signing_preimage(
         &self,
         chain_id: &ChainId,
@@ -931,7 +936,10 @@ impl ViewChangeVote {
         private_key: &PrivateKey,
     ) -> Result<(), VNextSignatureError> {
         let preimage = self.signing_preimage(chain_id, mode_tag)?;
-        self.signature = Signature::new(private_key, &preimage).payload().to_vec();
+        self.signature = Signature::try_new(private_key, &preimage)
+            .map_err(|_| VNextSignatureError::Signing)?
+            .payload()
+            .to_vec();
         Ok(())
     }
 }
@@ -1006,6 +1014,8 @@ pub enum VNextSignatureError {
     BadAggregateSignature,
     /// The canonical signing body could not be encoded.
     CanonicalEncoding,
+    /// The signing backend rejected the private key or preimage.
+    Signing,
     /// Signer roster is empty.
     EmptySignerRoster,
     /// Signer bitmap selected no signers.
@@ -1379,7 +1389,8 @@ mod tests {
                     .iter()
                     .find(|candidate| candidate.public_key() == signer.public_key())
                     .expect("signer key pair exists");
-                Signature::new(key_pair.private_key(), preimage)
+                Signature::try_new(key_pair.private_key(), preimage)
+                    .expect("checked aggregate fixture signature")
                     .payload()
                     .to_vec()
             })
@@ -1678,6 +1689,89 @@ mod tests {
             Err(RechainError::AccusedIsNotSuccessor { .. }
                 | RechainError::AccuserHasNoCriticalSuccessor)
         ));
+    }
+
+    #[test]
+    fn rechain_vote_checked_signature_verifies_and_commits_domain() {
+        let keypairs = bls_keypairs(5);
+        let validators = peers_from_keypairs(&keypairs);
+        let order = ChainOrder::new(7, 2, 0, 0, validators.clone(), 3, 3).expect("valid order");
+        let suspect = unsigned_suspect(
+            slot(9),
+            validators[1].clone(),
+            validators[2].clone(),
+            MissedObligation::AckValidation,
+            &order,
+            900,
+        );
+        let certificate = order
+            .rechain_after_suspicions(vec![suspect], &QuorumPolicy::Count { required: 3 })
+            .expect("rechain certificate");
+        let chain = chain_id();
+        let mut vote = RechainVote::unsigned(&certificate, validators[0].clone());
+
+        vote.sign(
+            &chain,
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            keypairs[0].private_key(),
+        )
+        .expect("checked rechain vote signature");
+
+        let preimage = vote
+            .signing_preimage(&chain, crate::sumeragi::consensus::PERMISSIONED_TAG)
+            .expect("rechain vote preimage");
+        let signature = Signature::from_bytes(&vote.signature);
+        signature
+            .verify(keypairs[0].public_key(), &preimage)
+            .expect("checked rechain vote signature verifies");
+        let wrong_domain_preimage = vote
+            .signing_preimage(&chain, "wrong-mode")
+            .expect("wrong-domain rechain vote preimage");
+        assert!(
+            signature
+                .verify(keypairs[0].public_key(), &wrong_domain_preimage)
+                .is_err(),
+            "rechain vote signature must commit the consensus domain"
+        );
+    }
+
+    #[test]
+    fn view_change_vote_checked_signature_verifies_and_commits_domain() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let signer = PeerId::new(keypair.public_key().clone());
+        let certificate = ViewChangeCertificate {
+            new_view: 3,
+            highest_slot: Some(slot(9)),
+            chain_order_hash: Hash::new(b"chain-order"),
+            signer_bitmap: Vec::new(),
+            aggregate_signature: Vec::new(),
+        };
+        let chain = chain_id();
+        let mut vote = ViewChangeVote::unsigned(&certificate, signer);
+
+        vote.sign(
+            &chain,
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            keypair.private_key(),
+        )
+        .expect("checked view-change vote signature");
+
+        let preimage = vote
+            .signing_preimage(&chain, crate::sumeragi::consensus::PERMISSIONED_TAG)
+            .expect("view-change vote preimage");
+        let signature = Signature::from_bytes(&vote.signature);
+        signature
+            .verify(keypair.public_key(), &preimage)
+            .expect("checked view-change vote signature verifies");
+        let wrong_domain_preimage = vote
+            .signing_preimage(&chain, "wrong-mode")
+            .expect("wrong-domain view-change vote preimage");
+        assert!(
+            signature
+                .verify(keypair.public_key(), &wrong_domain_preimage)
+                .is_err(),
+            "view-change vote signature must commit the consensus domain"
+        );
     }
 
     #[test]

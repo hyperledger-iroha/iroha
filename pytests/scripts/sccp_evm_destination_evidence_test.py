@@ -280,6 +280,32 @@ def test_evm_destination_domain_parser_accepts_eth_and_bsc_only():
             raise AssertionError(f"non-canonical BSC network {value!r} was accepted")
 
 
+def test_evm_destination_domain_parsers_redact_parser_causes():
+    module = load_evidence_module()
+
+    try:
+        module.parse_destination_domain("secret-token-evm-destination-domain")
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "domain must be eth or bsc"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret EVM destination domain was accepted")
+
+    try:
+        module.parse_bsc_network("secret-token-evm-destination-bsc-network")
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "BSC network must be mainnet or testnet"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret EVM destination BSC network was accepted")
+
+
 def test_evm_address_and_hash_parsers_reject_zero_and_wrong_width(tmp_path):
     module = load_evidence_module()
 
@@ -376,6 +402,56 @@ def test_evm_address_and_hash_parsers_reject_zero_and_wrong_width(tmp_path):
         raise AssertionError("short EVM network id was accepted")
 
 
+def test_evm_destination_direct_parsers_redact_parser_causes(tmp_path):
+    module = load_evidence_module()
+
+    fixed_payload = "secret-token-evm-destination-hex"
+    try:
+        module.parse_hex_bytes(
+            "0x" + fixed_payload + ("a" * (64 - len(fixed_payload))),
+            label="network id",
+            byte_length=32,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "network id must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret EVM destination fixed hex was accepted")
+
+    runtime_payload = "secret-token-evm-destination-runtime"
+    try:
+        module.parse_runtime_bytecode_hex(
+            "0x" + runtime_payload,
+            label="bridge runtime bytecode",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "bridge runtime bytecode must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret EVM destination runtime hex was accepted")
+
+    secret_path = tmp_path / "secret-token-evm-destination-file-path.hex"
+    try:
+        module.parse_runtime_bytecode_file(
+            str(secret_path),
+            label="bridge runtime bytecode",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "bridge runtime bytecode file cannot be read"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("missing secret EVM destination runtime file was accepted")
+
+
 def test_evm_destination_binding_hash_matches_vectors_and_domain_separates():
     module = load_evidence_module()
     common_eth = {
@@ -461,6 +537,43 @@ def test_evm_destination_binding_hash_matches_vectors_and_domain_separates():
         assert "chain id 56" in str(exc)
     else:
         raise AssertionError("BSC mainnet binding accepted testnet network id")
+
+
+def test_evm_destination_domain_wrappers_redact_nested_causes():
+    module = load_evidence_module()
+    common = {
+        "network_id": bytes.fromhex(ETH_MAINNET_NETWORK_ID),
+        "source_domain": 0,
+        "target_domain": module.SCCP_DOMAIN_SORA,
+        "verifier_address": bytes.fromhex("11" * 20),
+        "bridge_address": bytes.fromhex("22" * 20),
+        "verifier_code_hash": bytes.fromhex("bb" * 32),
+        "verifier_key_hash": bytes.fromhex("cc" * 32),
+    }
+
+    for call, expected in (
+        (
+            lambda: module.profile_for_domain(module.SCCP_DOMAIN_SORA),
+            "domain must be ETH or BSC",
+        ),
+        (
+            lambda: module.evm_destination_binding_hash(**common),
+            "target_domain must be ETH or BSC",
+        ),
+        (
+            lambda: module.evm_destination_binding_key(**common),
+            "target_domain must be ETH or BSC",
+        ),
+    ):
+        try:
+            call()
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"EVM destination wrapper accepted {expected}")
 
 
 def test_evm_route_allowlist_hash_matches_lane_evidence_vectors():
@@ -607,6 +720,8 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
         )
     except ValueError as exc:
         assert "target_domain must be ETH or BSC" in str(exc)
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("non-EVM route canary target domain was accepted")
 

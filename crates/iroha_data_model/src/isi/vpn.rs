@@ -328,7 +328,8 @@ mod tests {
             active_ms: 1_500,
             issued_at_ms: 1_700_000_000_000,
         };
-        let signature = Signature::new(key_pair.private_key(), &body.encode());
+        let signature = Signature::try_new(key_pair.private_key(), &body.encode())
+            .expect("checked VPN usage-voucher ISI fixture signature");
         VpnUsageVoucherV1 {
             body,
             client_public_key: key_pair.public_key().clone(),

@@ -104,8 +104,8 @@ def _parse_hex_bytes(value: str, *, label: str, byte_length: int) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
     return raw
@@ -307,9 +307,11 @@ def _json_rpc(
         with opener(request, timeout=timeout) as response:
             raw = response.read(EVM_SOURCE_JSON_RPC_MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"JSON-RPC {method} failed with HTTP {exc.code}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"JSON-RPC {method} request failed") from exc
+        raise RuntimeError(
+            f"JSON-RPC {method} failed with HTTP {exc.code}"
+        ) from None
+    except urllib.error.URLError:
+        raise RuntimeError(f"JSON-RPC {method} request failed") from None
     if len(raw) > EVM_SOURCE_JSON_RPC_MAX_RESPONSE_BYTES:
         raise RuntimeError(
             f"JSON-RPC {method} response exceeds "
@@ -320,14 +322,14 @@ def _json_rpc(
             raw.decode("utf-8"),
             object_pairs_hook=_json_object_without_duplicate_keys,
         )
-    except UnicodeDecodeError as exc:
-        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
+    except UnicodeDecodeError:
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
+    except json.JSONDecodeError:
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     except ValueError as exc:
         if str(exc) == "JSON-RPC returned duplicate JSON keys":
             raise RuntimeError(f"JSON-RPC {method} returned duplicate JSON keys") from None
-        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     if not isinstance(decoded, dict):
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     if decoded.get("jsonrpc") != "2.0":
@@ -435,10 +437,10 @@ def _receipt_summary(
             method="eth_getTransactionReceipt transactionHash",
             byte_length=32,
         )
-    except RuntimeError as exc:
+    except RuntimeError:
         raise RuntimeError(
             "deployment receipt transactionHash must be a non-zero bytes32"
-        ) from exc
+        ) from None
     if parsed_receipt_transaction_hash != deployment_transaction_hash:
         raise RuntimeError(
             "deployment receipt transactionHash does not match requested "
@@ -454,10 +456,10 @@ def _receipt_summary(
             byte_length=20,
             method="eth_getTransactionReceipt contractAddress",
         )
-    except RuntimeError as exc:
+    except RuntimeError:
         raise RuntimeError(
             "deployment receipt contractAddress must be a non-zero 20-byte EVM address"
-        ) from exc
+        ) from None
     if _hex(parsed_contract_address).lower() != bridge_address.lower():
         raise RuntimeError(
             "deployment receipt contractAddress does not match source bridge"
@@ -469,10 +471,10 @@ def _receipt_summary(
             method="eth_getTransactionReceipt blockHash",
             byte_length=32,
         )
-    except RuntimeError as exc:
+    except RuntimeError:
         raise RuntimeError(
             "deployment receipt blockHash must be a non-zero bytes32"
-        ) from exc
+        ) from None
     block_number = result.get("blockNumber")
     block_number_value = _rpc_quantity(
         block_number,

@@ -2094,7 +2094,7 @@ function normalizeKagemushaBlockHeight(blockHeight) {
     if (!Number.isFinite(blockHeight) || !Number.isInteger(blockHeight)) {
       throw new TypeError("blockHeight must be an integer");
     }
-    if (blockHeight < 0) {
+    if (blockHeight < 0 || Object.is(blockHeight, -0)) {
       throw new RangeError("blockHeight must be non-negative");
     }
     if (!Number.isSafeInteger(blockHeight)) {

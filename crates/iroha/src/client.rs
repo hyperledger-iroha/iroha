@@ -6688,7 +6688,8 @@ mod evidence_http_tests {
             PrivateKey::from_bytes(Algorithm::Ed25519, &[0x44; 32]).expect("seeded key"),
         )
         .expect("derive keypair");
-        let signature = Signature::new(keypair.private_key(), digest.as_ref());
+        let signature = Signature::try_new(keypair.private_key(), digest.as_ref())
+            .expect("alias proof fixture should sign");
         let (_, signer_bytes) = keypair
             .public_key()
             .try_to_bytes()
@@ -7743,7 +7744,9 @@ mod evidence_http_tests {
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .unwrap();
-        let tx = TransactionBuilder::new(chain, authority.clone()).sign(&private_key);
+        let tx = TransactionBuilder::new(chain, authority.clone())
+            .try_sign(&private_key)
+            .expect("queued status fixture transaction should sign");
         let hash = tx.hash();
         let entry = TransactionEntrypoint::External(tx);
         let entry_hash = entry.hash();
@@ -7953,7 +7956,9 @@ mod evidence_http_tests {
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .unwrap();
-        let tx = TransactionBuilder::new(chain, authority.clone()).sign(&private_key);
+        let tx = TransactionBuilder::new(chain, authority.clone())
+            .try_sign(&private_key)
+            .expect("rejection status fixture transaction should sign");
         let hash = tx.hash();
         let entry = TransactionEntrypoint::External(tx);
         let entry_hash = entry.hash();
@@ -8520,7 +8525,9 @@ mod evidence_http_tests {
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .unwrap();
-        let tx = TransactionBuilder::new(chain, authority).sign(&private_key);
+        let tx = TransactionBuilder::new(chain, authority)
+            .try_sign(&private_key)
+            .expect("committed transaction fixture should sign");
         let hash = tx.hash();
         let entry = TransactionEntrypoint::External(tx);
         let entry_hash = entry.hash();
@@ -9566,11 +9573,12 @@ impl Client {
     /// Builds transaction out of supplied instructions or IVM bytecode.
     ///
     /// Prefer [`Self::try_build_transaction`] when callers need to handle OS
-    /// entropy failures from configured transaction nonce generation.
+    /// entropy failures from configured transaction nonce generation or
+    /// signing failures from the configured signature backend.
     ///
     /// # Panics
     /// Panics if `transaction_add_nonce` is enabled and OS entropy is
-    /// unavailable while generating a transaction nonce.
+    /// unavailable while generating a transaction nonce, or if signing fails.
     pub fn build_transaction<Exec: Into<Executable>>(
         &self,
         instructions: Exec,
@@ -9583,7 +9591,8 @@ impl Client {
     /// Builds transaction out of supplied instructions or IVM bytecode.
     ///
     /// # Errors
-    /// Fails if configured transaction nonce generation cannot read OS entropy.
+    /// Fails if configured transaction nonce generation cannot read OS entropy,
+    /// or if the configured signature backend cannot sign the transaction.
     pub fn try_build_transaction<Exec: Into<Executable>>(
         &self,
         instructions: Exec,
@@ -9607,20 +9616,22 @@ impl Client {
 
         self.apply_transaction_defaults_with_rng(&mut tx_builder, rng)?;
 
-        Ok(tx_builder
+        tx_builder
             .with_metadata(metadata)
-            .sign(self.key_pair.private_key()))
+            .try_sign(self.key_pair.private_key())
+            .wrap_err("sign client transaction")
     }
 
     /// Builds a transaction from a collection of items convertible into `InstructionBox`.
     ///
     /// This avoids re-boxing already boxed instructions.
     /// Prefer [`Self::try_build_transaction_from_items`] when callers need to
-    /// handle OS entropy failures from configured transaction nonce generation.
+    /// handle OS entropy failures from configured transaction nonce generation
+    /// or signing failures from the configured signature backend.
     ///
     /// # Panics
     /// Panics if `transaction_add_nonce` is enabled and OS entropy is
-    /// unavailable while generating a transaction nonce.
+    /// unavailable while generating a transaction nonce, or if signing fails.
     pub fn build_transaction_from_items<I>(
         &self,
         instructions: impl IntoIterator<Item = I>,
@@ -9638,7 +9649,8 @@ impl Client {
     /// This avoids re-boxing already boxed instructions.
     ///
     /// # Errors
-    /// Fails if configured transaction nonce generation cannot read OS entropy.
+    /// Fails if configured transaction nonce generation cannot read OS entropy,
+    /// or if the configured signature backend cannot sign the transaction.
     pub fn try_build_transaction_from_items<I>(
         &self,
         instructions: impl IntoIterator<Item = I>,
@@ -9669,9 +9681,10 @@ impl Client {
 
         self.apply_transaction_defaults_with_rng(&mut tx_builder, rng)?;
 
-        Ok(tx_builder
+        tx_builder
             .with_metadata(metadata)
-            .sign(self.key_pair.private_key()))
+            .try_sign(self.key_pair.private_key())
+            .wrap_err("sign client transaction from instruction items")
     }
 
     /// Encode and hash a signed transaction once for later submission.
@@ -9689,12 +9702,29 @@ impl Client {
         }
     }
 
-    /// Signs transaction
+    /// Try to sign a transaction.
     ///
     /// # Errors
-    /// Fails if signature generation fails
+    /// Fails if the configured signature backend cannot sign the transaction.
+    pub fn try_sign_transaction(
+        &self,
+        transaction: TransactionBuilder,
+    ) -> Result<SignedTransaction> {
+        transaction
+            .try_sign(self.key_pair.private_key())
+            .wrap_err("sign client transaction builder")
+    }
+
+    /// Signs transaction.
+    ///
+    /// Prefer [`Self::try_sign_transaction`] when callers need to handle
+    /// signing failures from the configured signature backend.
+    ///
+    /// # Panics
+    /// Panics if the configured signature backend cannot sign the transaction.
     pub fn sign_transaction(&self, transaction: TransactionBuilder) -> SignedTransaction {
-        transaction.sign(self.key_pair.private_key())
+        self.try_sign_transaction(transaction)
+            .expect("failed to sign transaction")
     }
 
     /// Instructions API entry point. Submits one Iroha Special Instruction to `Iroha` peers.
@@ -16198,7 +16228,9 @@ mod tx_hash_tests {
                 .parse()
                 .unwrap();
 
-        let tx = TransactionBuilder::new(chain, authority.clone()).sign(&private_key);
+        let tx = TransactionBuilder::new(chain, authority.clone())
+            .try_sign(&private_key)
+            .expect("external entrypoint fixture transaction should sign");
         let entry = TransactionEntrypoint::External(tx.clone());
         let entry_hash = entry.hash();
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
@@ -18145,7 +18177,9 @@ mod tests {
                 .parse()
                 .expect("private key");
         let authority = AccountId::new(public_key);
-        let tx = TransactionBuilder::new(chain, authority).sign(&private_key);
+        let tx = TransactionBuilder::new(chain, authority)
+            .try_sign(&private_key)
+            .expect("block stream fixture transaction should sign");
         let block = SignedBlock::genesis(vec![tx], &private_key, None, None);
 
         let bytes = norito::to_bytes(&BlockMessage(block.clone())).expect("encode block message");
@@ -19856,6 +19890,22 @@ mod tests {
     }
 
     #[test]
+    fn try_sign_transaction_attaches_verifiable_signature() {
+        let client = client_with_base_url(base_url());
+        let builder = TransactionBuilder::new(client.chain.clone(), client.account.clone())
+            .with_instructions([Log::new(Level::INFO, "client checked signing".into())])
+            .with_metadata(Metadata::default());
+
+        let tx = client
+            .try_sign_transaction(builder)
+            .expect("client transaction signing should succeed");
+
+        tx.verify_signature()
+            .expect("client transaction signature must verify");
+        assert_eq!(tx.authority(), &client.account);
+    }
+
+    #[test]
     fn submit_transaction_uses_norito_content_type_header_and_signed_transaction_payload() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let capabilities_body = compatible_capabilities_body();
@@ -19974,7 +20024,8 @@ mod tests {
         let (authority, keypair) = gen_account_in("foreign-chain-authority");
         let tx = TransactionBuilder::new(ChainId::from("foreign-chain"), authority)
             .with_instructions(Vec::<InstructionBox>::new())
-            .sign(keypair.private_key());
+            .try_sign(keypair.private_key())
+            .expect("foreign-chain fixture transaction should sign");
         let prepared = client.prepare_transaction_payload(&tx);
 
         assert_eq!(prepared.hash(), tx.hash());

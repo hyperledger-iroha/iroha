@@ -17,7 +17,7 @@ hex = { version = "0.4.3", default-features = false }
 iroha_crypto = { path = "../../crates/iroha_crypto", default-features = false, features = ["std"] }
 iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["json", "governance", "transparent_api"] }
 norito = { path = "../../crates/norito", features = ["json"] }
-time = { version = "0.3.44", default-features = false, features = ["std", "macros", "formatting"] }
+time = { version = "=0.3.47", default-features = false, features = ["std", "macros", "formatting"] }
 iroha_schema = { path = "../../crates/iroha_schema" }
 iroha_primitives = { path = "../../crates/iroha_primitives" }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }

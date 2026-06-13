@@ -63,8 +63,8 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
     return raw
@@ -83,8 +83,8 @@ def parse_program_bytes_hex(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must have an even hex length")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
     if not raw.startswith(SOLANA_BPF_ELF_MAGIC):
@@ -102,8 +102,8 @@ def parse_program_bytes_base64(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must not be empty")
     try:
         raw = base64.b64decode(text, validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be base64") from exc
+    except (ValueError, binascii.Error):
+        raise argparse.ArgumentTypeError(f"{label} must be base64") from None
     if base64.b64encode(raw).decode("ascii") != text:
         raise argparse.ArgumentTypeError(f"{label} must be canonical base64")
     if not raw:
@@ -121,8 +121,8 @@ def parse_program_bytes_file(value: str, *, label: str) -> bytes:
     path = Path(value).expanduser()
     try:
         raw = path.read_bytes()
-    except OSError as exc:
-        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from exc
+    except OSError:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     if not raw:
         raise argparse.ArgumentTypeError(f"{label} file must not be empty")
     if not any(raw):

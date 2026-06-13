@@ -13,7 +13,7 @@ use core::fmt::Write as FmtWrite;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use blake3;
-use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
 use iroha_primitives::numeric::Numeric;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -760,6 +760,23 @@ pub struct VpnUsageVoucherV1 {
 }
 
 impl VpnUsageVoucherV1 {
+    /// Sign a cumulative usage body with the client's metering private key.
+    ///
+    /// # Errors
+    /// Returns an error when the configured signing backend rejects the private
+    /// key or Norito-encoded voucher body.
+    pub fn try_sign(
+        body: VpnUsageVoucherBodyV1,
+        private_key: &PrivateKey,
+    ) -> Result<Self, iroha_crypto::Error> {
+        let signature = Signature::try_new(private_key, &body.encode())?;
+        Ok(Self {
+            body,
+            client_public_key: PublicKey::from(private_key.clone()),
+            signature,
+        })
+    }
+
     /// Verify that the voucher signature matches the embedded public key and body.
     ///
     /// # Errors
@@ -1502,12 +1519,8 @@ mod tests {
             active_ms: 1_500,
             issued_at_ms: 1_700_000_000_000,
         };
-        let signature = Signature::new(key_pair.private_key(), &body.encode());
-        let voucher = VpnUsageVoucherV1 {
-            body,
-            client_public_key: key_pair.public_key().clone(),
-            signature,
-        };
+        let voucher =
+            VpnUsageVoucherV1::try_sign(body, key_pair.private_key()).expect("checked voucher");
         (key_pair, voucher)
     }
 
@@ -1763,6 +1776,36 @@ mod tests {
     }
 
     #[test]
+    fn usage_voucher_try_sign_uses_checked_signature_and_verifies() {
+        let key_pair = KeyPair::random();
+        let body = VpnUsageVoucherBodyV1 {
+            session_id: [0x01; 16],
+            quote_id: [0x02; 32],
+            relay_id: [0x03; 32],
+            sequence: 42,
+            ingress_bytes: 8_192,
+            egress_bytes: 16_384,
+            active_ms: 90_000,
+            issued_at_ms: 1_700_000_000_123,
+        };
+
+        let mut voucher =
+            VpnUsageVoucherV1::try_sign(body, key_pair.private_key()).expect("checked voucher");
+
+        assert_eq!(voucher.body, body);
+        assert_eq!(&voucher.client_public_key, key_pair.public_key());
+        voucher
+            .verify()
+            .expect("checked usage voucher signature must verify");
+
+        voucher.signature = Signature::from_bytes(&[0_u8; 64]);
+        assert!(
+            voucher.verify().is_err(),
+            "tampered checked voucher signature must fail"
+        );
+    }
+
+    #[test]
     fn usage_voucher_rejects_body_tampering() {
         let (_key_pair, mut voucher) = sample_usage_voucher();
         voucher.body.egress_bytes = voucher.body.egress_bytes.saturating_add(1);
@@ -1783,7 +1826,9 @@ mod tests {
     fn usage_voucher_rejects_signature_substitution() {
         let (_key_pair, mut voucher) = sample_usage_voucher();
         let other_key_pair = KeyPair::random();
-        voucher.signature = Signature::new(other_key_pair.private_key(), &voucher.body.encode());
+        voucher.signature = VpnUsageVoucherV1::try_sign(voucher.body, other_key_pair.private_key())
+            .expect("checked wrong-key voucher")
+            .signature;
 
         assert!(voucher.verify().is_err());
     }
@@ -1796,7 +1841,9 @@ mod tests {
         let mut body_changed = voucher.clone();
         body_changed.body.sequence = body_changed.body.sequence.saturating_add(1);
         body_changed.signature =
-            Signature::new(key_pair.private_key(), &body_changed.body.encode());
+            VpnUsageVoucherV1::try_sign(body_changed.body, key_pair.private_key())
+                .expect("checked changed-body voucher")
+                .signature;
         assert_ne!(base_hash, body_changed.hash());
 
         let mut public_key_changed = voucher.clone();
@@ -1804,7 +1851,9 @@ mod tests {
         assert_ne!(base_hash, public_key_changed.hash());
 
         let signature_changed = VpnUsageVoucherV1 {
-            signature: Signature::new(KeyPair::random().private_key(), &voucher.body.encode()),
+            signature: VpnUsageVoucherV1::try_sign(voucher.body, KeyPair::random().private_key())
+                .expect("checked changed-signature voucher")
+                .signature,
             ..voucher
         };
         assert_ne!(base_hash, signature_changed.hash());

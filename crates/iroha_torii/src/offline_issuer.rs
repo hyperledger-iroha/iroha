@@ -19,7 +19,7 @@ use iroha_data_model::{
     isi::{InstructionBox, IssueOfflineNote, SetKeyValue, Transfer},
     name::Name,
     offline::{OFFLINE_NOTE_KEY_CERTIFICATE_VERSION, OfflineNoteIssue, OfflineNoteKeyCertificate},
-    transaction::TransactionBuilder,
+    transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::Numeric;
@@ -87,6 +87,16 @@ impl OfflineIssuerRuntime {
         let bytes = json::to_vec(payload)
             .map_err(|source| Error::SerializationFailure { context, source })?;
         Ok(BASE64_STANDARD.encode(self.sign_bytes(&bytes, context)?.payload()))
+    }
+
+    fn sign_transaction(
+        &self,
+        transaction: TransactionBuilder,
+        context: &'static str,
+    ) -> Result<SignedTransaction, Error> {
+        transaction
+            .try_sign(self.key_pair.private_key())
+            .map_err(|source| offline_transaction_signing_error(context, source))
     }
 }
 
@@ -283,9 +293,11 @@ pub(crate) async fn handle_notes_issue(
         ),
         amount: amount.clone(),
     });
-    let tx = TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
-        .with_instructions([InstructionBox::from(issue)])
-        .sign(issuer.key_pair.private_key());
+    let tx = issuer.sign_transaction(
+        TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
+            .with_instructions([InstructionBox::from(issue)]),
+        "offline_note_issue_transaction",
+    )?;
     let tx_hash = tx.hash().to_string();
     routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
@@ -479,6 +491,15 @@ fn policy_lock_unavailable() -> Error {
 }
 
 fn offline_signing_error(context: &'static str, source: iroha_crypto::Error) -> Error {
+    Error::Query(ValidationFail::InternalError(format!(
+        "Offline Notes issuer failed to sign {context}: {source}"
+    )))
+}
+
+fn offline_transaction_signing_error(
+    context: &'static str,
+    source: impl std::fmt::Display,
+) -> Error {
     Error::Query(ValidationFail::InternalError(format!(
         "Offline Notes issuer failed to sign {context}: {source}"
     )))
@@ -2003,6 +2024,25 @@ mod tests {
             },
             verifier_key_pair,
         )
+    }
+
+    #[test]
+    fn offline_note_issue_transaction_checked_signing_verifies() {
+        let (issuer, _) = sample_issuer();
+        let tx = issuer
+            .sign_transaction(
+                TransactionBuilder::new(
+                    iroha_data_model::ChainId::from("offline-note-issue-sign-test"),
+                    issuer.authority.clone().into(),
+                )
+                .with_instructions(Vec::<InstructionBox>::new()),
+                "offline_note_issue_transaction_test",
+            )
+            .expect("checked transaction signing should succeed");
+
+        tx.verify_signature()
+            .expect("checked offline note issue transaction signature should verify");
+        assert_eq!(tx.authority(), &issuer.authority);
     }
 
     fn sample_request(

@@ -739,12 +739,21 @@ impl PeersGossiper {
         infos
             .iter()
             .cloned()
-            .map(|info| {
-                let signature =
-                    Signature::new(self.key_pair.private_key(), &Self::trust_payload(&info));
-                SignedPeerTrust {
-                    info,
-                    signature: signature.payload().to_vec(),
+            .filter_map(|info| {
+                let payload = Self::trust_payload(&info);
+                match Signature::try_new(self.key_pair.private_key(), &payload) {
+                    Ok(signature) => Some(SignedPeerTrust {
+                        info,
+                        signature: signature.payload().to_vec(),
+                    }),
+                    Err(err) => {
+                        iroha_logger::warn!(
+                            peer=%info.peer_id,
+                            ?err,
+                            "Skipping peer trust gossip entry after signing failure"
+                        );
+                        None
+                    }
                 }
             })
             .collect()
@@ -1137,6 +1146,14 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
 
     use super::*;
+
+    fn signed_trust_payload(signer: &KeyPair, info: &PeerTrustInfo) -> Vec<u8> {
+        Signature::try_new(signer.private_key(), &PeersGossiper::trust_payload(info))
+            .expect("trust gossip fixture should sign")
+            .payload()
+            .to_vec()
+    }
+
     #[test]
     fn peers_gossip_roundtrip() {
         // Use seeded keypairs to produce valid Ed25519 public keys deterministically.
@@ -1177,9 +1194,7 @@ mod tests {
             trusted: true,
             score: 2,
         };
-        let sig = Signature::new(kp.private_key(), &PeersGossiper::trust_payload(&info))
-            .payload()
-            .to_vec();
+        let sig = signed_trust_payload(&kp, &info);
         let gossip = PeerTrustGossip {
             trust: vec![SignedPeerTrust {
                 info: info.clone(),
@@ -1193,6 +1208,67 @@ mod tests {
         assert_eq!(decoded.trust.len(), 1);
         assert_eq!(decoded.trust[0].info.peer_id, info.peer_id);
         assert_eq!(decoded.trust[0].signature, sig);
+    }
+
+    #[test]
+    fn sign_trust_entries_produces_verifiable_records() {
+        let signer = KeyPair::from_seed(vec![59, 60, 61, 62], Algorithm::Ed25519);
+        let signer_peer = Peer::new(
+            "127.0.0.1:9500".parse().expect("addr"),
+            signer.public_key().clone(),
+        );
+        let reported = KeyPair::from_seed(vec![63, 64, 65, 66], Algorithm::Ed25519);
+        let reported_peer = Peer::new(
+            "127.0.0.1:9501".parse().expect("addr"),
+            reported.public_key().clone(),
+        );
+        let signer_id = signer_peer.id().clone();
+        let topology = BTreeSet::from([signer_id.clone(), reported_peer.id().clone()]);
+        let gossiper = PeersGossiper {
+            peer_id: signer_id,
+            initial_peers: BTreeMap::new(),
+            consensus_mode: ConsensusMode::Permissioned,
+            trusted_peers: topology.clone(),
+            static_trusted_peers: topology.clone(),
+            trust_candidates: topology.clone(),
+            gossip_peers: BTreeMap::new(),
+            peer_capabilities: BTreeMap::new(),
+            current_topology: topology,
+            key_pair: signer.clone(),
+            gossip_period: Duration::from_secs(1),
+            gossip_max_period: Duration::from_secs(1),
+            gossip_backoff: Duration::from_secs(1),
+            gossip_next_deadline: std::time::Instant::now(),
+            gossip_pending: true,
+            last_gossip_fingerprint: None,
+            last_drop_count: 0,
+            last_drop_at: None,
+            trust: TrustBook::new(
+                Duration::ZERO,
+                TrustPenalties {
+                    bad_gossip: 4,
+                    unknown_peer: 3,
+                },
+                -4,
+            ),
+            network: IrohaNetwork::closed_for_tests(),
+        };
+        let infos = [PeerTrustInfo {
+            peer_id: reported_peer.id().clone(),
+            trusted: true,
+            score: 2,
+        }];
+
+        let signed = gossiper.sign_trust_entries(&infos);
+
+        assert_eq!(signed.len(), 1);
+        assert_eq!(signed[0].info.peer_id, infos[0].peer_id);
+        Signature::from_bytes(&signed[0].signature)
+            .verify(
+                signer.public_key(),
+                &PeersGossiper::trust_payload(&signed[0].info),
+            )
+            .expect("trust record signature must verify");
     }
 
     #[test]
@@ -1677,12 +1753,7 @@ mod tests {
             trusted: false,
             score: 1,
         };
-        let signature = Signature::new(
-            kp_sender.private_key(),
-            &PeersGossiper::trust_payload(&info),
-        )
-        .payload()
-        .to_vec();
+        let signature = signed_trust_payload(&kp_sender, &info);
         let trust = vec![SignedPeerTrust { info, signature }];
         let now = Instant::now();
         let mut trust_book = TrustBook::new(
@@ -1731,12 +1802,7 @@ mod tests {
             trusted: false,
             score: 1,
         };
-        let signature = Signature::new(
-            kp_sender.private_key(),
-            &PeersGossiper::trust_payload(&info),
-        )
-        .payload()
-        .to_vec();
+        let signature = signed_trust_payload(&kp_sender, &info);
         let trust = vec![SignedPeerTrust { info, signature }];
         let now = Instant::now();
         let mut trust_book = TrustBook::new(
@@ -1802,12 +1868,7 @@ mod tests {
             trusted: true,
             score: 2,
         };
-        let signature = Signature::new(
-            kp_sender.private_key(),
-            &PeersGossiper::trust_payload(&info),
-        )
-        .payload()
-        .to_vec();
+        let signature = signed_trust_payload(&kp_sender, &info);
         let trust = vec![SignedPeerTrust { info, signature }];
         let now = Instant::now();
         let mut trust_book = TrustBook::new(
@@ -1861,12 +1922,7 @@ mod tests {
             trusted: true,
             score: 1,
         };
-        let signature = Signature::new(
-            kp_sender.private_key(),
-            &PeersGossiper::trust_payload(&info),
-        )
-        .payload()
-        .to_vec();
+        let signature = signed_trust_payload(&kp_sender, &info);
         let trust = vec![SignedPeerTrust { info, signature }];
         let now = Instant::now();
         let mut trust_book = TrustBook::new(

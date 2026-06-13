@@ -108,6 +108,8 @@ const ERR_GOVERNANCE: c_int = -28;
 const ERR_HEX: c_int = -29;
 const ERR_ACCOUNT_LIST: c_int = -30;
 const ERR_INVALID_NONCE: c_int = -31;
+const ERR_TRANSACTION_SIGN: c_int = -32;
+const ERR_SM2_SIGN: c_int = -33;
 const ERR_FETCH_PLAN_JSON: c_int = -100;
 const ERR_FETCH_PROVIDERS_JSON: c_int = -101;
 const ERR_FETCH_OPTIONS_JSON: c_int = -102;
@@ -177,6 +179,7 @@ enum BridgeError {
     SecpParse,
     SecpSign,
     SecpVerify,
+    TransactionSign,
     ConnectKeypair,
 }
 
@@ -222,6 +225,7 @@ impl BridgeError {
             BridgeError::SecpParse => ERR_SECP_PARSE,
             BridgeError::SecpSign => ERR_SECP_SIGN,
             BridgeError::SecpVerify => ERR_SECP_VERIFY,
+            BridgeError::TransactionSign => ERR_TRANSACTION_SIGN,
             BridgeError::ConnectKeypair => ERR_CONNECT_KEYPAIR,
         }
     }
@@ -3053,14 +3057,14 @@ fn privacy_result_for_request(
         }
 
         let known_entry = privacy_algorithm_entry(&request.algorithm_id);
-        if let Some(entry) = known_entry {
-            if privacy_entrypoint_planned(entry, &request.entrypoint) {
-                return privacy_failure_result_without_vk_ref(
-                    PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                    "privacy proof request entrypoint is planned but not executable until the production gate passes",
-                    &request,
-                );
-            }
+        if let Some(entry) = known_entry
+            && privacy_entrypoint_planned(entry, &request.entrypoint)
+        {
+            return privacy_failure_result_without_vk_ref(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request entrypoint is planned but not executable until the production gate passes",
+                &request,
+            );
         }
 
         if request.vk_ref.trim().is_empty() {
@@ -3285,8 +3289,7 @@ unsafe fn write_privacy_bytes(
 
 unsafe fn privacy_buffer_header_from_payload(ptr_: *mut c_uchar) -> *mut PrivacyBufferHeader {
     unsafe {
-        (ptr_ as *mut u8)
-            .sub(PRIVACY_BUFFER_HEADER_BYTES)
+        ptr_.sub(PRIVACY_BUFFER_HEADER_BYTES)
             .cast::<PrivacyBufferHeader>()
     }
 }
@@ -3327,9 +3330,9 @@ fn write_privacy_payload<T: norito::NoritoSerialize>(
         Err(_) => return ERR_CONNECT_ENCODE,
     };
     let mut bytes = bytes;
-    let result = if !privacy_patch_archive_repeated_schema_byte(&mut bytes, schema_byte) {
-        ERR_CONNECT_ENCODE
-    } else if bytes.len() > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES {
+    let result = if !privacy_patch_archive_repeated_schema_byte(&mut bytes, schema_byte)
+        || bytes.len() > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES
+    {
         ERR_CONNECT_ENCODE
     } else {
         match unsafe { write_privacy_bytes(out_ptr, out_len, &bytes) } {
@@ -4972,7 +4975,7 @@ fn encode_asset_transaction<F>(
     ttl_option: Option<NonZeroU64>,
     private_key: PrivateKey,
     build_executable: F,
-) -> (Vec<u8>, [u8; 32])
+) -> BridgeResult<(Vec<u8>, [u8; 32])>
 where
     F: FnOnce() -> Executable,
 {
@@ -4995,7 +4998,7 @@ fn encode_asset_transaction_with_nonce<F>(
     nonce_option: Option<NonZeroU32>,
     private_key: PrivateKey,
     build_executable: F,
-) -> (Vec<u8>, [u8; 32])
+) -> BridgeResult<(Vec<u8>, [u8; 32])>
 where
     F: FnOnce() -> Executable,
 {
@@ -5021,7 +5024,7 @@ fn encode_asset_transaction_with_nonce_and_metadata<F>(
     metadata: Metadata,
     private_key: PrivateKey,
     build_executable: F,
-) -> (Vec<u8>, [u8; 32])
+) -> BridgeResult<(Vec<u8>, [u8; 32])>
 where
     F: FnOnce() -> Executable,
 {
@@ -5038,11 +5041,13 @@ where
         builder.set_nonce(nonce);
     }
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let signed = builder.sign(&private_key);
+    let signed = builder
+        .try_sign(&private_key)
+        .map_err(|_| BridgeError::TransactionSign)?;
     let signed_bytes = signed.encode_versioned();
     let mut hash = [0u8; 32];
     hash.copy_from_slice(signed.hash().as_ref());
-    (signed_bytes, hash)
+    Ok((signed_bytes, hash))
 }
 
 fn encode_instruction_transaction(
@@ -5052,7 +5057,7 @@ fn encode_instruction_transaction(
     ttl_option: Option<NonZeroU64>,
     private_key: PrivateKey,
     instruction: InstructionBox,
-) -> (Vec<u8>, [u8; 32]) {
+) -> BridgeResult<(Vec<u8>, [u8; 32])> {
     encode_asset_transaction(
         chain_id,
         authority,
@@ -6793,7 +6798,7 @@ pub unsafe extern "C" fn connect_norito_encode_redeem_offline_note_signed_transa
             nonce,
             private_key,
             move || Executable::from([instruction]),
-        );
+        )?;
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
         Ok(())
@@ -6855,7 +6860,7 @@ pub unsafe extern "C" fn connect_norito_encode_audit_offline_note_signed_transac
             nonce,
             private_key,
             move || Executable::from([instruction]),
-        );
+        )?;
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
         Ok(())
@@ -6917,7 +6922,7 @@ pub unsafe extern "C" fn connect_norito_encode_issue_offline_note_signed_transac
             nonce,
             private_key,
             move || Executable::from([instruction]),
-        );
+        )?;
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
         Ok(())
@@ -7021,7 +7026,7 @@ pub unsafe extern "C" fn connect_norito_encode_defund_offline_note_signed_transa
             nonce,
             private_key,
             move || Executable::from(instructions),
-        );
+        )?;
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
         Ok(())
@@ -7117,7 +7122,7 @@ unsafe fn encode_offline_note_signed_transaction_with_metadata_impl(
         metadata,
         private_key,
         move || Executable::from([instruction]),
-    );
+    )?;
     write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
     unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
     Ok(())
@@ -7215,7 +7220,7 @@ unsafe fn encode_defund_offline_note_signed_transaction_with_metadata_impl(
         metadata,
         private_key,
         move || Executable::from(instructions),
-    );
+    )?;
     write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
     unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
     Ok(())
@@ -9089,7 +9094,7 @@ pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn iroha_privacy_free_buffer(ptr_: *mut c_uchar) {
+pub unsafe extern "C" fn iroha_privacy_free_buffer(ptr_: *mut c_uchar) {
     if !ptr_.is_null() {
         unsafe {
             let base = clear_privacy_allocated_buffer(ptr_);
@@ -14326,6 +14331,29 @@ mod offline_note_prover_tests {
     }
 
     #[test]
+    fn bridge_asset_transaction_checked_signing_verifies() {
+        let keypair = KeyPair::from_seed(vec![0x5a; 32], Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+            ChainId::from("bridge-checked-signing"),
+            authority.clone(),
+            1_736_000_000_000,
+            None,
+            keypair.private_key().clone(),
+            || Executable::from(Vec::<InstructionBox>::new()),
+        )
+        .expect("checked bridge transaction signing should succeed");
+
+        let signed =
+            decode_signed_transaction(&signed_bytes).expect("decode versioned signed transaction");
+        assert_eq!(hash_bytes, *signed.hash().as_ref());
+        assert_eq!(signed.authority(), &authority);
+        signed
+            .verify_signature()
+            .expect("checked bridge transaction signature should verify");
+    }
+
+    #[test]
     fn offline_note_signed_transaction_ffis_encode_canonical_transactions() {
         let chain = CString::new("00000042").expect("valid chain id");
         let (authority, private_key) = sample_authority_and_private_key(0x55);
@@ -15058,7 +15086,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
                 let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -15148,7 +15176,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
                 let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -15236,7 +15264,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
                 let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -15330,7 +15358,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
                 let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -15445,7 +15473,7 @@ pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction(
                 );
                 Executable::from([InstructionBox::from(instruction)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -15567,7 +15595,7 @@ pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction_alg(
                 );
                 Executable::from([InstructionBox::from(instruction)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -15662,7 +15690,7 @@ pub unsafe extern "C" fn connect_norito_encode_unshield_signed_transaction(
                 );
                 Executable::from([InstructionBox::from(instruction)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -15764,7 +15792,7 @@ pub unsafe extern "C" fn connect_norito_encode_unshield_signed_transaction_alg(
                 );
                 Executable::from([InstructionBox::from(instruction)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -15850,7 +15878,7 @@ pub unsafe extern "C" fn connect_norito_encode_zk_transfer_signed_transaction(
                     zk::ZkTransfer::new(asset_definition, nullifiers, outputs, proof, root_hint);
                 Executable::from([InstructionBox::from(instruction)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -15941,7 +15969,7 @@ pub unsafe extern "C" fn connect_norito_encode_zk_transfer_signed_transaction_al
                     zk::ZkTransfer::new(asset_definition, nullifiers, outputs, proof, root_hint);
                 Executable::from([InstructionBox::from(instruction)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16026,7 +16054,7 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
             encode_asset_transaction(chain_id, authority, creation_time_ms, ttl, private_key, {
                 let register = register.clone();
                 move || Executable::from([InstructionBox::from(register.clone())])
-            });
+            })?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16113,7 +16141,7 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
             encode_asset_transaction(chain_id, authority, creation_time_ms, ttl, private_key, {
                 let register = register.clone();
                 move || Executable::from([InstructionBox::from(register.clone())])
-            });
+            })?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16177,7 +16205,7 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction(
             ttl,
             private_key,
             instruction,
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16243,7 +16271,7 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction_
             ttl,
             private_key,
             instruction,
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16303,7 +16331,7 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
             ttl,
             private_key,
             instruction,
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16365,7 +16393,7 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
             ttl,
             private_key,
             instruction,
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16458,7 +16486,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             kotoba: None,
             provenance: None,
         }
-        .signed(&key_pair);
+        .try_signed(&key_pair)
+        .map_err(|_| BridgeError::Governance)?;
         let manifest_provenance = manifest.provenance.clone().ok_or(BridgeError::Governance)?;
 
         let proposal = ProposeDeployContract {
@@ -16478,7 +16507,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             ttl,
             private_key,
             InstructionBox::from(proposal),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16573,7 +16602,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             kotoba: None,
             provenance: None,
         }
-        .signed(&key_pair);
+        .try_signed(&key_pair)
+        .map_err(|_| BridgeError::Governance)?;
         let manifest_provenance = manifest.provenance.clone().ok_or(BridgeError::Governance)?;
 
         let proposal = ProposeDeployContract {
@@ -16593,7 +16623,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             ttl,
             private_key,
             InstructionBox::from(proposal),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16668,7 +16698,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
             ttl,
             private_key,
             InstructionBox::from(ballot),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16745,7 +16775,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
             ttl,
             private_key,
             InstructionBox::from(ballot),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16822,7 +16852,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
             ttl,
             private_key,
             InstructionBox::from(ballot),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16901,7 +16931,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
             ttl,
             private_key,
             InstructionBox::from(ballot),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -16972,7 +17002,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
             ttl,
             private_key,
             InstructionBox::from(enact),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -17045,7 +17075,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
             ttl,
             private_key,
             InstructionBox::from(enact),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -17108,7 +17138,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
             ttl,
             private_key,
             InstructionBox::from(finalize),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -17173,7 +17203,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
             ttl,
             private_key,
             InstructionBox::from(finalize),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -17246,7 +17276,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
             ttl,
             private_key,
             InstructionBox::from(persist),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -17321,7 +17351,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
             ttl,
             private_key,
             InstructionBox::from(persist),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -17518,7 +17548,10 @@ pub unsafe extern "C" fn connect_norito_sm2_sign(
         Ok(k) => k,
         Err(_) => return ERR_SM2_PARSE,
     };
-    let signature = key.sign(message);
+    let signature = match key.try_sign(message) {
+        Ok(signature) => signature,
+        Err(_) => return ERR_SM2_SIGN,
+    };
     let sig_bytes = signature.to_bytes();
     unsafe {
         ptr::copy_nonoverlapping(sig_bytes.as_ptr(), out_signature_ptr, Sm2Signature::LENGTH);
@@ -19664,7 +19697,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
                 let mint = Mint::asset_numeric(quantity, asset_id);
                 Executable::from([InstructionBox::from(mint)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -19752,7 +19785,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
                 let mint = Mint::asset_numeric(quantity, asset_id);
                 Executable::from([InstructionBox::from(mint)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -19813,7 +19846,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                     );
                     Executable::from([InstructionBox::from(register)])
                 }
-            });
+            })?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -19876,7 +19909,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                     );
                     Executable::from([InstructionBox::from(register)])
                 }
-            });
+            })?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -19958,7 +19991,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
                 let burn = Burn::asset_numeric(quantity, asset_id);
                 Executable::from([InstructionBox::from(burn)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -20014,7 +20047,7 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
             ttl,
             private_key,
             InstructionBox::from(ClaimIdentifier { account, receipt }),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -20072,7 +20105,7 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
             ttl,
             private_key,
             InstructionBox::from(ClaimIdentifier { account, receipt }),
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -20159,7 +20192,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
                 let burn = Burn::asset_numeric(quantity, asset_id);
                 Executable::from([InstructionBox::from(burn)])
             },
-        );
+        )?;
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
@@ -24463,7 +24496,7 @@ mod tests {
         assert!(!out_ptr.is_null(), "privacy FFI output pointer must be set");
         assert!(out_len > 0, "privacy FFI output must not be empty");
         let bytes = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
-        iroha_privacy_free_buffer(out_ptr);
+        unsafe { iroha_privacy_free_buffer(out_ptr) };
         bytes
     }
 
@@ -27533,7 +27566,7 @@ mod tests {
 
     #[test]
     fn privacy_free_buffer_tolerates_null_pointer() {
-        iroha_privacy_free_buffer(ptr::null_mut());
+        unsafe { iroha_privacy_free_buffer(ptr::null_mut()) };
     }
 
     #[test]
@@ -29232,6 +29265,62 @@ mod tests {
                 .try_to_prefixed_string()
                 .expect("checked SM2 prefixed formatter")
         );
+    }
+
+    #[test]
+    fn sm2_sign_ffi_uses_checked_signing_and_verifies() {
+        let distid = "connect-sm2-checked-signing";
+        let distid_c = CString::new(distid).expect("distid c string");
+        let private = Sm2PrivateKey::from_seed(distid, b"connect-sm2-checked-signing-seed")
+            .expect("derive SM2 key");
+        let private_bytes = private.secret_bytes();
+        let public_bytes = private.public_key().to_sec1_bytes(false);
+        let message = b"connect-sm2-checked-signing";
+
+        let mut signature = [0_u8; Sm2Signature::LENGTH];
+        let rc_sign = unsafe {
+            connect_norito_sm2_sign(
+                distid_c.as_ptr(),
+                distid_c.as_bytes().len() as c_ulong,
+                private_bytes.as_ptr(),
+                private_bytes.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_mut_ptr(),
+                signature.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc_sign, 0, "SM2 checked signing must succeed");
+
+        let rc_verify = unsafe {
+            connect_norito_sm2_verify(
+                distid_c.as_ptr(),
+                distid_c.as_bytes().len() as c_ulong,
+                public_bytes.as_ptr(),
+                public_bytes.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc_verify, 1, "SM2 checked signature must verify");
+
+        let mut tampered = signature;
+        tampered[0] ^= 0xFF;
+        let rc_bad = unsafe {
+            connect_norito_sm2_verify(
+                distid_c.as_ptr(),
+                distid_c.as_bytes().len() as c_ulong,
+                public_bytes.as_ptr(),
+                public_bytes.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                tampered.as_ptr(),
+                tampered.len() as c_ulong,
+            )
+        };
+        assert_eq!(rc_bad, 0, "tampered SM2 signature must fail cleanly");
     }
 
     #[test]

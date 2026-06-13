@@ -86,7 +86,7 @@ def parse_hex_bytes(
     try:
         raw = bytes.fromhex(text)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
     return raw
@@ -106,7 +106,7 @@ def parse_code_boc_hex(value: str, *, label: str) -> bytes:
     try:
         raw = bytes.fromhex(text)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
     return raw
@@ -135,7 +135,7 @@ def parse_code_boc_base64(value: str, *, label: str) -> bytes:
         except binascii.Error as exc:
             raise argparse.ArgumentTypeError(
                 f"{label} must be base64 or base64url"
-            ) from exc
+            ) from None
         canonical_url = base64.urlsafe_b64encode(raw).decode("ascii")
         if text not in {canonical_url, canonical_url.rstrip("=")}:
             raise argparse.ArgumentTypeError(f"{label} must be canonical base64url")
@@ -153,7 +153,7 @@ def parse_code_boc_file(value: str, *, label: str) -> bytes:
     try:
         raw = path.read_bytes()
     except OSError as exc:
-        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from exc
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     if not raw:
         raise argparse.ArgumentTypeError(f"{label} file must not be empty")
     if raw.startswith(TON_BOC_MAGIC):
@@ -213,7 +213,7 @@ def _parse_canonical_i32_decimal(value: str, *, label: str) -> int:
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
             f"{label} workchain must be canonical i32"
-        ) from exc
+        ) from None
     if parsed < -(2**31) or parsed > 2**31 - 1:
         raise argparse.ArgumentTypeError(f"{label} workchain must be canonical i32")
     return parsed
@@ -951,7 +951,7 @@ def ton_route_canary_evidence_hash(
             label="account_status",
         )
     except argparse.ArgumentTypeError as exc:
-        raise ValueError("account_status must be active") from exc
+        raise ValueError("account_status must be active") from None
     account_state_hash = _require_fixed_bytes(
         account_state_hash,
         label="account_state_hash",
@@ -965,7 +965,7 @@ def ton_route_canary_evidence_hash(
             label="last_transaction_lt",
         )
     except argparse.ArgumentTypeError as exc:
-        raise ValueError("last_transaction_lt must be a positive decimal") from exc
+        raise ValueError("last_transaction_lt must be a positive decimal") from None
     last_transaction_hash = _require_fixed_bytes(
         last_transaction_hash,
         label="last_transaction_hash",
@@ -1288,7 +1288,7 @@ def _require_toml_account_metadata(
             label="last transaction LT",
         )
     except argparse.ArgumentTypeError as exc:
-        raise ValueError(f"--{output} requires --last-transaction-lt") from exc
+        raise ValueError(f"--{output} requires --last-transaction-lt") from None
     if canonical_last_transaction_lt != last_transaction_lt:
         raise ValueError(f"--{output} requires --last-transaction-lt")
 

@@ -116,8 +116,34 @@ function normalizeAlgorithm(algorithm) {
   if (algorithm === undefined || algorithm === null) {
     return ALGORITHM_ED25519;
   }
-  const normalized = String(algorithm).toLowerCase();
-  if (/^[\x20-\x7e]+$/.test(normalized) && (normalized === ALGORITHM_ED25519 || normalized === "0")) {
+  if (typeof algorithm === "number") {
+    if (Number.isInteger(algorithm) && algorithm === ALGORITHM_ED25519_TAG) {
+      return ALGORITHM_ED25519;
+    }
+    throw new NexusAppError(
+      "unsupported_signature_algorithm",
+      `unsupported signature algorithm ${String(algorithm)}`,
+    );
+  }
+  if (typeof algorithm !== "string") {
+    throw new NexusAppError(
+      "unsupported_signature_algorithm",
+      `unsupported signature algorithm ${String(algorithm)}`,
+    );
+  }
+  if (!algorithm || !/^[\x20-\x7e]+$/.test(algorithm)) {
+    throw new NexusAppError(
+      "unsupported_signature_algorithm",
+      `unsupported signature algorithm ${algorithm}`,
+    );
+  }
+  if (algorithm !== algorithm.trim()) {
+    throw new NexusAppError(
+      "unsupported_signature_algorithm",
+      `unsupported signature algorithm ${algorithm}`,
+    );
+  }
+  if (algorithm === ALGORITHM_ED25519 || algorithm === "0") {
     return ALGORITHM_ED25519;
   }
   throw new NexusAppError(

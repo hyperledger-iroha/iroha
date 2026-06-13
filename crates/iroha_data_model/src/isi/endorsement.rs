@@ -180,7 +180,8 @@ mod tests {
         let body_hash = endorsement.body_hash();
         endorsement.signatures.push(DomainEndorsementSignature {
             signer: signer.public_key().clone(),
-            signature: iroha_crypto::Signature::new(signer.private_key(), body_hash.as_ref()),
+            signature: iroha_crypto::Signature::try_new(signer.private_key(), body_hash.as_ref())
+                .expect("checked domain endorsement ISI fixture signature"),
         });
         endorsement
     }

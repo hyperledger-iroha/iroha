@@ -161,7 +161,7 @@ def parse_hex_bytes(
     try:
         raw = bytes.fromhex(text)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
     return raw
@@ -191,7 +191,7 @@ def _parse_runtime_bytecode_text(
     try:
         raw = bytes.fromhex(text)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
     return raw
@@ -214,7 +214,7 @@ def parse_runtime_bytecode_file(value: str, *, label: str) -> bytes:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from exc
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     return _parse_runtime_bytecode_text(
         text,
         label=label,
@@ -337,7 +337,7 @@ def parse_tron_address(value: str, *, label: str) -> bytes:
         try:
             raw = bytes.fromhex(hex_text)
         except ValueError as exc:
-            raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+            raise argparse.ArgumentTypeError(f"{label} must be hex") from None
         if len(raw) == 21:
             if raw[0] != 0x41:
                 raise argparse.ArgumentTypeError(f"{label} must use TRON 0x41 prefix")

@@ -3,7 +3,7 @@
 use std::{error::Error, num::NonZeroU32, time::Duration};
 
 use iroha::{
-    crypto::{Algorithm, KeyPair, Signature},
+    crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
         asset::AssetDefinitionId,
         prelude::{AccountId, AssetId, ChainId, Metadata, Numeric},
@@ -58,7 +58,15 @@ impl NexusConnectTransport for DemoConnectTransport {
     ) -> Result<NexusWalletSignature, NexusAppError> {
         let payload_hash = hex::decode(&signable.payload_hash_hex)
             .map_err(|err| NexusAppError::InvalidSignature(err.to_string()))?;
-        let signature = Signature::new(self.key_pair.private_key(), &payload_hash);
+        if payload_hash.len() != Hash::LENGTH {
+            return Err(NexusAppError::InvalidSignature(format!(
+                "payload hash must be {} bytes, got {}",
+                Hash::LENGTH,
+                payload_hash.len()
+            )));
+        }
+        let signature = Signature::try_new(self.key_pair.private_key(), &payload_hash)
+            .map_err(|err| NexusAppError::InvalidSignature(err.to_string()))?;
         Ok(NexusWalletSignature {
             algorithm: signable.signature_algorithm,
             signature: signature.payload().to_vec(),
@@ -151,5 +159,94 @@ mod tests {
                 .expect("generated public key algorithm"),
             Algorithm::Ed25519
         );
+    }
+
+    #[test]
+    fn demo_connect_transport_uses_checked_wallet_signing() {
+        let (key_pair, client, session, signable) = demo_signing_context();
+
+        let wallet_signature = client
+            .request_signature(&session, &signable)
+            .expect("checked wallet signing should succeed");
+        assert_eq!(wallet_signature.algorithm, signable.signature_algorithm);
+        let payload_hash =
+            hex::decode(&signable.payload_hash_hex).expect("payload hash hex should decode");
+        Signature::from_bytes(&wallet_signature.signature)
+            .verify(key_pair.public_key(), &payload_hash)
+            .expect("checked demo wallet signature should verify");
+    }
+
+    #[test]
+    fn demo_connect_transport_rejects_non_hex_payload_hash() {
+        let (_key_pair, client, session, mut signable) = demo_signing_context();
+        signable.payload_hash_hex = "not-a-hex-payload-hash".to_owned();
+
+        let err = client
+            .request_signature(&session, &signable)
+            .expect_err("non-hex payload hash must be rejected");
+        assert_eq!(err.code(), "invalid_signature");
+        assert!(
+            matches!(err, NexusAppError::InvalidSignature(_)),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn demo_connect_transport_rejects_wrong_length_payload_hash() {
+        let (_key_pair, client, session, signable) = demo_signing_context();
+        for (label, payload_hash_hex) in [
+            ("empty", String::new()),
+            ("short", "ab".repeat(Hash::LENGTH - 1)),
+            ("long", "ab".repeat(Hash::LENGTH + 1)),
+        ] {
+            let mut mutated = signable.clone();
+            mutated.payload_hash_hex = payload_hash_hex;
+
+            let err = match client.request_signature(&session, &mutated) {
+                Ok(_) => panic!("{label} payload hash must be rejected"),
+                Err(err) => err,
+            };
+            let NexusAppError::InvalidSignature(message) = err else {
+                panic!("{label} payload hash returned unexpected error: {err:?}");
+            };
+            assert!(
+                message.contains("payload hash must be 32 bytes"),
+                "{label} payload hash returned unexpected message: {message}"
+            );
+        }
+    }
+
+    fn demo_signing_context() -> (
+        KeyPair,
+        NexusAppClient<DemoConnectTransport, DemoToriiSubmitter>,
+        NexusConnectSession,
+        NexusSignableTransaction,
+    ) {
+        let key_pair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
+            .expect("seeded demo wallet key should derive");
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let client = NexusAppClient::new(
+            NexusAppConfig {
+                authority: Some(account_id.clone()),
+                ..NexusAppConfig::new(ChainId::from("test-chain"))
+            },
+            DemoConnectTransport {
+                key_pair: key_pair.clone(),
+            },
+            DemoToriiSubmitter,
+        );
+        let mut session = client
+            .start_connect(NexusConnectOptions {
+                sid: Some("sid-demo-checked-signing".to_owned()),
+                node: None,
+            })
+            .expect("start demo connect session");
+        let approved = client
+            .await_approval(&mut session)
+            .expect("approve demo account");
+        let draft = client
+            .build_transfer_draft(transfer_input(approved.account_id))
+            .expect("build demo transfer draft");
+        (key_pair, client, session, draft.signable)
     }
 }

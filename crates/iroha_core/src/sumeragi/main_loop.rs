@@ -73,6 +73,33 @@ compile_error!(
     "The `bls` feature is mandatory for iroha_core consensus; rebuild with `--features bls`"
 );
 
+fn try_sign_consensus_preimage(
+    private_key: &PrivateKey,
+    preimage: &[u8],
+) -> std::result::Result<Vec<u8>, iroha_crypto::Error> {
+    Signature::try_new(private_key, preimage).map(|signature| signature.payload().to_vec())
+}
+
+#[cfg(test)]
+mod checked_consensus_signing_tests {
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+
+    use super::try_sign_consensus_preimage;
+
+    #[test]
+    fn consensus_preimage_checked_signature_verifies() {
+        let keypair = KeyPair::from_seed(vec![0x42; 32], Algorithm::BlsNormal);
+        let preimage = b"sumeragi checked consensus signing";
+
+        let payload = try_sign_consensus_preimage(keypair.private_key(), preimage)
+            .expect("checked consensus signature");
+
+        Signature::from_bytes(&payload)
+            .verify(keypair.public_key(), preimage)
+            .expect("signature verifies");
+    }
+}
+
 use iroha_data_model::consensus::Qc;
 use iroha_genesis::GENESIS_DOMAIN_ID;
 
@@ -23871,12 +23898,20 @@ impl Actor {
             }
         }
 
-        let bls_signature = Signature::new(
+        let bls_signature = match try_sign_consensus_preimage(
             self.common_config.key_pair.private_key(),
             &body.signature_preimage(),
-        )
-        .payload()
-        .to_vec();
+        ) {
+            Ok(signature) => signature,
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    sender = ?sender,
+                    "dropping native AMX request because local consensus signing failed"
+                );
+                return None;
+            }
+        };
         Some(NativeAmxVoteV1 {
             body,
             signer: local_peer,
@@ -24040,18 +24075,30 @@ impl Actor {
         view: u64,
         candidate: &crate::merge::MergeLedgerCandidate,
         message_digest: Hash,
-    ) -> MergeCommitteeSignature {
-        let signature = Signature::new(
+    ) -> Option<MergeCommitteeSignature> {
+        let bls_sig = match try_sign_consensus_preimage(
             self.common_config.key_pair.private_key(),
             message_digest.as_ref(),
-        );
-        MergeCommitteeSignature {
+        ) {
+            Ok(signature) => signature,
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    signer,
+                    epoch = candidate.epoch_id,
+                    view,
+                    "skipping merge committee signature because local consensus signing failed"
+                );
+                return None;
+            }
+        };
+        Some(MergeCommitteeSignature {
             epoch_id: candidate.epoch_id,
             view,
             signer,
             message_digest,
-            bls_sig: signature.payload().to_vec(),
-        }
+            bls_sig,
+        })
     }
 
     fn handle_merge_entry_candidates(&mut self) -> Result<()> {
@@ -24084,8 +24131,9 @@ impl Actor {
             };
             ordered_keys.push(key);
 
-            let local_signature = local_index
-                .map(|signer| self.build_merge_signature(signer, view, &candidate, message_digest));
+            let local_signature = local_index.and_then(|signer| {
+                self.build_merge_signature(signer, view, &candidate, message_digest)
+            });
 
             let mut broadcast_signature: Option<MergeCommitteeSignature> = None;
             {
@@ -25085,8 +25133,20 @@ impl Actor {
         };
 
         let preimage = rbc_ready_preimage(&self.chain_id, mode_tag, &ready);
-        let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
-        ready.signature = signature.payload().to_vec();
+        ready.signature =
+            match try_sign_consensus_preimage(self.common_config.key_pair.private_key(), &preimage)
+            {
+                Ok(signature) => signature,
+                Err(err) => {
+                    iroha_logger::warn!(
+                        ?err,
+                        height,
+                        view = view_idx,
+                        "skipping RBC ready because local consensus signing failed"
+                    );
+                    return None;
+                }
+            };
         Some(ready)
     }
 
@@ -25149,8 +25209,20 @@ impl Actor {
         };
 
         let preimage = rbc_deliver_preimage(&self.chain_id, mode_tag, &deliver);
-        let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
-        deliver.signature = signature.payload().to_vec();
+        deliver.signature =
+            match try_sign_consensus_preimage(self.common_config.key_pair.private_key(), &preimage)
+            {
+                Ok(signature) => signature,
+                Err(err) => {
+                    iroha_logger::warn!(
+                        ?err,
+                        height,
+                        view = view_idx,
+                        "skipping RBC deliver because local consensus signing failed"
+                    );
+                    return None;
+                }
+            };
         Some(deliver)
     }
 

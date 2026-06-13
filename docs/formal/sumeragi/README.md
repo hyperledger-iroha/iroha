@@ -10091,6 +10091,13 @@ Temporal properties:
   `DeliveredPendingCompleteWaitState` exactly on the non-final branch, while
   the certified branch remains outside that wait state with committed finality,
   exact commit witnesses, and closed progress gates.
+- `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteContinuation`
+  proves the aggregate first-delivery continuation contract: the same branch
+  selector composes the exact action source, witness surface, residual gates,
+  counter frame, and delivered-pending handoff into either certified finality
+  with exact commit witnesses or the named delivered-pending complete wait
+  state with commit witnesses absent and the continuation action/timer surface
+  exposed.
 - `RbcProgressEvidenceNeverDiverges` proves that every reachable RBC progress
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk
@@ -10718,6 +10725,17 @@ Temporal properties:
   prepare-vote, timeout/NewView, NewView-vote, proposal, or GST branch
   theorems, with RBC and Byzantine-fault actions closed at the delivered
   wait-state boundary.
+- `DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState` proves
+  the complementary stuttering branch from the named delivered-pending complete
+  wait state: all consensus, RBC, Byzantine-fault, GST, timer, vote/counter,
+  view/evidence, and commit-artifact surfaces remain unchanged, and the named
+  wait-state envelope is preserved exactly.
+- `DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteBranchClassifier`
+  proves the aggregate named wait-state branch classifier for every
+  `[Next]_vars` step: non-stuttering steps are exactly one named consensus,
+  commit-vote, timeout, NewView, proposal, or GST branch with RBC/fault actions
+  closed, while stuttering steps keep the full delivered-pending complete
+  wait-state envelope unchanged.
 - `PendingProtocolStepsNeverChangeGst` proves that non-final NewView,
   prepare-vote, honest commit-vote, Byzantine commit-vote, and RBC DELIVER
   pending branches preserve the GST observation flag; synchrony observation
