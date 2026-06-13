@@ -1245,6 +1245,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-recursive-spend-native-output-headers",
     ),
     (
+        "Mobile privacy production-gate exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness",
+    ),
+    (
         "JVM Offline Note V2 decoder placeholder negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-decoder-placeholder",
     ),
@@ -3917,6 +3921,79 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "Kagemusha JVM SDK script must run Android signing algorithm exactness tests",
         errors,
     )
+
+
+def check_mobile_privacy_production_gate_exactness(texts, errors):
+    java_bridge = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java"
+    kotlin_bridge = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"
+    require_contains(
+        texts,
+        kotlin_bridge,
+        (
+            "rows.any { !nativeCapabilityRowIsExact(it) }",
+            "private fun nativeCapabilityRowIsExact(row: NativeCapability): Boolean",
+            "row.productionReady != gate.ready",
+            "gate.requiredGates != REQUIRED_GATES",
+            "gate.gates.map { it.key } != REQUIRED_GATES",
+            "gate.gates.any { it.passed != gate.ready }",
+            "row.plannedEntrypoints.isEmpty()",
+            "readyAuditReferencesAreExact(gate.auditReferences)",
+            "references.distinct().size != references.size",
+            "productionHashIsValid(reference.removePrefix(prefix))",
+            "productionSignatureIsValid(reference.removePrefix(prefix))",
+            "value.any { it.code !in 0x20..0x7e || it == '\\\\' }",
+            "compact.contains(\"devprooffixture\")",
+            "localnet_lifecycle_recursive_append_verify_hash:",
+        ),
+        "Kotlin privacy production-gate exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_bridge,
+        (
+            "if (!nativeCapabilityRowIsExact(row))",
+            "private static boolean nativeCapabilityRowIsExact(final NativeCapability row)",
+            "row.productionReady != gate.ready",
+            "!gate.requiredGates.equals(PRODUCTION_GATE_REQUIRED)",
+            "gate.gates.size() != PRODUCTION_GATE_REQUIRED.size()",
+            "status.passed != gate.ready",
+            "row.plannedEntrypoints.isEmpty()",
+            "readyAuditReferencesAreExact(gate.auditReferences)",
+            "new LinkedHashSet<>(references).size() != references.size()",
+            "productionHashIsValid(value)",
+            "productionSignatureIsValid(value)",
+            "ch < 0x20 || ch > 0x7e",
+            "normalized.contains(\"devprooffixture\")",
+            "localnet_lifecycle_recursive_append_verify_hash:",
+        ),
+        "Android Java privacy production-gate exactness",
+        errors,
+    )
+    for relative, label in (
+        (kotlin_test, "Kotlin privacy production-gate exactness tests"),
+        (java_test, "Android Java privacy production-gate exactness tests"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "productionReadyCapabilitiesRequireExactNativeGateEvidence",
+                "forgedProductionReadyCapabilityRowsFailClosed",
+                "empty required gates",
+                "missing gate status",
+                "duplicate audit reference",
+                "bad audit hash",
+                "uppercase audit signature",
+                "mock localnet marker",
+                "planned entrypoint",
+                "production ready mismatch",
+            ),
+            label,
+            errors,
+        )
 
 
 def check_javascript(texts, errors):
@@ -9662,6 +9739,7 @@ def run_checks(texts):
     check_rust_policy_constants(texts, errors)
     check_node_host(texts, errors)
     check_jvm_sdk_script_pins_jdk21(texts, errors)
+    check_mobile_privacy_production_gate_exactness(texts, errors)
     check_javascript(texts, errors)
     check_python(texts, errors)
     check_swift(texts, errors)
@@ -11257,6 +11335,42 @@ if mode == "--negative-control-mobile-recursive-spend-native-output-headers":
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile native output header drift was not detected")
+
+if mode == "--negative-control-mobile-privacy-production-gate-exactness":
+    mutated_texts = dict(texts)
+    kotlin_bridge = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
+    java_bridge = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
+    kotlin_mutated = read(kotlin_bridge).replace(
+        "rows.any { !nativeCapabilityRowIsExact(it) }",
+        "rows.any { it.productionGate.version != PRODUCTION_GATE_VERSION }",
+        1,
+    )
+    java_mutated = read(java_bridge).replace(
+        "if (!nativeCapabilityRowIsExact(row))",
+        "if (!PRODUCTION_GATE_VERSION.equals(row.productionGate.version))",
+        1,
+    )
+    if kotlin_mutated == read(kotlin_bridge) or java_mutated == read(java_bridge):
+        raise SystemExit("negative control failed: unable to mutate mobile privacy production-gate exactness")
+    mutated_texts[kotlin_bridge] = kotlin_mutated
+    mutated_texts[java_bridge] = java_mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        for label in (
+            "Kotlin privacy production-gate exactness",
+            "Android Java privacy production-gate exactness",
+        ):
+            if label not in message:
+                raise SystemExit(
+                    "negative control failed: mobile privacy production-gate drift was not detected for "
+                    + label
+                )
+        print("negative control rejected mobile privacy production-gate exactness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile privacy production-gate exactness drift was not detected")
 
 if mode == "--negative-control-jvm-sdk-android-harness-script":
     target = JVM_SDK_TEST_COMMAND

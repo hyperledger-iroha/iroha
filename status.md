@@ -13,9 +13,16 @@ Last updated: 2026-06-13
   audit references, malformed SHA-256 or Ed25519 evidence values, mock/local-only
   evidence markers, non-empty planned entrypoints, missing gate statuses, and
   mismatched `production_ready` state.
+- Pinned the exact-row aggregation predicates in the recursive-spend SDK parity
+  guard and workflow, with a negative control that rewrites Kotlin/JVM and
+  Android Java back to the old version-only row check and requires the guard to
+  reject that drift.
 - Focused validation passed:
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --rerun-tasks --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
   - `git diff --check`
 
 ## 2026-06-13 C# nested identifier receipt hardening

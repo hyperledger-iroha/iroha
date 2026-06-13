@@ -4687,6 +4687,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-recursive-compact-verifier-availability",
     "--negative-control-jvm-recursive-compact-shape-classifier",
     "--negative-control-mobile-recursive-spend-native-output-headers",
+    "--negative-control-mobile-privacy-production-gate-exactness",
     "--negative-control-jvm-offline-note-v2-decoder-placeholder",
     "--negative-control-jvm-offline-note-v2-instruction-wrapper",
     "--negative-control-jvm-offline-note-v2-instruction-decoder",
@@ -6420,7 +6421,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const mobileNativeOutputHeaderBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-recursive-spend-native-output-headers":'),
-    guard.indexOf('if mode == "--negative-control-jvm-sdk-android-harness-script":'),
+    guard.indexOf('if mode == "--negative-control-mobile-privacy-production-gate-exactness":'),
   );
   assert.match(
     mobileNativeOutputHeaderBranch,
@@ -6446,6 +6447,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     mobileNativeOutputHeaderBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "mobile native output header negative control must not unconditionally pass after run_checks",
+  );
+  const mobilePrivacyProductionGateBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-privacy-production-gate-exactness":'),
+    guard.indexOf('if mode == "--negative-control-jvm-sdk-android-harness-script":'),
+  );
+  assert.match(
+    mobilePrivacyProductionGateBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[kotlin_bridge\]\s*=\s*kotlin_mutated[\s\S]*?mutated_texts\[java_bridge\]\s*=\s*java_mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile privacy production-gate negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobilePrivacyProductionGateBranch,
+    /rows\.any \{ !nativeCapabilityRowIsExact\(it\) \}[\s\S]*?rows\.any \{ it\.productionGate\.version != PRODUCTION_GATE_VERSION \}[\s\S]*?if \(!nativeCapabilityRowIsExact\(row\)\)[\s\S]*?if \(!PRODUCTION_GATE_VERSION\.equals\(row\.productionGate\.version\)\)/u,
+    "mobile privacy production-gate negative control must mutate exact-row checks to version-only checks",
+  );
+  assert.match(
+    mobilePrivacyProductionGateBranch,
+    /Kotlin privacy production-gate exactness[\s\S]*?Android Java privacy production-gate exactness/u,
+    "mobile privacy production-gate negative control must require both mobile exactness labels",
+  );
+  assert.match(
+    mobilePrivacyProductionGateBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile privacy production-gate exactness drift was not detected"\)/u,
+    "mobile privacy production-gate negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobilePrivacyProductionGateBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile privacy production-gate negative control must not unconditionally pass after run_checks",
   );
   const csharpArchiveCopyBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-csharp-archive-copy":'),
