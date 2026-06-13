@@ -191,7 +191,7 @@ def _account_data(account: dict[str, Any], *, label: str) -> bytes:
         raise RuntimeError(f"{label} account data must use base64 encoding")
     try:
         raw = base64.b64decode(data[0], validate=True)
-    except (ValueError, binascii.Error):
+    except (TypeError, ValueError, binascii.Error):
         raise RuntimeError(f"{label} account data is invalid base64") from None
     if base64.b64encode(raw).decode("ascii") != data[0]:
         raise RuntimeError(f"{label} account data must be canonical base64")
@@ -361,7 +361,7 @@ def _live_base64_bytes(live: dict[str, Any], field: str, *, label: str) -> bytes
         raise ValueError(f"{label} must be present")
     try:
         raw = base64.b64decode(value, validate=True)
-    except (ValueError, binascii.Error):
+    except (TypeError, ValueError, binascii.Error):
         raise ValueError(f"{label} must be base64") from None
     if base64.b64encode(raw).decode("ascii") != value:
         raise ValueError(f"{label} must be canonical base64")
@@ -381,21 +381,21 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
             str(live.get("verifier_program_id", "")),
             label="verifier program id",
         )
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError):
         raise ValueError("Solana live verifier program id metadata is invalid") from None
     try:
         programdata_address = evidence.normalize_solana_program_id(
             str(live.get("programdata_address", "")),
             label="programdata address",
         )
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError):
         raise ValueError("Solana live ProgramData address metadata is invalid") from None
     try:
         verifier_code_hash = _parse_hex32(
             str(live.get("verifier_code_hash", "")),
             label="verifier_code_hash",
         )
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError):
         raise ValueError("Solana live verifier code hash metadata is invalid") from None
     if programdata_address == program_id:
         raise ValueError("Solana verifier ProgramData account must differ from program id")
@@ -412,7 +412,7 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
             executable_base64,
             label="Solana ProgramData executable base64 metadata",
         )
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError):
         raise ValueError("Solana ProgramData executable base64 metadata is invalid") from None
     derived_code_hash = evidence.solana_verifier_program_code_hash(program_bytes)
     if derived_code_hash != verifier_code_hash:
@@ -483,7 +483,7 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
             programdata_address,
             label="programdata address",
         )
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError):
         raise ValueError(
             "Solana Program account ProgramData address metadata is invalid"
         ) from None

@@ -3671,6 +3671,140 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
 }
 
 #[test]
+fn da_receipt_log_in_memory_append_fails_closed() {
+    let lane_epoch = LaneEpoch::new(LaneId::new(4), 10);
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let signer = KeyPair::random();
+    let log = DaReceiptLog::in_memory(Arc::clone(&cursor_store), signer.public_key().clone());
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xA1);
+
+    let err = log
+        .append(lane_epoch, 1, receipt, test_fingerprint(0xA1))
+        .expect_err("in-memory receipt logs must not acknowledge DA ingest appends");
+
+    assert!(
+        format!("{err:?}").contains("not durable"),
+        "unexpected in-memory append error: {err:?}"
+    );
+    assert!(
+        log.receipts_for(lane_epoch).is_empty(),
+        "failed in-memory append must not update receipt-log memory"
+    );
+}
+
+#[test]
+fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
+    let temp_dir = tempdir().expect("temp dir");
+    let spool_dir = temp_dir.path();
+    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let request = context.request;
+    let manifest = context.artifacts;
+    let canonical = normalize_payload(&request).expect("normalize payload");
+    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let metadata =
+        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
+    let rent_policy = DaRentPolicyV1::default();
+    let retry_manifest = resolve_manifest(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &metadata,
+        &request.retention_policy,
+        1_701_001_111,
+        &rent_policy,
+    )
+    .expect("retry manifest");
+    assert_eq!(retry_manifest.storage_ticket, manifest.storage_ticket);
+    assert_eq!(retry_manifest.fingerprint, manifest.fingerprint);
+    assert_ne!(
+        retry_manifest.manifest_hash, manifest.manifest_hash,
+        "retry timestamp should change the timestamped manifest hash"
+    );
+
+    persistence::persist_manifest_for_sorafs(
+        spool_dir,
+        &manifest.encoded,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist manifest")
+    .expect("manifest path");
+    let pdp_commitment = compute_pdp_commitment(
+        &manifest.manifest_hash,
+        &manifest.manifest,
+        &chunk_store,
+        1_701_000_999,
+    )
+    .expect("PDP commitment");
+    let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode PDP commitment");
+    persistence::persist_pdp_commitment(
+        spool_dir,
+        &pdp_commitment,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist PDP")
+    .expect("PDP path");
+
+    let signer = KeyPair::random();
+    let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
+    let receipt = build_receipt(
+        &signer,
+        &request,
+        1_701_000_999,
+        manifest.blob_hash,
+        manifest.chunk_root,
+        manifest.manifest_hash,
+        manifest.storage_ticket,
+        pdp_bytes.clone(),
+        manifest.manifest.rent_quote,
+        stripe_layout_from_manifest(&manifest.manifest),
+    )
+    .expect("build receipt");
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let log = DaReceiptLog::open(
+        spool_dir.to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    )
+    .expect("open receipt log");
+    assert!(matches!(
+        log.append(
+            lane_epoch,
+            request.sequence,
+            receipt.clone(),
+            manifest.fingerprint
+        )
+        .expect("append receipt"),
+        ReceiptInsertOutcome::Stored { .. }
+    ));
+
+    let duplicate = load_duplicate_da_artifacts(
+        &log,
+        spool_dir,
+        lane_epoch,
+        request.sequence,
+        &retry_manifest.storage_ticket,
+        retry_manifest.fingerprint,
+    )
+    .expect("load duplicate artifacts");
+
+    assert_eq!(duplicate.receipt, receipt);
+    assert_eq!(duplicate.pdp_commitment_bytes, pdp_bytes);
+    assert_eq!(
+        receipt_file_count(spool_dir),
+        1,
+        "duplicate artifact recovery must not write another receipt"
+    );
+}
+
+#[test]
 fn da_receipt_log_rejects_invalid_signature() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(5), 7);

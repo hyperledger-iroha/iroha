@@ -506,12 +506,23 @@ object KagemushaRecursiveSpendRequestCodecs {
         NoritoCodec.encode(request, SCHEMA_REDEEM_REQUEST, RedeemRequestAdapter, REQUEST_FLAGS)
 
     @JvmStatic
-    fun buildPallasOpenEnvelopesArchive(proofOutputArchives: List<ByteArray>?): ByteArray {
-        require(!proofOutputArchives.isNullOrEmpty()) { "proofOutputArchives must not be empty" }
-        throw IllegalArgumentException(
-            "Pallas IPA opening envelopes cannot be derived from privacy proof outputs; " +
-                "pass the prover-emitted Norito archive of Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
-        )
+    fun buildPallasOpenEnvelopesArchive(hops: List<VerifiedFoldHopEvidence>?): ByteArray {
+        require(!hops.isNullOrEmpty()) { "hops must not be empty" }
+        return buildPallasOpenEnvelopesArchiveForRecordBundle(buildVerifiedFoldRecordBundle(hops))
+    }
+
+    @JvmStatic
+    fun buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle: ByteArray?): ByteArray {
+        require(recordBundle != null) { "recordBundle is required" }
+        compactPayloadForRequest(recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle")
+        return KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundle)
+    }
+
+    @JvmStatic
+    fun buildPreviousProofOpenEnvelopesArchive(previousBundle: ByteArray?): ByteArray {
+        require(previousBundle != null) { "previousBundle is required" }
+        decodeBundle(previousBundle)
+        return KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(previousBundle)
     }
 
     @JvmStatic
@@ -614,6 +625,31 @@ object KagemushaRecursiveSpendRequestCodecs {
     @JvmOverloads
     fun buildRecursiveSpendInitRequest(
         hop: VerifiedFoldHopEvidence?,
+        spendableNote: SpendableNoteDescriptor?,
+        lineageVerifierKey: ByteArray? = null,
+        lineageProvingKeyArchive: ByteArray? = null,
+        blockHeight: Long? = null,
+    ): ByteArray {
+        require(hop != null) { "hop is required" }
+        require(spendableNote != null) { "spendableNote is required" }
+        val recordBundle = buildVerifiedFoldRecordBundle(listOf(hop))
+        val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)
+        return encodeInitRequest(
+            InitSpendRequest(
+                recordBundle = recordBundle,
+                pallasOpenEnvelopes = pallasOpenEnvelopes,
+                currentNote = spendableNote,
+                lineageVerifierKey = lineageVerifierKey,
+                lineageProvingKeyArchive = lineageProvingKeyArchive,
+                blockHeight = blockHeight,
+            ),
+        )
+    }
+
+    @JvmStatic
+    @JvmOverloads
+    fun buildRecursiveSpendInitRequest(
+        hop: VerifiedFoldHopEvidence?,
         pallasOpenEnvelopes: ByteArray?,
         spendableNote: SpendableNoteDescriptor?,
         lineageKeyArtifacts: KagemushaRecursiveSpendProver.LineageKeyArtifacts,
@@ -625,6 +661,29 @@ object KagemushaRecursiveSpendRequestCodecs {
         return encodeInitRequest(
             InitSpendRequest(
                 recordBundle = buildVerifiedFoldRecordBundle(listOf(hop)),
+                pallasOpenEnvelopes = pallasOpenEnvelopes,
+                currentNote = spendableNote,
+                lineageKeyArtifacts = lineageKeyArtifacts,
+                blockHeight = blockHeight,
+            ),
+        )
+    }
+
+    @JvmStatic
+    @JvmOverloads
+    fun buildRecursiveSpendInitRequest(
+        hop: VerifiedFoldHopEvidence?,
+        spendableNote: SpendableNoteDescriptor?,
+        lineageKeyArtifacts: KagemushaRecursiveSpendProver.LineageKeyArtifacts,
+        blockHeight: Long? = null,
+    ): ByteArray {
+        require(hop != null) { "hop is required" }
+        require(spendableNote != null) { "spendableNote is required" }
+        val recordBundle = buildVerifiedFoldRecordBundle(listOf(hop))
+        val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)
+        return encodeInitRequest(
+            InitSpendRequest(
+                recordBundle = recordBundle,
                 pallasOpenEnvelopes = pallasOpenEnvelopes,
                 currentNote = spendableNote,
                 lineageKeyArtifacts = lineageKeyArtifacts,
@@ -686,6 +745,45 @@ object KagemushaRecursiveSpendRequestCodecs {
     }
 
     @JvmStatic
+    @JvmOverloads
+    fun buildRecursiveSpendAppendRequest(
+        previousBundle: ByteArray?,
+        hop: VerifiedFoldHopEvidence?,
+        spendableNote: SpendableNoteDescriptor?,
+        outputCircuitId: String? = null,
+        previousLineageVerifierRecord: VerifierRecordRef? = null,
+        previousProofOpenEnvelopes: ByteArray? = null,
+        lineageVerifierKey: ByteArray? = null,
+        lineageProvingKeyArchive: ByteArray? = null,
+        blockHeight: Long? = null,
+    ): ByteArray {
+        require(previousBundle != null) { "previousBundle is required" }
+        require(hop != null) { "hop is required" }
+        require(spendableNote != null) { "spendableNote is required" }
+        val recordBundle = buildVerifiedFoldRecordBundle(listOf(hop))
+        val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)
+        val previousOpenEnvelopes = previousProofOpenEnvelopesOrGenerated(
+            previousBundle,
+            outputCircuitId,
+            previousProofOpenEnvelopes,
+        )
+        return encodeAppendRequest(
+            AppendSpendRequest(
+                previousBundle = previousBundle,
+                recordBundle = recordBundle,
+                pallasOpenEnvelopes = pallasOpenEnvelopes,
+                currentNote = spendableNote,
+                outputProofCircuitId = outputCircuitId,
+                previousLineageVerifierRecord = previousLineageVerifierRecord,
+                previousProofOpenEnvelopes = previousOpenEnvelopes,
+                lineageVerifierKey = lineageVerifierKey,
+                lineageProvingKeyArchive = lineageProvingKeyArchive,
+                blockHeight = blockHeight,
+            ),
+        )
+    }
+
+    @JvmStatic
     fun buildRecursiveSpendAppendRequest(
         previousBundle: ByteArray?,
         hop: VerifiedFoldHopEvidence?,
@@ -710,6 +808,42 @@ object KagemushaRecursiveSpendRequestCodecs {
                 outputProofCircuitId = outputCircuitId,
                 previousLineageVerifierRecord = previousLineageVerifierRecord,
                 previousProofOpenEnvelopes = previousProofOpenEnvelopes,
+                lineageKeyArtifacts = lineageKeyArtifacts,
+                blockHeight = blockHeight,
+            ),
+        )
+    }
+
+    @JvmStatic
+    fun buildRecursiveSpendAppendRequest(
+        previousBundle: ByteArray?,
+        hop: VerifiedFoldHopEvidence?,
+        spendableNote: SpendableNoteDescriptor?,
+        outputCircuitId: String?,
+        previousLineageVerifierRecord: VerifierRecordRef?,
+        previousProofOpenEnvelopes: ByteArray?,
+        lineageKeyArtifacts: KagemushaRecursiveSpendProver.LineageKeyArtifacts?,
+        blockHeight: Long?,
+    ): ByteArray {
+        require(previousBundle != null) { "previousBundle is required" }
+        require(hop != null) { "hop is required" }
+        require(spendableNote != null) { "spendableNote is required" }
+        val recordBundle = buildVerifiedFoldRecordBundle(listOf(hop))
+        val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)
+        val previousOpenEnvelopes = previousProofOpenEnvelopesOrGenerated(
+            previousBundle,
+            outputCircuitId,
+            previousProofOpenEnvelopes,
+        )
+        return encodeAppendRequest(
+            AppendSpendRequest(
+                previousBundle = previousBundle,
+                recordBundle = recordBundle,
+                pallasOpenEnvelopes = pallasOpenEnvelopes,
+                currentNote = spendableNote,
+                outputProofCircuitId = outputCircuitId,
+                previousLineageVerifierRecord = previousLineageVerifierRecord,
+                previousProofOpenEnvelopes = previousOpenEnvelopes,
                 lineageKeyArtifacts = lineageKeyArtifacts,
                 blockHeight = blockHeight,
             ),
@@ -829,10 +963,29 @@ object KagemushaRecursiveSpendRequestCodecs {
 
     private fun failClosedProofOnlyRecursiveSpendRequest(): Nothing {
         throw IllegalArgumentException(
-            "recursive spend requests require explicit VerifiedFoldHopEvidence and a prover-emitted " +
+            "recursive spend requests require explicit VerifiedFoldHopEvidence and a bridge-generated or explicit " +
                 "Pallas open-envelopes archive; privacy proof outputs alone do not carry " +
                 "Pallas IPA opening envelopes, chainId, asset, or rootAfter",
         )
+    }
+
+    private fun previousProofOpenEnvelopesOrGenerated(
+        previousBundle: ByteArray,
+        outputCircuitId: String?,
+        provided: ByteArray?,
+    ): ByteArray? {
+        if (provided != null) return provided
+        val previousSummary = decodeBundle(previousBundle)
+        return if (
+            KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
+                outputCircuitId,
+                previousSummary.hopCount,
+            )
+        ) {
+            buildPreviousProofOpenEnvelopesArchive(previousBundle)
+        } else {
+            null
+        }
     }
 
     internal class ArchivePayload(

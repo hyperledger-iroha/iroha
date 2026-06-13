@@ -5,7 +5,7 @@
 use std::{
     borrow::{Cow, ToOwned},
     io::{ErrorKind, Read},
-    path::Path,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -18,6 +18,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
+use eyre::{WrapErr, eyre};
 use flate2::read::{DeflateDecoder, GzDecoder};
 use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
 use iroha_core::da::{LaneEpoch, ReplayFingerprint, ReplayInsertOutcome, ReplayKey};
@@ -223,17 +224,6 @@ pub async fn handler_post_da_ingest(
 
     match outcome {
         ReplayInsertOutcome::Fresh { .. } | ReplayInsertOutcome::Duplicate { .. } => {
-            let mut spool_batch = DaSpoolBatch::new();
-            if matches!(outcome, ReplayInsertOutcome::Fresh { .. }) {
-                let replay_store = Arc::clone(&app.da_replay_store);
-                let sequence = request.sequence;
-                spool_batch.push(DaSpoolAction::new("replay_cursor", move || {
-                    replay_store
-                        .record(lane_epoch, sequence)
-                        .map(|()| DaSpoolActionOutput::None)
-                        .map_err(|err| err.to_string())
-                }));
-            }
             let duplicate = matches!(outcome, ReplayInsertOutcome::Duplicate { .. });
             let (rent_gib, rent_months) =
                 rent_usage_from_request(request.total_size, &enforced_retention);
@@ -245,6 +235,29 @@ pub async fn handler_post_da_ingest(
                 rent_months,
                 &manifest.manifest.rent_quote,
             );
+
+            if duplicate {
+                return handle_duplicate_da_ingest(
+                    app.as_ref(),
+                    &telemetry,
+                    &request,
+                    &manifest,
+                    lane_epoch,
+                    format,
+                );
+            }
+
+            let mut spool_batch = DaSpoolBatch::new();
+            if matches!(outcome, ReplayInsertOutcome::Fresh { .. }) {
+                let replay_store = Arc::clone(&app.da_replay_store);
+                let sequence = request.sequence;
+                spool_batch.push(DaSpoolAction::new("replay_cursor", move || {
+                    replay_store
+                        .record(lane_epoch, sequence)
+                        .map(|()| DaSpoolActionOutput::None)
+                        .map_err(|err| err.to_string())
+                }));
+            }
 
             {
                 let spool_dir = app.da_ingest.manifest_store_dir.clone();
@@ -663,6 +676,103 @@ pub async fn handler_post_da_ingest(
             format,
         )),
     }
+}
+
+struct DuplicateDaArtifacts {
+    receipt_path: PathBuf,
+    receipt: DaIngestReceipt,
+    pdp_commitment_bytes: Vec<u8>,
+}
+
+fn load_duplicate_da_artifacts(
+    receipt_log: &persistence::DaReceiptLog,
+    spool_dir: &Path,
+    lane_epoch: LaneEpoch,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+    fingerprint: ReplayFingerprint,
+) -> eyre::Result<DuplicateDaArtifacts> {
+    let manifest_bytes = persistence::load_manifest_from_spool(spool_dir, storage_ticket)
+        .wrap_err("failed to load duplicate DA manifest artifact")?;
+    let manifest_hash = BlobDigest::from_hash(blake3_hash(&manifest_bytes));
+    let pdp_commitment_bytes =
+        persistence::load_pdp_commitment_from_spool(spool_dir, storage_ticket)
+            .wrap_err("failed to load duplicate DA PDP commitment artifact")?;
+    let (receipt_path, receipt) = receipt_log
+        .durable_receipt_for_duplicate(lane_epoch, sequence, fingerprint)
+        .wrap_err("failed to load duplicate DA receipt artifact")?
+        .ok_or_else(|| eyre!("durable duplicate DA receipt was not found"))?;
+
+    if receipt.storage_ticket != *storage_ticket {
+        return Err(eyre!(
+            "duplicate DA receipt storage ticket does not match replay fingerprint"
+        ));
+    }
+    if receipt.manifest_hash != manifest_hash {
+        return Err(eyre!(
+            "duplicate DA receipt manifest hash does not match durable manifest"
+        ));
+    }
+    if receipt.pdp_commitment.as_deref() != Some(pdp_commitment_bytes.as_slice()) {
+        return Err(eyre!(
+            "duplicate DA receipt PDP commitment does not match durable PDP artifact"
+        ));
+    }
+
+    Ok(DuplicateDaArtifacts {
+        receipt_path,
+        receipt,
+        pdp_commitment_bytes,
+    })
+}
+
+fn handle_duplicate_da_ingest(
+    app: &crate::AppState,
+    telemetry: &MaybeTelemetry,
+    request: &DaIngestRequest,
+    manifest: &ManifestArtifacts,
+    lane_epoch: LaneEpoch,
+    format: ResponseFormat,
+) -> Result<Response, ResponseError> {
+    let artifacts = load_duplicate_da_artifacts(
+        app.da_receipt_log.as_ref(),
+        &app.da_ingest.manifest_store_dir,
+        lane_epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        manifest.fingerprint,
+    )
+    .map_err(|err| {
+        ResponseError::from(build_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("failed to recover duplicate DA ingest artifacts: {err}"),
+            format,
+        ))
+    })?;
+
+    record_da_receipt_metrics(
+        telemetry,
+        lane_epoch,
+        request.sequence,
+        &ReceiptInsertOutcome::Duplicate {
+            path: artifacts.receipt_path,
+        },
+    );
+
+    let pdp_header_value = pdp_commitment_header_value(&artifacts.pdp_commitment_bytes).map_err(
+        |(status, message)| ResponseError::from(build_error_response(status, &message, format)),
+    )?;
+    let response = DaIngestResponse {
+        status: "accepted",
+        duplicate: true,
+        receipt: Some(artifacts.receipt),
+    };
+    let mut http_response = utils::respond_with_format(response, format);
+    http_response.headers_mut().insert(
+        HeaderName::from_static(HEADER_SORA_PDP_COMMITMENT),
+        pdp_header_value,
+    );
+    Ok(with_status(http_response, StatusCode::ACCEPTED))
 }
 
 #[derive(

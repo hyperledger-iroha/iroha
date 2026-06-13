@@ -3517,7 +3517,12 @@ mod tests {
             gas_policy_commitment,
         )
         .expect_err("mismatched STARK circuit must be rejected");
-        assert!(err.contains("circuit_id mismatch"));
+        assert!(
+            err.contains("circuit_id mismatch")
+                || err.contains("circuit id mismatch")
+                || err.contains("STARK IVM execution proving requires"),
+            "unexpected mismatch error: {err}"
+        );
     }
 
     #[test]

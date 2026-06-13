@@ -1829,6 +1829,54 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
     note = _recursive_spend_note()
     init_artifacts = _recursive_spend_lineage_artifacts_for_init(0x95)
     append_artifacts = _recursive_spend_lineage_artifacts_for_append(0x97)
+    invalid_block_heights = (True, False, 1.5, "1", -1, 1 << 64)
+    block_height_request_builders = (
+        lambda block_height: kagemusha.KagemushaRecursiveSpendInitRequest(
+            record_bundle=record_bundle,
+            pallas_open_envelopes=pallas,
+            current_note=note,
+            lineage_key_artifacts=init_artifacts,
+            block_height=block_height,
+        ),
+        lambda block_height: kagemusha.KagemushaRecursiveSpendAppendRequest(
+            previous_bundle=_shared_recursive_spend_archive("init_bundle"),
+            record_bundle=record_bundle,
+            pallas_open_envelopes=pallas,
+            current_note=note,
+            previous_lineage_verifier_record=_recursive_spend_verifier_record(),
+            block_height=block_height,
+        ),
+        lambda block_height: kagemusha.KagemushaRecursiveSpendVerifyRequest(
+            bundle=_shared_recursive_spend_archive("init_bundle"),
+            block_height=block_height,
+        ),
+        lambda block_height: kagemusha.KagemushaRecursiveSpendRedeemRequest(
+            bundle=_shared_recursive_spend_archive("init_bundle"),
+            recipient=_recursive_spend_recipient(),
+            public_amount="1",
+            redeem_proof=_synthetic_kagemusha_archive(
+                kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
+                0x7A,
+            ),
+            block_height=block_height,
+        ),
+    )
+    for build_request in block_height_request_builders:
+        for block_height in invalid_block_heights:
+            with pytest.raises((TypeError, ValueError), match="block_height"):
+                build_request(block_height)
+    invalid_public_amounts = ("", "0", "01", "-1", "+1", "1.0", "1e3", str(1 << 128))
+    for public_amount in invalid_public_amounts:
+        with pytest.raises(ValueError, match="public_amount"):
+            kagemusha.KagemushaRecursiveSpendRedeemRequest(
+                bundle=_shared_recursive_spend_archive("init_bundle"),
+                recipient=_recursive_spend_recipient(),
+                public_amount=public_amount,
+                redeem_proof=_synthetic_kagemusha_archive(
+                    kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
+                    0x7B,
+                ),
+            )
     with pytest.raises(ValueError, match="lineage_verifier_key"):
         kagemusha.KagemushaRecursiveSpendInitRequest(
             record_bundle=record_bundle,

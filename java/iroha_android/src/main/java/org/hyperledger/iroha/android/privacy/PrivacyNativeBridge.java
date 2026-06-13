@@ -8,10 +8,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Raw Norito V1 privacy proof bridge backed by {@code connect_norito_bridge}. */
 public final class PrivacyNativeBridge {
@@ -87,6 +89,30 @@ public final class PrivacyNativeBridge {
               "verifier_fuzzing",
               "performance_gates",
               "external_audit"));
+  private static final List<String> READY_AUDIT_REFERENCE_PREFIXES =
+      Collections.unmodifiableList(
+          Arrays.asList(
+              "chain_id:",
+              "reviewer:",
+              "review_artifact_hash:",
+              "review_artifact_signature:",
+              "fuzz_artifact_hash:",
+              "performance_artifact_hash:",
+              "localnet_run_id:",
+              "localnet_smoke_tx_hash:",
+              "localnet_replay_rejection_hash:",
+              "localnet_restart_replay_rejection_hash:",
+              "localnet_state_recovery_hash:",
+              "localnet_lifecycle_shield_tx_hash:",
+              "localnet_lifecycle_hop_proof_hash:",
+              "localnet_lifecycle_recursive_init_hash:",
+              "localnet_lifecycle_recursive_init_verify_hash:",
+              "localnet_lifecycle_recursive_append_hash:",
+              "localnet_lifecycle_recursive_append_verify_hash:",
+              "localnet_lifecycle_unshield_proof_hash:",
+              "localnet_lifecycle_redeem_tx_hash:"));
+  private static final Set<String> READY_HASH_REFERENCE_PREFIXES =
+      readyHashReferencePrefixes();
   private static final List<String> PRODUCTION_GATE_AUDIT_REFERENCES = Collections.emptyList();
   private static final TypeAdapter<Long> NATIVE_U32 = NoritoAdapters.uint(32);
   private static final TypeAdapter<String> NATIVE_STRING = NoritoAdapters.stringAdapter();
@@ -715,7 +741,7 @@ public final class PrivacyNativeBridge {
 
     final List<NativeCapability> rows = Arrays.asList(confidentialTransfer, unshield);
     for (final NativeCapability row : rows) {
-      if (!PRODUCTION_GATE_VERSION.equals(row.productionGate.version)) {
+      if (!nativeCapabilityRowIsExact(row)) {
         return PrivacyCapabilities.failClosed(bridgeAvailable);
       }
     }
@@ -798,6 +824,115 @@ public final class PrivacyNativeBridge {
 
   private static List<String> stableDistinct(final List<String> values) {
     return Collections.unmodifiableList(new ArrayList<>(new LinkedHashSet<>(values)));
+  }
+
+  private static boolean nativeCapabilityRowIsExact(final NativeCapability row) {
+    final NativeProductionGate gate = row.productionGate;
+    if (!PRODUCTION_GATE_VERSION.equals(gate.version)
+        || row.productionReady != gate.ready
+        || !gate.requiredGates.equals(PRODUCTION_GATE_REQUIRED)
+        || gate.gates.size() != PRODUCTION_GATE_REQUIRED.size()) {
+      return false;
+    }
+    for (int index = 0; index < PRODUCTION_GATE_REQUIRED.size(); index++) {
+      final NativeGateStatus status = gate.gates.get(index);
+      if (!PRODUCTION_GATE_REQUIRED.get(index).equals(status.key)
+          || status.passed != gate.ready) {
+        return false;
+      }
+    }
+    if (gate.ready) {
+      return row.plannedEntrypoints.isEmpty()
+          && gate.missing.isEmpty()
+          && readyAuditReferencesAreExact(gate.auditReferences);
+    }
+    return gate.auditReferences.isEmpty() && !gate.missing.isEmpty();
+  }
+
+  private static boolean readyAuditReferencesAreExact(final List<String> references) {
+    if (references.size() != READY_AUDIT_REFERENCE_PREFIXES.size()
+        || new LinkedHashSet<>(references).size() != references.size()) {
+      return false;
+    }
+    for (int index = 0; index < READY_AUDIT_REFERENCE_PREFIXES.size(); index++) {
+      final String reference = references.get(index);
+      final String prefix = READY_AUDIT_REFERENCE_PREFIXES.get(index);
+      if (!reference.startsWith(prefix) || !productionEvidenceTextIsClean(reference)) {
+        return false;
+      }
+      final String value = reference.substring(prefix.length());
+      if ("review_artifact_signature:".equals(prefix)) {
+        if (!productionSignatureIsValid(value)) {
+          return false;
+        }
+      } else if (READY_HASH_REFERENCE_PREFIXES.contains(prefix)
+          && !productionHashIsValid(value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean productionHashIsValid(final String value) {
+    if (!value.startsWith("sha256:") || value.length() != "sha256:".length() + 64) {
+      return false;
+    }
+    for (int index = "sha256:".length(); index < value.length(); index++) {
+      final char ch = value.charAt(index);
+      if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean productionSignatureIsValid(final String value) {
+    if (!value.startsWith("ed25519:") || value.length() != "ed25519:".length() + 128) {
+      return false;
+    }
+    for (int index = "ed25519:".length(); index < value.length(); index++) {
+      final char ch = value.charAt(index);
+      if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean productionEvidenceTextIsClean(final String value) {
+    if (value.isEmpty()
+        || value.length() > 768
+        || !value.trim().equals(value)
+        || value.indexOf('\\') >= 0) {
+      return false;
+    }
+    final StringBuilder compact = new StringBuilder(value.length());
+    for (int index = 0; index < value.length(); index++) {
+      final char ch = value.charAt(index);
+      if (ch < 0x20 || ch > 0x7e) {
+        return false;
+      }
+      if (Character.isLetterOrDigit(ch)) {
+        compact.append(Character.toLowerCase(ch));
+      }
+    }
+    final String normalized = compact.toString();
+    return !normalized.contains("devfixture")
+        && !normalized.contains("devprooffixture")
+        && !normalized.contains("localonly")
+        && !normalized.contains("mock");
+  }
+
+  private static Set<String> readyHashReferencePrefixes() {
+    final Set<String> prefixes = new HashSet<>();
+    for (final String prefix : READY_AUDIT_REFERENCE_PREFIXES) {
+      if (prefix.endsWith("_hash:")
+          || prefix.endsWith("_tx_hash:")
+          || prefix.endsWith("_proof_hash:")) {
+        prefixes.add(prefix);
+      }
+    }
+    return Collections.unmodifiableSet(prefixes);
   }
 
   @SuppressWarnings("unchecked")

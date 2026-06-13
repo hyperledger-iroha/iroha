@@ -118,7 +118,7 @@ def test_solana_destination_hex_parsers_redact_parser_causes():
         raise AssertionError("invalid Solana destination program hex was accepted")
 
 
-def test_solana_destination_base64_parser_redacts_parser_causes():
+def test_solana_destination_base64_parser_redacts_parser_causes(monkeypatch):
     """Invalid Solana destination base64 inputs must not chain parser payloads."""
 
     module = load_evidence_module()
@@ -136,6 +136,26 @@ def test_solana_destination_base64_parser_redacts_parser_causes():
         assert exc.__suppress_context__ is True
     else:
         raise AssertionError("invalid Solana destination program base64 was accepted")
+
+    def fail_b64decode(_value, *, validate):
+        raise TypeError("secret-token Solana destination base64 decoder detail")
+
+    monkeypatch.setattr(module.base64, "b64decode", fail_b64decode)
+    try:
+        module.parse_program_bytes_base64(
+            SOLANA_VERIFIER_PROGRAM_BYTES_BASE64,
+            label="verifier program bytes",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "verifier program bytes must be base64"
+        assert "secret-token" not in rendered
+        assert "decoder detail" not in rendered
+        assert "TypeError" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("Solana destination base64 decoder detail was accepted")
 
 
 def test_solana_destination_file_parser_redacts_file_read_causes(tmp_path):

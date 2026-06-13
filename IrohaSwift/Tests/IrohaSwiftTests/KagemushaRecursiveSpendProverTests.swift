@@ -1385,6 +1385,8 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
     func testRejectsEmptyRequestArchivesBeforeBridgeCall() {
         let validArchive = Self.validKagemushaNoritoArchive()
         let helpers: [(String, (Data) throws -> Data)] = [
+            ("buildPallasOpenEnvelopesArchive", KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive),
+            ("buildPreviousProofOpenEnvelopesArchive", KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive),
             ("init", KagemushaRecursiveSpendProver.initSpend),
             ("append", KagemushaRecursiveSpendProver.appendSpend),
             ("transitionProfileInit", KagemushaRecursiveSpendProver.transitionProfileInit),
@@ -1448,6 +1450,8 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
     func testRejectsMalformedInputArchivesBeforeBridgeCall() {
         let validArchive = Self.validKagemushaNoritoArchive()
         let helpers: [(String, (Data) throws -> Data)] = [
+            ("buildPallasOpenEnvelopesArchive", KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive),
+            ("buildPreviousProofOpenEnvelopesArchive", KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive),
             ("init", KagemushaRecursiveSpendProver.initSpend),
             ("append", KagemushaRecursiveSpendProver.appendSpend),
             ("transitionProfileInit", KagemushaRecursiveSpendProver.transitionProfileInit),
@@ -1527,6 +1531,8 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         let oversizedMessage =
             "must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes"
         let helpers: [(String, (Data) throws -> Data)] = [
+            ("buildPallasOpenEnvelopesArchive", KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive),
+            ("buildPreviousProofOpenEnvelopesArchive", KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive),
             ("init", KagemushaRecursiveSpendProver.initSpend),
             ("append", KagemushaRecursiveSpendProver.appendSpend),
             ("transitionProfileInit", KagemushaRecursiveSpendProver.transitionProfileInit),
@@ -1605,6 +1611,8 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         let validArchive = Self.validKagemushaNoritoArchive()
         let emptyPayloadArchive = Self.emptyPayloadKagemushaNoritoArchive()
         let helpers: [(String, (Data) throws -> Data)] = [
+            ("buildPallasOpenEnvelopesArchive", KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive),
+            ("buildPreviousProofOpenEnvelopesArchive", KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive),
             ("init", KagemushaRecursiveSpendProver.initSpend),
             ("append", KagemushaRecursiveSpendProver.appendSpend),
             ("transitionProfileInit", KagemushaRecursiveSpendProver.transitionProfileInit),

@@ -812,6 +812,34 @@ class PrivacyNativeBridge private constructor() {
                         "external_audit",
                     ),
                 )
+            private val READY_AUDIT_REFERENCE_PREFIXES: List<String> =
+                Collections.unmodifiableList(
+                    listOf(
+                        "chain_id:",
+                        "reviewer:",
+                        "review_artifact_hash:",
+                        "review_artifact_signature:",
+                        "fuzz_artifact_hash:",
+                        "performance_artifact_hash:",
+                        "localnet_run_id:",
+                        "localnet_smoke_tx_hash:",
+                        "localnet_replay_rejection_hash:",
+                        "localnet_restart_replay_rejection_hash:",
+                        "localnet_state_recovery_hash:",
+                        "localnet_lifecycle_shield_tx_hash:",
+                        "localnet_lifecycle_hop_proof_hash:",
+                        "localnet_lifecycle_recursive_init_hash:",
+                        "localnet_lifecycle_recursive_init_verify_hash:",
+                        "localnet_lifecycle_recursive_append_hash:",
+                        "localnet_lifecycle_recursive_append_verify_hash:",
+                        "localnet_lifecycle_unshield_proof_hash:",
+                        "localnet_lifecycle_redeem_tx_hash:",
+                    ),
+                )
+            private val READY_HASH_REFERENCE_PREFIXES: Set<String> =
+                READY_AUDIT_REFERENCE_PREFIXES
+                    .filter { it.endsWith("_hash:") || it.endsWith("_tx_hash:") || it.endsWith("_proof_hash:") }
+                    .toSet()
             private val EMPTY_AUDIT_REFERENCES: List<String> =
                 Collections.unmodifiableList(emptyList())
 
@@ -842,7 +870,7 @@ class PrivacyNativeBridge private constructor() {
             internal fun fromNativeRows(rows: List<NativeCapability>): PrivacyProductionGate {
                 if (
                     rows.isEmpty() ||
-                    rows.any { it.productionGate.version != PRODUCTION_GATE_VERSION }
+                    rows.any { !nativeCapabilityRowIsExact(it) }
                 ) {
                     return failClosed()
                 }
@@ -891,6 +919,74 @@ class PrivacyNativeBridge private constructor() {
 
             private fun stableDistinct(values: List<String>): List<String> =
                 Collections.unmodifiableList(values.distinct())
+
+            private fun nativeCapabilityRowIsExact(row: NativeCapability): Boolean {
+                val gate = row.productionGate
+                if (
+                    gate.version != PRODUCTION_GATE_VERSION ||
+                    row.productionReady != gate.ready ||
+                    gate.requiredGates != REQUIRED_GATES ||
+                    gate.gates.map { it.key } != REQUIRED_GATES ||
+                    gate.gates.any { it.passed != gate.ready }
+                ) {
+                    return false
+                }
+
+                return if (gate.ready) {
+                    row.plannedEntrypoints.isEmpty() &&
+                        gate.missing.isEmpty() &&
+                        readyAuditReferencesAreExact(gate.auditReferences)
+                } else {
+                    gate.auditReferences.isEmpty() && gate.missing.isNotEmpty()
+                }
+            }
+
+            private fun readyAuditReferencesAreExact(references: List<String>): Boolean {
+                if (
+                    references.size != READY_AUDIT_REFERENCE_PREFIXES.size ||
+                    references.distinct().size != references.size
+                ) {
+                    return false
+                }
+
+                return references.zip(READY_AUDIT_REFERENCE_PREFIXES).all { (reference, prefix) ->
+                    reference.startsWith(prefix) &&
+                        productionEvidenceTextIsClean(reference) &&
+                        when (prefix) {
+                            "review_artifact_signature:" ->
+                                productionSignatureIsValid(reference.removePrefix(prefix))
+                            in READY_HASH_REFERENCE_PREFIXES ->
+                                productionHashIsValid(reference.removePrefix(prefix))
+                            else -> true
+                        }
+                }
+            }
+
+            private fun productionHashIsValid(value: String): Boolean =
+                value.startsWith("sha256:") &&
+                    value.length == "sha256:".length + 64 &&
+                    value.removePrefix("sha256:").all { it in '0'..'9' || it in 'a'..'f' }
+
+            private fun productionSignatureIsValid(value: String): Boolean =
+                value.startsWith("ed25519:") &&
+                    value.length == "ed25519:".length + 128 &&
+                    value.removePrefix("ed25519:").all { it in '0'..'9' || it in 'a'..'f' }
+
+            private fun productionEvidenceTextIsClean(value: String): Boolean {
+                if (
+                    value.isEmpty() ||
+                    value.length > 768 ||
+                    value.trim() != value ||
+                    value.any { it.code !in 0x20..0x7e || it == '\\' }
+                ) {
+                    return false
+                }
+                val compact = value.filter { it.isLetterOrDigit() }.lowercase()
+                return !compact.contains("devfixture") &&
+                    !compact.contains("devprooffixture") &&
+                    !compact.contains("localonly") &&
+                    !compact.contains("mock")
+            }
         }
     }
 }
