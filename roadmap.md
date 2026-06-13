@@ -62,6 +62,10 @@ and completed history lives in [`status.md`](./status.md).
   commitment before serialization; wallet-facing constructors should prefer
   validated `LineageKeyArtifacts` packages over manually split raw key bytes,
   including through the high-level recursive-spend request helper overloads.
+  The Python typed recursive-spend request API now enforces the same package
+  binding before encoding, including rejection of wrong-profile artifacts,
+  mismatched raw verifier/proving-key pairs, mixed typed/raw key material, and
+  unnecessary lineage artifacts on semantic append output.
   The JVM recursive-spend guard must continue exercising both Gradle and direct
   `javac` Android harness compilation for these typed request surfaces.
   The explicit hop-evidence builders must also keep confidential-transfer-v2
@@ -86,28 +90,28 @@ and completed history lives in [`status.md`](./status.md).
   input rejection, transfer/unshield shape separation, exact verifier
   references, public-input schema constants, and the native Norito witness
   alignment padding remain pinned by SDK and Rust golden-vector tests.
-- Kagemusha C# SDK validation remains a Windows-machine follow-up because this
-  macOS host does not have `dotnet` installed. On Windows, install or select a
-  .NET 8 SDK, run the standalone C# Kagemusha guard
-  `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` or its direct
-  `dotnet test` equivalent, and preserve the selected `dotnet --version`
-  evidence in the output. The focused pass should cover
+- Kagemusha C# SDK validation now passes on this macOS host with .NET SDK
+  8.0.128 through `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, including
+  a freshly built `connect_norito_bridge` native library and 103 focused SDK
+  tests across recursive spend, privacy native, transaction builder, canonical
+  request, and Torii identifier receipt surfaces. The focused pass covers
   `csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs`,
   `PrivacyNativeTests.cs`, and `TransactionBuilderTests.cs`, with native bridge
   loading and P/Invoke symbol probing enabled for the ABI-6 recursive spend and
   ABI-7 compact-token, recursive aggregation, recursive compact
   verifier/projection, and instruction transaction-builder surfaces. The
-  standalone runner now builds `connect_norito_bridge`, resolves the
+  standalone runner builds `connect_norito_bridge`, resolves the
   platform-specific native library name, fails if the freshly built artifact is
   missing, prints the selected native bridge path, and prepends that directory
   to the macOS, Linux, and Windows loader paths before invoking `dotnet test`.
-  The
-  Windows pass must also pin the C# negative controls for malformed Norito
-  input/output headers, caller archive-copy immutability, verifier-unavailable
-  status mapping, transaction-builder schema and wire-name drift, and
-  package/evidence parity. After the Windows run passes, update `status.md`
-  with the C# SDK evidence and rerun the Kagemusha SDK parity or production
-  readiness guards needed to clear the C# row.
+  Windows remains a separate host-certification follow-up so the same C# lane
+  is proven against `connect_norito_bridge.dll`, Windows loader paths, RID, and
+  architecture. The Windows pass must also pin the C# negative controls for
+  malformed Norito input/output headers, caller archive-copy immutability,
+  verifier-unavailable status mapping, transaction-builder schema and wire-name
+  drift, and package/evidence parity. After the Windows run passes, update
+  `status.md` with the Windows C# SDK evidence and rerun the Kagemusha SDK
+  parity or production readiness guards needed to clear the Windows-only row.
   Windows-machine TODOs:
   - Select a .NET 8 SDK and capture `dotnet --version` in the run log.
   - Capture the Windows `dotnet --info` output, including RID/architecture, so

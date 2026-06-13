@@ -15,6 +15,24 @@ Last updated: 2026-06-13
   - `ci/check_kagemusha_production_readiness.sh`
   - `git diff --check -- java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
 
+## 2026-06-13 Recursive spend Python artifact validation
+
+- Hardened the Python recursive-spend typed request API so init and
+  lineage-append request constructors validate lineage verifier/proving-key
+  artifacts as bound one-hop or append packages before request serialization.
+- Added Python fixture helpers and negative coverage for wrong artifact
+  profiles, raw verifier/proving-key pair mismatches, mixed typed/raw key
+  material, and unnecessary lineage artifacts on semantic append output.
+- Updated the SDK parity guard to require the Python request-codec artifact
+  validation helpers and reran the Python, C#, parity, and production-readiness
+  validation lanes.
+- Validation passed:
+  - `source /private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-kagemusha-python-sdk-venv/bin/activate && cd python/iroha_python && pytest -q tests/kagemusha_test.py`
+  - `ci/check_kagemusha_recursive_spend_python_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_production_readiness.sh`
+
 ## 2026-06-13 Recursive lineage artifact helper overloads
 
 - Added Kotlin/JVM and Android Java high-level
