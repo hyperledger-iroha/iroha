@@ -62,6 +62,8 @@ and completed history lives in [`status.md`](./status.md).
   commitment before serialization; wallet-facing constructors should prefer
   validated `LineageKeyArtifacts` packages over manually split raw key bytes,
   including through the high-level recursive-spend request helper overloads.
+  The JVM recursive-spend guard must continue exercising both Gradle and direct
+  `javac` Android harness compilation for these typed request surfaces.
   The explicit hop-evidence builders must also keep confidential-transfer-v2
   public-instance shape exact: exactly nine single-row ZK1 columns, no extra
   public columns, nonzero root transitions, continuous multi-hop roots, and

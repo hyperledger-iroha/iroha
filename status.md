@@ -2,6 +2,19 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Recursive spend JVM guard validation
+
+- Fixed the Android Java recursive-spend standalone harness source so the
+  `ci/check_kagemusha_recursive_spend_jvm_sdk.sh` direct `javac` path compiles
+  the expanded request-codec fixture helpers, not only the Gradle harness path.
+- Re-ran the JVM recursive-spend guard plus cross-SDK parity and production
+  readiness guards after the typed lineage artifact request/helper updates.
+- Validation passed:
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=$(/usr/libexec/java_home -v 21) ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check -- java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+
 ## 2026-06-13 Recursive lineage artifact helper overloads
 
 - Added Kotlin/JVM and Android Java high-level

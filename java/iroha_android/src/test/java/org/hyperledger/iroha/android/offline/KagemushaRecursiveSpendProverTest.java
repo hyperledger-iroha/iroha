@@ -2638,7 +2638,8 @@ public final class KagemushaRecursiveSpendProverTest {
       final NoritoEncoder encoder, final int count, final byte seed) {
     encoder.writeUInt(count, 64);
     for (int index = 0; index < count; index++) {
-      writeTestField(encoder, child -> child.writeBytes(repeat((byte) (seed + index), 32)));
+      final byte itemSeed = (byte) (seed + index);
+      writeTestField(encoder, child -> child.writeBytes(repeat(itemSeed, 32)));
     }
   }
 
@@ -3057,6 +3058,16 @@ public final class KagemushaRecursiveSpendProverTest {
       }
     }
     return true;
+  }
+
+  private static void require(final boolean condition, final String message) {
+    if (!condition) {
+      throw new IllegalArgumentException(message);
+    }
+  }
+
+  private static byte[] fixedBytes(final int seed) {
+    return repeat((byte) seed, 32);
   }
 
   private static byte[] repeat(final byte value, final int count) {
