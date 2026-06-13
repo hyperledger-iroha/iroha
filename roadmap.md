@@ -172,7 +172,10 @@ and completed history lives in [`status.md`](./status.md).
   the `privacy-production-enabled` feature opt-in, preserve default
   production-disabled serialized results, and retain focused coverage for real
   confidential-transfer-v2/unshield proving, verification, and checked unshield
-  input-sum overflow rejection. The focused runner now also executes the
+  input-sum overflow rejection. The production-enabled bridge must also reject
+  algorithm-mismatched witness fields, invalid input/output counts, duplicate
+  input leaf/rho material, and out-of-range leaf indices before verifier-key
+  lookup or prover setup. The focused runner now also executes the
   Kotlin/JVM and Android Java
   account-literal, canonical request auth, and Offline Cash issuer-key
   exactness tests, plus Torii event-stream verifier-filter, signing-algorithm,

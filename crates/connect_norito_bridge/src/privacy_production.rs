@@ -14,11 +14,11 @@
 use iroha_core::zk::{
     ZK_BACKEND_HALO2_IPA,
     confidential_v2::{
-        CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID, CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-        ConfidentialTransferInputV2, ConfidentialTransferOutputV2, ConfidentialUnshieldInputV2,
-        ConfidentialUnshieldOutputV3, build_confidential_transfer_proof_v2,
-        build_confidential_unshield_proof_v3, confidential_transfer_v2_vk_box,
-        confidential_unshield_v3_vk_box,
+        CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID, CONFIDENTIAL_TREE_CAPACITY_V2,
+        CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID, ConfidentialTransferInputV2,
+        ConfidentialTransferOutputV2, ConfidentialUnshieldInputV2, ConfidentialUnshieldOutputV3,
+        build_confidential_transfer_proof_v2, build_confidential_unshield_proof_v3,
+        confidential_transfer_v2_vk_box, confidential_unshield_v3_vk_box,
     },
     verify_backend,
 };
@@ -35,6 +35,9 @@ const PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID: &str = "confidential-transf
 const PRIVACY_CONFIDENTIAL_UNSHIELD_ALGORITHM_ID: &str = "unshield";
 const PRIVACY_CONFIDENTIAL_BYTES_32: usize = 32;
 const PRIVACY_CONFIDENTIAL_SPEND_KEY_BYTES: usize = 32;
+const PRIVACY_CONFIDENTIAL_MAX_INPUTS_V2: usize = 2;
+const PRIVACY_CONFIDENTIAL_MAX_TRANSFER_OUTPUTS_V2: usize = 2;
+const PRIVACY_CONFIDENTIAL_MAX_UNSHIELD_CHANGE_OUTPUTS_V3: usize = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
 struct PrivacyConfidentialNoteWitnessV1 {
@@ -143,16 +146,44 @@ fn privacy_array_32(bytes: &[u8]) -> [u8; PRIVACY_CONFIDENTIAL_BYTES_32] {
 }
 
 fn privacy_validate_tree_commitments(raw: &[Vec<u8>]) -> Result<(), String> {
+    if raw.len() > CONFIDENTIAL_TREE_CAPACITY_V2 {
+        return Err(format!(
+            "tree commitments exceed confidential v2 capacity of {CONFIDENTIAL_TREE_CAPACITY_V2}"
+        ));
+    }
     raw.iter()
         .try_for_each(|commitment| privacy_require_32("tree commitment", commitment))
 }
 
-fn privacy_validate_note_witnesses(raw: &[PrivacyConfidentialNoteWitnessV1]) -> Result<(), String> {
-    for note in raw {
+fn privacy_validate_note_witnesses(
+    raw: &[PrivacyConfidentialNoteWitnessV1],
+    tree_len: usize,
+) -> Result<(), String> {
+    if raw.is_empty() || raw.len() > PRIVACY_CONFIDENTIAL_MAX_INPUTS_V2 {
+        return Err("confidential witness must include one or two inputs".to_owned());
+    }
+    for (index, note) in raw.iter().enumerate() {
         privacy_require_32("input rho", &note.rho)?;
         privacy_require_32("input diversifier", &note.diversifier)?;
-        usize::try_from(note.leaf_index)
+        let leaf_index = usize::try_from(note.leaf_index)
             .map_err(|_| "input leaf_index exceeds usize".to_owned())?;
+        if leaf_index >= tree_len {
+            return Err(format!(
+                "inputs[{index}].leaf_index must reference tree_commitments"
+            ));
+        }
+        for (previous_index, previous) in raw[..index].iter().enumerate() {
+            if previous.leaf_index == note.leaf_index {
+                return Err(format!(
+                    "inputs[{index}].leaf_index duplicates inputs[{previous_index}]"
+                ));
+            }
+            if previous.rho == note.rho {
+                return Err(format!(
+                    "inputs[{index}].rho duplicates inputs[{previous_index}]"
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -160,6 +191,9 @@ fn privacy_validate_note_witnesses(raw: &[PrivacyConfidentialNoteWitnessV1]) -> 
 fn privacy_validate_transfer_outputs(
     raw: &[PrivacyConfidentialTransferOutputWitnessV1],
 ) -> Result<(), String> {
+    if raw.is_empty() || raw.len() > PRIVACY_CONFIDENTIAL_MAX_TRANSFER_OUTPUTS_V2 {
+        return Err("confidential transfer witness must include one or two outputs".to_owned());
+    }
     for output in raw {
         privacy_require_32("output rho", &output.rho)?;
         privacy_require_32("output owner_tag", &output.owner_tag)?;
@@ -170,6 +204,12 @@ fn privacy_validate_transfer_outputs(
 fn privacy_validate_unshield_change(
     raw: &[PrivacyConfidentialUnshieldChangeWitnessV1],
 ) -> Result<(), String> {
+    if raw.len() > PRIVACY_CONFIDENTIAL_MAX_UNSHIELD_CHANGE_OUTPUTS_V3 {
+        return Err(
+            "confidential unshield v3 witness supports at most one private change output"
+                .to_owned(),
+        );
+    }
     raw.iter()
         .try_for_each(|change| privacy_require_32("change rho", &change.rho))
 }
@@ -243,6 +283,39 @@ fn privacy_common_witness_checks(witness: &PrivacyConfidentialWitnessV1) -> Resu
     Ok(())
 }
 
+fn privacy_validate_transfer_witness_shape(
+    witness: &PrivacyConfidentialWitnessV1,
+) -> Result<(), String> {
+    privacy_common_witness_checks(witness)?;
+    if witness.public_amount != 0 {
+        return Err("confidential transfer witness must not include public_amount".to_owned());
+    }
+    if !witness.unshield_change.is_empty() {
+        return Err(
+            "confidential transfer witness must not include unshield change outputs".to_owned(),
+        );
+    }
+    privacy_validate_tree_commitments(&witness.tree_commitments)?;
+    privacy_validate_note_witnesses(&witness.inputs, witness.tree_commitments.len())?;
+    privacy_validate_transfer_outputs(&witness.transfer_outputs)?;
+    privacy_fixed_32("root_hint", &witness.root_hint)?;
+    Ok(())
+}
+
+fn privacy_validate_unshield_witness_shape(
+    witness: &PrivacyConfidentialWitnessV1,
+) -> Result<(), String> {
+    privacy_common_witness_checks(witness)?;
+    if !witness.transfer_outputs.is_empty() {
+        return Err("confidential unshield witness must not include transfer outputs".to_owned());
+    }
+    privacy_validate_tree_commitments(&witness.tree_commitments)?;
+    privacy_validate_note_witnesses(&witness.inputs, witness.tree_commitments.len())?;
+    privacy_validate_unshield_change(&witness.unshield_change)?;
+    privacy_fixed_32("root_hint", &witness.root_hint)?;
+    Ok(())
+}
+
 fn privacy_parse_chain_id(witness: &PrivacyConfidentialWitnessV1) -> Result<ChainId, String> {
     witness
         .chain_id
@@ -284,11 +357,8 @@ fn privacy_zeroize_unshield_change(change: &mut [ConfidentialUnshieldOutputV3]) 
 }
 
 fn privacy_build_transfer_proof(witness: &PrivacyConfidentialWitnessV1) -> Result<Vec<u8>, String> {
-    privacy_common_witness_checks(witness)?;
+    privacy_validate_transfer_witness_shape(witness)?;
     let chain_id = privacy_parse_chain_id(witness)?;
-    privacy_validate_tree_commitments(&witness.tree_commitments)?;
-    privacy_validate_note_witnesses(&witness.inputs)?;
-    privacy_validate_transfer_outputs(&witness.transfer_outputs)?;
     let root_hint = privacy_fixed_32("root_hint", &witness.root_hint)?;
     let vk_box = confidential_transfer_v2_vk_box()?;
     // All fallible steps are behind us: the typed copies below carry secret
@@ -314,11 +384,8 @@ fn privacy_build_transfer_proof(witness: &PrivacyConfidentialWitnessV1) -> Resul
 }
 
 fn privacy_build_unshield_proof(witness: &PrivacyConfidentialWitnessV1) -> Result<Vec<u8>, String> {
-    privacy_common_witness_checks(witness)?;
+    privacy_validate_unshield_witness_shape(witness)?;
     let chain_id = privacy_parse_chain_id(witness)?;
-    privacy_validate_tree_commitments(&witness.tree_commitments)?;
-    privacy_validate_note_witnesses(&witness.inputs)?;
-    privacy_validate_unshield_change(&witness.unshield_change)?;
     let root_hint = privacy_fixed_32("root_hint", &witness.root_hint)?;
     let vk_box = confidential_unshield_v3_vk_box()?;
     // All fallible steps are behind us: the typed copies below carry secret
@@ -377,6 +444,7 @@ fn privacy_success_result_invariants_hold(result: &PrivacyProofResultV1) -> bool
 
 fn privacy_dispatch_build(
     request: &PrivacyProofRequestV1,
+    validator: fn(&PrivacyConfidentialWitnessV1) -> Result<(), String>,
     builder: fn(&PrivacyConfidentialWitnessV1) -> Result<Vec<u8>, String>,
 ) -> PrivacyProofResultV1 {
     let mut witness = match privacy_decode_witness(&request.witness) {
@@ -389,6 +457,10 @@ fn privacy_dispatch_build(
             );
         }
     };
+    if let Err(message) = validator(&witness) {
+        witness.zeroize();
+        return privacy_failure_result(PRIVACY_FFI_ERROR_INVALID_REQUEST, &message, Some(request));
+    }
     let outcome = builder(&witness);
     witness.zeroize();
     match outcome {
@@ -437,10 +509,18 @@ pub(crate) fn privacy_production_dispatch(
 ) -> PrivacyProofResultV1 {
     match (request.algorithm_id.as_str(), operation) {
         (PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID, PrivacyProofOperationV1::Build) => {
-            privacy_dispatch_build(request, privacy_build_transfer_proof)
+            privacy_dispatch_build(
+                request,
+                privacy_validate_transfer_witness_shape,
+                privacy_build_transfer_proof,
+            )
         }
         (PRIVACY_CONFIDENTIAL_UNSHIELD_ALGORITHM_ID, PrivacyProofOperationV1::Build) => {
-            privacy_dispatch_build(request, privacy_build_unshield_proof)
+            privacy_dispatch_build(
+                request,
+                privacy_validate_unshield_witness_shape,
+                privacy_build_unshield_proof,
+            )
         }
         (PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID, PrivacyProofOperationV1::Verify) => {
             privacy_dispatch_verify(request, confidential_transfer_v2_vk_box())
@@ -641,6 +721,26 @@ mod tests {
         }
     }
 
+    fn assert_invalid_witness(
+        algorithm_id: &str,
+        witness: PrivacyConfidentialWitnessV1,
+        expected_message: &str,
+    ) {
+        let result = privacy_production_dispatch(
+            &build_request(algorithm_id, encode_witness(&witness)),
+            PrivacyProofOperationV1::Build,
+        );
+        assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR);
+        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
+        assert!(
+            result.message.contains(expected_message),
+            "expected `{expected_message}` in `{}`",
+            result.message
+        );
+        assert!(result.proof.is_empty());
+        assert!(!result.verified);
+    }
+
     #[test]
     fn transfer_build_then_verify_round_trips() {
         let witness = encode_witness(&valid_transfer_witness());
@@ -735,6 +835,88 @@ mod tests {
                 .windows(secret.len())
                 .any(|window| window == secret),
             "invalid-witness result must not echo witness bytes"
+        );
+    }
+
+    #[test]
+    fn transfer_witness_shape_rejects_ignored_or_ambiguous_fields() {
+        let mut with_public_amount = valid_transfer_witness();
+        with_public_amount.public_amount = 1;
+        assert_invalid_witness(
+            PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
+            with_public_amount,
+            "public_amount",
+        );
+
+        let mut with_unshield_change = valid_transfer_witness();
+        with_unshield_change
+            .unshield_change
+            .push(PrivacyConfidentialUnshieldChangeWitnessV1 {
+                amount: 1,
+                rho: vec![0x7A; 32],
+            });
+        assert_invalid_witness(
+            PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
+            with_unshield_change,
+            "unshield change",
+        );
+
+        let mut without_outputs = valid_transfer_witness();
+        without_outputs.transfer_outputs.clear();
+        assert_invalid_witness(
+            PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
+            without_outputs,
+            "one or two outputs",
+        );
+
+        let mut duplicate_input = valid_transfer_witness();
+        duplicate_input
+            .inputs
+            .push(duplicate_input.inputs[0].clone());
+        assert_invalid_witness(
+            PRIVACY_CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
+            duplicate_input,
+            "duplicates inputs[0]",
+        );
+    }
+
+    #[test]
+    fn unshield_witness_shape_rejects_ignored_or_ambiguous_fields() {
+        let mut with_transfer_outputs = valid_unshield_witness();
+        with_transfer_outputs.transfer_outputs = valid_transfer_witness().transfer_outputs;
+        assert_invalid_witness(
+            PRIVACY_CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
+            with_transfer_outputs,
+            "transfer outputs",
+        );
+
+        let mut too_many_change_outputs = valid_unshield_witness();
+        too_many_change_outputs
+            .unshield_change
+            .push(too_many_change_outputs.unshield_change[0].clone());
+        assert_invalid_witness(
+            PRIVACY_CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
+            too_many_change_outputs,
+            "at most one",
+        );
+
+        let mut out_of_range_leaf = valid_unshield_witness();
+        out_of_range_leaf.inputs[0].leaf_index = 1;
+        assert_invalid_witness(
+            PRIVACY_CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
+            out_of_range_leaf,
+            "must reference tree_commitments",
+        );
+
+        let mut duplicate_rho = valid_unshield_witness();
+        let mut second_input = duplicate_rho.inputs[0].clone();
+        second_input.leaf_index = 1;
+        duplicate_rho.tree_commitments.push(vec![0; 32]);
+        duplicate_rho.inputs.push(second_input);
+        assert_invalid_witness(
+            PRIVACY_CONFIDENTIAL_UNSHIELD_ALGORITHM_ID,
+            duplicate_rho,
+            "rho duplicates",
         );
     }
 

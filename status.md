@@ -2,6 +2,23 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Privacy production witness-shape validation
+
+- Hardened the `privacy-production-enabled` bridge dispatch so decoded
+  confidential-transfer-v2 and unshield-v3 witnesses reject algorithm-mismatched
+  fields, invalid input/output counts, out-of-range leaf indices, duplicate
+  leaf references, and duplicate input rho/nullifier material before verifier-key
+  lookup or prover setup.
+- Added fast adversarial production-dispatch tests for transfer witnesses with
+  public amounts, unshield change outputs, missing outputs, and duplicate input
+  leaves, plus unshield witnesses with transfer outputs, too many private change
+  outputs, out-of-range leaf indices, and duplicate input rho.
+- Focused validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled transfer_witness_shape_rejects_ignored_or_ambiguous_fields --lib`
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled unshield_witness_shape_rejects_ignored_or_ambiguous_fields --lib`
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled privacy_production --lib`
+
 ## 2026-06-13 ZK Torii client JSON numeric exactness
 
 - Hardened Kotlin/JVM and Android Java `/v1/zk/roots` and
