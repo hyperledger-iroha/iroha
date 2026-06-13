@@ -2662,6 +2662,21 @@ final class OfflineNoteTests: XCTestCase {
     }
 
     func testOfflineNoteNearbyPeerSelectionKeepsOnlySelectedPeerActive() {
+        let peerKey = OfflineNoteNearbyPeerSelection.peerKey(
+            displayName: "receiver-a",
+            selectionHash: 42
+        )
+        XCTAssertEqual(peerKey, "10:receiver-a#42")
+
+        let adversarialPeerName = "receiver#a\n\u{202E}"
+        let adversarialPeerKey = OfflineNoteNearbyPeerSelection.peerKey(
+            displayName: adversarialPeerName,
+            selectionHash: -7
+        )
+        XCTAssertTrue(adversarialPeerKey.hasPrefix("\(adversarialPeerName.utf8.count):"))
+        XCTAssertTrue(adversarialPeerKey.hasSuffix("#-7"))
+        XCTAssertNotEqual(adversarialPeerKey, "\(adversarialPeerName)#-7")
+
         XCTAssertTrue(
             OfflineNoteNearbyPeerSelection.shouldAcceptInvitation(
                 didFinish: false,
@@ -2761,6 +2776,11 @@ final class OfflineNoteTests: XCTestCase {
     }
 
     func testOfflineNoteNearbyDiscoveryPolicyRequiresExactProtocolMarker() {
+        XCTAssertEqual(OfflineNoteNearbyDiscoveryPolicy.bonjourServiceName, "_iroha-pay._tcp")
+        XCTAssertEqual(
+            OfflineNoteNearbyDiscoveryPolicy.bonjourServiceName(for: "iroha-pay"),
+            "_iroha-pay._tcp"
+        )
         XCTAssertEqual(
             OfflineNoteNearbyDiscoveryPolicy.discoveryInfo,
             [
@@ -2788,6 +2808,44 @@ final class OfflineNoteTests: XCTestCase {
                 String(describing: discoveryInfo)
             )
         }
+    }
+
+    func testOfflineNoteNearbyTransportPolicyDefinesReusableRuntimeDefaults() {
+        XCTAssertEqual(OfflineNoteNearbyTransportPolicy.exchangeTimeoutSeconds, 90)
+        XCTAssertEqual(OfflineNoteNearbyTransportPolicy.invitationTimeoutSeconds, 20)
+        XCTAssertEqual(OfflineNoteNearbyTransportPolicy.localNetworkPreflightTimeoutSeconds, 12)
+        XCTAssertEqual(OfflineNoteNearbyTransportPolicy.maxPeerDisplayNameUTF8Bytes, 63)
+
+        let uuid = UUID(uuidString: "01234567-89AB-CDEF-0123-456789ABCDEF")!
+        XCTAssertEqual(
+            OfflineNoteNearbyTransportPolicy.peerDisplayName(prefix: "bokolo", uuid: uuid),
+            "bokolo-01234567"
+        )
+        XCTAssertEqual(
+            OfflineNoteNearbyTransportPolicy.peerDisplayName(prefix: " __ ", uuid: uuid),
+            "iroha-01234567"
+        )
+
+        let adversarialPrefix = "  ../Alice@example.com\n\u{202E}_\(String(repeating: "x", count: 100))  "
+        let displayName = OfflineNoteNearbyTransportPolicy.peerDisplayName(
+            prefix: adversarialPrefix,
+            uuid: uuid
+        )
+        XCTAssertLessThanOrEqual(displayName.utf8.count, OfflineNoteNearbyTransportPolicy.maxPeerDisplayNameUTF8Bytes)
+        XCTAssertTrue(displayName.hasSuffix("-01234567"))
+        XCTAssertFalse(displayName.contains("@"))
+        XCTAssertFalse(displayName.contains("."))
+        XCTAssertFalse(displayName.contains("/"))
+        XCTAssertFalse(displayName.contains("\n"))
+        XCTAssertFalse(displayName.contains("\u{202E}"))
+        XCTAssertTrue(
+            displayName.unicodeScalars.allSatisfy { scalar in
+                ("a"..."z").contains(String(scalar))
+                    || ("0"..."9").contains(String(scalar))
+                    || scalar == "-"
+            },
+            "Nearby peer display names must stay ASCII alphanumeric plus hyphen."
+        )
     }
 
     func testOfflineNoteNearbyMessageHandlingAcceptsOnlyFirstApplicationPayloadPerPhase() {

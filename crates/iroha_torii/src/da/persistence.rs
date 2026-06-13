@@ -4,6 +4,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
+    ffi::OsStr,
     fs,
     io::{ErrorKind, Write},
     path::{Path, PathBuf},
@@ -87,7 +88,7 @@ impl ReplayCursorStore {
                             ReplayCursorState::from_snapshot(tmp_snapshot)
                         }
                         CursorSnapshotRelation::Equal | CursorSnapshotRelation::CandidateBehind => {
-                            remove_replay_cursor_temp(&tmp_path);
+                            remove_replay_cursor_temp(&tmp_path)?;
                             ReplayCursorState::from_snapshot(snapshot)
                         }
                         CursorSnapshotRelation::Conflicting => {
@@ -95,7 +96,7 @@ impl ReplayCursorStore {
                                 path = %tmp_path.display(),
                                 "discarding conflicting DA replay cursor temp snapshot"
                             );
-                            remove_replay_cursor_temp(&tmp_path);
+                            remove_replay_cursor_temp(&tmp_path)?;
                             ReplayCursorState::from_snapshot(snapshot)
                         }
                     }
@@ -107,7 +108,7 @@ impl ReplayCursorStore {
                         path = %tmp_path.display(),
                         "discarding unreadable DA replay cursor temp snapshot"
                     );
-                    remove_replay_cursor_temp(&tmp_path);
+                    remove_replay_cursor_temp(&tmp_path)?;
                     ReplayCursorState::from_snapshot(snapshot)
                 }
             },
@@ -117,15 +118,7 @@ impl ReplayCursorStore {
                     ReplayCursorState::from_snapshot(snapshot)
                 }
                 Ok(None) => ReplayCursorState::default(),
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        path = %tmp_path.display(),
-                        "discarding unreadable DA replay cursor temp snapshot"
-                    );
-                    remove_replay_cursor_temp(&tmp_path);
-                    ReplayCursorState::default()
-                }
+                Err(err) => return Err(err),
             },
             Err(err) => match read_cursor_snapshot(&tmp_path) {
                 Ok(Some(snapshot)) => {
@@ -370,17 +363,16 @@ fn cursor_snapshot_map(snapshot: &CursorSnapshot) -> BTreeMap<LaneEpoch, u64> {
     entries
 }
 
-fn remove_replay_cursor_temp(tmp_path: &Path) {
+fn remove_replay_cursor_temp(tmp_path: &Path) -> eyre::Result<()> {
     match fs::remove_file(tmp_path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == ErrorKind::NotFound => {}
-        Err(err) => {
-            warn!(
-                ?err,
-                path = %tmp_path.display(),
-                "failed to remove DA replay cursor temp snapshot"
-            );
-        }
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(eyre!(err)).wrap_err_with(|| {
+            format!(
+                "failed to remove DA replay cursor temp snapshot {}",
+                tmp_path.display()
+            )
+        }),
     }
 }
 
@@ -482,6 +474,7 @@ pub enum ReceiptInsertOutcome {
 #[derive(Clone)]
 struct ReceiptMeta {
     manifest_hash: BlobDigest,
+    fingerprint: ReplayFingerprint,
     path: PathBuf,
     receipt: DaIngestReceipt,
 }
@@ -550,6 +543,9 @@ impl DaReceiptLog {
     }
 
     /// Construct an in-memory receipt log (no on-disk persistence).
+    ///
+    /// This is only suitable for tests and diagnostics. Production ingest appends
+    /// require a durable receipt file before the request can be acknowledged.
     pub fn in_memory(cursor_store: Arc<ReplayCursorStore>, signer_public_key: PublicKey) -> Self {
         Self {
             dir: PathBuf::new(),
@@ -572,6 +568,11 @@ impl DaReceiptLog {
                 "receipt lane/epoch mismatch: key {lane_epoch:?} vs receipt {}@{}",
                 receipt.lane_id.as_u32(),
                 receipt.epoch
+            ));
+        }
+        if self.dir.as_os_str().is_empty() {
+            return Err(eyre!(
+                "DA receipt log is not durable; refusing to acknowledge ingest without a receipt file"
             ));
         }
 
@@ -613,12 +614,59 @@ impl DaReceiptLog {
             sequence,
             ReceiptMeta {
                 manifest_hash,
+                fingerprint,
                 path: path.clone(),
                 receipt: receipt.clone(),
             },
         );
 
         Ok(ReceiptInsertOutcome::Stored { cursor_advanced })
+    }
+
+    /// Return a previously persisted receipt for an idempotent ingest retry.
+    pub(crate) fn durable_receipt_for_duplicate(
+        &self,
+        lane_epoch: LaneEpoch,
+        sequence: u64,
+        fingerprint: ReplayFingerprint,
+    ) -> eyre::Result<Option<(PathBuf, DaIngestReceipt)>> {
+        if self.dir.as_os_str().is_empty() {
+            return Err(eyre!(
+                "DA receipt log is not durable; duplicate receipt cannot be recovered from disk"
+            ));
+        }
+
+        let (path, receipt) = {
+            let guard = self.index.lock().expect("receipt index mutex poisoned");
+            let Some(meta) = guard
+                .get(&lane_epoch)
+                .and_then(|entries| entries.get(&sequence))
+            else {
+                return Ok(None);
+            };
+            if meta.fingerprint != fingerprint {
+                return Ok(None);
+            }
+            (meta.path.clone(), meta.receipt.clone())
+        };
+
+        let stored = Self::decode_receipt(&path)
+            .wrap_err_with(|| format!("failed to reload durable DA receipt {}", path.display()))?;
+        if stored.sequence != sequence || stored.receipt != receipt {
+            return Err(eyre!(
+                "durable DA receipt {} no longer matches receipt-log index",
+                path.display()
+            ));
+        }
+        verify_receipt_signature(&stored.receipt, stored.sequence, &self.signer_public_key)
+            .wrap_err_with(|| {
+                format!(
+                    "failed to verify reloaded durable DA receipt {}",
+                    path.display()
+                )
+            })?;
+
+        Ok(Some((path, receipt)))
     }
 
     /// Load receipts for a `(lane, epoch)` window in sequence order.
@@ -657,14 +705,20 @@ impl DaReceiptLog {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
-            if !path.is_file() {
+            if !artifact_path_matches(&path, RECEIPT_FILE_PREFIX)? {
                 continue;
             }
-            if !Self::is_receipt_file(&path) {
-                continue;
+            if !entry.file_type()?.is_file() {
+                return Err(eyre!(
+                    "durable DA receipt {} is not a regular file",
+                    path.display()
+                ));
             }
             let stored = Self::decode_receipt(&path).wrap_err_with(|| {
                 format!("failed to load durable DA receipt {}", path.display())
+            })?;
+            let receipt_key = parse_receipt_file_key(&path).wrap_err_with(|| {
+                format!("failed to parse durable DA receipt {}", path.display())
             })?;
             let StoredDaReceipt {
                 sequence, receipt, ..
@@ -685,6 +739,15 @@ impl DaReceiptLog {
                         hex::encode(manifest_hash.as_bytes())
                     ));
                 }
+                if existing.receipt != receipt {
+                    return Err(eyre!(
+                        "conflicting duplicate receipt for lane {:?} seq {} at {} and {}",
+                        lane_epoch,
+                        sequence,
+                        existing.path.display(),
+                        path.display()
+                    ));
+                }
                 continue;
             }
 
@@ -696,6 +759,7 @@ impl DaReceiptLog {
                 sequence,
                 ReceiptMeta {
                     manifest_hash,
+                    fingerprint: receipt_key.fingerprint,
                     path,
                     receipt,
                 },
@@ -735,13 +799,6 @@ impl DaReceiptLog {
         validate_receipt_filename(path, &stored)?;
         Ok(stored)
     }
-
-    fn is_receipt_file(path: &Path) -> bool {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name.starts_with(RECEIPT_FILE_PREFIX) && name.ends_with(".norito"))
-            .unwrap_or(false)
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -750,6 +807,7 @@ struct ReceiptFileKey {
     epoch: u64,
     sequence: u64,
     storage_ticket: StorageTicketId,
+    fingerprint: ReplayFingerprint,
 }
 
 fn parse_receipt_file_key(path: &Path) -> eyre::Result<ReceiptFileKey> {
@@ -794,7 +852,8 @@ fn parse_receipt_file_key(path: &Path) -> eyre::Result<ReceiptFileKey> {
         parse_fixed_hex_32(ticket_hex)
             .ok_or_else(|| eyre!("receipt filename storage ticket is not 32-byte hex"))?,
     );
-    let _ = parse_fixed_hex_32(fingerprint_hex)
+    let fingerprint = parse_fixed_hex_32(fingerprint_hex)
+        .map(ReplayFingerprint::from)
         .ok_or_else(|| eyre!("receipt filename fingerprint is not 32-byte hex"))?;
 
     Ok(ReceiptFileKey {
@@ -802,6 +861,7 @@ fn parse_receipt_file_key(path: &Path) -> eyre::Result<ReceiptFileKey> {
         epoch,
         sequence,
         storage_ticket,
+        fingerprint,
     })
 }
 
@@ -1002,13 +1062,11 @@ pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDa
     }
 
     let mut receipts = Vec::new();
+    let mut by_key: BTreeMap<(u32, u64, u64), usize> = BTreeMap::new();
     for entry in fs::read_dir(spool_dir)? {
         let entry = entry?;
         let path = entry.path();
-        let Some(name) = path.file_name().and_then(|raw| raw.to_str()) else {
-            continue;
-        };
-        if !name.starts_with(RECEIPT_FILE_PREFIX) || !name.ends_with(".norito") {
+        if !artifact_path_matches(&path, RECEIPT_FILE_PREFIX)? {
             continue;
         }
         let stored = DaReceiptLog::decode_receipt(&path).map_err(|err| {
@@ -1017,6 +1075,25 @@ pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDa
                 format!("failed to load DA receipt {}: {err}", path.display()),
             )
         })?;
+        let key = (
+            stored.receipt.lane_id.as_u32(),
+            stored.receipt.epoch,
+            stored.sequence,
+        );
+        if let Some(existing_idx) = by_key.get(&key).copied() {
+            let existing: &StoredDaReceipt = &receipts[existing_idx];
+            if existing.receipt != stored.receipt {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "conflicting duplicate DA receipt for lane {} epoch {} sequence {}",
+                        key.0, key.1, key.2
+                    ),
+                ));
+            }
+            continue;
+        }
+        by_key.insert(key, receipts.len());
         receipts.push(stored);
     }
 
@@ -1089,17 +1166,24 @@ fn load_single_spool_artifact_path_by_ticket(
     let entries = fs::read_dir(spool_dir)?;
     for entry in entries {
         let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
         let file_name = entry.file_name();
-        let Some(name) = file_name.to_str() else {
+        let Some(name) = artifact_file_name(&file_name, prefix)? else {
             continue;
         };
-        if let Some(key) = parse_spool_artifact_file_key(name, prefix) {
-            if key.storage_ticket == *ticket {
-                matches.push((key, entry.path()));
-            }
+        if !entry.file_type()?.is_file() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("spool artifact `{name}` is not a regular file"),
+            ));
+        }
+        let key = parse_spool_artifact_file_key(name, prefix).ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("malformed spool artifact filename `{name}`"),
+            )
+        })?;
+        if key.storage_ticket == *ticket {
+            matches.push((key, entry.path()));
         }
     }
     if matches.is_empty() {
@@ -1113,6 +1197,74 @@ fn load_single_spool_artifact_path_by_ticket(
     }
     matches.sort_by_key(|(key, _)| *key);
     Ok(matches.remove(0))
+}
+
+fn artifact_path_matches(path: &Path, prefix: &str) -> std::io::Result<bool> {
+    let Some(name) = path.file_name() else {
+        return Ok(false);
+    };
+    artifact_file_name(name, prefix).map(|name| name.is_some())
+}
+
+fn artifact_file_name<'a>(name: &'a OsStr, prefix: &str) -> std::io::Result<Option<&'a str>> {
+    if let Some(name) = name.to_str() {
+        return Ok((name.starts_with(prefix) && name.ends_with(".norito")).then_some(name));
+    }
+    if non_utf8_artifact_name_matches(name, prefix.as_bytes(), b".norito") {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("spool artifact filename with prefix `{prefix}` is not valid UTF-8"),
+        ));
+    }
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn non_utf8_artifact_name_matches(name: &OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    let bytes = name.as_bytes();
+    bytes.starts_with(prefix) && bytes.ends_with(suffix)
+}
+
+#[cfg(not(unix))]
+fn non_utf8_artifact_name_matches(_name: &OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn artifact_file_name_rejects_non_utf8_shaped_names() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        for (prefix, raw_name) in [
+            ("manifest-", b"manifest-\xFF.norito".to_vec()),
+            ("pdp-commitment-", b"pdp-commitment-\xFF.norito".to_vec()),
+            (RECEIPT_FILE_PREFIX, b"da-receipt-\xFF.norito".to_vec()),
+        ] {
+            let name = OsString::from_vec(raw_name);
+            let err = artifact_file_name(name.as_os_str(), prefix)
+                .expect_err("non-UTF8 shaped artifact name rejects");
+            assert_eq!(err.kind(), ErrorKind::InvalidData);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn artifact_file_name_ignores_unrelated_non_utf8_names() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let name = OsString::from_vec(b"unrelated-\xFF.norito".to_vec());
+        assert!(
+            artifact_file_name(name.as_os_str(), "manifest-")
+                .expect("unrelated non-UTF8 name is ignored")
+                .is_none()
+        );
+    }
 }
 
 fn validate_manifest_spool_body(bytes: &[u8], key: &SpoolArtifactFileKey) -> std::io::Result<()> {

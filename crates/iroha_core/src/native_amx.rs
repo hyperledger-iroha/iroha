@@ -299,6 +299,25 @@ mod tests {
 
     use super::*;
 
+    fn checked_random_ed25519_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked native AMX fixture keypair")
+    }
+
+    fn checked_bls_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+            .expect("generate checked native AMX BLS fixture keypair")
+    }
+
+    fn checked_bls_signature_payload(keypair: &KeyPair, message: &[u8]) -> Vec<u8> {
+        let signature = Signature::try_new(keypair.private_key(), message)
+            .expect("checked native AMX vote fixture signature");
+        signature
+            .verify(keypair.public_key(), message)
+            .expect("checked native AMX vote fixture signature verifies");
+        signature.payload().to_vec()
+    }
+
     fn body(phase: NativeAmxPhase) -> NativeAmxAttestationBodyV1 {
         NativeAmxAttestationBodyV1 {
             source_id: [0xAB; iroha_crypto::Hash::LENGTH],
@@ -317,7 +336,7 @@ mod tests {
     }
 
     fn vote(phase: NativeAmxPhase) -> NativeAmxVoteV1 {
-        let keypair = KeyPair::random();
+        let keypair = checked_random_ed25519_keypair();
         NativeAmxVoteV1 {
             body: body(phase),
             signer: PeerId::new(keypair.public_key().clone()),
@@ -386,8 +405,10 @@ mod tests {
     #[test]
     fn session_cache_filters_exact_body_votes_to_validator_set() {
         let mut cache = NativeAmxSessionCache::new(NonZeroUsize::new(4).expect("nonzero"));
-        let allowed_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let unknown_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let allowed_keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("generate checked allowed native AMX BLS fixture keypair");
+        let unknown_keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("generate checked unknown native AMX BLS fixture keypair");
         let allowed = PeerId::new(allowed_keypair.public_key().clone());
         let unknown = PeerId::new(unknown_keypair.public_key().clone());
         let body = body(NativeAmxPhase::Prepare);
@@ -445,18 +466,16 @@ mod tests {
         NativeAmxVoteV1 {
             body: body.clone(),
             signer: PeerId::new(keypair.public_key().clone()),
-            bls_signature: Signature::new(keypair.private_key(), &body.signature_preimage())
-                .payload()
-                .to_vec(),
+            bls_signature: checked_bls_signature_payload(keypair, &body.signature_preimage()),
         }
     }
 
     #[test]
     fn aggregate_votes_to_qc_orders_votes_by_validator_set() {
         let keypairs = [
-            KeyPair::from_seed(vec![0xA1; 32], Algorithm::BlsNormal),
-            KeyPair::from_seed(vec![0xB2; 32], Algorithm::BlsNormal),
-            KeyPair::from_seed(vec![0xC3; 32], Algorithm::BlsNormal),
+            checked_bls_keypair(0xA1),
+            checked_bls_keypair(0xB2),
+            checked_bls_keypair(0xC3),
         ];
         let validator_set = keypairs
             .iter()
@@ -489,10 +508,7 @@ mod tests {
 
     #[test]
     fn aggregate_votes_to_qc_rejects_bad_vote_sets() {
-        let keypairs = [
-            KeyPair::from_seed(vec![0xD1; 32], Algorithm::BlsNormal),
-            KeyPair::from_seed(vec![0xD2; 32], Algorithm::BlsNormal),
-        ];
+        let keypairs = [checked_bls_keypair(0xD1), checked_bls_keypair(0xD2)];
         let validator_set = keypairs
             .iter()
             .map(|keypair| PeerId::new(keypair.public_key().clone()))
@@ -518,7 +534,7 @@ mod tests {
             Err(NativeAmxQcBuildError::DuplicateSigner)
         );
 
-        let outsider = KeyPair::from_seed(vec![0xD3; 32], Algorithm::BlsNormal);
+        let outsider = checked_bls_keypair(0xD3);
         assert_eq!(
             aggregate_votes_to_qc(
                 body.clone(),

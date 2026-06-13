@@ -2192,11 +2192,6 @@ impl MlDsaSecretKey {
         self.inner.secret.as_bytes().to_vec()
     }
 
-    fn sign(&self, payload: &[u8]) -> Vec<u8> {
-        self.try_sign(payload)
-            .expect("ML-DSA signing should succeed for a valid private key and payload")
-    }
-
     fn try_sign(&self, payload: &[u8]) -> Result<Vec<u8>, Error> {
         let mut rng = rand::rngs::OsRng;
         self.try_sign_with_rng(payload, &mut rng)
@@ -3065,6 +3060,19 @@ mod tests {
         (public, MlDsaSecretKey::new(&raw_secret))
     }
 
+    fn checked_seed_keypair(seed: &[u8], algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(seed.to_vec(), algorithm).expect("generate checked seeded keypair")
+    }
+
+    #[cfg(feature = "rand")]
+    fn checked_random_keypair(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).expect("generate checked random keypair")
+    }
+
+    fn checked_signature(private_key: &PrivateKey, message: &[u8]) -> Signature {
+        Signature::try_new(private_key, message).expect("sign checked top-level fixture")
+    }
+
     #[test]
     fn session_key_from_zeroizing_vec_preserves_payload_and_zeroizes_on_drop() {
         let _test_guard = session_key_zeroization_test_guard();
@@ -3111,8 +3119,7 @@ mod tests {
         ];
 
         for (algorithm, seed) in cases {
-            let key_pair =
-                KeyPair::try_from_seed(seed.to_vec(), *algorithm).expect("seeded classic keypair");
+            let key_pair = checked_seed_keypair(seed, *algorithm);
             let (exported_algorithm, payload) = key_pair
                 .private_key()
                 .try_to_bytes()
@@ -3128,7 +3135,7 @@ mod tests {
             assert_eq!(parsed.to_bytes(), (exported_algorithm, payload));
 
             let message = b"top-level private-key export roundtrip";
-            let signature = Signature::new(&parsed, message);
+            let signature = checked_signature(&parsed, message);
             signature
                 .verify(key_pair.public_key(), message)
                 .expect("reparsed private key signs for original public key");
@@ -3183,36 +3190,51 @@ mod tests {
     fn try_random_with_algorithm_ed25519_signs_and_verifies() {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("checked Ed25519 random keypair");
+        let wrong_key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("checked wrong Ed25519 random keypair");
         let message = b"top-level checked Ed25519 random keypair";
-        let signature = Signature::new(key_pair.private_key(), message);
+        let signature = checked_signature(key_pair.private_key(), message);
 
         signature
             .verify(key_pair.public_key(), message)
             .expect("signature verifies");
+        signature
+            .verify(wrong_key.public_key(), message)
+            .expect_err("signature must reject wrong Ed25519 key");
     }
 
     #[test]
     fn try_random_with_algorithm_secp256k1_signs_and_verifies() {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)
             .expect("checked secp256k1 random keypair");
+        let wrong_key = KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)
+            .expect("checked wrong secp256k1 random keypair");
         let message = b"top-level checked secp256k1 random keypair";
-        let signature = Signature::new(key_pair.private_key(), message);
+        let signature = checked_signature(key_pair.private_key(), message);
 
         signature
             .verify(key_pair.public_key(), message)
             .expect("signature verifies");
+        signature
+            .verify(wrong_key.public_key(), message)
+            .expect_err("signature must reject wrong secp256k1 key");
     }
 
     #[test]
     fn try_random_with_algorithm_ml_dsa_signs_and_verifies() {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
             .expect("checked ML-DSA random keypair");
+        let wrong_key = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
+            .expect("checked wrong ML-DSA random keypair");
         let message = b"top-level checked ML-DSA random keypair";
-        let signature = Signature::new(key_pair.private_key(), message);
+        let signature = checked_signature(key_pair.private_key(), message);
 
         signature
             .verify(key_pair.public_key(), message)
             .expect("signature verifies");
+        signature
+            .verify(wrong_key.public_key(), message)
+            .expect_err("signature must reject wrong ML-DSA key");
     }
 
     #[cfg(feature = "sm")]
@@ -3220,12 +3242,17 @@ mod tests {
     fn try_random_with_algorithm_sm2_signs_and_verifies() {
         let key_pair =
             KeyPair::try_random_with_algorithm(Algorithm::Sm2).expect("checked SM2 random keypair");
+        let wrong_key = KeyPair::try_random_with_algorithm(Algorithm::Sm2)
+            .expect("checked wrong SM2 random keypair");
         let message = b"top-level checked SM2 random keypair";
-        let signature = Signature::new(key_pair.private_key(), message);
+        let signature = checked_signature(key_pair.private_key(), message);
 
         signature
             .verify(key_pair.public_key(), message)
             .expect("signature verifies");
+        signature
+            .verify(wrong_key.public_key(), message)
+            .expect_err("signature must reject wrong SM2 key");
     }
 
     #[cfg(feature = "sm")]
@@ -3254,7 +3281,7 @@ mod tests {
         );
 
         let message = b"top-level checked ML-DSA seeded keypair";
-        let signature = Signature::new(first.private_key(), message);
+        let signature = checked_signature(first.private_key(), message);
         signature
             .verify(first.public_key(), message)
             .expect("signature verifies");
@@ -3287,12 +3314,12 @@ mod tests {
     #[test]
     fn bls_normal_aggregate_fast_accepts_valid_and_rejects_bad() {
         let msg = b"bls-normal-fast";
-        let kp1 = KeyPair::from_seed(vec![1; 32], Algorithm::BlsNormal);
-        let kp2 = KeyPair::from_seed(vec![2; 32], Algorithm::BlsNormal);
+        let kp1 = checked_seed_keypair(&[1; 32], Algorithm::BlsNormal);
+        let kp2 = checked_seed_keypair(&[2; 32], Algorithm::BlsNormal);
         let (pk1, sk1) = kp1.into_parts();
         let (pk2, sk2) = kp2.into_parts();
-        let sig1 = Signature::new(&sk1, msg);
-        let sig2 = Signature::new(&sk2, msg);
+        let sig1 = checked_signature(&sk1, msg);
+        let sig2 = checked_signature(&sk2, msg);
         let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
         let public_keys: Vec<&PublicKey> = vec![&pk1, &pk2];
         let pops = [
@@ -3323,9 +3350,9 @@ mod tests {
     #[test]
     fn bls_normal_same_message_wrappers_reject_duplicate_public_keys() {
         let msg = b"bls-normal-duplicate-public-key";
-        let key_pair = KeyPair::from_seed(vec![9; 32], Algorithm::BlsNormal);
+        let key_pair = checked_seed_keypair(&[9; 32], Algorithm::BlsNormal);
         let (public_key, private_key) = key_pair.into_parts();
-        let signature = Signature::new(&private_key, msg);
+        let signature = checked_signature(&private_key, msg);
         let signatures: Vec<&[u8]> = vec![signature.payload(), signature.payload()];
         let public_keys: Vec<&PublicKey> = vec![&public_key, &public_key];
         let pop = bls_normal_pop_prove(&private_key).expect("pop");
@@ -3373,8 +3400,8 @@ mod tests {
         bls_normal_pop_verify(&pk2, &pop2).expect("pop 2 verifies");
 
         let msg = b"canceling-wrapper-normal";
-        let sig1 = Signature::new(&sk1, msg);
-        let sig2 = Signature::new(&sk2, msg);
+        let sig1 = checked_signature(&sk1, msg);
+        let sig2 = checked_signature(&sk2, msg);
         sig1.verify(&pk1, msg).expect("signature 1 verifies");
         sig2.verify(&pk2, msg).expect("signature 2 verifies");
         let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
@@ -3402,12 +3429,12 @@ mod tests {
     #[test]
     fn bls_small_aggregate_fast_accepts_valid_and_rejects_bad() {
         let msg = b"bls-small-fast";
-        let kp1 = KeyPair::from_seed(vec![3; 32], Algorithm::BlsSmall);
-        let kp2 = KeyPair::from_seed(vec![4; 32], Algorithm::BlsSmall);
+        let kp1 = checked_seed_keypair(&[3; 32], Algorithm::BlsSmall);
+        let kp2 = checked_seed_keypair(&[4; 32], Algorithm::BlsSmall);
         let (pk1, sk1) = kp1.into_parts();
         let (pk2, sk2) = kp2.into_parts();
-        let sig1 = Signature::new(&sk1, msg);
-        let sig2 = Signature::new(&sk2, msg);
+        let sig1 = checked_signature(&sk1, msg);
+        let sig2 = checked_signature(&sk2, msg);
         let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
         let public_keys: Vec<&PublicKey> = vec![&pk1, &pk2];
         let pops = [
@@ -3438,9 +3465,9 @@ mod tests {
     #[test]
     fn bls_small_same_message_wrappers_reject_duplicate_public_keys() {
         let msg = b"bls-small-duplicate-public-key";
-        let key_pair = KeyPair::from_seed(vec![10; 32], Algorithm::BlsSmall);
+        let key_pair = checked_seed_keypair(&[10; 32], Algorithm::BlsSmall);
         let (public_key, private_key) = key_pair.into_parts();
-        let signature = Signature::new(&private_key, msg);
+        let signature = checked_signature(&private_key, msg);
         let signatures: Vec<&[u8]> = vec![signature.payload(), signature.payload()];
         let public_keys: Vec<&PublicKey> = vec![&public_key, &public_key];
         let pop = bls_small_pop_prove(&private_key).expect("pop");
@@ -3478,8 +3505,8 @@ mod tests {
         bls_small_pop_verify(&pk2, &pop2).expect("pop 2 verifies");
 
         let msg = b"canceling-wrapper-small";
-        let sig1 = Signature::new(&sk1, msg);
-        let sig2 = Signature::new(&sk2, msg);
+        let sig1 = checked_signature(&sk1, msg);
+        let sig2 = checked_signature(&sk2, msg);
         sig1.verify(&pk1, msg).expect("signature 1 verifies");
         sig2.verify(&pk2, msg).expect("signature 2 verifies");
         let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
@@ -3531,8 +3558,8 @@ mod tests {
         assert_eq!(key.strong_count(), 2, "cloning increments strong count");
 
         let message = b"iroha:ml-dsa:test-arc-sharing";
-        let sig_original = key.sign(message);
-        let sig_clone = cloned.sign(message);
+        let sig_original = key.try_sign(message).expect("original ML-DSA signature");
+        let sig_clone = cloned.try_sign(message).expect("clone ML-DSA signature");
         Signature::from_bytes(&sig_original)
             .verify(&public, message)
             .expect("original ML-DSA signature should verify");
@@ -3600,7 +3627,7 @@ mod tests {
             .expect("parse ML-DSA private key");
 
         let message = b"iroha:ml-dsa:parsed-private-key-signs";
-        let signature = Signature::new(&parsed, message);
+        let signature = checked_signature(&parsed, message);
 
         signature
             .verify(&public, message)
@@ -3676,7 +3703,7 @@ mod tests {
         }
 
         for algorithm in supported_algorithms() {
-            let key_pair = KeyPair::random_with_algorithm(algorithm);
+            let key_pair = checked_random_keypair(algorithm);
             let exposed_key_pair = ExposedKeyPair {
                 public_key: key_pair.public_key.clone(),
                 private_key: ExposedPrivateKey(key_pair.private_key.clone()),
@@ -3715,13 +3742,13 @@ mod tests {
     #[cfg(feature = "bls")]
     fn bls_pop_prove_and_verify_roundtrip() {
         // Generate a BLS-normal key pair
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp = checked_random_keypair(Algorithm::BlsNormal);
         // Prove possession
         let pop = bls_normal_pop_prove(kp.private_key()).expect("pop prove");
         // Verify
         bls_normal_pop_verify(kp.public_key(), &pop).expect("pop verify");
         // Negative: wrong key should fail
-        let other = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let other = checked_random_keypair(Algorithm::BlsNormal);
         assert!(bls_normal_pop_verify(other.public_key(), &pop).is_err());
     }
 
@@ -3731,7 +3758,7 @@ mod tests {
         use crate::secrecy::ExposeSecret;
 
         // PoP signed over POP_DST || pk (unhashed) must be rejected.
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp = checked_random_keypair(Algorithm::BlsNormal);
         let (algorithm, pk_bytes) = kp
             .public_key()
             .try_to_bytes()
@@ -3754,10 +3781,10 @@ mod tests {
     #[test]
     #[cfg(feature = "bls")]
     fn bls_small_pop_roundtrip() {
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsSmall);
+        let kp = checked_random_keypair(Algorithm::BlsSmall);
         let pop = bls_small_pop_prove(kp.private_key()).expect("small pop prove");
         bls_small_pop_verify(kp.public_key(), &pop).expect("small pop verify");
-        let other = KeyPair::random_with_algorithm(Algorithm::BlsSmall);
+        let other = checked_random_keypair(Algorithm::BlsSmall);
         assert!(bls_small_pop_verify(other.public_key(), &pop).is_err());
     }
 
@@ -3789,7 +3816,7 @@ mod tests {
 
     #[test]
     fn private_key_format_or_serialize_redacted() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair(Algorithm::default());
         let (_, private_key) = key_pair.into_parts();
 
         assert_eq!(
@@ -3846,7 +3873,7 @@ mod tests {
                 Algorithm::Gost3410_2012_512ParamSetA,
                 Algorithm::Gost3410_2012_512ParamSetB,
             ] {
-                let key_pair = KeyPair::random_with_algorithm(algorithm);
+                let key_pair = checked_random_keypair(algorithm);
                 let public: PublicKey = key_pair
                     .public_key()
                     .to_string()
@@ -3921,7 +3948,7 @@ mod tests {
     #[cfg(feature = "rand")]
     fn encode_decode_public_key_consistent() {
         for algorithm in supported_algorithms() {
-            let key_pair = KeyPair::random_with_algorithm(algorithm);
+            let key_pair = checked_random_keypair(algorithm);
             let (public_key, _) = key_pair.into_parts();
 
             let encoded_public_key = public_key.encode();
@@ -4152,7 +4179,7 @@ mod tests {
 
     #[test]
     fn public_key_full_try_payload_borrows_ed25519_payload() {
-        let public_key = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519)
+        let public_key = checked_seed_keypair(&[0x42; 32], Algorithm::Ed25519)
             .public_key()
             .clone();
         let (algorithm, payload) = public_key
@@ -4173,7 +4200,7 @@ mod tests {
     #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
     fn public_key_full_try_payload_borrows_blstrs_bls_payloads() {
         for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
-            let public_key = KeyPair::from_seed(vec![0x42; 32], algorithm)
+            let public_key = checked_seed_keypair(&[0x42; 32], algorithm)
                 .public_key()
                 .clone();
             let (algorithm, payload) = public_key
@@ -4195,7 +4222,7 @@ mod tests {
     #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
     fn public_key_full_try_payload_borrows_w3f_bls_payloads() {
         for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
-            let public_key = KeyPair::from_seed(vec![0x42; 32], algorithm)
+            let public_key = checked_seed_keypair(&[0x42; 32], algorithm)
                 .public_key()
                 .clone();
             let (algorithm, payload) = public_key
@@ -4257,7 +4284,7 @@ mod tests {
 
     #[test]
     fn public_key_try_to_bytes_rejects_malformed_compact_state_without_panic() {
-        let valid = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519)
+        let valid = checked_seed_keypair(&[0x42; 32], Algorithm::Ed25519)
             .public_key()
             .clone();
         let missing_tag = PublicKey(PublicKeyCompact {
@@ -4285,7 +4312,7 @@ mod tests {
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_hash_and_ord_handle_malformed_compact_state_without_panic() {
-        let valid = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519)
+        let valid = checked_seed_keypair(&[0x42; 32], Algorithm::Ed25519)
             .public_key()
             .clone();
         let missing_tag = PublicKey(PublicKeyCompact {
@@ -4368,7 +4395,7 @@ mod tests {
     #[test]
     #[cfg(feature = "rand")]
     fn public_key_from_bytes_roundtrip() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair(Algorithm::default());
         let (public_key, _) = key_pair.into_parts();
         let (alg, bytes) = public_key
             .try_to_bytes()

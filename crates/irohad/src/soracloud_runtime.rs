@@ -86,7 +86,7 @@ use iroha_data_model::{
         encode_model_host_heartbeat_provenance_payload,
     },
     sorafs::pin_registry::ManifestDigest,
-    transaction::TransactionBuilder,
+    transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_primitives::json::Json;
@@ -224,13 +224,14 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
         instruction: InstructionBox,
         endpoint: &'static str,
     ) -> eyre::Result<()> {
-        let tx = TransactionBuilder::new((*self.chain_id).clone(), self.authority.clone())
-            .with_instructions([instruction])
-            .with_metadata(soracloud_runtime_submission_metadata(
-                &self.state,
-                self.gas_asset_id.as_deref(),
-            ))
-            .sign(self.key_pair.private_key());
+        let tx = sign_soracloud_runtime_submission_transaction(
+            (*self.chain_id).clone(),
+            self.authority.clone(),
+            instruction,
+            soracloud_runtime_submission_metadata(&self.state, self.gas_asset_id.as_deref()),
+            &self.key_pair,
+            endpoint,
+        )?;
         let (max_clock_drift, transaction_params, crypto) = {
             let world = self.state.world_view();
             let params = world.parameters();
@@ -319,6 +320,21 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
         });
         self.submit_instruction(instruction, "/internal/soracloud/runtime/inrou-host-advert")
     }
+}
+
+fn sign_soracloud_runtime_submission_transaction(
+    chain_id: ChainId,
+    authority: AccountId,
+    instruction: InstructionBox,
+    metadata: Metadata,
+    key_pair: &KeyPair,
+    endpoint: &'static str,
+) -> eyre::Result<SignedTransaction> {
+    TransactionBuilder::new(chain_id, authority)
+        .with_instructions([instruction])
+        .with_metadata(metadata)
+        .try_sign(key_pair.private_key())
+        .wrap_err_with(|| format!("sign internal Soracloud runtime mutation at `{endpoint}`"))
 }
 
 fn sign_soracloud_runtime_provenance(
@@ -13938,7 +13954,9 @@ mod tests {
     use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
     use iroha_data_model::asset::AssetDefinitionId;
     use iroha_data_model::{
+        Level,
         block::BlockHeader,
+        isi::Log,
         metadata::Metadata,
         smart_contract::manifest::EntryPointKind,
         soracloud::{
@@ -14008,6 +14026,24 @@ mod tests {
         )?;
 
         signature.verify(ALICE_KEYPAIR.public_key(), &payload)?;
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_submission_transaction_checked_signing_verifies() -> Result<()> {
+        let authority = AccountId::new(ALICE_KEYPAIR.public_key().clone());
+        let tx = sign_soracloud_runtime_submission_transaction(
+            ChainId::from("soracloud-runtime-sign-test"),
+            authority.clone(),
+            InstructionBox::from(Log::new(Level::INFO, "checked runtime signing".into())),
+            Metadata::default(),
+            &ALICE_KEYPAIR,
+            "/internal/soracloud/runtime/test",
+        )?;
+
+        tx.verify_signature()
+            .wrap_err("verify checked Soracloud runtime submission signature")?;
+        assert_eq!(tx.authority(), &authority);
         Ok(())
     }
 
@@ -15364,7 +15400,10 @@ mod tests {
             signature: sorafs_manifest::AdvertSignature {
                 algorithm: SignatureAlgorithm::Ed25519,
                 public_key: advert_public_payload.to_vec(),
-                signature: Signature::new(&advert_key, &body_bytes).payload().to_vec(),
+                signature: Signature::try_new(&advert_key, &body_bytes)
+                    .wrap_err("sign Soracloud provider advert fixture")?
+                    .payload()
+                    .to_vec(),
             },
             signature_strict: true,
             allow_unknown_capabilities: false,
@@ -15406,7 +15445,8 @@ mod tests {
             retention_epoch: expires_at + 600,
             council_signatures: vec![CouncilSignature {
                 signer: council_public_payload,
-                signature: Signature::new(&council_key, &proposal_digest)
+                signature: Signature::try_new(&council_key, &proposal_digest)
+                    .wrap_err("sign Soracloud provider admission fixture")?
                     .payload()
                     .to_vec(),
             }],
@@ -15729,10 +15769,11 @@ mod tests {
                     heartbeat_expires_at_ms,
                     provenance: ManifestProvenance {
                         signer: ALICE_KEYPAIR.public_key().clone(),
-                        signature: iroha_crypto::Signature::new(
-                            ALICE_KEYPAIR.private_key(),
+                        signature: sign_soracloud_runtime_provenance(
+                            &ALICE_KEYPAIR,
                             &payload,
-                        ),
+                            "sign test model host heartbeat provenance",
+                        )?,
                     },
                 },
             ));
@@ -15749,10 +15790,11 @@ mod tests {
                     capability: capability.clone(),
                     provenance: ManifestProvenance {
                         signer: ALICE_KEYPAIR.public_key().clone(),
-                        signature: iroha_crypto::Signature::new(
-                            ALICE_KEYPAIR.private_key(),
+                        signature: sign_soracloud_runtime_provenance(
+                            &ALICE_KEYPAIR,
                             &payload,
-                        ),
+                            "sign test Inrou host advert provenance",
+                        )?,
                     },
                 },
             ));

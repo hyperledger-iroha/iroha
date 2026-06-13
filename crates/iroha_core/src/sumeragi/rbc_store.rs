@@ -380,24 +380,30 @@ impl ChunkStore {
     }
 
     fn is_session_file(path: &Path) -> bool {
-        let Some(name) = path.file_name().and_then(|os| os.to_str()) else {
+        let Some(name) = path.file_name() else {
             return false;
         };
-        let Some(stem) = name.strip_suffix(".norito") else {
-            return false;
+        if let Some(name) = name.to_str() {
+            let Some(stem) = name.strip_suffix(".norito") else {
+                return false;
+            };
+            // Session files are `{hash}_{height}_{view}`.
+            return stem.split('_').count() == 3;
         };
-        // Session files are `{hash}_{height}_{view}`.
-        stem.split('_').count() == 3
+        raw_session_file_name_matches(name, b".norito")
     }
 
     fn is_temp_session_file(path: &Path) -> bool {
-        let Some(name) = path.file_name().and_then(|os| os.to_str()) else {
+        let Some(name) = path.file_name() else {
             return false;
         };
-        let Some(stem) = name.strip_suffix(".norito.tmp") else {
-            return false;
+        if let Some(name) = name.to_str() {
+            let Some(stem) = name.strip_suffix(".norito.tmp") else {
+                return false;
+            };
+            return stem.split('_').count() == 3;
         };
-        stem.split('_').count() == 3
+        raw_session_file_name_matches(name, b".norito.tmp")
     }
 
     fn session_file_name(key: &SessionKey) -> String {
@@ -545,16 +551,42 @@ impl ChunkStore {
                     continue;
                 }
             };
-            let Ok(ft) = entry.file_type() else { continue };
+            let path = entry.path();
+            let is_temp_session = Self::is_temp_session_file(&path);
+            let is_session = Self::is_session_file(&path);
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(err) if is_temp_session || is_session => {
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "failed to inspect persisted RBC session `{}`: {err}",
+                            path.display()
+                        ),
+                    ));
+                }
+                Err(err) => {
+                    warn!(?err, ?path, "failed to inspect entry in RBC chunk store");
+                    continue;
+                }
+            };
             if !ft.is_file() {
+                if is_temp_session || is_session {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "persisted RBC session `{}` is not a regular file",
+                            path.display()
+                        ),
+                    ));
+                }
                 continue;
             }
-            let path = entry.path();
-            if Self::is_temp_session_file(&path) {
+            if is_temp_session {
                 temp_paths.push(path);
                 continue;
             }
-            if Self::is_session_file(&path) {
+            if is_session {
                 main_paths.push(path);
             }
         }
@@ -590,7 +622,13 @@ impl ChunkStore {
                     );
                 }
                 Err(err) => {
-                    warn!(?err, ?path, "failed to read persisted RBC temp session");
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "failed to read persisted RBC temp session `{}`: {err}",
+                            path.display()
+                        ),
+                    ));
                 }
             }
         }
@@ -625,7 +663,13 @@ impl ChunkStore {
                     );
                 }
                 Err(err) => {
-                    warn!(?err, ?path, "failed to read persisted RBC session");
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "failed to read persisted RBC session `{}`: {err}",
+                            path.display()
+                        ),
+                    ));
                 }
             }
         }
@@ -961,6 +1005,21 @@ impl ChunkStore {
 
 fn temp_session_path(path: &Path) -> PathBuf {
     path.with_added_extension("tmp")
+}
+
+#[cfg(unix)]
+fn raw_session_file_name_matches(name: &std::ffi::OsStr, suffix: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let Some(stem) = name.as_bytes().strip_suffix(suffix) else {
+        return false;
+    };
+    stem.split(|byte| *byte == b'_').count() == 3
+}
+
+#[cfg(not(unix))]
+fn raw_session_file_name_matches(_name: &std::ffi::OsStr, _suffix: &[u8]) -> bool {
+    false
 }
 
 fn read_session_bytes(path: &Path) -> io::Result<Option<Vec<u8>>> {
@@ -1515,6 +1574,18 @@ mod tests {
         .expect("chunk store init")
     }
 
+    #[cfg(unix)]
+    fn set_unix_file_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut permissions = fs::metadata(path)
+            .unwrap_or_else(|err| panic!("read permissions for {}: {err}", path.display()))
+            .permissions();
+        permissions.set_mode(mode);
+        fs::set_permissions(path, permissions)
+            .unwrap_or_else(|err| panic!("set permissions for {}: {err}", path.display()));
+    }
+
     fn write_persisted_session_at(
         dir: &Path,
         path_key: &SessionKey,
@@ -1945,6 +2016,28 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_session_shaped_names_are_classified_for_recovery() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt as _};
+
+        let mut session_name = "aa".repeat(Hash::LENGTH).into_bytes();
+        session_name.extend_from_slice(b"_\xff_2.norito");
+        let session_path = PathBuf::from(OsString::from_vec(session_name));
+        assert!(ChunkStore::is_session_file(&session_path));
+        assert!(!ChunkStore::is_temp_session_file(&session_path));
+
+        let mut temp_name = "bb".repeat(Hash::LENGTH).into_bytes();
+        temp_name.extend_from_slice(b"_1_\xff.norito.tmp");
+        let temp_path = PathBuf::from(OsString::from_vec(temp_name));
+        assert!(ChunkStore::is_temp_session_file(&temp_path));
+        assert!(!ChunkStore::is_session_file(&temp_path));
+
+        let unrelated_path = PathBuf::from(OsString::from_vec(b"sessions-\xff.norito".to_vec()));
+        assert!(!ChunkStore::is_session_file(&unrelated_path));
+        assert!(!ChunkStore::is_temp_session_file(&unrelated_path));
+    }
+
     #[test]
     fn scan_entries_falls_back_to_main_when_temp_invalid() {
         let dir = tempdir().unwrap();
@@ -2072,6 +2165,99 @@ mod tests {
         };
         assert_ne!(err.kind(), io::ErrorKind::NotFound);
         assert!(tmp_path.exists(), "failed promotion should leave temp file");
+    }
+
+    #[test]
+    fn scan_entries_rejects_session_shaped_non_file() {
+        let dir = tempdir().unwrap();
+        let store = store_for_tests(dir.path());
+        let key = session_key(51);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        fs::create_dir(&path).expect("create session-shaped directory");
+
+        let err = match store.load(&chain_hash, &manifest) {
+            Ok(_) => panic!("session-shaped non-file should fail store recovery"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            path.exists(),
+            "scanner should not remove non-file artifacts itself"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_entries_rejects_unreadable_main_session_file() {
+        let dir = tempdir().unwrap();
+        let store = store_for_tests(dir.path());
+        let key = session_key(52);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        fs::write(
+            &path,
+            to_bytes(&persisted).expect("encode persisted session"),
+        )
+        .expect("write main session");
+        set_unix_file_mode(&path, 0);
+
+        let err = match store.load(&chain_hash, &manifest) {
+            Ok(_) => panic!("unreadable main session should fail store recovery"),
+            Err(err) => err,
+        };
+        set_unix_file_mode(&path, 0o600);
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        let message = err.to_string();
+        assert!(
+            message.contains("failed to read persisted RBC session"),
+            "error should identify the unreadable main session: {message}"
+        );
+        assert!(
+            message.contains(&path.display().to_string()),
+            "error should include the unreadable main session path: {message}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_entries_rejects_unreadable_temp_session_file() {
+        let dir = tempdir().unwrap();
+        let store = store_for_tests(dir.path());
+        let key = session_key(53);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::write(
+            &tmp_path,
+            to_bytes(&persisted).expect("encode persisted session"),
+        )
+        .expect("write temp session");
+        set_unix_file_mode(&tmp_path, 0);
+
+        let err = match store.load(&chain_hash, &manifest) {
+            Ok(_) => panic!("unreadable temp session should fail store recovery"),
+            Err(err) => err,
+        };
+        set_unix_file_mode(&tmp_path, 0o600);
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        let message = err.to_string();
+        assert!(
+            message.contains("failed to read persisted RBC temp session"),
+            "error should identify the unreadable temp session: {message}"
+        );
+        assert!(
+            message.contains(&tmp_path.display().to_string()),
+            "error should include the unreadable temp session path: {message}"
+        );
     }
 
     #[test]

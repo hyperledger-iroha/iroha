@@ -1649,16 +1649,21 @@ fn derive_public_impl(params: &CurveParams, private: &PrivateKey) -> Result<Publ
     })
 }
 
-fn random_scalar<R: RngCore>(params: &CurveParams, rng: &mut R) -> BigUint {
+fn random_scalar<R: RngCore>(params: &CurveParams, rng: &mut R) -> Result<BigUint, Error> {
+    const MAX_DETERMINISTIC_SCALAR_ATTEMPTS: usize = 1024;
+
     let mut buf = Zeroizing::new(vec![0u8; params.scalar_len]);
-    loop {
+    for _ in 0..MAX_DETERMINISTIC_SCALAR_ATTEMPTS {
         rng.fill_bytes(buf.as_mut_slice());
         let scalar = BigUint::from_bytes_le(buf.as_slice());
         if scalar.is_zero() || scalar >= params.q {
             continue;
         }
-        return scalar;
+        return Ok(scalar);
     }
+    Err(Error::KeyGen(
+        "GOST deterministic RNG did not produce a valid scalar".to_owned(),
+    ))
 }
 
 fn random_scalar_from_os(params: &CurveParams) -> Result<BigUint, Error> {
@@ -1703,7 +1708,7 @@ fn keypair_random_impl(params: &CurveParams) -> Result<(PublicKey, PrivateKey), 
 fn keypair_seed_impl(params: &CurveParams, seed: &[u8]) -> Result<(PublicKey, PrivateKey), Error> {
     validate_seed_material_not_all_zero(seed)?;
     let mut rng = rng_from_seed_slice(seed);
-    let scalar = random_scalar(params, &mut rng);
+    let scalar = random_scalar(params, &mut rng)?;
     let private = PrivateKey {
         bytes_le: Zeroizing::new(scalar_to_le_bytes(&scalar, params.scalar_len)),
     };
@@ -2316,9 +2321,9 @@ mod tests {
             let params = params_variant.curve();
 
             for _ in 0..8 {
-                let scalar_g = random_scalar(params, &mut rng);
-                let scalar_q = random_scalar(params, &mut rng);
-                let point_scalar = random_scalar(params, &mut rng);
+                let scalar_g = random_scalar(params, &mut rng).expect("valid scalar g");
+                let scalar_q = random_scalar(params, &mut rng).expect("valid scalar q");
+                let point_scalar = random_scalar(params, &mut rng).expect("valid point scalar");
 
                 let q_point = match compat_scalar_mul(params, &point_scalar, &params.generator()) {
                     Some(point) => point,
@@ -2551,6 +2556,24 @@ mod tests {
         }
     }
 
+    struct FixedRng {
+        byte: u8,
+    }
+
+    impl RngCore for FixedRng {
+        fn next_u32(&mut self) -> u32 {
+            u32::from_le_bytes([self.byte; 4])
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            u64::from_le_bytes([self.byte; 8])
+        }
+
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            dest.fill(self.byte);
+        }
+    }
+
     #[test]
     fn random_scalar_rejects_zero_and_out_of_range_samples() {
         let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
@@ -2574,8 +2597,25 @@ mod tests {
         let samples = vec![zero, q_bytes, q_plus_one, high, valid.clone()];
         let mut rng = StubRng::new(samples);
 
-        let scalar = random_scalar(params, &mut rng);
+        let scalar = random_scalar(params, &mut rng).expect("valid scalar after invalid samples");
         assert_eq!(scalar, &params.q - BigUint::one());
+    }
+
+    #[test]
+    fn random_scalar_rejects_repeated_invalid_deterministic_samples() {
+        let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
+            Params::Bits256(params) => params,
+            _ => unreachable!(),
+        };
+        let mut rng = FixedRng { byte: 0 };
+
+        let err = random_scalar(params, &mut rng)
+            .expect_err("repeated all-zero deterministic scalar samples must fail");
+
+        assert!(matches!(
+            err,
+            Error::KeyGen(message) if message.contains("did not produce a valid scalar")
+        ));
     }
 
     #[test]

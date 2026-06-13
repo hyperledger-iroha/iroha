@@ -105,9 +105,11 @@ def _json_rpc(
         with opener(request, timeout=timeout) as response:
             raw = response.read(SOLANA_JSON_RPC_MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"JSON-RPC {method} failed with HTTP {exc.code}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"JSON-RPC {method} request failed") from exc
+        raise RuntimeError(
+            f"JSON-RPC {method} failed with HTTP {exc.code}"
+        ) from None
+    except urllib.error.URLError:
+        raise RuntimeError(f"JSON-RPC {method} request failed") from None
     if len(raw) > SOLANA_JSON_RPC_MAX_RESPONSE_BYTES:
         raise RuntimeError(
             f"JSON-RPC {method} response exceeds "
@@ -118,14 +120,14 @@ def _json_rpc(
             raw.decode("utf-8"),
             object_pairs_hook=_json_object_without_duplicate_keys,
         )
-    except UnicodeDecodeError as exc:
-        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
+    except UnicodeDecodeError:
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
+    except json.JSONDecodeError:
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     except ValueError as exc:
         if str(exc) == "JSON-RPC returned duplicate JSON keys":
             raise RuntimeError(f"JSON-RPC {method} returned duplicate JSON keys") from None
-        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from exc
+        raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     if not isinstance(decoded, dict):
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     error = decoded.get("error")
@@ -189,8 +191,8 @@ def _account_data(account: dict[str, Any], *, label: str) -> bytes:
         raise RuntimeError(f"{label} account data must use base64 encoding")
     try:
         raw = base64.b64decode(data[0], validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise RuntimeError(f"{label} account data is invalid base64") from exc
+    except (ValueError, binascii.Error):
+        raise RuntimeError(f"{label} account data is invalid base64") from None
     if base64.b64encode(raw).decode("ascii") != data[0]:
         raise RuntimeError(f"{label} account data must be canonical base64")
     return raw
@@ -359,8 +361,8 @@ def _live_base64_bytes(live: dict[str, Any], field: str, *, label: str) -> bytes
         raise ValueError(f"{label} must be present")
     try:
         raw = base64.b64decode(value, validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise ValueError(f"{label} must be base64") from exc
+    except (ValueError, binascii.Error):
+        raise ValueError(f"{label} must be base64") from None
     if base64.b64encode(raw).decode("ascii") != value:
         raise ValueError(f"{label} must be canonical base64")
     return raw

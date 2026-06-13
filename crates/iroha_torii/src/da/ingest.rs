@@ -5,6 +5,7 @@
 use std::{
     borrow::{Cow, ToOwned},
     io::{ErrorKind, Read},
+    path::Path,
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -810,8 +811,22 @@ pub async fn handler_get_da_manifest(
         body.insert("sampling_plan".into(), sampling_plan_to_value(&plan));
     }
 
-    let mut response = utils::respond_value_with_format(Value::Object(body), format);
-    match persistence::load_pdp_commitment_from_spool(&app.da_ingest.manifest_store_dir, &ticket) {
+    let response = utils::respond_value_with_format(Value::Object(body), format);
+    attach_pdp_commitment_header_from_spool(
+        &app.da_ingest.manifest_store_dir,
+        &ticket,
+        response,
+        format,
+    )
+}
+
+fn attach_pdp_commitment_header_from_spool(
+    spool_dir: &Path,
+    ticket: &StorageTicketId,
+    mut response: Response,
+    format: ResponseFormat,
+) -> Result<Response, ResponseError> {
+    match persistence::load_pdp_commitment_from_spool(spool_dir, ticket) {
         Ok(commitment) => match pdp_commitment_header_value(&commitment) {
             Ok(value) => {
                 response
@@ -819,19 +834,20 @@ pub async fn handler_get_da_manifest(
                     .insert(HeaderName::from_static(HEADER_SORA_PDP_COMMITMENT), value);
             }
             Err((_, message)) => {
-                warn!(
-                    ticket = %hex::encode(ticket.as_bytes()),
-                    "failed to encode PDP commitment header: {message}"
-                );
+                return Err(ResponseError::from(build_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("failed to encode PDP commitment header: {message}"),
+                    format,
+                )));
             }
         },
         Err(err) if err.kind() == ErrorKind::NotFound => {}
         Err(err) => {
-            warn!(
-                ?err,
-                ticket = %hex::encode(ticket.as_bytes()),
-                "failed to load PDP commitment for manifest fetch"
-            );
+            return Err(ResponseError::from(build_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to read PDP commitment from spool: {err}"),
+                format,
+            )));
         }
     }
     Ok(response)

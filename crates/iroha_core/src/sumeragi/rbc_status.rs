@@ -666,88 +666,154 @@ fn load_into_map(
 
 fn read_entries_with_fallback(path: &Path) -> io::Result<Vec<StoredEntry>> {
     let tmp_path = temp_store_path(path);
-    let tmp_bytes = match read_store_bytes(&tmp_path) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            warn!(?err, ?tmp_path, "failed to read RBC session temp store");
-            None
-        }
-    };
-    let main_bytes = match read_store_bytes(path) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            warn!(?err, ?path, "failed to read RBC session store");
-            None
-        }
-    };
+    let main = read_store_candidate(path, false)?;
+    let temp = read_store_candidate(&tmp_path, true)?;
 
-    if tmp_bytes.is_none() && main_bytes.is_none() {
-        return Ok(Vec::new());
-    }
-
-    let had_tmp = tmp_bytes.is_some();
-    let mut selected = None;
-    for (candidate_path, is_temp, bytes) in [
-        (path, false, main_bytes),
-        (tmp_path.as_path(), true, tmp_bytes),
-    ] {
-        let Some(bytes) = bytes.as_deref() else {
-            continue;
-        };
-        match decode_entries(bytes) {
-            Ok(entries) => {
-                let decoded_len = entries.len();
-                let entries = retain_valid_entries(entries, candidate_path);
-                if entries.is_empty() && decoded_len > 0 {
-                    let _ = fs::remove_file(candidate_path);
-                    continue;
-                }
-                let newest_updated_at_ms = entries
-                    .iter()
-                    .map(|entry| entry.updated_at_ms)
-                    .max()
-                    .unwrap_or(0);
-                let candidate = StoreCandidate {
-                    entries,
-                    newest_updated_at_ms,
-                    is_temp,
-                };
-                if store_candidate_newer_than_selected(&candidate, selected.as_ref()) {
-                    selected = Some(candidate);
-                }
-            }
-            Err(err) => {
-                if is_temp {
-                    warn!(?err, ?tmp_path, "failed to decode RBC session temp store");
-                    let _ = fs::remove_file(&tmp_path);
-                } else {
-                    warn!(?err, ?path, "failed to decode RBC session store");
-                    let _ = fs::remove_file(path);
-                }
-            }
+    match (main, temp) {
+        (StoreCandidateState::Missing, StoreCandidateState::Missing) => Ok(Vec::new()),
+        (StoreCandidateState::Valid(candidate), StoreCandidateState::Missing) => {
+            Ok(candidate.entries)
         }
-    }
-
-    if let Some(selected) = selected {
-        if selected.is_temp {
+        (StoreCandidateState::Missing, StoreCandidateState::Valid(candidate)) => {
             warn!(
                 path = %tmp_path.display(),
                 "recovered RBC session store from temp file"
             );
             promote_temp_store(&tmp_path, path)?;
-        } else if had_tmp {
-            let _ = fs::remove_file(&tmp_path);
+            Ok(candidate.entries)
         }
-        return Ok(selected.entries);
+        (StoreCandidateState::Valid(main), StoreCandidateState::Valid(temp)) => {
+            if store_candidate_newer_than_selected(&temp, Some(&main)) {
+                warn!(
+                    path = %tmp_path.display(),
+                    "recovered RBC session store from temp file"
+                );
+                promote_temp_store(&tmp_path, path)?;
+                Ok(temp.entries)
+            } else {
+                remove_store_file(&tmp_path, "stale RBC session temp store")?;
+                Ok(main.entries)
+            }
+        }
+        (StoreCandidateState::Valid(main), StoreCandidateState::Corrupt(err)) => {
+            warn!(
+                ?err,
+                path = %tmp_path.display(),
+                "discarding corrupt RBC session temp store"
+            );
+            remove_store_file(&tmp_path, "corrupt RBC session temp store")?;
+            Ok(main.entries)
+        }
+        (StoreCandidateState::Missing, StoreCandidateState::Corrupt(err))
+        | (StoreCandidateState::Corrupt(err), StoreCandidateState::Missing) => Err(err),
+        (StoreCandidateState::Corrupt(err), StoreCandidateState::Valid(candidate)) => {
+            warn!(
+                ?err,
+                path = %path.display(),
+                "RBC session store invalid; recovering from temp store"
+            );
+            warn!(
+                path = %tmp_path.display(),
+                "recovered RBC session store from temp file"
+            );
+            promote_temp_store(&tmp_path, path)?;
+            Ok(candidate.entries)
+        }
+        (StoreCandidateState::Corrupt(main_err), StoreCandidateState::Corrupt(temp_err)) => {
+            Err(io::Error::new(
+                main_err.kind(),
+                format!(
+                    "failed to recover RBC session store {}: {main_err}; temp store {} is also invalid: {temp_err}",
+                    path.display(),
+                    tmp_path.display()
+                ),
+            ))
+        }
     }
+}
 
-    Ok(Vec::new())
+enum StoreCandidateState {
+    Missing,
+    Valid(StoreCandidate),
+    Corrupt(io::Error),
 }
 
 struct StoreCandidate {
     entries: Vec<StoredEntry>,
     newest_updated_at_ms: u64,
     is_temp: bool,
+}
+
+fn read_store_candidate(path: &Path, is_temp: bool) -> io::Result<StoreCandidateState> {
+    let Some(bytes) = read_store_bytes(path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "failed to read {} {}: {err}",
+                store_label(is_temp),
+                path.display()
+            ),
+        )
+    })?
+    else {
+        return Ok(StoreCandidateState::Missing);
+    };
+
+    match decode_entries(&bytes) {
+        Ok(entries) => {
+            let decoded_len = entries.len();
+            let entries = retain_valid_entries(entries, path);
+            if entries.is_empty() && decoded_len > 0 {
+                remove_store_file(path, invalid_store_label(is_temp))?;
+                return Ok(StoreCandidateState::Missing);
+            }
+            let newest_updated_at_ms = entries
+                .iter()
+                .map(|entry| entry.updated_at_ms)
+                .max()
+                .unwrap_or(0);
+            Ok(StoreCandidateState::Valid(StoreCandidate {
+                entries,
+                newest_updated_at_ms,
+                is_temp,
+            }))
+        }
+        Err(err) => Ok(StoreCandidateState::Corrupt(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "failed to decode {} {}: {err}",
+                store_label(is_temp),
+                path.display()
+            ),
+        ))),
+    }
+}
+
+fn store_label(is_temp: bool) -> &'static str {
+    if is_temp {
+        "RBC session temp store"
+    } else {
+        "RBC session store"
+    }
+}
+
+fn invalid_store_label(is_temp: bool) -> &'static str {
+    if is_temp {
+        "invalid RBC session temp store"
+    } else {
+        "invalid RBC session store"
+    }
+}
+
+fn remove_store_file(path: &Path, label: &'static str) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(io::Error::new(
+            err.kind(),
+            format!("failed to remove {label} {}: {err}", path.display()),
+        )),
+    }
 }
 
 fn store_candidate_newer_than_selected(
@@ -1303,6 +1369,141 @@ mod tests {
             "promotion failure should leave disk persistence disabled"
         );
         assert!(tmp.exists(), "failed promotion should leave temp store");
+    }
+
+    #[test]
+    fn persisted_snapshot_rejects_corrupt_main_store() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join(FILE_NAME);
+        fs::write(&file, b"corrupt").expect("write corrupt main store");
+
+        let snapshot = read_persisted_snapshot(dir.path());
+
+        assert!(
+            snapshot.is_empty(),
+            "corrupt main store must not report persisted status"
+        );
+        assert!(
+            file.exists(),
+            "corrupt main store should remain visible for operator repair"
+        );
+    }
+
+    #[test]
+    fn configure_rejects_corrupt_main_store() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join(FILE_NAME);
+        fs::write(&file, b"corrupt").expect("write corrupt main store");
+        let handle = Handle::new();
+
+        handle.configure(Some(StoreConfig {
+            dir: dir.path().to_path_buf(),
+            ttl: Duration::ZERO,
+            capacity: 8,
+        }));
+
+        assert!(
+            handle.snapshot().is_empty(),
+            "runtime configure must not seed status from a corrupt main store"
+        );
+        let inner = handle.store.lock_inner();
+        assert!(
+            inner.persistence_unavailable,
+            "corrupt main store should mark persistence unavailable"
+        );
+        assert!(
+            inner.disk.is_none(),
+            "corrupt main store should leave disk persistence disabled"
+        );
+        assert!(
+            file.exists(),
+            "corrupt main store should remain visible for operator repair"
+        );
+    }
+
+    #[test]
+    fn persisted_snapshot_rejects_orphan_corrupt_temp_store() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join(FILE_NAME);
+        let tmp = temp_store_path(&file);
+        fs::write(&tmp, b"corrupt").expect("write corrupt temp store");
+
+        let snapshot = read_persisted_snapshot(dir.path());
+
+        assert!(
+            snapshot.is_empty(),
+            "orphan corrupt temp store must not report persisted status"
+        );
+        assert!(
+            tmp.exists(),
+            "orphan corrupt temp store should remain visible for operator repair"
+        );
+    }
+
+    #[test]
+    fn persisted_snapshot_recovers_main_after_corrupt_temp_cleanup() {
+        let dir = tempdir().expect("tempdir");
+        let main_summary = summary(12, 12, 2, 1, false, Some(b"main"));
+        let file = dir.path().join(FILE_NAME);
+        let tmp = temp_store_path(&file);
+        fs::write(
+            &file,
+            to_bytes(&vec![StoredEntry {
+                summary: main_summary.clone(),
+                updated_at_ms: 200,
+            }])
+            .expect("encode main store"),
+        )
+        .expect("write main store");
+        fs::write(&tmp, b"corrupt").expect("write corrupt temp store");
+
+        let snapshot = read_persisted_snapshot(dir.path());
+
+        assert_eq!(snapshot, vec![main_summary]);
+        assert!(
+            !tmp.exists(),
+            "corrupt temp store should be removed after selecting a valid main store"
+        );
+    }
+
+    #[test]
+    fn configure_rejects_unreadable_temp_store_even_with_valid_main() {
+        let dir = tempdir().expect("tempdir");
+        let main_summary = summary(13, 13, 2, 1, false, Some(b"main"));
+        let file = dir.path().join(FILE_NAME);
+        let tmp = temp_store_path(&file);
+        fs::write(
+            &file,
+            to_bytes(&vec![StoredEntry {
+                summary: main_summary,
+                updated_at_ms: 200,
+            }])
+            .expect("encode main store"),
+        )
+        .expect("write main store");
+        fs::create_dir(&tmp).expect("create unreadable temp store path");
+        let handle = Handle::new();
+
+        handle.configure(Some(StoreConfig {
+            dir: dir.path().to_path_buf(),
+            ttl: Duration::ZERO,
+            capacity: 8,
+        }));
+
+        assert!(
+            handle.snapshot().is_empty(),
+            "runtime configure must not seed status while a temp store cannot be inspected"
+        );
+        let inner = handle.store.lock_inner();
+        assert!(
+            inner.persistence_unavailable,
+            "unreadable temp store should mark persistence unavailable"
+        );
+        assert!(
+            inner.disk.is_none(),
+            "unreadable temp store should leave disk persistence disabled"
+        );
+        assert!(tmp.is_dir(), "unreadable temp path should be left visible");
     }
 
     #[test]

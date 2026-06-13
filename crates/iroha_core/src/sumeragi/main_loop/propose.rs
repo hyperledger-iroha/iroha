@@ -402,6 +402,53 @@ fn canonicalize_proposal_batch_with_plans(
     }
 }
 
+fn refresh_proposal_routing_from_state(
+    tx_batch: &[AcceptedTransaction<'static>],
+    routing_batch: &mut Vec<RoutingDecision>,
+    routing_plan_batch: &mut Vec<crate::queue::RoutingPlan>,
+    state_view: &crate::state::StateView<'_>,
+    ledger_time_ms: u64,
+) -> Result<bool> {
+    if tx_batch.len() != routing_batch.len() || tx_batch.len() != routing_plan_batch.len() {
+        return Err(eyre!(
+            "proposal routing vector length mismatch: txs={} routes={} plans={}",
+            tx_batch.len(),
+            routing_batch.len(),
+            routing_plan_batch.len()
+        ));
+    }
+    if tx_batch.is_empty() {
+        return Ok(false);
+    }
+
+    let nexus = &state_view.nexus;
+    let mut refreshed_routing = Vec::with_capacity(tx_batch.len());
+    let mut refreshed_plans = Vec::with_capacity(tx_batch.len());
+    for (idx, tx) in tx_batch.iter().enumerate() {
+        let refreshed_plan = crate::queue::evaluate_policy_plan_with_catalog_and_world_at(
+            &nexus.routing_policy,
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+            tx,
+            state_view.world(),
+            ledger_time_ms,
+        )
+        .map_err(|err| {
+            eyre!("proposal routing cannot be resolved from committed state at index {idx}: {err}")
+        })?;
+        refreshed_routing.push(refreshed_plan.coordinator_route());
+        refreshed_plans.push(refreshed_plan);
+    }
+
+    let changed = routing_batch.as_slice() != refreshed_routing.as_slice()
+        || routing_plan_batch.as_slice() != refreshed_plans.as_slice();
+    if changed {
+        *routing_batch = refreshed_routing;
+        *routing_plan_batch = refreshed_plans;
+    }
+    Ok(changed)
+}
+
 const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_millis(1);
 
 #[derive(Debug, Clone, Copy)]
@@ -3053,6 +3100,25 @@ impl Actor {
                 } else {
                     BlockBuilder::new(tx_batch.clone()).chain(view, None)
                 };
+                let routing_ledger_time_ms =
+                    u64::try_from(builder.creation_time().as_millis()).unwrap_or(u64::MAX);
+                {
+                    let state_view = self.state.view();
+                    if refresh_proposal_routing_from_state(
+                        &tx_batch,
+                        &mut routing_batch,
+                        &mut routing_plan_batch,
+                        &state_view,
+                        routing_ledger_time_ms,
+                    )? {
+                        info!(
+                            height = proposal_height,
+                            view,
+                            tx_count = tx_batch.len(),
+                            "proposal routing refreshed from committed Nexus state before sidecar assembly"
+                        );
+                    }
+                }
                 if proposal_height > 2 && previous_roster_evidence.is_none() {
                     return Err(eyre!(
                         "missing previous-roster evidence for parent block at height {}",
@@ -3172,8 +3238,17 @@ impl Actor {
                                 .note_da_manifest_cache(cache_outcome.as_telemetry());
                             #[cfg(not(feature = "telemetry"))]
                             let _ = cache_outcome;
-                            if available {
-                                kept.push(record.clone());
+                            match available {
+                                Ok(true) => kept.push(record.clone()),
+                                Ok(false) => {}
+                                Err(err) => {
+                                    return Err(eyre!(
+                                        "DA manifest guard failed before sealing commitment for lane {} epoch {} seq {}: {err}",
+                                        record.lane_id.as_u32(),
+                                        record.epoch,
+                                        record.sequence
+                                    ));
+                                }
                             }
                         }
                         kept
@@ -3275,19 +3350,24 @@ impl Actor {
                         &lane_config,
                         account_exists,
                     );
-                    if !rejected.is_empty() {
-                        for reason in rejected {
+                    if let Some(first_rejection) = rejected.first().cloned() {
+                        for reason in &rejected {
                             #[cfg(feature = "telemetry")]
                             self.telemetry.note_da_pin_intent_spool(
                                 crate::telemetry::PinIntentSpoolResult::Dropped,
-                                crate::telemetry::PinIntentSpoolReason::from(&reason),
+                                crate::telemetry::PinIntentSpoolReason::from(reason),
                             );
                             warn!(
                                 height = proposal_height,
                                 ?reason,
-                                "dropping invalid DA pin intent before sealing bundle"
+                                "rejecting invalid DA pin intent before sealing bundle"
                             );
                         }
+                        return Err(eyre!(
+                            "invalid DA pin intent in spool `{}`: {first_rejection} ({} rejection(s))",
+                            self.subsystems.da_rbc.spool_dir.display(),
+                            rejected.len()
+                        ));
                     }
                     #[cfg(feature = "telemetry")]
                     let dedupe_before = intents.len();
@@ -3335,6 +3415,45 @@ impl Actor {
                 let proof_policy_bundle = crate::da::proof_policy_bundle(&lane_config);
                 builder = builder.with_da_proof_policies(Some(proof_policy_bundle));
 
+                if !tx_batch.is_empty() {
+                    let before_routes = routing_plan_batch
+                        .iter()
+                        .map(|plan| {
+                            let route = plan.coordinator_route();
+                            (route.lane_id.as_u32(), route.dataspace_id.as_u64())
+                        })
+                        .collect::<Vec<_>>();
+                    let (state_height, refreshed) = {
+                        let state_view = self.state.view();
+                        let state_height = state_view.height();
+                        let refreshed = refresh_proposal_routing_from_state(
+                            &tx_batch,
+                            &mut routing_batch,
+                            &mut routing_plan_batch,
+                            &state_view,
+                            routing_ledger_time_ms,
+                        )?;
+                        (state_height, refreshed)
+                    };
+                    let after_routes = routing_plan_batch
+                        .iter()
+                        .map(|plan| {
+                            let route = plan.coordinator_route();
+                            (route.lane_id.as_u32(), route.dataspace_id.as_u64())
+                        })
+                        .collect::<Vec<_>>();
+                    info!(
+                        height = proposal_height,
+                        view,
+                        state_height,
+                        tx_count = tx_batch.len(),
+                        refreshed,
+                        before_routes = ?before_routes,
+                        after_routes = ?after_routes,
+                        "proposal routing resolved from committed Nexus state before execution context assembly"
+                    );
+                }
+
                 let native_amx_receipts = self
                     .native_amx_receipts_for_batch(&tx_batch, &routing_plan_batch, proposal_height)
                     .map_err(|reason| {
@@ -3366,10 +3485,11 @@ impl Actor {
                 let block_build_started_at = Instant::now();
                 let new_block = builder
                     .with_confidential_features(conf_features)
-                    .sign_with_index(
+                    .try_sign_with_index(
                         self.common_config.key_pair.private_key(),
                         u64::from(local_validator_index),
                     )
+                    .map_err(|err| eyre!("failed to sign proposed block: {err}"))?
                     .unpack(|event| self.emit_pipeline_event(event));
                 let signed_block: SignedBlock = new_block.into();
                 let built_height = signed_block.header().height().get();
@@ -3800,13 +3920,14 @@ impl Actor {
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
         let time_source = iroha_primitives::time::TimeSource::new_system();
-        let signed = crate::tx::build_heartbeat_transaction_with_time_source(
+        let signed = crate::tx::try_build_heartbeat_transaction_with_time_source(
             self.state.chain_id_ref().clone(),
             &self.common_config.key_pair,
             &tx_limits,
             proposal_height,
             &time_source,
-        );
+        )
+        .map_err(|err| eyre!("failed to sign recovery heartbeat transaction: {err}"))?;
         let crypto = self.state.crypto();
         AcceptedTransaction::accept_with_time_source(
             signed,
@@ -6730,8 +6851,8 @@ mod tests {
         ProposalBackpressure, cached_slot_timeout_hysteresis_remaining,
         canonicalize_parallel_batch_by_key, canonicalize_proposal_batch,
         canonicalize_proposal_batch_with_plans, consensus_queue_backpressure, da_payload_budget,
-        next_cached_slot_timeout_streak, trim_batch_for_size_cap,
-        trim_batch_for_size_cap_with_plans,
+        next_cached_slot_timeout_streak, refresh_proposal_routing_from_state,
+        trim_batch_for_size_cap, trim_batch_for_size_cap_with_plans,
     };
     use crate::queue::{BackpressureState, RoutingDecision, RoutingPlan};
     use crate::sumeragi::status;
@@ -6757,6 +6878,94 @@ mod tests {
             .sign(&private_key);
 
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
+    fn blank_state() -> crate::state::State {
+        let world = crate::state::World::default();
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        #[cfg(feature = "telemetry")]
+        {
+            let telemetry = crate::telemetry::StateTelemetry::default();
+            crate::state::State::with_telemetry(world, kura, query, telemetry)
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            crate::state::State::new(world, kura, query)
+        }
+    }
+
+    #[test]
+    fn refresh_proposal_routing_from_state_replaces_stale_vectors() {
+        let state = blank_state();
+        let tx_batch = vec![
+            accepted_log_transaction("refresh-route-a"),
+            accepted_log_transaction("refresh-route-b"),
+        ];
+        let stale_route = RoutingDecision::new(LaneId::new(7), DataSpaceId::new(7));
+        let mut routing_batch = vec![stale_route; tx_batch.len()];
+        let mut routing_plan_batch = vec![RoutingPlan::single(stale_route); tx_batch.len()];
+        let default_route = RoutingDecision::default();
+        let default_plan = RoutingPlan::single(default_route);
+
+        let changed = refresh_proposal_routing_from_state(
+            &tx_batch,
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &state.view(),
+            0,
+        )
+        .expect("refresh should use committed state routing");
+
+        assert!(changed, "stale route vectors should be replaced");
+        assert_eq!(routing_batch, vec![default_route; tx_batch.len()]);
+        assert_eq!(routing_plan_batch, vec![default_plan; tx_batch.len()]);
+
+        let changed_again = refresh_proposal_routing_from_state(
+            &tx_batch,
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &state.view(),
+            0,
+        )
+        .expect("second refresh should remain valid");
+
+        assert!(
+            !changed_again,
+            "already-current route vectors should not report another refresh"
+        );
+    }
+
+    #[test]
+    fn refresh_proposal_routing_from_state_rejects_vector_length_drift() {
+        let state = blank_state();
+        let tx_batch = vec![accepted_log_transaction("refresh-route-drift")];
+        let mut routing_batch = Vec::new();
+        let mut routing_plan_batch = vec![RoutingPlan::single(RoutingDecision::default())];
+
+        let err = refresh_proposal_routing_from_state(
+            &tx_batch,
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &state.view(),
+            0,
+        )
+        .expect_err("routing vector drift must fail closed");
+
+        assert!(
+            err.to_string()
+                .contains("proposal routing vector length mismatch"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            routing_batch.is_empty(),
+            "failed refresh must not mutate route vector"
+        );
+        assert_eq!(
+            routing_plan_batch,
+            vec![RoutingPlan::single(RoutingDecision::default())],
+            "failed refresh must not mutate plan vector"
+        );
     }
 
     #[test]

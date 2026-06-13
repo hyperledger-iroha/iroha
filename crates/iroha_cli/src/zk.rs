@@ -3251,6 +3251,65 @@ mod tests {
         }
     }
 
+    fn sample_prepared_vk_submission(
+        key_pair: &iroha_crypto::KeyPair,
+        name: &str,
+    ) -> PreparedVkSubmission {
+        use iroha::data_model::{account::AccountId, proof::VerifyingKeyRecord, zk::BackendTag};
+
+        let mut record = VerifyingKeyRecord::new_with_owner(
+            1,
+            "test-zk-vk-circuit-v1",
+            None,
+            "core",
+            BackendTag::Halo2IpaPasta,
+            "pasta",
+            [7_u8; 32],
+            [9_u8; 32],
+        );
+        record.vk_len = 32;
+        record.max_proof_bytes = 4096;
+
+        PreparedVkSubmission {
+            authority: AccountId::new(key_pair.public_key().clone()),
+            private_key: iroha_crypto::ExposedPrivateKey(key_pair.private_key().clone()),
+            id: iroha::data_model::proof::VerifyingKeyId::new("halo2/ipa", name),
+            record,
+        }
+    }
+
+    #[test]
+    fn vk_register_update_checked_transaction_helpers_verify() {
+        let key_pair = iroha_crypto::KeyPair::try_from_seed(
+            vec![71, 72, 73, 74],
+            iroha_crypto::Algorithm::Ed25519,
+        )
+        .expect("nonzero deterministic test key");
+        let chain = iroha::data_model::prelude::ChainId::from(
+            "00000000-0000-0000-0000-000000000000",
+        );
+
+        let register_tx = signed_vk_register_transaction(
+            chain.clone(),
+            iroha::data_model::prelude::Metadata::default(),
+            sample_prepared_vk_submission(&key_pair, "vk_register_checked"),
+        )
+        .expect("register transaction signs through checked helper");
+        register_tx
+            .verify_signature()
+            .expect("register transaction signature verifies");
+
+        let update_tx = signed_vk_update_transaction(
+            chain,
+            iroha::data_model::prelude::Metadata::default(),
+            sample_prepared_vk_submission(&key_pair, "vk_update_checked"),
+        )
+        .expect("update transaction signs through checked helper");
+        update_tx
+            .verify_signature()
+            .expect("update transaction signature verifies");
+    }
+
     #[test]
     fn encode_encrypted_payload_rejects_empty_ciphertext() {
         let epk = "07".repeat(32);
@@ -3448,6 +3507,44 @@ struct PreparedVkSubmission {
     record: iroha::data_model::proof::VerifyingKeyRecord,
 }
 
+fn signed_vk_register_transaction(
+    chain: iroha::data_model::prelude::ChainId,
+    metadata: iroha::data_model::prelude::Metadata,
+    prepared: PreparedVkSubmission,
+) -> Result<iroha::data_model::prelude::SignedTransaction> {
+    use iroha::data_model::{isi::verifying_keys, prelude::TransactionBuilder};
+
+    TransactionBuilder::new(chain, prepared.authority.into())
+        .with_metadata(metadata)
+        .with_instructions(core::iter::once(InstructionBox::from(
+            verifying_keys::RegisterVerifyingKey {
+                id: prepared.id,
+                record: prepared.record,
+            },
+        )))
+        .try_sign(&prepared.private_key.0)
+        .wrap_err("failed to sign VK register transaction")
+}
+
+fn signed_vk_update_transaction(
+    chain: iroha::data_model::prelude::ChainId,
+    metadata: iroha::data_model::prelude::Metadata,
+    prepared: PreparedVkSubmission,
+) -> Result<iroha::data_model::prelude::SignedTransaction> {
+    use iroha::data_model::{isi::verifying_keys, prelude::TransactionBuilder};
+
+    TransactionBuilder::new(chain, prepared.authority.into())
+        .with_metadata(metadata)
+        .with_instructions(core::iter::once(InstructionBox::from(
+            verifying_keys::UpdateVerifyingKey {
+                id: prepared.id,
+                record: prepared.record,
+            },
+        )))
+        .try_sign(&prepared.private_key.0)
+        .wrap_err("failed to sign VK update transaction")
+}
+
 fn parse_hex32_str(value: &str, field: &str) -> Result<[u8; 32]> {
     let trimmed = value.strip_prefix("0x").unwrap_or(value);
     let bytes = hex::decode(trimmed).wrap_err_with(|| format!("invalid {field}"))?;
@@ -3584,23 +3681,14 @@ fn load_vk_submission(path: &std::path::Path) -> Result<PreparedVkSubmission> {
 
 impl Run for VkRegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        use iroha::data_model::{isi::verifying_keys, prelude::TransactionBuilder};
-
         let client: Client = context.client_from_config();
         let prepared = load_vk_submission(&self.json)?;
         let metadata = context.transaction_metadata().cloned().unwrap_or_default();
-        let tx = TransactionBuilder::new(
+        let tx = signed_vk_register_transaction(
             context.config().chain.clone(),
-            prepared.authority.clone().into(),
-        )
-        .with_metadata(metadata)
-        .with_instructions(core::iter::once(InstructionBox::from(
-            verifying_keys::RegisterVerifyingKey {
-                id: prepared.id,
-                record: prepared.record,
-            },
-        )))
-        .sign(&prepared.private_key.0);
+            metadata,
+            prepared,
+        )?;
         let hash = tx.hash();
         client
             .submit_transaction(&tx)
@@ -3619,23 +3707,14 @@ pub struct VkUpdateArgs {
 
 impl Run for VkUpdateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        use iroha::data_model::{isi::verifying_keys, prelude::TransactionBuilder};
-
         let client: Client = context.client_from_config();
         let prepared = load_vk_submission(&self.json)?;
         let metadata = context.transaction_metadata().cloned().unwrap_or_default();
-        let tx = TransactionBuilder::new(
+        let tx = signed_vk_update_transaction(
             context.config().chain.clone(),
-            prepared.authority.clone().into(),
-        )
-        .with_metadata(metadata)
-        .with_instructions(core::iter::once(InstructionBox::from(
-            verifying_keys::UpdateVerifyingKey {
-                id: prepared.id,
-                record: prepared.record,
-            },
-        )))
-        .sign(&prepared.private_key.0);
+            metadata,
+            prepared,
+        )?;
         let hash = tx.hash();
         client
             .submit_transaction(&tx)

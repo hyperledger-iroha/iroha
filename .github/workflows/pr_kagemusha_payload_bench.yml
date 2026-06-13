@@ -56,6 +56,7 @@ on:
       - "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"
+      - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift"
       - "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift"
       - "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
@@ -85,10 +86,12 @@ on:
       - "IrohaSwift/Sources/IrohaSwift/OfflineQrStreamScan.swift"
       - "IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift"
       - "IrohaSwift/Sources/IrohaSwift/OfflineTransferDiagnostics.swift"
+      - "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift"
@@ -113,9 +116,13 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineRevocationBundleTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountIdLiteral.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/CanonicalRequestSigner.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/AccountAliasJsonParser.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractJsonParser.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierJsonParser.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/RamLfeJsonParser.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoder.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptVerifier.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClient.java"
@@ -133,6 +140,7 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/VerifyingKeyBoxCodec.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java"
@@ -156,7 +164,10 @@ on:
       - "kotlin/gradle/libs.versions.toml"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountIdLiteral.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/CanonicalRequestSigner.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AccountAliasJsonParser.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ContractJsonParser.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierJsonParser.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/RamLfeJsonParser.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptCanonicalEncoder.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptVerifier.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamClient.kt"
@@ -174,6 +185,7 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/VerifyingKeyBoxCodec.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
@@ -191,18 +203,27 @@ on:
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"
       - "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestCredentials.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestHeaders.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs"
       - "javascript/iroha_js/src/address.js"
       - "javascript/iroha_js/src/canonicalRequest.js"
@@ -240,6 +261,7 @@ on:
       - "javascript/iroha_js/test/package_dist.test.js"
       - "javascript/iroha_js/test/privacyNative.test.js"
       - "javascript/iroha_js/test/toriiClient.identifier.test.js"
+      - "javascript/iroha_js/test/toriiClient.ramLfe.test.js"
       - "javascript/iroha_js/test/toriiClient.test.js"
       - "python/iroha_python/src/iroha_python/__init__.py"
       - "python/iroha_python/src/iroha_python/_privacy_backends.py"
@@ -405,6 +427,11 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-kagemusha-instruction-transaction-builder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-lineage-key-package-binding
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-key-package-binding
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-cid1-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-canonical-request-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-identifier-receipt-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-transaction-builder-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-transaction-encoding-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-lineage-key-package-binding
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-witness-availability-probe
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-witness-append-availability-probe
@@ -454,6 +481,20 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-compact-projection-block-height-validation
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-spend-compact-projection-root-export
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-compact-projection-unsigned-block-height
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-claim-identifier-account-binding-test
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-claim-identifier-account-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-identifier-claim-record-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-swift-identifier-claim-record-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-ram-lfe-response-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-ram-lfe-program-policy-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-policy-proof-verifier-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-policy-metadata-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-account-alias-resolution-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-multisig-resolved-account-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-fail-closed
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-overmatch
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-override-binding
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-assembler-identity-fields
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-zero-envelope-pallas-guard
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-abi-probe-bounds
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-probe-rejection-shape
@@ -493,6 +534,9 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-policy-summary-id-exactness-guard
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-program-id-exactness-guard
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-account-id-exactness-guard
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-identifier-receipt-account-id-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-identifier-receipt-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-claim-identifier-account-binding
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-hash-exactness-guard
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-timestamp-exactness-guard
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-timestamp-u64-guard
@@ -547,6 +591,12 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-native-output-headers
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-native-input-headers
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-instruction-transaction-builder
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-identifier-receipt-account-id-decode-test
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-receive-success-preservation
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-receipt-ack-single-success
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-receipt-ack-read-single-success
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-emulation-progress-after-success
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-send-terminal-success-policy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-version-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-override-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-needs-workflow
@@ -561,6 +611,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-bridge-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-library-evidence-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-filter-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-verifier-backend-test-filter-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-workflow-inventory
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-archive-copy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-recursive-compact-verifier-unavailable
@@ -634,6 +685,16 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-path-canonical
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-release-apk-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-minimum-os
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-device-identity-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-identity-fields
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-partial-identity
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-partial-artifact-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-partial-core-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-incomplete-entry
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-slot-id
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-incomplete-slot-coverage
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-slot-summary-incomplete-kagemusha
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-duplicate-bindings-incomplete-slot-summary
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-abi6-probe-status-exactness
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-chain-binding
@@ -647,6 +708,15 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-unique-bindings
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-production-claim-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-complete-evidence
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-trusted-signer-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-zero-trusted-signer-digest
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-duplicate-binding-zero-digest
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-zero-sha256-placeholders
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-source-zero-sha256-placeholders
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-trusted-signer-map-path-type
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-trusted-signer-map-container
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-trusted-signer-map-mixed-key-sort
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-aliases
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-is-dir-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-metadata-failure
@@ -921,6 +991,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-directory-collision
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-entry-cap
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-slot-required
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-chain-digest-required
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-challenge-digest-required
@@ -928,7 +1000,15 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-identity-strings
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-sdk-digests
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-strongbox-levels
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-blank-serial
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-signature-required
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-family-override-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-device-identity-fields
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-identity-fallback
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-blank-source-identity
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-blank-identity-override
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-identity-conflict
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-override-source-identity-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-open-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-root-path-aliases
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-path-aliases
@@ -962,7 +1042,9 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-rollup
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-rollup-path-safety
+          ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-trusted-signer-sanitization
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-android-report-secret-redaction
+          ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-android-zero-binding-digest
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-repo-root-aliases
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-repo-root-direct-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-repo-root-metadata-failure
@@ -1032,6 +1114,13 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-section-schema
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-summary-schema
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-value-inventory
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-blocked-manifest-trusted-signer-sanitization
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-identity
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-summary-identity
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-identity-drift
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-identity-drift
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-manifest-android-signed-evidence-identity-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-inventory-schema
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-inventory-keysets
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-section-schema
@@ -1140,10 +1229,17 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-execution-log-sha256
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-execution-log-sha256
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-execution-log-sha256
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-execution-elapsed-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-replace-conflict
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-resume-replace-conflict
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-exit-marker
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-exit-marker
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-timestamp-raw
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-timestamp-raw
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-future-skew
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-future-skew
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-readback
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-readback
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-rollback-identity

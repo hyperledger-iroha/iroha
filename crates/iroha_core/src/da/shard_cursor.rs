@@ -446,7 +446,7 @@ impl DaShardCursorJournal {
                         Some(tmp_persisted)
                     }
                     JournalRelation::Equal | JournalRelation::CandidateBehind => {
-                        Self::remove_temp(&tmp_path);
+                        Self::remove_temp(&tmp_path)?;
                         Some(persisted)
                     }
                     JournalRelation::Conflicting => {
@@ -454,7 +454,7 @@ impl DaShardCursorJournal {
                             path = %tmp_path.display(),
                             "discarding conflicting DA shard cursor journal temp file"
                         );
-                        Self::remove_temp(&tmp_path);
+                        Self::remove_temp(&tmp_path)?;
                         Some(persisted)
                     }
                 },
@@ -465,7 +465,7 @@ impl DaShardCursorJournal {
                         path = %tmp_path.display(),
                         "discarding unreadable DA shard cursor journal temp file"
                     );
-                    Self::remove_temp(&tmp_path);
+                    Self::remove_temp(&tmp_path)?;
                     Some(persisted)
                 }
             },
@@ -481,8 +481,7 @@ impl DaShardCursorJournal {
                         path = %tmp_path.display(),
                         "failed to read DA shard cursor journal temp file"
                     );
-                    let _ = fs::remove_file(&tmp_path);
-                    None
+                    return Err(err);
                 }
             },
             Err(err) => match Self::read_persisted(&tmp_path) {
@@ -813,17 +812,14 @@ impl DaShardCursorJournal {
         entries
     }
 
-    fn remove_temp(tmp_path: &Path) {
+    fn remove_temp(tmp_path: &Path) -> Result<(), ShardCursorJournalError> {
         match fs::remove_file(tmp_path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %tmp_path.display(),
-                    "failed to remove DA shard cursor journal temp file"
-                );
-            }
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(ShardCursorJournalError::Write {
+                path: tmp_path.to_path_buf(),
+                source,
+            }),
         }
     }
 
@@ -1327,6 +1323,53 @@ mod tests {
         assert_eq!(
             (cursor.epoch, cursor.sequence, cursor.last_block_height),
             (1, 2, 1)
+        );
+    }
+
+    #[test]
+    fn journal_load_rejects_orphan_corrupt_temp_file() {
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let tmp_path = DaShardCursorJournal::temp_path(&path);
+        fs::write(&tmp_path, b"corrupt").expect("write corrupt temp");
+
+        let err = DaShardCursorJournal::load(&config, path)
+            .expect_err("orphan corrupt temp journal should fail closed");
+
+        match err {
+            ShardCursorJournalError::Decode { path: err_path, .. } => {
+                assert_eq!(err_path, tmp_path)
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            tmp_path.exists(),
+            "orphan corrupt temp journal should remain visible for operator repair"
+        );
+    }
+
+    #[test]
+    fn journal_load_rejects_unremovable_bad_temp_when_main_valid() {
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let tmp_path = DaShardCursorJournal::temp_path(&path);
+        write_journal_payload(&path, vec![journal_entry(0, 0, 1, 2, 1)]);
+        fs::create_dir(&tmp_path).expect("block temp cleanup");
+
+        let err = DaShardCursorJournal::load(&config, path)
+            .expect_err("unremovable bad temp journal should fail closed");
+
+        match err {
+            ShardCursorJournalError::Write { path: err_path, .. } => {
+                assert_eq!(err_path, tmp_path)
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            tmp_path.exists(),
+            "failed temp cleanup should leave path visible for operator repair"
         );
     }
 

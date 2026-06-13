@@ -4825,6 +4825,14 @@ test("EthereumMainnetSccp rejects unsafe native EVM prover bundle manifests", ()
     () =>
       validateEthereumMainnetNativeEvmProverBundle({
         ...bundle,
+        proof_artifact: "artifacts/eth-mainnet/%2e%2e/proof-artifact.r1cs",
+      }),
+    /proofArtifact must not contain percent-encoded path segments/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
         proof_artifact: "artifacts/ethereum-mainnet/fixtures/proof-artifact.r1cs",
       }),
     /proofArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
@@ -4959,6 +4967,22 @@ test("EthereumMainnetSccp rejects unsafe native EVM prover bundle manifests", ()
         ),
       }),
     /implementationArtifact must be a relative POSIX path/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        native_sdk_artifacts: bundle.native_sdk_artifacts.map((artifact) =>
+          artifact.sdk === "javascript"
+            ? {
+                ...artifact,
+                implementation_artifact:
+                  "artifacts/eth-mainnet/javascript%2fimplementation.bin",
+              }
+            : artifact,
+        ),
+      }),
+    /nativeSdkArtifacts\[0\]\.implementationArtifact must not contain percent-encoded path segments/u,
   );
   assert.throws(
     () =>

@@ -177,6 +177,56 @@ def test_eth_address_parser_rejects_zero_and_wrong_width(tmp_path):
         raise AssertionError("short ETH bridge address was accepted")
 
 
+def test_eth_source_bridge_direct_parsers_redact_parser_causes(tmp_path):
+    module = load_evidence_module()
+
+    fixed_payload = "secret-token-eth-source-hex"
+    try:
+        module.parse_hex_bytes(
+            "0x" + fixed_payload + ("a" * (64 - len(fixed_payload))),
+            label="source trust anchor hash",
+            byte_length=32,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "source trust anchor hash must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret ETH source bridge fixed hex was accepted")
+
+    runtime_payload = "secret-token-eth-source-runtime0"
+    try:
+        module.parse_runtime_bytecode_hex(
+            "0x" + runtime_payload,
+            label="source bridge runtime bytecode",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "source bridge runtime bytecode must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret ETH source bridge runtime hex was accepted")
+
+    secret_path = tmp_path / "secret-token-eth-source-file-path.hex"
+    try:
+        module.parse_runtime_bytecode_file(
+            str(secret_path),
+            label="source bridge runtime bytecode",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "source bridge runtime bytecode file cannot be read"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("missing secret ETH source bridge runtime file was accepted")
+
+
 def test_eth_hash_parser_rejects_zero_and_wrong_width():
     module = load_evidence_module()
 
@@ -465,6 +515,10 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
         in rendered
     )
     assert 'deployment_receipt_hash = "0x' + "aa" * 32 + '"' in rendered
+    assert (
+        'evm_source_gate_hash = "0x' + module.eth_source_gate_hash(args).hex() + '"'
+        in rendered
+    )
     assert (
         'source_bridge_network_id = "0x'
         + module.eth_source_bridge_network_id().hex()

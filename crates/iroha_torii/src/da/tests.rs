@@ -233,7 +233,7 @@ fn load_pdp_commitment_from_spool_locates_ticket() {
 }
 
 #[test]
-fn load_manifest_from_spool_ignores_malformed_ticket_match() {
+fn load_manifest_from_spool_rejects_malformed_ticket_match() {
     let dir = tempdir().expect("dir");
     let ticket = StorageTicketId::new([0x77; 32]);
     let ticket_hex = hex::encode(ticket.as_bytes());
@@ -243,9 +243,36 @@ fn load_manifest_from_spool_ignores_malformed_ticket_match() {
     fs::write(&path, b"manifest-bytes").expect("manifest file");
 
     let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
-        .expect_err("malformed filename should not match");
+        .expect_err("malformed filename should fail closed");
 
-    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string()
+            .contains("malformed spool artifact filename"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn load_manifest_from_spool_rejects_manifest_shaped_directory() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x77; 32]);
+    let path = dir.path().join(spool_artifact_file_name(
+        "manifest-",
+        &ticket,
+        2,
+        [0x44; 32],
+    ));
+    fs::create_dir(path).expect("create manifest-shaped directory");
+
+    let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
+        .expect_err("manifest-shaped directory must fail closed");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("is not a regular file"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -346,6 +373,49 @@ fn load_pdp_commitment_from_spool_rejects_duplicate_ticket_matches() {
 }
 
 #[test]
+fn load_pdp_commitment_from_spool_rejects_malformed_ticket_match() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x99; 32]);
+    let ticket_hex = hex::encode(ticket.as_bytes());
+    let path = dir.path().join(format!(
+        "pdp-commitment-00000001-0000000000000001-0000000000000002-{ticket_hex}-deadbeef.norito"
+    ));
+    fs::write(path, b"commitment").expect("commitment file");
+
+    let err = persistence::load_pdp_commitment_from_spool(dir.path(), &ticket)
+        .expect_err("malformed filename should fail closed");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string()
+            .contains("malformed spool artifact filename"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn load_pdp_commitment_from_spool_rejects_commitment_shaped_directory() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x99; 32]);
+    let path = dir.path().join(spool_artifact_file_name(
+        "pdp-commitment-",
+        &ticket,
+        2,
+        [0x55; 32],
+    ));
+    fs::create_dir(path).expect("create PDP-shaped directory");
+
+    let err = persistence::load_pdp_commitment_from_spool(dir.path(), &ticket)
+        .expect_err("PDP-shaped directory must fail closed");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("is not a regular file"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn load_pdp_commitment_from_spool_rejects_invalid_body() {
     let dir = tempdir().expect("dir");
     let ticket = StorageTicketId::new([0x99; 32]);
@@ -376,6 +446,85 @@ fn pdp_commitment_header_value_matches_base64_payload() {
     let header_value = pdp_commitment_header_value(&bytes).expect("header value");
     let expected = BASE64.encode(bytes);
     assert_eq!(header_value.to_str().expect("utf8 header"), expected);
+}
+
+#[test]
+fn manifest_response_pdp_header_is_optional_when_missing() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x91; 32]);
+    let response =
+        utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
+
+    let response = attach_pdp_commitment_header_from_spool(
+        dir.path(),
+        &ticket,
+        response,
+        ResponseFormat::Json,
+    )
+    .expect("missing PDP commitment should remain optional");
+
+    assert!(
+        !response
+            .headers()
+            .contains_key(HeaderName::from_static(HEADER_SORA_PDP_COMMITMENT)),
+        "missing PDP commitment must not attach a header"
+    );
+}
+
+#[test]
+fn manifest_response_attaches_pdp_commitment_header() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x92; 32]);
+    let commitment = sample_pdp_commitment_for_tests();
+    let bytes = encode_pdp_commitment_bytes(&commitment).expect("encode commitment");
+    let path = dir.path().join(spool_artifact_file_name(
+        "pdp-commitment-",
+        &ticket,
+        2,
+        [0x57; 32],
+    ));
+    fs::write(&path, &bytes).expect("commitment file");
+    let response =
+        utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
+
+    let response = attach_pdp_commitment_header_from_spool(
+        dir.path(),
+        &ticket,
+        response,
+        ResponseFormat::Json,
+    )
+    .expect("valid PDP commitment should attach");
+
+    let header = response
+        .headers()
+        .get(HeaderName::from_static(HEADER_SORA_PDP_COMMITMENT))
+        .expect("PDP commitment header");
+    assert_eq!(header.to_str().expect("header utf8"), BASE64.encode(bytes));
+}
+
+#[test]
+fn manifest_response_rejects_corrupt_pdp_commitment_sidecar() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x93; 32]);
+    let path = dir.path().join(spool_artifact_file_name(
+        "pdp-commitment-",
+        &ticket,
+        2,
+        [0x58; 32],
+    ));
+    fs::write(&path, b"not a PDP commitment").expect("commitment file");
+    let response =
+        utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
+
+    let err = attach_pdp_commitment_header_from_spool(
+        dir.path(),
+        &ticket,
+        response,
+        ResponseFormat::Json,
+    )
+    .expect_err("corrupt PDP commitment should fail manifest response");
+    let response = axum::response::IntoResponse::into_response(err);
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 fn taikai_metadata() -> ExtraMetadata {
@@ -1499,7 +1648,7 @@ async fn taikai_anchor_processing_generates_payload_and_sentinel() {
 }
 
 #[tokio::test]
-async fn taikai_anchor_collection_skips_malformed_base_id() {
+async fn taikai_anchor_collection_rejects_malformed_base_id() {
     let dir = tempdir().expect("tempdir");
     let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
     async_fs::create_dir_all(&spool_dir)
@@ -1526,13 +1675,104 @@ async fn taikai_anchor_collection_skips_malformed_base_id() {
     .await
     .expect("write ssm");
 
-    let pending = collect_pending_uploads(&spool_dir)
-        .await
-        .expect("collect pending");
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("malformed base id must reject anchor collection"),
+        Err(err) => err,
+    };
 
     assert!(
-        pending.is_empty(),
-        "malformed base id must not produce an anchor upload"
+        err.contains("malformed spool artifact id"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(base_id),
+        "error should identify malformed base id: {err}"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_collection_rejects_missing_required_artifacts() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    async_fs::create_dir_all(&spool_dir)
+        .await
+        .expect("create spool");
+    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    async_fs::write(
+        spool_dir.join(format!("taikai-envelope-{base_id}.norito")),
+        b"envelope-bytes",
+    )
+    .await
+    .expect("write envelope");
+
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("missing required companion artifact must reject anchor collection"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.contains("failed to read Taikai indexes JSON"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(base_id),
+        "error should identify affected base id: {err}"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_collection_rejects_corrupt_indexes_json() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    async_fs::write(
+        spool_dir.join(format!("taikai-indexes-{base_id}.json")),
+        b"{not-json",
+    )
+    .await
+    .expect("write corrupt indexes");
+
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("corrupt indexes JSON must reject anchor collection"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.contains("failed to parse Taikai indexes JSON"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(base_id),
+        "error should identify affected base id: {err}"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_collection_rejects_corrupt_lineage_hint() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    async_fs::write(
+        spool_dir.join(format!("taikai-lineage-{base_id}.json")),
+        b"{not-json",
+    )
+    .await
+    .expect("write corrupt lineage");
+
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("corrupt lineage hint must reject anchor collection"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.contains("failed to parse Taikai lineage hint JSON"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(base_id),
+        "error should identify affected base id: {err}"
     );
 }
 
@@ -3319,6 +3559,57 @@ fn load_da_receipts_rejects_filename_ticket_mismatch() {
 }
 
 #[test]
+fn load_da_receipts_rejects_receipt_shaped_directory() {
+    let temp_dir = tempdir().expect("temp dir");
+    let manifest_dir = temp_dir.path();
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xAE);
+    let path = manifest_dir.join(receipt_spool_file_name(&receipt, 7, [0xBE; 32]));
+    fs::create_dir(&path).expect("create receipt-shaped directory");
+
+    let err = persistence::load_da_receipts(manifest_dir)
+        .expect_err("receipt-shaped directory must reject receipt loading");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("failed to load DA receipt"),
+        "unexpected receipt load error: {err}"
+    );
+}
+
+#[test]
+fn load_da_receipts_rejects_same_manifest_duplicate_with_different_receipt() {
+    let temp_dir = tempdir().expect("temp dir");
+    let manifest_dir = temp_dir.path();
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xAF);
+    let mut conflicting = test_receipt(&signer, LaneId::new(3), 5, 7, 0xB0);
+    conflicting.manifest_hash = receipt.manifest_hash;
+    let unsigned = persistence::unsigned_receipt_bytes(&conflicting, 7).expect("unsigned bytes");
+    conflicting.operator_signature = Signature::new(signer.private_key(), &unsigned);
+
+    for (receipt, fingerprint) in [(&receipt, [0xC0; 32]), (&conflicting, [0xC1; 32])] {
+        let stored = persistence::StoredDaReceipt {
+            version: persistence::STORED_RECEIPT_VERSION,
+            sequence: 7,
+            receipt: receipt.clone(),
+        };
+        let bytes = to_bytes(&stored).expect("encode receipt");
+        let path = manifest_dir.join(receipt_spool_file_name(receipt, 7, fingerprint));
+        fs::write(path, bytes).expect("write duplicate receipt");
+    }
+
+    let err = persistence::load_da_receipts(manifest_dir)
+        .expect_err("conflicting duplicate receipts must reject the receipt load");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("conflicting duplicate DA receipt"),
+        "unexpected receipt load error: {err}"
+    );
+}
+
+#[test]
 fn da_receipt_log_enforces_ordering_and_dedupe() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 9);
@@ -3477,6 +3768,50 @@ fn da_receipt_log_reloads_from_disk() {
 }
 
 #[test]
+fn da_receipt_log_rejects_same_manifest_duplicate_with_different_receipt_on_open() {
+    let temp_dir = tempdir().expect("temp dir");
+    let lane_epoch = LaneEpoch::new(LaneId::new(6), 16);
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x91);
+    let mut conflicting = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x92);
+    conflicting.manifest_hash = receipt.manifest_hash;
+    let unsigned = persistence::unsigned_receipt_bytes(&conflicting, 1).expect("unsigned bytes");
+    conflicting.operator_signature = Signature::new(signer.private_key(), &unsigned);
+
+    for (receipt, fingerprint) in [(&receipt, [0xA1; 32]), (&conflicting, [0xA2; 32])] {
+        let stored = persistence::StoredDaReceipt {
+            version: persistence::STORED_RECEIPT_VERSION,
+            sequence: 1,
+            receipt: receipt.clone(),
+        };
+        let bytes = to_bytes(&stored).expect("encode receipt");
+        let path = temp_dir
+            .path()
+            .join(receipt_spool_file_name(receipt, 1, fingerprint));
+        fs::write(path, bytes).expect("write duplicate receipt");
+    }
+
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let err = match DaReceiptLog::open(
+        temp_dir.path().to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    ) {
+        Ok(_) => panic!("conflicting duplicate receipt must reject receipt-log recovery"),
+        Err(err) => err,
+    };
+
+    assert!(
+        format!("{err:?}").contains("conflicting duplicate receipt"),
+        "unexpected receipt-log recovery error: {err:?}"
+    );
+    assert!(
+        cursor_store.highest_sequences().is_empty(),
+        "conflicting duplicate receipts must not seed replay cursors"
+    );
+}
+
+#[test]
 fn da_receipt_log_rejects_sequence_rebound_signature_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 13);
@@ -3536,6 +3871,36 @@ fn da_receipt_log_rejects_invalid_entries_on_open() {
     assert!(
         format!("{err:?}").contains("failed to load durable DA receipt"),
         "unexpected receipt-log recovery error: {err:?}"
+    );
+}
+
+#[test]
+fn da_receipt_log_rejects_receipt_shaped_directory_on_open() {
+    let temp_dir = tempdir().expect("temp dir");
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, LaneId::new(1), 1, 1, 0xAB);
+    let path = temp_dir
+        .path()
+        .join(receipt_spool_file_name(&receipt, 1, [0xDE; 32]));
+    fs::create_dir(&path).expect("create receipt-shaped directory");
+
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let err = match DaReceiptLog::open(
+        temp_dir.path().to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    ) {
+        Ok(_) => panic!("receipt-shaped directory must reject receipt-log recovery"),
+        Err(err) => err,
+    };
+
+    assert!(
+        format!("{err:?}").contains("is not a regular file"),
+        "unexpected receipt-log recovery error: {err:?}"
+    );
+    assert!(
+        cursor_store.highest_sequences().is_empty(),
+        "receipt-shaped directories must not seed replay cursors"
     );
 }
 
@@ -3821,6 +4186,60 @@ fn replay_cursor_store_open_removes_corrupt_temp_snapshot() {
         "corrupt temp snapshot should be removed"
     );
     assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
+}
+
+#[test]
+fn replay_cursor_store_open_rejects_unremovable_corrupt_temp_snapshot() {
+    let temp = tempdir().expect("tempdir");
+    let main_path = replay_cursor_main_path(temp.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    fs::write(
+        &main_path,
+        replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]),
+    )
+    .expect("write main snapshot");
+    fs::create_dir(&tmp_path).expect("block corrupt temp snapshot cleanup");
+
+    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+        Ok(_) => panic!("unremovable corrupt temp snapshot should reject recovery"),
+        Err(err) => err,
+    };
+
+    assert!(
+        format!("{err:?}").contains("failed to remove DA replay cursor temp snapshot"),
+        "unexpected error: {err:?}"
+    );
+    assert!(
+        tmp_path.exists(),
+        "failed cleanup should leave temp path visible for operator repair"
+    );
+}
+
+#[test]
+fn replay_cursor_store_open_rejects_orphan_corrupt_temp_snapshot() {
+    let temp = tempdir().expect("tempdir");
+    let main_path = replay_cursor_main_path(temp.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    fs::write(&tmp_path, b"corrupt").expect("write corrupt temp snapshot");
+
+    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+        Ok(_) => panic!("orphan corrupt temp snapshot should be rejected"),
+        Err(err) => err,
+    };
+
+    assert!(
+        format!("{err:?}").contains("failed to decode DA replay snapshot"),
+        "unexpected error: {err:?}"
+    );
+    assert!(
+        tmp_path.exists(),
+        "orphan corrupt temp snapshot should remain for operator inspection"
+    );
+    assert!(
+        !main_path.exists(),
+        "corrupt temp snapshot must not be promoted into the main cursor path"
+    );
 }
 
 #[test]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import gzip
 import hashlib
 import importlib.util
@@ -872,6 +873,66 @@ def write_wallet_integrity_transcript(
     return transcript_path, digest
 
 
+DEVICE_IDENTITY_BY_FAMILY: dict[str, tuple[str, str]] = {
+    "Google Pixel 6 / 6a": ("Pixel 6", "oriole"),
+    "Google Pixel 7 / 7 Pro": ("Pixel 7", "panther"),
+    "Google Pixel 8 / 8a / 8 Pro": ("Pixel 8", "shiba"),
+    "Google Pixel Fold / Tablet": ("Pixel Fold", "felix"),
+    "Samsung Galaxy S23": ("SM-S911B", "dm1q"),
+    "Samsung Galaxy S24": ("SM-S921B", "e1q"),
+}
+
+
+def device_identity_for_family(family: str) -> tuple[str, str]:
+    identity = DEVICE_IDENTITY_BY_FAMILY.get(family)
+    if identity is None:
+        raise AssertionError(f"missing test device identity for {family}")
+    return identity
+
+
+def summary_release_report(
+    slot="slot-0",
+    family=None,
+    *,
+    device_fingerprint_sha256=None,
+    attestation_challenge_sha256=None,
+    signed_at_utc="2026-06-06T00:00:00Z",
+):
+    family = family or device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+    device_model, device_codename = device_identity_for_family(family)
+    return {
+        "slot": slot,
+        "status": "ok",
+        "errors": [],
+        "kagemusha": {
+            "required": True,
+            "device_family": family,
+            "device_model": device_model,
+            "device_codename": device_codename,
+            "native_bridge_abi_version": (
+                device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION
+            ),
+            "signed_at_utc": signed_at_utc,
+            "signed_evidence_artifact_sha256": "3" * 64,
+            "signed_evidence_signer_public_key_sha256": "4" * 64,
+            "device_fingerprint_sha256": device_fingerprint_sha256 or "a" * 64,
+            "attestation_challenge_sha256": (
+                attestation_challenge_sha256 or "b" * 64
+            ),
+            "attestation_certificate_chain_path": (
+                "attestation/keymint-certificate-chain.pem"
+            ),
+            "attestation_certificate_chain_sha256": "5" * 64,
+            "offline_wallet_apk_path": "evidence/offline-wallet-release.apk",
+            "offline_wallet_apk_sha256": "6" * 64,
+            "d2d_payment_transcript_path": "handoff/d2d-payment.json",
+            "d2d_payment_transcript_sha256": "7" * 64,
+            "wallet_integrity_transcript_path": "wallet/integrity.json",
+            "wallet_integrity_transcript_sha256": "8" * 64,
+        },
+    }
+
+
 def create_slot(
     root: Path,
     name: str,
@@ -879,6 +940,8 @@ def create_slot(
     signer: dict[str, Path | str] | None = None,
 ) -> Path:
     slot = root / name
+    slot_family = family or device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+    device_model, device_codename = device_identity_for_family(slot_family)
     device_fingerprint = f"{name}/fingerprint"
     os_build_id = f"{name}-build"
     app_package_name = "org.hyperledger.iroha.android.offlinewallet"
@@ -918,8 +981,8 @@ def create_slot(
             "schema_version": 1,
             "slot_id": name,
             "suite": "kagemusha-device-lab",
-            "device_model": "Pixel 8",
-            "device_codename": "husky",
+            "device_model": device_model,
+            "device_codename": device_codename,
             "app_package_name": app_package_name,
         },
     )
@@ -988,7 +1051,7 @@ def create_slot(
         write_d2d_payment_transcript(
             slot,
             name,
-            family or device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+            slot_family,
             device_fingerprint=device_fingerprint,
             os_build_id=os_build_id,
             app_package_name=app_package_name,
@@ -1002,7 +1065,7 @@ def create_slot(
         write_wallet_integrity_transcript(
             slot,
             name,
-            family or device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+            slot_family,
             device_fingerprint=device_fingerprint,
             os_build_id=os_build_id,
             app_package_name=app_package_name,
@@ -1026,6 +1089,8 @@ def create_slot(
                     "schema": device_lab.SIGNED_EVIDENCE_SCHEMA,
                     "slot_id": name,
                     "device_family": family,
+                    "device_model": device_model,
+                    "device_codename": device_codename,
                     "device_fingerprint": device_fingerprint,
                     "os_build_id": os_build_id,
                     "minimum_os": minimum_os,
@@ -1067,6 +1132,8 @@ def create_slot(
                 "schema": "iroha.android.device_lab.kagemusha.v1",
                 "slot_id": name,
                 "device_family": family,
+                "device_model": device_model,
+                "device_codename": device_codename,
                 "device_fingerprint": device_fingerprint,
                 "os_build_id": os_build_id,
                 "minimum_os": minimum_os,
@@ -1165,6 +1232,13 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
     raw_test_commands = list(KAGEMUSHA_ANDROID_RAW_TEST_COMMANDS)
     offline_wallet_apk_path = "evidence/offline-wallet-release.apk"
     app_package_name = "org.hyperledger.iroha.android.offlinewallet"
+    device_model, device_codename = device_identity_for_family(family)
+    telemetry_path = slot / "telemetry" / "telemetry.json"
+    telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+    telemetry["device_model"] = device_model
+    telemetry["device_codename"] = device_codename
+    telemetry["app_package_name"] = app_package_name
+    write_json(telemetry_path, telemetry)
     app_signing_certificate_sha256 = hashlib.sha256(
         f"{name}:app-signing-certificate".encode("utf-8")
     ).hexdigest()
@@ -1217,6 +1291,8 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
             "schema": "iroha.android.device_lab.kagemusha.v1",
             "slot_id": name,
             "device_family": family,
+            "device_model": device_model,
+            "device_codename": device_codename,
             "device_fingerprint": f"{name}/fingerprint",
             "os_build_id": f"{name}-build",
             "minimum_os": device_lab.KAGEMUSHA_STANDARD_DEVICE_MINIMUM_OS[family],
@@ -1328,6 +1404,8 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             slot_id="pixel6",
             family=family,
             facts={
+                "device_model": "Pixel 6",
+                "device_codename": "oriole",
                 "device_fingerprint": "google/oriole/oriole:16/test:user/release-keys",
                 "os_build_id": "TEST.1",
             },
@@ -1367,6 +1445,8 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 slot_id="pixel6",
                 family=family,
                 facts={
+                    "device_model": "Pixel 6",
+                    "device_codename": "oriole",
                     "device_fingerprint": "google/oriole/oriole:16/test:user/release-keys",
                     "os_build_id": "TEST.1",
                 },
@@ -1388,6 +1468,74 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 wallet_integrity_transcript_sha256="6" * 64,
                 raw_test_commands=[],
             )
+
+    def test_kagemusha_slot_metadata_rejects_zero_sha256_placeholders(self) -> None:
+        family = device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+        base_kwargs = {
+            "slot_id": "pixel6",
+            "family": family,
+            "facts": {
+                "device_model": "Pixel 6",
+                "device_codename": "oriole",
+                "device_fingerprint": "google/oriole/oriole:16/test:user/release-keys",
+                "os_build_id": "TEST.1",
+            },
+            "attestation_result": {
+                "app_signing_certificate_sha256": "1" * 64,
+                "attestation_challenge_sha256": "2" * 64,
+                "offline_wallet_policy_sha256": "7" * 64,
+                "strongbox_attestation": True,
+                "physical_device_attestation": True,
+                "keymint_security_level": "STRONGBOX",
+            },
+            "attestation_chain_path": "attestation/keymint-certificate-chain.pem",
+            "attestation_chain_sha256": "3" * 64,
+            "offline_wallet_apk_sha256": "4" * 64,
+            "d2d_payment_transcript_sha256": "5" * 64,
+            "wallet_integrity_transcript": {
+                "one_use_key_rotation_passed": True,
+                "rollback_rejection_passed": True,
+            },
+            "wallet_integrity_transcript_sha256": "6" * 64,
+            "raw_test_commands": [],
+        }
+        cases = (
+            (
+                "attestation_result.app_signing_certificate_sha256",
+                "attestation_result app_signing_certificate_sha256",
+            ),
+            (
+                "attestation_result.attestation_challenge_sha256",
+                "attestation_result attestation_challenge_sha256",
+            ),
+            (
+                "attestation_result.offline_wallet_policy_sha256",
+                "attestation_result offline_wallet_policy_sha256",
+            ),
+            (
+                "attestation_chain_sha256",
+                "attestation_certificate_chain_sha256",
+            ),
+            ("offline_wallet_apk_sha256", "offline_wallet_apk_sha256"),
+            ("d2d_payment_transcript_sha256", "d2d_payment_transcript_sha256"),
+            (
+                "wallet_integrity_transcript_sha256",
+                "wallet_integrity_transcript_sha256",
+            ),
+        )
+        for field, label in cases:
+            with self.subTest(field=field):
+                kwargs = copy.deepcopy(base_kwargs)
+                if field.startswith("attestation_result."):
+                    _, key = field.split(".", 1)
+                    kwargs["attestation_result"][key] = "0" * 64
+                else:
+                    kwargs[field] = "0" * 64
+                with self.assertRaisesRegex(
+                    ValueError,
+                    f"{label} must be non-zero lowercase sha256 hex",
+                ):
+                    slot_assembler.build_slot_metadata(**kwargs)
 
     def test_kagemusha_slot_assembler_builds_signed_production_slot(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1758,6 +1906,151 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertFalse((slot_root / "pixel6").exists())
 
+    def test_kagemusha_slot_assembler_infers_only_standard_device_families(
+        self,
+    ) -> None:
+        exact_cases = (
+            ("Pixel 6", "oriole", "Google Pixel 6 / 6a"),
+            ("Pixel 6a", "bluejay", "Google Pixel 6 / 6a"),
+            ("Pixel 7", "panther", "Google Pixel 7 / 7 Pro"),
+            ("Pixel 7 Pro", "cheetah", "Google Pixel 7 / 7 Pro"),
+            ("Pixel 8", "shiba", "Google Pixel 8 / 8a / 8 Pro"),
+            ("Pixel 8a", "akita", "Google Pixel 8 / 8a / 8 Pro"),
+            ("Pixel 8 Pro", "husky", "Google Pixel 8 / 8a / 8 Pro"),
+            ("Pixel Fold", "felix", "Google Pixel Fold / Tablet"),
+            ("Pixel Tablet", "tangorpro", "Google Pixel Fold / Tablet"),
+            ("SM-S911B", "dm1q", "Samsung Galaxy S23"),
+            ("SM-S916U", "dm2q", "Samsung Galaxy S23"),
+            ("SM-S918B", "dm3q", "Samsung Galaxy S23"),
+            ("SM-S921B", "e1q", "Samsung Galaxy S24"),
+            ("SM-S926U", "e2q", "Samsung Galaxy S24"),
+            ("SM-S928B", "e3q", "Samsung Galaxy S24"),
+        )
+        for model, codename, family in exact_cases:
+            with self.subTest(model=model, codename=codename):
+                self.assertEqual(
+                    slot_assembler.infer_device_family(model, codename),
+                    family,
+                )
+
+        rejected_cases = (
+            ("Pixel 6 Pro", "raven"),
+            ("Pixel 6 Pro", "oriole"),
+            ("Pixel 6", "raven"),
+            ("Pixel 7a", "lynx"),
+            ("Galaxy S23 FE", "dm1q"),
+            ("Galaxy S23 FE", "r11q"),
+            ("SM-S911B", "r11q"),
+            ("SM-S711B", "r11q"),
+            (" Pixel 6 ", ""),
+            ("Pixel 6", "cheetah"),
+            ("Pixel 8 Pro", "panther"),
+        )
+        for model, codename in rejected_cases:
+            with self.subTest(model=model, codename=codename):
+                self.assertIsNone(
+                    slot_assembler.infer_device_family(model, codename)
+                )
+
+    def test_kagemusha_slot_assembler_rejects_family_override_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            slot_root = Path(temp) / "device-lab"
+            args = slot_assembler_args(
+                slot_root=slot_root,
+                source_slot=source_slot,
+                signer=signer,
+            )
+            args[args.index("--device-family") + 1] = (
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1]
+            )
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "device family must match attached device model/codename",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_family_override_for_near_match(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            slot_root = Path(temp) / "device-lab"
+            args = slot_assembler_args(
+                slot_root=slot_root,
+                source_slot=source_slot,
+                signer=signer,
+            )
+            args[args.index("--device-model") + 1] = "Pixel 6 Pro"
+            args[args.index("--device-codename") + 1] = "raven"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "device_model override must match captured source identity",
+            stderr.getvalue(),
+        )
+        self.assertIn(
+            "device_codename override must match captured source identity",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_conflicting_model_codename(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            slot_root = Path(temp) / "device-lab"
+            args = slot_assembler_args(
+                slot_root=slot_root,
+                source_slot=source_slot,
+                signer=signer,
+            )
+            args[args.index("--device-model") + 1] = "Pixel 6"
+            args[args.index("--device-codename") + 1] = "cheetah"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = slot_assembler.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "device family must match attached device model/codename",
+            stderr.getvalue(),
+        )
+        self.assertFalse((slot_root / "pixel6").exists())
+
     def test_kagemusha_slot_assembler_rejects_padded_identity_override(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source_signer = create_test_signer(Path(temp) / "source-keys")
@@ -1786,6 +2079,60 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             stderr.getvalue(),
         )
         self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_blank_identity_override_without_adb(
+        self,
+    ) -> None:
+        cases = (
+            ("--device-fingerprint", "device_fingerprint"),
+            ("--os-build-id", "os_build_id"),
+            ("--device-model", "device_model"),
+            ("--device-codename", "device_codename"),
+        )
+        for option, key in cases:
+            with self.subTest(option=option):
+                with tempfile.TemporaryDirectory() as temp:
+                    source_signer = create_test_signer(Path(temp) / "source-keys")
+                    signer = create_test_signer(Path(temp) / "slot-keys")
+                    source_slot = create_slot(
+                        Path(temp) / "source",
+                        "pixel6",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                        source_signer,
+                    )
+                    slot_root = Path(temp) / "device-lab"
+                    args = slot_assembler_args(
+                        slot_root=slot_root,
+                        source_slot=source_slot,
+                        signer=signer,
+                    )
+                    args[args.index(option) + 1] = ""
+                    real_run = slot_assembler.subprocess.run
+
+                    def fail_adb_only(
+                        command: list[str],
+                        **kwargs: object,
+                    ) -> subprocess.CompletedProcess:
+                        if command and command[0] == "adb":
+                            raise AssertionError("ADB must not be queried")
+                        return real_run(command, **kwargs)
+
+                    stderr = io.StringIO()
+                    with (
+                        mock.patch.object(
+                            slot_assembler.subprocess,
+                            "run",
+                            side_effect=fail_adb_only,
+                        ),
+                        redirect_stdout(io.StringIO()),
+                        redirect_stderr(stderr),
+                    ):
+                        status = slot_assembler.main(args)
+                    rendered = stderr.getvalue()
+
+                self.assertEqual(status, 1)
+                self.assertIn(f"{key} must be a non-empty string", rendered)
+                self.assertFalse((slot_root / "pixel6").exists())
 
     def test_kagemusha_slot_assembler_rejects_padded_adb_identity(self) -> None:
         outputs = {
@@ -1898,6 +2245,379 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("\x1b", rendered)
         self.assertFalse((slot_root / "pixel6").exists())
 
+    def test_kagemusha_slot_assembler_uses_source_identity_without_adb(
+        self,
+    ) -> None:
+        def remove_options(args: list[str], names: set[str]) -> list[str]:
+            filtered: list[str] = []
+            index = 0
+            while index < len(args):
+                if args[index] in names:
+                    index += 2
+                    continue
+                filtered.append(args[index])
+                index += 1
+            return filtered
+
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            slot_root = Path(temp) / "device-lab"
+            args = remove_options(
+                slot_assembler_args(
+                    slot_root=slot_root,
+                    source_slot=source_slot,
+                    signer=signer,
+                ),
+                {
+                    "--device-family",
+                    "--device-fingerprint",
+                    "--os-build-id",
+                    "--device-model",
+                    "--device-codename",
+                },
+            )
+            real_run = slot_assembler.subprocess.run
+
+            def fail_adb_only(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+                if command and command[0] == "adb":
+                    raise AssertionError("ADB must not be queried")
+                return real_run(command, **kwargs)
+
+            with (
+                mock.patch.object(
+                    slot_assembler.subprocess,
+                    "run",
+                    side_effect=fail_adb_only,
+                ),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                status = slot_assembler.main(args)
+            metadata = json.loads((slot_root / "pixel6" / "slot.json").read_text())
+            signed = json.loads(
+                (slot_root / "pixel6" / "evidence" / "signed-evidence.json").read_text()
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(metadata["device_family"], "Google Pixel 6 / 6a")
+        self.assertEqual(metadata["device_model"], "Pixel 6")
+        self.assertEqual(metadata["device_codename"], "oriole")
+        self.assertEqual(metadata["device_fingerprint"], "pixel6/fingerprint")
+        self.assertEqual(metadata["os_build_id"], "pixel6-build")
+        self.assertEqual(signed["device_model"], "Pixel 6")
+        self.assertEqual(signed["device_codename"], "oriole")
+
+    def test_kagemusha_slot_assembler_rejects_bad_source_identity_without_adb(
+        self,
+    ) -> None:
+        def remove_identity_options(args: list[str]) -> list[str]:
+            names = {
+                "--device-family",
+                "--device-fingerprint",
+                "--os-build-id",
+                "--device-model",
+                "--device-codename",
+            }
+            filtered: list[str] = []
+            index = 0
+            while index < len(args):
+                if args[index] in names:
+                    index += 2
+                    continue
+                filtered.append(args[index])
+                index += 1
+            return filtered
+
+        unsafe_codename = "oriole\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            telemetry_path = source_slot / "telemetry" / "telemetry.json"
+            telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+            telemetry["device_codename"] = unsafe_codename
+            write_json(telemetry_path, telemetry)
+            slot_root = Path(temp) / "device-lab"
+            args = remove_identity_options(
+                slot_assembler_args(
+                    slot_root=slot_root,
+                    source_slot=source_slot,
+                    signer=signer,
+                )
+            )
+            real_run = slot_assembler.subprocess.run
+
+            def fail_adb_only(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+                if command and command[0] == "adb":
+                    raise AssertionError("ADB must not be queried")
+                return real_run(command, **kwargs)
+
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    slot_assembler.subprocess,
+                    "run",
+                    side_effect=fail_adb_only,
+                ),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+            ):
+                status = slot_assembler.main(args)
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "telemetry/telemetry.json device_codename must not contain control characters",
+            rendered,
+        )
+        self.assertNotIn(unsafe_codename, rendered)
+        self.assertNotIn("\x1b", rendered)
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_blank_source_identity_without_adb(
+        self,
+    ) -> None:
+        def remove_identity_options(args: list[str]) -> list[str]:
+            names = {
+                "--device-family",
+                "--device-fingerprint",
+                "--os-build-id",
+                "--device-model",
+                "--device-codename",
+            }
+            filtered: list[str] = []
+            index = 0
+            while index < len(args):
+                if args[index] in names:
+                    index += 2
+                    continue
+                filtered.append(args[index])
+                index += 1
+            return filtered
+
+        cases = (
+            (
+                "attestation/result.json",
+                ("attestation", "result.json"),
+                "device_fingerprint",
+            ),
+            (
+                "attestation/report.json",
+                ("attestation", "report.json"),
+                "device_fingerprint",
+            ),
+            (
+                "attestation/result.json",
+                ("attestation", "result.json"),
+                "os_build_id",
+            ),
+            (
+                "attestation/report.json",
+                ("attestation", "report.json"),
+                "os_build_id",
+            ),
+            (
+                "telemetry/telemetry.json",
+                ("telemetry", "telemetry.json"),
+                "device_model",
+            ),
+            (
+                "telemetry/telemetry.json",
+                ("telemetry", "telemetry.json"),
+                "device_codename",
+            ),
+        )
+        for label, relative_parts, key in cases:
+            with self.subTest(label=label, key=key):
+                with tempfile.TemporaryDirectory() as temp:
+                    source_signer = create_test_signer(Path(temp) / "source-keys")
+                    signer = create_test_signer(Path(temp) / "slot-keys")
+                    source_slot = create_slot(
+                        Path(temp) / "source",
+                        "pixel6",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                        source_signer,
+                    )
+                    source_path = source_slot.joinpath(*relative_parts)
+                    payload = json.loads(source_path.read_text(encoding="utf-8"))
+                    payload[key] = ""
+                    write_json(source_path, payload)
+                    slot_root = Path(temp) / "device-lab"
+                    args = remove_identity_options(
+                        slot_assembler_args(
+                            slot_root=slot_root,
+                            source_slot=source_slot,
+                            signer=signer,
+                        )
+                    )
+                    real_run = slot_assembler.subprocess.run
+
+                    def fail_adb_only(
+                        command: list[str],
+                        **kwargs: object,
+                    ) -> subprocess.CompletedProcess:
+                        if command and command[0] == "adb":
+                            raise AssertionError("ADB must not be queried")
+                        return real_run(command, **kwargs)
+
+                    stderr = io.StringIO()
+                    with (
+                        mock.patch.object(
+                            slot_assembler.subprocess,
+                            "run",
+                            side_effect=fail_adb_only,
+                        ),
+                        redirect_stdout(io.StringIO()),
+                        redirect_stderr(stderr),
+                    ):
+                        status = slot_assembler.main(args)
+                    rendered = stderr.getvalue()
+
+                self.assertEqual(status, 1)
+                self.assertIn(f"{label} {key} must be a non-empty string", rendered)
+                self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_conflicting_source_identity_without_adb(
+        self,
+    ) -> None:
+        def remove_identity_options(args: list[str]) -> list[str]:
+            names = {
+                "--device-family",
+                "--device-fingerprint",
+                "--os-build-id",
+                "--device-model",
+                "--device-codename",
+            }
+            filtered: list[str] = []
+            index = 0
+            while index < len(args):
+                if args[index] in names:
+                    index += 2
+                    continue
+                filtered.append(args[index])
+                index += 1
+            return filtered
+
+        with tempfile.TemporaryDirectory() as temp:
+            source_signer = create_test_signer(Path(temp) / "source-keys")
+            signer = create_test_signer(Path(temp) / "slot-keys")
+            source_slot = create_slot(
+                Path(temp) / "source",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                source_signer,
+            )
+            report_path = source_slot / "attestation" / "report.json"
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["device_fingerprint"] = "other-device/fingerprint"
+            write_json(report_path, report)
+            slot_root = Path(temp) / "device-lab"
+            args = remove_identity_options(
+                slot_assembler_args(
+                    slot_root=slot_root,
+                    source_slot=source_slot,
+                    signer=signer,
+                )
+            )
+            real_run = slot_assembler.subprocess.run
+
+            def fail_adb_only(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+                if command and command[0] == "adb":
+                    raise AssertionError("ADB must not be queried")
+                return real_run(command, **kwargs)
+
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    slot_assembler.subprocess,
+                    "run",
+                    side_effect=fail_adb_only,
+                ),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+            ):
+                status = slot_assembler.main(args)
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "attestation/report.json device_fingerprint must match "
+            "attestation/result.json device_fingerprint",
+            rendered,
+        )
+        self.assertNotIn("other-device/fingerprint", rendered)
+        self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_override_source_identity_mismatch_without_adb(
+        self,
+    ) -> None:
+        cases = (
+            ("--device-fingerprint", "device_fingerprint", "other-device/fingerprint"),
+            ("--os-build-id", "os_build_id", "other-build"),
+            ("--device-model", "device_model", "Pixel 6 Pro"),
+            ("--device-codename", "device_codename", "raven"),
+        )
+        for option, key, unsafe_value in cases:
+            with self.subTest(option=option):
+                with tempfile.TemporaryDirectory() as temp:
+                    source_signer = create_test_signer(Path(temp) / "source-keys")
+                    signer = create_test_signer(Path(temp) / "slot-keys")
+                    source_slot = create_slot(
+                        Path(temp) / "source",
+                        "pixel6",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                        source_signer,
+                    )
+                    slot_root = Path(temp) / "device-lab"
+                    args = slot_assembler_args(
+                        slot_root=slot_root,
+                        source_slot=source_slot,
+                        signer=signer,
+                    )
+                    args[args.index(option) + 1] = unsafe_value
+                    real_run = slot_assembler.subprocess.run
+
+                    def fail_adb_only(
+                        command: list[str],
+                        **kwargs: object,
+                    ) -> subprocess.CompletedProcess:
+                        if command and command[0] == "adb":
+                            raise AssertionError("ADB must not be queried")
+                        return real_run(command, **kwargs)
+
+                    stderr = io.StringIO()
+                    with (
+                        mock.patch.object(
+                            slot_assembler.subprocess,
+                            "run",
+                            side_effect=fail_adb_only,
+                        ),
+                        redirect_stdout(io.StringIO()),
+                        redirect_stderr(stderr),
+                    ):
+                        status = slot_assembler.main(args)
+                    rendered = stderr.getvalue()
+
+                self.assertEqual(status, 1)
+                self.assertIn(
+                    f"{key} override must match captured source identity",
+                    rendered,
+                )
+                self.assertNotIn(unsafe_value, rendered)
+                self.assertFalse((slot_root / "pixel6").exists())
+
     def test_kagemusha_slot_assembler_rejects_report_device_mismatch_before_install(
         self,
     ) -> None:
@@ -1928,7 +2648,8 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIn(
-            "attestation/report.json device_fingerprint must match device identity",
+            "attestation/report.json device_fingerprint must match "
+            "attestation/result.json device_fingerprint",
             stderr.getvalue(),
         )
         self.assertFalse((slot_root / "pixel6").exists())
@@ -1986,6 +2707,60 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 "verification",
                 lambda _result, report: report["verification"].__setitem__("debug", True),
                 "attestation/report.json verification contains unexpected field debug",
+            ),
+        )
+        for name, mutate, expected_error in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp:
+                    source_signer = create_test_signer(Path(temp) / "source-keys")
+                    source_slot = create_slot(
+                        Path(temp) / "source",
+                        "pixel6",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                        source_signer,
+                    )
+                    result_path = source_slot / "attestation" / "result.json"
+                    report_path = source_slot / "attestation" / "report.json"
+                    result = json.loads(result_path.read_text(encoding="utf-8"))
+                    report = json.loads(report_path.read_text(encoding="utf-8"))
+                    mutate(result, report)
+                    write_json(result_path, result)
+                    write_json(report_path, report)
+                    slot_root = Path(temp) / "device-lab"
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = slot_assembler.main(
+                            slot_assembler_args(
+                                slot_root=slot_root,
+                                source_slot=source_slot,
+                            )
+                            + ["--allow-unsigned"]
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertIn(expected_error, stderr.getvalue())
+                self.assertFalse((slot_root / "pixel6").exists())
+
+    def test_kagemusha_slot_assembler_rejects_zero_source_sha256_placeholders_before_publish(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "result-policy",
+                lambda result, _report: result.__setitem__(
+                    "offline_wallet_policy_sha256",
+                    "0" * 64,
+                ),
+                "attestation/result.json offline_wallet_policy_sha256 must be non-zero lowercase sha256 hex",
+            ),
+            (
+                "report-challenge",
+                lambda _result, report: report.__setitem__(
+                    "attestation_challenge_sha256",
+                    "0" * 64,
+                ),
+                "attestation/report.json attestation_challenge_sha256 must be non-zero lowercase sha256 hex",
             ),
         )
         for name, mutate, expected_error in cases:
@@ -2260,8 +3035,8 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                         "schema_version": 1,
                         "slot_id": "pixel6",
                         "suite": "kagemusha-device-lab",
-                        "device_model": "Pixel 8",
-                        "device_codename": "husky",
+                        "device_model": "Pixel 6",
+                        "device_codename": "oriole",
                         "app_package_name": "org.hyperledger.iroha.android.other",
                     },
                 ),
@@ -4192,6 +4967,43 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertTrue(any("cat" in call for call in runner.calls))  # type: ignore[attr-defined]
         self.assertTrue(any("exec-out" in call for call in runner.calls))  # type: ignore[attr-defined]
 
+    def test_kagemusha_android_raw_puller_installs_private_permissions(self) -> None:
+        old_umask = os.umask(0)
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                temp_path = Path(temp)
+                out_root = temp_path / "raw"
+                out_root.mkdir(mode=0o777)
+                runner = fake_raw_pull_runner(raw_slot_tar_bytes("pixel6"), "pixel6")
+
+                status, slot_path, errors = raw_puller.pull_raw_slot(
+                    raw_pull_args(out_root),
+                    runner=runner,
+                )
+
+                self.assertEqual(status, 0, errors)
+                assert slot_path is not None
+                output_root_mode = out_root.stat().st_mode & 0o777
+                directory_modes = {
+                    ".": slot_path.stat().st_mode & 0o777,
+                    **{
+                        relative: (slot_path / relative).stat().st_mode & 0o777
+                        for relative in raw_puller.RAW_SLOT_ALLOWED_DIRECTORIES
+                    },
+                }
+                file_modes = {
+                    relative: (slot_path / relative).stat().st_mode & 0o777
+                    for relative in raw_puller.RAW_SLOT_REQUIRED_PATHS
+                }
+        finally:
+            os.umask(old_umask)
+
+        self.assertEqual(output_root_mode, 0o700)
+        self.assertEqual(set(directory_modes), {".", *raw_puller.RAW_SLOT_ALLOWED_DIRECTORIES})
+        self.assertTrue(all(mode == 0o700 for mode in directory_modes.values()))
+        self.assertEqual(set(file_modes), set(raw_puller.RAW_SLOT_REQUIRED_PATHS))
+        self.assertTrue(all(mode == 0o600 for mode in file_modes.values()))
+
     def test_kagemusha_android_raw_puller_rejects_noncanonical_slot_id_before_adb(
         self,
     ) -> None:
@@ -4241,6 +5053,11 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 "serial",
                 "ABC123\x00",
                 "ADB serial must not contain control characters",
+            ),
+            (
+                "serial",
+                "",
+                "ADB serial must be a non-empty string",
             ),
             (
                 "run_as_package",
@@ -5760,6 +6577,29 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             errors,
         )
 
+    def test_kagemusha_android_raw_puller_rejects_too_many_tar_entries(self) -> None:
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as tar:
+            add_tar_directory(tar, "pixel6")
+            for index in range(raw_puller.MAX_RAW_SLOT_ENTRIES + 1):
+                add_tar_directory(tar, f"pixel6/empty-{index}")
+
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(buffer.getvalue(), "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(
+            f"raw slot tar must not contain more than {raw_puller.MAX_RAW_SLOT_ENTRIES} entries",
+            errors,
+        )
+        self.assertFalse((out_root / "pixel6").exists())
+
     def test_kagemusha_android_raw_puller_rejects_latest_slot_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             out_root = Path(temp) / "raw"
@@ -6126,6 +6966,44 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "must be a lowercase SHA-256 hex digest",
             errors,
         )
+
+    def test_kagemusha_android_raw_puller_rejects_zero_result_digests(self) -> None:
+        fields = (
+            "attestation_certificate_chain_sha256",
+            "attestation_challenge_sha256",
+            "app_signing_certificate_sha256",
+            "offline_wallet_policy_sha256",
+        )
+        for field in fields:
+            with self.subTest(field=field):
+                result = json.loads(raw_slot_artifacts("pixel6")["attestation/result.json"])
+                result[field] = "0" * 64
+                with tempfile.TemporaryDirectory() as temp:
+                    out_root = Path(temp) / "raw"
+                    tar_bytes = raw_slot_tar_bytes(
+                        "pixel6",
+                        omit_files={"attestation/result.json"},
+                        extra_files={
+                            "pixel6/attestation/result.json": json.dumps(
+                                result,
+                                sort_keys=True,
+                            ).encode("utf-8")
+                            + b"\n",
+                        },
+                    )
+
+                    status, slot_path, errors = raw_puller.pull_raw_slot(
+                        raw_pull_args(out_root),
+                        runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(slot_path)
+                self.assertIn(
+                    f"attestation/result.json {field} "
+                    "must be a non-zero lowercase SHA-256 hex digest",
+                    errors,
+                )
 
     def test_kagemusha_android_raw_puller_requires_result_strongbox_levels(
         self,
@@ -7262,6 +8140,19 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(report["status"], "error")
         self.assertIn(
             "sha256sum.txt line 1: must not contain surrounding whitespace",
+            report["errors"],
+        )
+
+    def test_scan_slot_rejects_zero_sha256sum_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            write_text(slot / "sha256sum.txt", f"{'0' * 64}  logs/runtime.log\n")
+
+            report = device_lab.scan_slot(slot)
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "sha256sum.txt line 1: non-canonical sha256 digest",
             report["errors"],
         )
 
@@ -8833,7 +9724,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             write_text(slot / secret_path, "must not leak\n")
             write_text(
                 slot / "sha256sum.txt",
-                f"{'00' * 32}  {secret_path}\n",
+                f"{'01' * 32}  {secret_path}\n",
             )
 
             report = device_lab.scan_slot(slot)
@@ -11139,7 +12030,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             )
             metadata_path = slot / "slot.json"
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            metadata["signed_evidence_artifact_sha256"] = "00" * 32
+            metadata["signed_evidence_artifact_sha256"] = "01" * 32
             write_json(metadata_path, metadata)
             rewrite_sha256sum(slot)
 
@@ -11154,6 +12045,46 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "slot.json signed_evidence_artifact_sha256 does not match signed_evidence_artifact_path",
             report["errors"],
         )
+
+    def test_production_metadata_rejects_zero_sha256_placeholders(self) -> None:
+        fields = (
+            "app_signing_certificate_sha256",
+            "attestation_challenge_sha256",
+            "attestation_certificate_chain_sha256",
+            "offline_wallet_policy_sha256",
+            "offline_wallet_apk_sha256",
+            "d2d_payment_transcript_sha256",
+            "wallet_integrity_transcript_sha256",
+            "signed_evidence_artifact_sha256",
+        )
+        for field in fields:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    metadata_path = slot / "slot.json"
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    metadata[field] = "0" * 64
+                    write_json(metadata_path, metadata)
+                    rewrite_sha256sum(slot)
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(
+                    f"slot.json {field} must be non-zero lowercase sha256 hex",
+                    report["errors"],
+                )
 
     def test_production_metadata_uses_lstat_before_signed_evidence_is_file_preflight(
         self,
@@ -12273,6 +13204,34 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_d2d_payment_transcript_rejects_zero_sha256_placeholders(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            transcript_path = slot / "handoff" / "d2d-payment.json"
+            transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+            transcript["payer_wallet_state_before_sha256"] = "0" * 64
+            write_json(transcript_path, transcript)
+            refresh_d2d_payment_transcript_hash(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "d2d payment transcript payer_wallet_state_before_sha256 must be non-zero lowercase sha256 hex",
+            report["errors"],
+        )
+
     def test_production_metadata_rejects_d2d_payment_transcript_outside_handoff(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -12367,6 +13326,34 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(report["status"], "error")
         self.assertIn(
             "slot.json wallet_integrity_transcript_sha256 does not match wallet_integrity_transcript_path",
+            report["errors"],
+        )
+
+    def test_wallet_integrity_transcript_rejects_zero_sha256_placeholders(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            transcript_path = slot / "wallet" / "integrity.json"
+            transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+            transcript["rotation_session_id_sha256"] = "0" * 64
+            write_json(transcript_path, transcript)
+            refresh_wallet_integrity_transcript_hash(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "wallet integrity transcript rotation_session_id_sha256 must be non-zero lowercase sha256 hex",
             report["errors"],
         )
 
@@ -13444,6 +14431,43 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_production_metadata_rejects_zero_attestation_sha256_bindings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            attestation_path = slot / "attestation" / "result.json"
+            attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+            attestation["attestation_challenge_sha256"] = "0" * 64
+            write_json(attestation_path, attestation)
+
+            report_path = slot / "attestation" / "report.json"
+            attestation_report = json.loads(report_path.read_text(encoding="utf-8"))
+            attestation_report["attestation_challenge_sha256"] = "0" * 64
+            write_json(report_path, attestation_report)
+            resign_signed_evidence_artifacts(slot, signer)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "attestation/result.json attestation_challenge_sha256 must be non-zero lowercase sha256 hex",
+            report["errors"],
+        )
+        self.assertIn(
+            "attestation/report.json attestation_challenge_sha256 must be non-zero lowercase sha256 hex",
+            report["errors"],
+        )
+
     def test_production_metadata_rejects_signed_evidence_challenge_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -13960,6 +14984,167 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_production_metadata_rejects_signed_evidence_device_model_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            mutate_signed_evidence(
+                slot,
+                lambda evidence: evidence.__setitem__("device_model", "Pixel 7"),
+            )
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "signed evidence artifact device_model must match slot.json device_model",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_slot_family_model_codename_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["device_model"] = "Pixel 7"
+            metadata["device_codename"] = "panther"
+            write_json(metadata_path, metadata)
+
+            telemetry_path = slot / "telemetry" / "telemetry.json"
+            telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+            telemetry["device_model"] = "Pixel 7"
+            telemetry["device_codename"] = "panther"
+            write_json(telemetry_path, telemetry)
+
+            evidence_path = slot / "evidence" / "signed-evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["device_model"] = "Pixel 7"
+            evidence["device_codename"] = "panther"
+            evidence["artifact_digests"] = required_artifact_digests(slot)
+            write_json(evidence_path, sign_evidence(evidence, signer))
+            refresh_signed_evidence_hash(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json device_family must match device_model/device_codename",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_conflicting_model_codename(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["device_model"] = "Pixel 8 Pro"
+            metadata["device_codename"] = "panther"
+            write_json(metadata_path, metadata)
+
+            telemetry_path = slot / "telemetry" / "telemetry.json"
+            telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+            telemetry["device_model"] = "Pixel 8 Pro"
+            telemetry["device_codename"] = "panther"
+            write_json(telemetry_path, telemetry)
+
+            evidence_path = slot / "evidence" / "signed-evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["device_model"] = "Pixel 8 Pro"
+            evidence["device_codename"] = "panther"
+            evidence["artifact_digests"] = required_artifact_digests(slot)
+            write_json(evidence_path, sign_evidence(evidence, signer))
+            refresh_signed_evidence_hash(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json device_model/device_codename must identify a standard Kagemusha family",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_unknown_model_with_known_codename(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["device_model"] = "Pixel 6 Pro"
+            metadata["device_codename"] = "oriole"
+            write_json(metadata_path, metadata)
+
+            telemetry_path = slot / "telemetry" / "telemetry.json"
+            telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+            telemetry["device_model"] = "Pixel 6 Pro"
+            telemetry["device_codename"] = "oriole"
+            write_json(telemetry_path, telemetry)
+
+            evidence_path = slot / "evidence" / "signed-evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["device_model"] = "Pixel 6 Pro"
+            evidence["device_codename"] = "oriole"
+            evidence["artifact_digests"] = required_artifact_digests(slot)
+            write_json(evidence_path, sign_evidence(evidence, signer))
+            refresh_signed_evidence_hash(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json device_model/device_codename must identify a standard Kagemusha family",
+            report["errors"],
+        )
+
     def test_production_metadata_rejects_whitespace_normalized_signed_evidence_slot_field(
         self,
     ) -> None:
@@ -14068,7 +15253,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             )
 
             def corrupt_runtime_log_digest(evidence: dict) -> None:
-                evidence["artifact_digests"]["logs/runtime.log"] = "00" * 32
+                evidence["artifact_digests"]["logs/runtime.log"] = "01" * 32
 
             mutate_signed_evidence(slot, corrupt_runtime_log_digest)
 
@@ -14081,6 +15266,34 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(report["status"], "error")
         self.assertIn(
             "signed evidence artifact digest mismatch for logs/runtime.log",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_zero_signed_evidence_artifact_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+
+            def zero_runtime_log_digest(evidence: dict) -> None:
+                evidence["artifact_digests"]["logs/runtime.log"] = "0" * 64
+
+            mutate_signed_evidence(slot, zero_runtime_log_digest)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "signed evidence artifact artifact_digests[logs/runtime.log] must be non-zero lowercase sha256 hex",
             report["errors"],
         )
 
@@ -14701,6 +15914,39 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 self.assertEqual(report["status"], "error")
                 self.assertIn(expected_error, report["errors"])
 
+    def test_production_metadata_rejects_telemetry_model_slot_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            telemetry_path = slot / "telemetry" / "telemetry.json"
+            telemetry = json.loads(telemetry_path.read_text(encoding="utf-8"))
+            telemetry["device_model"] = "Pixel 7"
+            write_json(telemetry_path, telemetry)
+
+            evidence_path = slot / "evidence" / "signed-evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_digests"] = required_artifact_digests(slot)
+            write_json(evidence_path, sign_evidence(evidence, signer))
+            refresh_signed_evidence_hash(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "telemetry/telemetry.json device_model must match slot.json device_model",
+            report["errors"],
+        )
+
     def test_production_metadata_rejects_telemetry_app_package_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -15188,12 +16434,139 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn(str(real_parent), rendered)
         self.assertNotIn(str(linked_parent), rendered)
 
+    def test_production_metadata_rejects_zero_trusted_signer_digest_before_metadata_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = Path(temp) / "pixel8"
+            trusted = {"0" * 64: Path(temp) / "safe.pem"}
+
+            with mock.patch.object(
+                device_lab,
+                "_load_json",
+                side_effect=AssertionError("slot metadata must not be read"),
+            ) as load_json:
+                errors, details = device_lab.validate_kagemusha_production_metadata(
+                    slot,
+                    trusted_signer_public_keys=trusted,
+                )
+
+        load_json.assert_not_called()
+        self.assertEqual(details, {})
+        self.assertEqual(
+            errors,
+            ["trusted signer public key digest must be non-zero lowercase sha256 hex"],
+        )
+
+    def test_production_metadata_rejects_non_path_trusted_signer_map_before_metadata_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = Path(temp) / "pixel8"
+            trusted = {"1" * 64: "safe.pem"}
+
+            with mock.patch.object(
+                device_lab,
+                "_load_json",
+                side_effect=AssertionError("slot metadata must not be read"),
+            ) as load_json:
+                errors, details = device_lab.validate_kagemusha_production_metadata(
+                    slot,
+                    trusted_signer_public_keys=trusted,  # type: ignore[arg-type]
+                )
+
+        load_json.assert_not_called()
+        self.assertEqual(details, {})
+        self.assertEqual(
+            errors,
+            ["trusted signer public key path must be a pathlib Path"],
+        )
+
+    def test_production_metadata_rejects_non_mapping_trusted_signer_map_before_metadata_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = Path(temp) / "pixel8"
+
+            with mock.patch.object(
+                device_lab,
+                "_load_json",
+                side_effect=AssertionError("slot metadata must not be read"),
+            ) as load_json:
+                errors, details = device_lab.validate_kagemusha_production_metadata(
+                    slot,
+                    trusted_signer_public_keys=[("1" * 64, Path(temp) / "safe.pem")],  # type: ignore[arg-type]
+                )
+
+        load_json.assert_not_called()
+        self.assertEqual(details, {})
+        self.assertEqual(errors, ["trusted signer public key map must be a mapping"])
+
+    def test_production_metadata_rejects_mixed_trusted_signer_digest_keys_without_crash(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = Path(temp) / "pixel8"
+            trusted = {
+                7: Path(temp) / "integer.pem",
+                "1" * 64: Path(temp) / "safe.pem",
+            }
+
+            with mock.patch.object(
+                device_lab,
+                "_load_json",
+                side_effect=AssertionError("slot metadata must not be read"),
+            ) as load_json:
+                errors, details = device_lab.validate_kagemusha_production_metadata(
+                    slot,
+                    trusted_signer_public_keys=trusted,  # type: ignore[arg-type]
+                )
+
+        load_json.assert_not_called()
+        self.assertEqual(details, {})
+        self.assertIn(
+            "trusted signer public key digest must be non-zero lowercase sha256 hex",
+            errors,
+        )
+        self.assertNotIn("TypeError", "\n".join(errors))
+
+    def test_production_metadata_rejects_unrepresentable_trusted_signer_digest_without_crash(
+        self,
+    ) -> None:
+        class UnrepresentableDigest:
+            def __repr__(self) -> str:
+                raise AssertionError("digest repr must not be used")
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = Path(temp) / "pixel8"
+            trusted = {
+                UnrepresentableDigest(): Path(temp) / "unrepresentable.pem",
+                "1" * 64: Path(temp) / "safe.pem",
+            }
+
+            with mock.patch.object(
+                device_lab,
+                "_load_json",
+                side_effect=AssertionError("slot metadata must not be read"),
+            ) as load_json:
+                errors, details = device_lab.validate_kagemusha_production_metadata(
+                    slot,
+                    trusted_signer_public_keys=trusted,  # type: ignore[arg-type]
+                )
+
+        load_json.assert_not_called()
+        self.assertEqual(details, {})
+        self.assertIn(
+            "trusted signer public key digest must be non-zero lowercase sha256 hex",
+            errors,
+        )
+
     def test_production_metadata_rejects_control_trusted_signer_map_before_metadata_read(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp:
             slot = Path(temp) / "pixel8"
-            trusted = {"0" * 64: Path(temp) / "control\nsigner.pem"}
+            trusted = {"1" * 64: Path(temp) / "control\nsigner.pem"}
 
             with mock.patch.object(
                 device_lab,
@@ -15234,7 +16607,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 key_path = root / key_path
                 with self.subTest(key_path=key_path):
                     slot = root / "pixel8"
-                    trusted = {"0" * 64: key_path}
+                    trusted = {"1" * 64: key_path}
 
                     with mock.patch.object(
                         device_lab,
@@ -15264,7 +16637,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             )
             mutate_signed_evidence(
                 slot,
-                lambda evidence: evidence.__setitem__("signature_payload_sha256", "00" * 32),
+                lambda evidence: evidence.__setitem__("signature_payload_sha256", "01" * 32),
             )
 
             report = device_lab.scan_slot(
@@ -15278,6 +16651,50 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "signed evidence artifact signature_payload_sha256 mismatch",
             report["errors"],
         )
+
+    def test_production_metadata_rejects_zero_signed_evidence_sha256_placeholders(
+        self,
+    ) -> None:
+        fields = (
+            "attestation_challenge_sha256",
+            "attestation_certificate_chain_sha256",
+            "offline_wallet_policy_sha256",
+            "offline_wallet_apk_sha256",
+            "d2d_payment_transcript_sha256",
+            "wallet_integrity_transcript_sha256",
+            "signer_public_key_sha256",
+            "signature_payload_sha256",
+        )
+        for field in fields:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as temp:
+                    signer = create_test_signer(Path(temp))
+                    trusted = trusted_signers_for(signer)
+                    slot = create_slot(
+                        Path(temp),
+                        "pixel8",
+                        device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                        signer,
+                    )
+                    mutate_signed_evidence(
+                        slot,
+                        lambda evidence, field=field: evidence.__setitem__(
+                            field,
+                            "0" * 64,
+                        ),
+                    )
+
+                    report = device_lab.scan_slot(
+                        slot,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys=trusted,
+                    )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(
+                    f"signed evidence artifact {field} must be non-zero lowercase sha256 hex",
+                    report["errors"],
+                )
 
     def test_signed_evidence_canonical_payload_rejects_nonfinite_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -21311,6 +22728,36 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             hashlib.sha256(b"slot-0:attestation-challenge").hexdigest(),
         )
 
+    def test_duplicate_matrix_bindings_can_require_complete_signed_evidence(
+        self,
+    ) -> None:
+        duplicate_fingerprint = "a" * 64
+        reports = [
+            summary_release_report(
+                "slot-0",
+                device_fingerprint_sha256=duplicate_fingerprint,
+            ),
+            summary_release_report(
+                "slot-1",
+                device_fingerprint_sha256=duplicate_fingerprint,
+            ),
+        ]
+        partial = summary_release_report(
+            "slot-2",
+            device_fingerprint_sha256=duplicate_fingerprint,
+        )
+        del partial["kagemusha"]["signed_evidence_signer_public_key_sha256"]
+        reports.append(partial)
+
+        duplicates = device_lab.kagemusha_duplicate_matrix_bindings(
+            reports,
+            require_complete_signed_evidence=True,
+        )
+
+        duplicate = duplicates["device_fingerprint_sha256"][0]
+        self.assertEqual(duplicate["slots"], ["slot-0", "slot-1"])
+        self.assertEqual(duplicate["value_sha256"], duplicate_fingerprint)
+
     def test_duplicate_matrix_bindings_redacts_unsafe_direct_report_slots(self) -> None:
         duplicate_fingerprint = "a" * 64
         reports = [
@@ -21367,6 +22814,30 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(duplicates, {})
         self.assertNotIn("supersecret", rendered)
 
+    def test_duplicate_matrix_bindings_ignores_zero_direct_values(self) -> None:
+        reports = [
+            {
+                "slot": "slot-0",
+                "status": "ok",
+                "kagemusha": {
+                    "device_fingerprint_sha256": "0" * 64,
+                    "attestation_challenge_sha256": "0" * 64,
+                },
+            },
+            {
+                "slot": "slot-1",
+                "status": "ok",
+                "kagemusha": {
+                    "device_fingerprint_sha256": "0" * 64,
+                    "attestation_challenge_sha256": "0" * 64,
+                },
+            },
+        ]
+
+        duplicates = device_lab.kagemusha_duplicate_matrix_bindings(reports)
+
+        self.assertEqual(duplicates, {})
+
     def test_build_summary_redacts_unsafe_direct_report_strings(self) -> None:
         duplicate_fingerprint = "b" * 64
         duplicate_challenge = "c" * 64
@@ -21414,20 +22885,8 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             summary["slots"][0]["kagemusha"]["unsafe_note"],
             device_lab.SECRET_PATH_REDACTION,
         )
-        duplicate_fingerprint_summary = summary["kagemusha"]["duplicate_bindings"][
-            "device_fingerprint_sha256"
-        ][0]
-        self.assertEqual(
-            duplicate_fingerprint_summary["slots"],
-            [device_lab.SECRET_PATH_REDACTION, "<unsafe-slot-name>"],
-        )
-        duplicate_challenge_summary = summary["kagemusha"]["duplicate_bindings"][
-            "attestation_challenge_sha256"
-        ][0]
-        self.assertEqual(
-            duplicate_challenge_summary["slots"],
-            [device_lab.SECRET_PATH_REDACTION, "<unsafe-slot-name>"],
-        )
+        self.assertEqual(summary["kagemusha"]["covered_device_families"], [])
+        self.assertEqual(summary["kagemusha"]["duplicate_bindings"], {})
         self.assertNotIn("supersecret", rendered)
         self.assertNotIn("token=supersecret-slot", rendered)
         self.assertNotIn("slot-\\u001b[31m", rendered)
@@ -21757,6 +23216,140 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("supersecret", rendered)
         self.assertNotIn("Unreviewed Device", summary["kagemusha"]["covered_device_families"])
 
+    def test_build_summary_requires_complete_signed_evidence_for_kagemusha_rollup(
+        self,
+    ) -> None:
+        duplicate_fingerprint = "a" * 64
+        reports = [
+            {
+                "slot": "slot-0",
+                "status": "ok",
+                "kagemusha": {
+                    "required": True,
+                    "device_family": device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                    "device_fingerprint_sha256": duplicate_fingerprint,
+                    "attestation_challenge_sha256": "b" * 64,
+                },
+            },
+            {
+                "slot": "slot-1",
+                "status": "ok",
+                "kagemusha": {
+                    "required": True,
+                    "device_family": device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1],
+                    "device_fingerprint_sha256": duplicate_fingerprint,
+                    "attestation_challenge_sha256": "c" * 64,
+                },
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+            )
+
+        self.assertEqual(summary["kagemusha"]["covered_device_families"], [])
+        self.assertEqual(summary["kagemusha"]["duplicate_bindings"], {})
+        self.assertEqual(
+            summary["kagemusha"]["missing_device_families"],
+            list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+        )
+
+    def test_build_summary_preserves_complete_signed_evidence_for_kagemusha_rollup(
+        self,
+    ) -> None:
+        duplicate_fingerprint = "a" * 64
+        first_family = device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+        second_family = device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1]
+        reports = [
+            summary_release_report(
+                "slot-0",
+                first_family,
+                device_fingerprint_sha256=duplicate_fingerprint,
+                attestation_challenge_sha256="b" * 64,
+            ),
+            summary_release_report(
+                "slot-1",
+                second_family,
+                device_fingerprint_sha256=duplicate_fingerprint,
+                attestation_challenge_sha256="c" * 64,
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+            )
+
+        self.assertEqual(
+            summary["kagemusha"]["covered_device_families"],
+            sorted([first_family, second_family]),
+        )
+        duplicate = summary["kagemusha"]["duplicate_bindings"][
+            "device_fingerprint_sha256"
+        ][0]
+        self.assertEqual(duplicate["slots"], ["slot-0", "slot-1"])
+        self.assertEqual(duplicate["value_sha256"], duplicate_fingerprint)
+
+    def test_build_summary_requires_trusted_signer_for_kagemusha_rollup(
+        self,
+    ) -> None:
+        family = device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+        report = summary_release_report("slot-0", family)
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                [report],
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"9" * 64: Path(temp) / "other.pem"},
+            )
+
+        self.assertEqual(summary["kagemusha"]["covered_device_families"], [])
+        self.assertEqual(summary["kagemusha"]["duplicate_bindings"], {})
+        self.assertEqual(
+            summary["kagemusha"]["missing_device_families"],
+            list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+        )
+
+    def test_build_summary_rejects_malformed_complete_signed_evidence_rollup_fields(
+        self,
+    ) -> None:
+        cases = (
+            ("slot", "token=supersecret-slot"),
+            ("device_model", "Unreviewed Model"),
+            ("native_bridge_abi_version", 6),
+            ("signed_at_utc", "2026-06-06T00:00:00+00:00"),
+            ("offline_wallet_apk_path", "../evidence/offline-wallet-release.apk"),
+            ("offline_wallet_apk_sha256", "0" * 64),
+        )
+        for field, value in cases:
+            with self.subTest(field=field):
+                report = summary_release_report()
+                if field == "slot":
+                    report["slot"] = value
+                else:
+                    report["kagemusha"][field] = value
+
+                with tempfile.TemporaryDirectory() as temp:
+                    summary = device_lab.build_summary(
+                        Path(temp),
+                        [report],
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys={
+                            "4" * 64: Path(temp) / "safe.pem"
+                        },
+                    )
+
+                self.assertEqual(summary["kagemusha"]["covered_device_families"], [])
+                self.assertEqual(summary["kagemusha"]["duplicate_bindings"], {})
+
     def test_build_summary_ignores_non_sha256_direct_trusted_signer_keys(self) -> None:
         signer_digest = "d" * 64
         reports = [
@@ -21788,6 +23381,51 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertNotIn("supersecret", rendered)
         self.assertNotIn("E" * 64, rendered)
+
+    def test_build_summary_ignores_zero_direct_trusted_signer_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                [],
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={
+                    "0" * 64: Path(temp) / "zero.pem",
+                    "d" * 64: Path(temp) / "safe.pem",
+                },
+            )
+
+        self.assertEqual(
+            summary["kagemusha"]["trusted_signer_public_key_sha256"],
+            ["d" * 64],
+        )
+
+    def test_build_summary_ignores_non_mapping_direct_trusted_signer_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                [],
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=[("d" * 64, Path(temp) / "safe.pem")],  # type: ignore[arg-type]
+            )
+
+        self.assertEqual(summary["kagemusha"]["trusted_signer_public_key_sha256"], [])
+
+    def test_build_summary_ignores_mixed_direct_trusted_signer_key_types(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                [],
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={
+                    7: Path(temp) / "integer.pem",
+                    "d" * 64: Path(temp) / "safe.pem",
+                },  # type: ignore[arg-type]
+            )
+
+        self.assertEqual(
+            summary["kagemusha"]["trusted_signer_public_key_sha256"],
+            ["d" * 64],
+        )
 
     def test_json_summary_reports_kagemusha_matrix_and_signer_pins(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -81,6 +81,84 @@ def test_solana_destination_redacts_verifier_program_parser_failures(monkeypatch
         raise AssertionError("Solana destination leaked verifier parser detail")
 
 
+def test_solana_destination_hex_parsers_redact_parser_causes():
+    """Invalid Solana destination hex inputs must not chain parser payloads."""
+
+    module = load_evidence_module()
+    fixed_payload = "secret-token-solana-fixed-hex"
+    program_payload = "secret-token-solana-program-hex"
+
+    try:
+        module.parse_hex_bytes(
+            "0x" + fixed_payload + ("a" * (64 - len(fixed_payload))),
+            label="verifier code hash",
+            byte_length=32,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "verifier code hash must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("invalid Solana destination fixed hex was accepted")
+
+    try:
+        module.parse_program_bytes_hex(
+            "0x" + program_payload + ("a" * (64 - len(program_payload))),
+            label="verifier program bytes",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "verifier program bytes must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("invalid Solana destination program hex was accepted")
+
+
+def test_solana_destination_base64_parser_redacts_parser_causes():
+    """Invalid Solana destination base64 inputs must not chain parser payloads."""
+
+    module = load_evidence_module()
+
+    try:
+        module.parse_program_bytes_base64(
+            "secret-token-solana-destination-base64",
+            label="verifier program bytes",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "verifier program bytes must be base64"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("invalid Solana destination program base64 was accepted")
+
+
+def test_solana_destination_file_parser_redacts_file_read_causes(tmp_path):
+    """Unreadable Solana destination program paths must not chain path details."""
+
+    module = load_evidence_module()
+    private_path = tmp_path / "secret-token-private-verifier.so"
+
+    try:
+        module.parse_program_bytes_file(
+            str(private_path),
+            label="verifier program bytes",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "verifier program bytes file cannot be read"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("missing Solana destination program file was accepted")
+
+
 def noncanonical_base64_alias(raw: bytes) -> str:
     encoded = base64.b64encode(raw).decode("ascii")
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

@@ -1,3 +1,5 @@
+#[cfg(feature = "rand")]
+use rand_core::{TryCryptoRng, TryRngCore};
 #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
 use w3f_bls::SerializableToBytes as _;
 
@@ -11,6 +13,32 @@ use crate::{Error, KeyGenOption};
 const MESSAGE_1: &[u8; 22] = b"This is a test message";
 const MESSAGE_2: &[u8; 20] = b"Another test message";
 const SEED: &[u8; 10] = &[1u8; 10];
+
+#[cfg(feature = "rand")]
+struct FixedTryRng {
+    byte: u8,
+}
+
+#[cfg(feature = "rand")]
+impl TryRngCore for FixedTryRng {
+    type Error = core::convert::Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(u32::from_le_bytes([self.byte; 4]))
+    }
+
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(u64::from_le_bytes([self.byte; 8]))
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+        dest.fill(self.byte);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "rand")]
+impl TryCryptoRng for FixedTryRng {}
 
 #[allow(clippy::similar_names)]
 fn test_keypair_generation_from_seed<C: BlsConfiguration>() {
@@ -63,6 +91,17 @@ fn test_try_keypair_rejects_all_zero_seed<C: BlsConfiguration>() {
         Err(Error::KeyGen(message)) => assert!(message.contains("all zero")),
         Err(err) => panic!("expected all-zero seed KeyGen error, got {err:?}"),
         Ok(_) => panic!("all-zero BLS seed material must fail"),
+    }
+}
+
+#[cfg(feature = "rand")]
+fn test_random_keypair_from_rng_rejects_all_zero_seed<C: BlsConfiguration>() {
+    let mut rng = FixedTryRng { byte: 0 };
+
+    match BlsImpl::<C>::random_keypair_from_rng(&mut rng) {
+        Err(Error::KeyGen(message)) => assert!(message.contains("all zero")),
+        Err(err) => panic!("expected all-zero random seed KeyGen error, got {err:?}"),
+        Ok(_) => panic!("all-zero BLS random seed material must fail"),
     }
 }
 
@@ -169,6 +208,12 @@ mod normal {
     #[test]
     fn checked_keypair_rejects_all_zero_seed() {
         test_try_keypair_rejects_all_zero_seed::<NormalConfiguration>();
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn random_keypair_from_rng_rejects_all_zero_seed() {
+        test_random_keypair_from_rng_rejects_all_zero_seed::<NormalConfiguration>();
     }
 
     #[test]
@@ -492,6 +537,12 @@ mod small {
     #[test]
     fn checked_keypair_rejects_all_zero_seed() {
         test_try_keypair_rejects_all_zero_seed::<SmallConfiguration>();
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn random_keypair_from_rng_rejects_all_zero_seed() {
+        test_random_keypair_from_rng_rejects_all_zero_seed::<SmallConfiguration>();
     }
 
     #[test]

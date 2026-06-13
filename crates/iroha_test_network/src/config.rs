@@ -713,6 +713,15 @@ fn append_consensus_handshake_meta_override(
     genesis_key_pair: &KeyPair,
     consensus_handshake_meta: Parameter,
 ) {
+    try_append_consensus_handshake_meta_override(block, genesis_key_pair, consensus_handshake_meta)
+        .expect("sign genesis consensus handshake metadata override");
+}
+
+fn try_append_consensus_handshake_meta_override(
+    block: &mut GenesisBlock,
+    genesis_key_pair: &KeyPair,
+    consensus_handshake_meta: Parameter,
+) -> Result<(), Report> {
     let mut transactions = block.0.transactions_vec().clone();
     let chain = transactions
         .first()
@@ -730,7 +739,11 @@ fn append_consensus_handshake_meta_override(
         .unwrap_or_default()
         .saturating_add(std::time::Duration::from_millis(1));
     tx_builder.set_creation_time(next_creation_time);
-    transactions.push(tx_builder.sign(genesis_key_pair.private_key()));
+    transactions.push(
+        tx_builder
+            .try_sign(genesis_key_pair.private_key())
+            .map_err(Report::new)?,
+    );
 
     let external_merkle: iroha_crypto::MerkleTree<
         iroha_data_model::transaction::TransactionEntrypoint,
@@ -756,7 +769,8 @@ fn append_consensus_handshake_meta_override(
         .unwrap_or(0);
     let placeholder_sig = iroha_data_model::block::BlockSignature::new(
         signer_index,
-        SignatureOf::from_hash(genesis_key_pair.private_key(), header.hash()),
+        SignatureOf::try_from_hash(genesis_key_pair.private_key(), header.hash())
+            .map_err(Report::new)?,
     );
     let da_commitments = block.0.da_commitments().cloned();
     let da_proof_policies = block.0.da_proof_policies().cloned();
@@ -780,7 +794,8 @@ fn append_consensus_handshake_meta_override(
 
     let signature = iroha_data_model::block::BlockSignature::new(
         signer_index,
-        SignatureOf::from_hash(genesis_key_pair.private_key(), working.hash()),
+        SignatureOf::try_from_hash(genesis_key_pair.private_key(), working.hash())
+            .map_err(Report::new)?,
     );
     let mut rebuilt = iroha_data_model::block::SignedBlock::presigned(
         signature,
@@ -794,6 +809,7 @@ fn append_consensus_handshake_meta_override(
         .set_transaction_results(Vec::new(), &hashes, Vec::new())
         .expect("genesis placeholder hashes should match payload");
     block.0 = rebuilt;
+    Ok(())
 }
 
 fn format_hash_hex(hash: [u8; 32]) -> String {
@@ -1100,7 +1116,8 @@ fn rebuild_block_from_parts(
     let initial_signature = template.signatures().next().cloned().unwrap_or_else(|| {
         iroha_data_model::block::BlockSignature::new(
             0,
-            SignatureOf::from_hash(genesis_key_pair.private_key(), header.hash()),
+            SignatureOf::try_from_hash(genesis_key_pair.private_key(), header.hash())
+                .expect("sign genesis placeholder header"),
         )
     });
     let da_commitments = template.da_commitments().cloned();
@@ -1121,7 +1138,8 @@ fn rebuild_block_from_parts(
         .expect("genesis result hashes should match payload");
     let signature = iroha_data_model::block::BlockSignature::new(
         signer_index,
-        SignatureOf::from_hash(genesis_key_pair.private_key(), working.hash()),
+        SignatureOf::try_from_hash(genesis_key_pair.private_key(), working.hash())
+            .expect("sign rebuilt genesis header"),
     );
 
     let mut rebuilt = iroha_data_model::block::SignedBlock::presigned(
@@ -1343,6 +1361,53 @@ mod tests {
             block.0.results().all(|result| result.as_ref().is_ok()),
             "pre-executed genesis should yield successful outcomes"
         );
+    }
+
+    #[test]
+    fn append_consensus_handshake_meta_override_checked_signing_verifies() {
+        init_instruction_registry();
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let topology = [peer_id.clone()]
+            .into_iter()
+            .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let (mut block, _genesis_account, _topology_vec, genesis_key_pair) =
+            super::build_minimal_genesis_unexecuted(
+                Vec::new(),
+                topology,
+                vec![entry],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            );
+        let original_len = block.0.transactions_vec().len();
+        let consensus_handshake_meta = Parameter::Custom(CustomParameter::new(
+            consensus_metadata::handshake_meta_id(),
+            Json::new(Value::String("checked-signing".to_owned())),
+        ));
+
+        super::try_append_consensus_handshake_meta_override(
+            &mut block,
+            &genesis_key_pair,
+            consensus_handshake_meta,
+        )
+        .expect("checked genesis metadata override signing succeeds");
+
+        assert_eq!(block.0.transactions_vec().len(), original_len + 1);
+        let appended_tx = block
+            .0
+            .transactions_vec()
+            .last()
+            .expect("override transaction is appended");
+        appended_tx
+            .verify_signature()
+            .expect("checked override transaction signature verifies");
+        assert!(super::genesis_signature_is_canonical(
+            &block.0,
+            &genesis_key_pair
+        ));
     }
 
     #[test]
@@ -1677,7 +1742,8 @@ mod tests {
                 InstructionBox::from(Register::domain(Domain::new(ivm_domain))),
                 InstructionBox::from(Register::account(gas_account)),
             ])
-            .sign(genesis_key_pair.private_key());
+            .try_sign(genesis_key_pair.private_key())
+            .expect("checked genesis test transaction signing succeeds");
         let block = GenesisBlock(SignedBlock::genesis(
             vec![tx],
             genesis_key_pair.private_key(),

@@ -346,6 +346,8 @@ enum ControllerError {
     ClosedStream(#[from] quinn::ClosedStream),
     #[error("vpn frame parse error: {0}")]
     VpnCell(#[from] VpnCellError),
+    #[error("usage voucher signing failed: {0}")]
+    Signing(#[from] iroha_crypto::Error),
     #[error("handshake error: {0}")]
     Handshake(String),
     #[error("state error: {0}")]
@@ -1308,7 +1310,10 @@ impl UsageVoucherSigner {
         self.last_emitted_at.elapsed() >= self.interval
     }
 
-    fn build_envelope(&mut self, counters: &UsageVoucherCounters) -> VpnUsageVoucherEnvelopeV1 {
+    fn build_envelope(
+        &mut self,
+        counters: &UsageVoucherCounters,
+    ) -> Result<VpnUsageVoucherEnvelopeV1, iroha_crypto::Error> {
         let (ingress_bytes, egress_bytes) = counters.snapshot();
         let active_ms = self
             .started_at
@@ -1326,17 +1331,17 @@ impl UsageVoucherSigner {
             issued_at_ms: unix_now_ms(),
         };
         let voucher = VpnUsageVoucherV1 {
-            signature: Signature::new(self.key_pair.private_key(), &body.encode()),
+            signature: Signature::try_new(self.key_pair.private_key(), &body.encode())?,
             client_public_key: self.key_pair.public_key().clone(),
             body,
         };
         let earned_fee_nanos = self.ticket.tariff.earned_fee_nanos(&voucher.body);
         self.sequence = self.sequence.saturating_add(1);
         self.last_emitted_at = Instant::now();
-        VpnUsageVoucherEnvelopeV1 {
+        Ok(VpnUsageVoucherEnvelopeV1 {
             voucher,
             earned_fee_nanos,
-        }
+        })
     }
 }
 
@@ -1349,7 +1354,7 @@ async fn send_usage_voucher_control_cell(
     signer: &mut UsageVoucherSigner,
     sequence: &mut u64,
 ) -> Result<(), ControllerError> {
-    let envelope = signer.build_envelope(counters);
+    let envelope = signer.build_envelope(counters)?;
     let encoded = envelope.encode();
     let mut payload = Vec::with_capacity(
         VPN_USAGE_VOUCHER_CONTROL_MAGIC
@@ -2965,7 +2970,9 @@ mod tests {
         counters.add_ingress(10);
         counters.add_egress(20);
 
-        let envelope = signer.build_envelope(&counters);
+        let envelope = signer
+            .build_envelope(&counters)
+            .expect("usage voucher should sign");
 
         envelope.voucher.verify().expect("voucher signature");
         assert_eq!(envelope.voucher.body.session_id, ticket.session_id);

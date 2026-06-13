@@ -257,6 +257,23 @@ public final class ClientConfig {
   }
 
   /**
+   * Creates a {@link ConfidentialAssetToriiClient} that reuses this config's base URI, timeout,
+   * headers, and observers. Callers must provide the executor so transports can share the same HTTP
+   * stack.
+   */
+  public ConfidentialAssetToriiClient toConfidentialAssetToriiClient(
+      final HttpTransportExecutor executor) {
+    Objects.requireNonNull(executor, "executor");
+    return ConfidentialAssetToriiClient.builder()
+        .executor(executor)
+        .baseUri(baseUri)
+        .timeout(requestTimeout)
+        .defaultHeaders(defaultHeaders)
+        .observers(observers)
+        .build();
+  }
+
+  /**
    * Creates a {@link SubscriptionToriiClient} that reuses this config's base URI, timeout, headers,
    * and observers. Callers must provide the executor so transports can share the same HTTP stack.
    */

@@ -2235,13 +2235,6 @@ fn sample_da_record_for_default_lane(proof_digest: Option<Hash>) -> DaCommitment
     record
 }
 
-#[derive(Clone, Debug, norito::derive::NoritoSerialize)]
-struct StoredDaReceiptFixture {
-    version: u16,
-    sequence: u64,
-    receipt: DaIngestReceipt,
-}
-
 fn sample_da_receipt_for_record(record: &DaCommitmentRecord) -> DaIngestReceipt {
     DaIngestReceipt {
         client_blob_id: record.client_blob_id,
@@ -2346,12 +2339,8 @@ fn write_da_receipt_spool_file(
     fingerprint: [u8; 32],
 ) -> PathBuf {
     let path = spool_dir.join(da_receipt_spool_file_name(receipt, sequence, fingerprint));
-    let stored = StoredDaReceiptFixture {
-        version: 1,
-        sequence,
-        receipt: receipt.clone(),
-    };
-    let bytes = to_bytes(&stored).expect("encode DA receipt");
+    let bytes = crate::da::receipts::encode_receipt_for_spool_test(sequence, receipt.clone())
+        .expect("encode DA receipt");
     fs::write(&path, bytes).expect("write DA receipt to spool");
     path
 }
@@ -65606,6 +65595,123 @@ fn manifest_guard_ignores_non_production_manifest_filenames() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn manifest_spool_file_name_rejects_non_utf8_manifest_shaped_artifact() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt as _};
+
+    let shaped = OsString::from_vec(b"manifest-\xff.norito".to_vec());
+    let err = super::manifest_spool_file_name(shaped.as_os_str())
+        .expect_err("non-UTF8 manifest-shaped artifact should reject cache refresh");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+    let unrelated = OsString::from_vec(b"unrelated-\xff.norito".to_vec());
+    assert!(
+        super::manifest_spool_file_name(unrelated.as_os_str())
+            .expect("unrelated non-UTF8 artifact ignored")
+            .is_none()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_spool_scan_rejects_uninspectable_shaped_artifact() {
+    use std::os::unix::fs::symlink;
+
+    let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0xef; 32]));
+    symlink(dir.path().join("missing-manifest-target"), &path)
+        .expect("create broken manifest artifact symlink");
+
+    let err = match super::scan_manifest_spool(dir.path()) {
+        Ok(_) => panic!("uninspectable manifest-shaped artifact should fail cache scan"),
+        Err(err) => err,
+    };
+
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to read manifest spool metadata")
+            || message.contains("is not a regular file"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn manifest_available_for_commitment_defers_missing_but_errors_on_malformed_artifacts() {
+    let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut cache = super::ManifestSpoolCache::default();
+    let expected_manifest = b"manifest-expected-by-commitment";
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(expected_manifest).as_bytes());
+
+    let (available, _) = super::manifest_available_for_commitment(
+        &mut cache,
+        dir.path(),
+        &record,
+        DaManifestPolicy::Strict,
+    );
+    assert!(
+        matches!(available, Ok(false)),
+        "missing strict manifest should defer the commitment"
+    );
+
+    let unreadable_path = dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0x4d; 32]));
+    fs::create_dir(&unreadable_path).expect("create unreadable manifest artifact");
+    let (available, _) = super::manifest_available_for_commitment(
+        &mut cache,
+        dir.path(),
+        &record,
+        DaManifestPolicy::Strict,
+    );
+    match available {
+        Err(super::ManifestGuardError::Read { path, .. }) => assert_eq!(path, unreadable_path),
+        other => panic!("expected unreadable manifest artifact to fail, got {other:?}"),
+    }
+    fs::remove_dir(&unreadable_path).expect("remove unreadable manifest artifact");
+
+    let audit_dir = tempfile::tempdir().expect("audit tempdir");
+    let audit_unreadable_path = audit_dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0x4f; 32]));
+    fs::create_dir(&audit_unreadable_path).expect("create audit-only unreadable manifest");
+    let mut audit_cache = super::ManifestSpoolCache::default();
+    let (available, _) = super::manifest_available_for_commitment(
+        &mut audit_cache,
+        audit_dir.path(),
+        &record,
+        DaManifestPolicy::AuditOnly,
+    );
+    assert!(
+        matches!(available, Ok(true)),
+        "audit-only unreadable manifests should still allow the commitment"
+    );
+
+    write_da_manifest_spool_file(
+        dir.path(),
+        &record,
+        b"manifest-with-wrong-digest",
+        [0x4e; 32],
+    );
+    let (available, _) = super::manifest_available_for_commitment(
+        &mut cache,
+        dir.path(),
+        &record,
+        DaManifestPolicy::Strict,
+    );
+    assert!(
+        matches!(
+            available,
+            Err(super::ManifestGuardError::HashMismatch { .. })
+        ),
+        "strict manifest hash mismatch should fail proposal assembly"
+    );
+}
+
 #[test]
 fn manifest_guard_prefers_matching_manifest() {
     let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
@@ -65673,6 +65779,81 @@ fn da_spool_cache_hits_on_repeated_load() {
         .expect("load bundle");
     assert!(bundle.is_some(), "bundle should be loaded from cache");
     assert_eq!(outcome, super::CacheOutcome::Hit);
+}
+
+#[cfg(unix)]
+#[test]
+fn da_spool_stamp_rejects_uninspectable_shaped_artifact() {
+    use std::os::unix::fs::symlink;
+
+    let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir
+        .path()
+        .join(da_commitment_spool_file_name(&record, [0xee; 32]));
+    symlink(dir.path().join("missing-commitment-target"), &path)
+        .expect("create broken DA artifact symlink");
+
+    let err = super::scan_da_spool_stamp(dir.path())
+        .expect_err("uninspectable DA-shaped artifact should fail cache scan");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to read DA spool metadata")
+            || message.contains("is not a regular file"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn da_spool_file_name_ignores_commitment_schedule_sidecars() {
+    assert!(
+        super::da_spool_file_name(std::ffi::OsStr::new(
+            "da-commitment-schedule-00000001-0000000000000001-0000000000000001-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.norito"
+        ))
+        .expect("schedule sidecar classifier")
+        .is_none(),
+        "commitment schedule sidecars should not affect core DA spool caches"
+    );
+    assert!(
+        super::da_spool_file_name(std::ffi::OsStr::new(
+            "da-commitment-00000001-0000000000000001-0000000000000001-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.norito"
+        ))
+        .expect("commitment classifier")
+        .is_some(),
+        "commitment records should still be tracked by core DA spool caches"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn da_spool_file_name_rejects_non_utf8_shaped_artifacts() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt as _};
+
+    for raw in [
+        b"da-commitment-\xff.norito".as_slice(),
+        b"da-pin-intent-\xff.norito".as_slice(),
+        b"da-receipt-\xff.norito".as_slice(),
+    ] {
+        let name = OsString::from_vec(raw.to_vec());
+        let err = super::da_spool_file_name(name.as_os_str())
+            .expect_err("non-UTF8 production-shaped artifact should reject cache refresh");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    let schedule = OsString::from_vec(b"da-commitment-schedule-\xff.norito".to_vec());
+    assert!(
+        super::da_spool_file_name(schedule.as_os_str())
+            .expect("non-UTF8 schedule sidecar ignored")
+            .is_none()
+    );
+
+    let unrelated = OsString::from_vec(b"unrelated-\xff.norito".to_vec());
+    assert!(
+        super::da_spool_file_name(unrelated.as_os_str())
+            .expect("unrelated non-UTF8 artifact ignored")
+            .is_none()
+    );
 }
 
 #[test]
@@ -66890,6 +67071,120 @@ async fn assemble_proposal_rejects_corrupt_da_commitment_file() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_invalid_da_commitment_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.da.max_commitments_per_block = 1;
+    actor.config.da.max_proof_openings_per_block = 1;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let manifest = b"manifest-for-zero-ticket-da-commitment";
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x78; 32])));
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(manifest).as_bytes());
+    record.storage_ticket = StorageTicketId::new([0; 32]);
+    write_da_commitment_spool_file(&spool_dir, &record, [0x79; 32]);
+    write_da_manifest_spool_file(&spool_dir, &record, manifest, [0x7A; 32]);
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("invalid DA commitment must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("DA commitment bundle failed validation"),
+        "expected DA commitment validation failure, got {message}"
+    );
+    assert!(
+        message.contains("zeroed storage ticket"),
+        "error should identify the semantic validation failure: {message}"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .da
+            .sealed_commitments
+            .contains(&iroha_data_model::da::commitment::DaCommitmentKey::from_record(&record)),
+        "invalid commitment must not be marked sealed after assembly rejection"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_mismatched_da_manifest_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.da.max_commitments_per_block = 1;
+    actor.config.da.max_proof_openings_per_block = 1;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let expected_manifest = b"manifest-expected-before-sealing";
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x7B; 32])));
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(expected_manifest).as_bytes());
+    write_da_commitment_spool_file(&spool_dir, &record, [0x7C; 32]);
+    write_da_manifest_spool_file(
+        &spool_dir,
+        &record,
+        b"manifest-with-conflicting-digest",
+        [0x7D; 32],
+    );
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("mismatched DA manifest must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("DA manifest guard failed before sealing commitment"),
+        "expected manifest guard failure, got {message}"
+    );
+    assert!(
+        message.contains("manifest hash mismatch"),
+        "error should identify the manifest hash mismatch: {message}"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .da
+            .sealed_commitments
+            .contains(&iroha_data_model::da::commitment::DaCommitmentKey::from_record(&record)),
+        "mismatched manifest must not mark the commitment sealed"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn assemble_proposal_rejects_corrupt_da_pin_intent_file() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -66937,6 +67232,64 @@ async fn assemble_proposal_rejects_corrupt_da_pin_intent_file() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_invalid_da_pin_intent_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let intent = DaPinIntent::new(
+        LaneId::new(0),
+        1,
+        2,
+        StorageTicketId::new([0x76; 32]),
+        ManifestDigest::new([0; 32]),
+    );
+    write_da_pin_intent_spool_file(&spool_dir, &intent, [0x77; 32]);
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("invalid DA pin intent must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("invalid DA pin intent in spool"),
+        "expected DA pin-intent validation failure, got {message}"
+    );
+    assert!(
+        message.contains(&spool_dir.display().to_string()),
+        "error should identify the pin-intent spool path: {message}"
+    );
+    assert!(
+        message.contains("zeroed pin-intent manifest hash"),
+        "error should identify the semantic validation failure: {message}"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.da.sealed_pin_intents.contains(&(
+            intent.lane_id.as_u32(),
+            intent.epoch,
+            intent.sequence
+        )),
+        "invalid pin intent must not be marked sealed after assembly rejection"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn assemble_proposal_rejects_corrupt_da_receipt_file() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -66978,6 +67331,47 @@ async fn assemble_proposal_rejects_corrupt_da_receipt_file() {
     assert!(
         message.contains(&path.display().to_string()),
         "error should identify the corrupt receipt path: {message}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_conflicting_da_receipt_evidence() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = true;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x7B; 32])));
+    let receipt_a = sample_da_receipt_for_record(&record);
+    let mut receipt_b = receipt_a.clone();
+    receipt_b.blob_hash = BlobDigest::new([0x7C; 32]);
+    write_da_receipt_spool_file(&spool_dir, &receipt_a, record.sequence, [0x7D; 32]);
+    write_da_receipt_spool_file(&spool_dir, &receipt_b, record.sequence, [0x7E; 32]);
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("conflicting DA receipt evidence must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("receipt evidence conflict"),
+        "expected receipt evidence conflict, got {message}"
     );
 
     harness.shutdown.send();

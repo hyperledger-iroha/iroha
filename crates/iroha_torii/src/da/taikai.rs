@@ -87,6 +87,7 @@ pub(crate) const TAIKAI_LINEAGE_HINT_PREFIX: &str = "taikai-lineage";
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) mod taikai_ingest {
     use std::{
+        ffi::OsStr,
         io::{self, Write},
         str::FromStr,
         sync::atomic::{AtomicU64, Ordering},
@@ -1442,106 +1443,96 @@ pub(crate) mod taikai_ingest {
             )
         })? {
             let file_name = entry.file_name();
-            let file_name = match file_name.to_str() {
-                Some(value) => value,
-                None => continue,
-            };
-
-            if !file_name.starts_with("taikai-envelope-") || !file_name.ends_with(".norito") {
+            let Some(file_name) = taikai_envelope_file_name(&file_name)? else {
                 continue;
-            }
+            };
 
             let base_id = &file_name["taikai-envelope-".len()..file_name.len() - ".norito".len()];
             if !valid_spool_artifact_base_id(base_id) {
-                iroha_logger::warn!(
-                    base = base_id,
-                    "skipping Taikai envelope with malformed spool artifact id"
-                );
-                continue;
+                return Err(format!(
+                    "Taikai envelope has malformed spool artifact id `{base_id}`"
+                ));
             }
             let sentinel_path = spool_dir.join(format!(
                 "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
             ));
-            if async_fs::metadata(&sentinel_path).await.is_ok() {
-                continue;
+            match async_fs::metadata(&sentinel_path).await {
+                Ok(_) => continue,
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(format!(
+                        "failed to inspect Taikai anchor sentinel `{}`: {err}",
+                        sentinel_path.display()
+                    ));
+                }
             }
 
             let envelope_path = entry.path();
             let indexes_name = format!("taikai-indexes-{base_id}.json");
             let indexes_path = spool_dir.join(&indexes_name);
-            if async_fs::metadata(&indexes_path).await.is_err() {
-                continue;
-            }
             let ssm_name = format!("taikai-ssm-{base_id}.norito");
             let ssm_path = spool_dir.join(&ssm_name);
-            if async_fs::metadata(&ssm_path).await.is_err() {
-                continue;
-            }
 
-            let envelope_bytes = match async_fs::read(&envelope_path).await {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    iroha_logger::warn!(?err, path = ?envelope_path, "failed to read Taikai envelope");
-                    continue;
-                }
-            };
+            let envelope_bytes = async_fs::read(&envelope_path).await.map_err(|err| {
+                format!(
+                    "failed to read Taikai envelope `{}`: {err}",
+                    envelope_path.display()
+                )
+            })?;
 
-            let indexes_value: Value = match async_fs::read(&indexes_path).await {
-                Ok(bytes) => match json::from_slice(&bytes) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        iroha_logger::warn!(?err, path = ?indexes_path, "failed to parse Taikai indexes JSON");
-                        continue;
-                    }
-                },
-                Err(err) => {
-                    iroha_logger::warn!(?err, path = ?indexes_path, "failed to read Taikai indexes JSON");
-                    continue;
-                }
-            };
+            let indexes_bytes = async_fs::read(&indexes_path).await.map_err(|err| {
+                format!(
+                    "failed to read Taikai indexes JSON `{}`: {err}",
+                    indexes_path.display()
+                )
+            })?;
+            let indexes_value: Value = json::from_slice(&indexes_bytes).map_err(|err| {
+                format!(
+                    "failed to parse Taikai indexes JSON `{}`: {err}",
+                    indexes_path.display()
+                )
+            })?;
 
-            let ssm_bytes = match async_fs::read(&ssm_path).await {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    iroha_logger::warn!(?err, path = ?ssm_path, "failed to read Taikai signing manifest");
-                    continue;
-                }
-            };
+            let ssm_bytes = async_fs::read(&ssm_path).await.map_err(|err| {
+                format!(
+                    "failed to read Taikai signing manifest `{}`: {err}",
+                    ssm_path.display()
+                )
+            })?;
 
             let trm_name = format!("taikai-trm-{base_id}.norito");
             let trm_path = spool_dir.join(&trm_name);
             let trm_bytes = match async_fs::read(&trm_path).await {
                 Ok(bytes) => Some(bytes),
                 Err(err) => {
-                    if err.kind() != ErrorKind::NotFound {
-                        iroha_logger::warn!(?err, path = ?trm_path, "failed to read Taikai routing manifest");
+                    if err.kind() == ErrorKind::NotFound {
+                        None
+                    } else {
+                        return Err(format!(
+                            "failed to read Taikai routing manifest `{}`: {err}",
+                            trm_path.display()
+                        ));
                     }
-                    None
                 }
             };
             let lineage_name = format!("{TAIKAI_LINEAGE_HINT_PREFIX}-{base_id}.json");
             let lineage_path = spool_dir.join(&lineage_name);
             let lineage_value = match async_fs::read(&lineage_path).await {
-                Ok(bytes) => match json::from_slice(&bytes) {
-                    Ok(value) => Some(value),
-                    Err(err) => {
-                        iroha_logger::warn!(
-                            ?err,
-                            path = ?lineage_path,
-                            "failed to parse Taikai lineage hint JSON"
-                        );
-                        None
-                    }
-                },
+                Ok(bytes) => Some(json::from_slice(&bytes).map_err(|err| {
+                    format!(
+                        "failed to parse Taikai lineage hint JSON `{}`: {err}",
+                        lineage_path.display()
+                    )
+                })?),
                 Err(err) => {
-                    if err.kind() != ErrorKind::NotFound {
-                        iroha_logger::warn!(
-                            ?err,
-                            path = ?lineage_path,
-                            "failed to read Taikai lineage hint JSON"
-                        );
+                    if err.kind() == ErrorKind::NotFound {
+                        None
+                    } else {
+                        return Err(format!(
+                            "failed to read Taikai lineage hint JSON `{}`: {err}",
+                            lineage_path.display()
+                        ));
                     }
-                    None
                 }
             };
 
@@ -1559,17 +1550,9 @@ pub(crate) mod taikai_ingest {
                 payload.insert("lineage_hint".to_string(), value);
             }
             let payload = Value::Object(payload);
-            let body = match json::to_string(&payload) {
-                Ok(body) => body,
-                Err(err) => {
-                    iroha_logger::warn!(
-                        ?err,
-                        base = base_id,
-                        "failed to encode Taikai anchor payload"
-                    );
-                    continue;
-                }
-            };
+            let body = json::to_string(&payload).map_err(|err| {
+                format!("failed to encode Taikai anchor payload for `{base_id}`: {err}")
+            })?;
 
             persist_anchor_request_capture(spool_dir, base_id, &body)
                 .await
@@ -1619,8 +1602,62 @@ pub(crate) mod taikai_ingest {
             && fixed_hex(fingerprint_hex, 64)
     }
 
+    fn taikai_envelope_file_name(name: &OsStr) -> Result<Option<&str>, String> {
+        if let Some(name) = name.to_str() {
+            return Ok(
+                (name.starts_with("taikai-envelope-") && name.ends_with(".norito")).then_some(name),
+            );
+        }
+        if non_utf8_artifact_name_matches(name, b"taikai-envelope-", b".norito") {
+            return Err("Taikai envelope filename is not valid UTF-8".to_string());
+        }
+        Ok(None)
+    }
+
+    #[cfg(unix)]
+    fn non_utf8_artifact_name_matches(name: &OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
+        use std::os::unix::ffi::OsStrExt;
+
+        let bytes = name.as_bytes();
+        bytes.starts_with(prefix) && bytes.ends_with(suffix)
+    }
+
+    #[cfg(not(unix))]
+    fn non_utf8_artifact_name_matches(_name: &OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
+        false
+    }
+
     fn fixed_hex(value: &str, width: usize) -> bool {
         value.len() == width && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[cfg(unix)]
+        #[test]
+        fn taikai_envelope_file_name_rejects_non_utf8_shaped_name() {
+            use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+            let name = OsString::from_vec(b"taikai-envelope-\xFF.norito".to_vec());
+            let err = taikai_envelope_file_name(name.as_os_str())
+                .expect_err("non-UTF8 envelope-shaped name rejects");
+            assert!(err.contains("not valid UTF-8"));
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn taikai_envelope_file_name_ignores_unrelated_non_utf8_name() {
+            use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+            let name = OsString::from_vec(b"taikai-index-\xFF.norito".to_vec());
+            assert!(
+                taikai_envelope_file_name(name.as_os_str())
+                    .expect("unrelated non-UTF8 name is ignored")
+                    .is_none()
+            );
+        }
     }
 }
 

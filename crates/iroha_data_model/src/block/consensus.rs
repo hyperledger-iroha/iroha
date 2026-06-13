@@ -3312,7 +3312,8 @@ mod tests {
         let (_, leader_private) = leader_key.into_parts();
         let leader_signature = BlockSignature::new(
             0,
-            SignatureOf::from_hash(&leader_private, block_header.hash()),
+            SignatureOf::try_from_hash(&leader_private, block_header.hash())
+                .expect("checked RBC init leader fixture signature"),
         );
         RbcInit {
             block_hash: block_header.hash(),

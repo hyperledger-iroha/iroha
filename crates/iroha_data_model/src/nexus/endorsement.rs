@@ -186,7 +186,8 @@ mod tests {
         let baseline = endorsement.body_hash();
         endorsement.signatures.push(DomainEndorsementSignature {
             signer: kp.public_key().clone(),
-            signature: iroha_crypto::Signature::new(kp.private_key(), baseline.as_ref()),
+            signature: iroha_crypto::Signature::try_new(kp.private_key(), baseline.as_ref())
+                .expect("checked domain endorsement fixture signature"),
         });
         let with_sig = endorsement.body_hash();
         assert_eq!(baseline, with_sig);

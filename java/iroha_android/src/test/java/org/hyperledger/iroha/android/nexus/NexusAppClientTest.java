@@ -95,6 +95,37 @@ public final class NexusAppClientTest {
   }
 
   @Test
+  public void finalizeAndSubmitAcceptsExactZeroSignatureAlgorithmAlias() {
+    final FakeToriiClient torii = new FakeToriiClient();
+    final NexusAppClient client =
+        new NexusAppClient(
+            new NexusAppConfig(
+                "test-chain", null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()),
+            null,
+            null,
+            torii);
+    final NexusTransferDraft draft = client.buildTransferDraft(sampleInput());
+    final NexusSignableTransaction signable =
+        new NexusSignableTransaction(
+            draft.signable().payloadBytes(),
+            draft.signable().payloadHashHex(),
+            draft.signable().authority(),
+            draft.signable().signingPublicKey(),
+            "0");
+
+    final NexusTransferReceipt receipt =
+        client.finalizeAndSubmit(
+            signable,
+            new NexusWalletSignature(WALLET_SIGNATURE, "0"),
+            new NexusFinalizeOptions(false, null));
+
+    assertEquals(receipt.transactionHashHex(), torii.submittedHash);
+    assertEquals(receipt.transactionHashHex(), SignedTransactionHasher.hashHex(receipt.signedTransaction()));
+    assertArrayEquals(WALLET_SIGNATURE, receipt.signedTransaction().signature());
+    assertArrayEquals(PUBLIC_KEY, receipt.signedTransaction().publicKey());
+  }
+
+  @Test
   public void finalizeAndSubmitRejectsUnsupportedSignatureAlgorithm() {
     final NexusAppClient client =
         new NexusAppClient(
@@ -107,8 +138,21 @@ public final class NexusAppClientTest {
 
     for (final String algorithm :
         new String[] {
+          "ed25519 ",
+          " ed25519",
+          "\ted25519",
+          "ed25519\n",
+          "ed25519\u00A0",
+          "0 ",
+          " 0",
+          "\t0",
+          "00",
+          "\uFF10",
           "secp256k1",
           "ed\t25519",
+          "ed" + (char) 0 + "25519",
+          "ed" + (char) 0x001F + "25519",
+          "ed" + (char) 0x007F + "25519",
           "ed\u200B25519",
           "\u0435d25519",
           "ed\uFF0D25519",
@@ -125,19 +169,92 @@ public final class NexusAppClientTest {
       assertEquals("unsupported_signature_algorithm", error.code());
     }
 
-    final NexusAppError signableError =
-        expectNexusError(
-            () ->
-                client.finalizeAndSubmit(
-                    new NexusSignableTransaction(
-                        draft.signable().payloadBytes(),
-                        draft.signable().payloadHashHex(),
-                        draft.signable().authority(),
-                        draft.signable().signingPublicKey(),
-                        "ed\u200B25519"),
-                    new NexusWalletSignature(filled(0x07, 64))));
+    for (final String algorithm :
+        new String[] {
+          "ed25519 ",
+          " ed25519",
+          "0 ",
+          " 0",
+          "00",
+          "ED25519",
+          "ed" + (char) 0 + "25519",
+          "ed\u200B25519",
+          "\u0435d25519",
+        }) {
+      final NexusAppError signableError =
+          expectNexusError(
+              () ->
+                  client.finalizeAndSubmit(
+                      new NexusSignableTransaction(
+                          draft.signable().payloadBytes(),
+                          draft.signable().payloadHashHex(),
+                          draft.signable().authority(),
+                          draft.signable().signingPublicKey(),
+                          algorithm),
+                      new NexusWalletSignature(WALLET_SIGNATURE)));
 
-    assertEquals("unsupported_signature_algorithm", signableError.code());
+      assertEquals("unsupported_signature_algorithm", signableError.code());
+    }
+  }
+
+  @Test
+  public void requestSignatureRejectsUnsupportedAlgorithmsAtTransportBoundary() {
+    final NexusConnectSession session =
+        new NexusConnectSession(
+            "session-1",
+            "sora://wallet/connect?session=session-1",
+            null,
+            null,
+            null,
+            ACCOUNT_ID,
+            PUBLIC_KEY,
+            Collections.emptyMap());
+    final NexusSignableTransaction signable =
+        new NexusSignableTransaction(
+            new byte[] {0x01, 0x02, 0x03},
+            "0".repeat(64),
+            ACCOUNT_ID,
+            PUBLIC_KEY,
+            NexusAppClient.SIGNATURE_ALGORITHM_ED25519);
+
+    for (final String algorithm :
+        new String[] {"ed25519 ", " 0", "ED25519", "ed\u200B25519"}) {
+      final SignatureConnect connect = new SignatureConnect(WALLET_SIGNATURE);
+      final NexusAppClient client =
+          new NexusAppClient(
+              new NexusAppConfig("test-chain", null, null, null, null, null, Collections.emptyMap()),
+              connect,
+              null,
+              null);
+      final NexusSignableTransaction badSignable =
+          new NexusSignableTransaction(
+              signable.payloadBytes(),
+              signable.payloadHashHex(),
+              signable.authority(),
+              signable.signingPublicKey(),
+              algorithm);
+
+      final NexusAppError error = expectNexusError(() -> client.requestSignature(session, badSignable));
+
+      assertEquals("unsupported_signature_algorithm", error.code());
+      assertEquals(null, connect.lastSignable);
+    }
+
+    for (final String algorithm :
+        new String[] {"ed25519 ", " 0", "\uFF10", "ed" + (char) 0 + "25519", "\u0435d25519"}) {
+      final SignatureConnect connect = new SignatureConnect(WALLET_SIGNATURE, algorithm);
+      final NexusAppClient client =
+          new NexusAppClient(
+              new NexusAppConfig("test-chain", null, null, null, null, null, Collections.emptyMap()),
+              connect,
+              null,
+              null);
+
+      final NexusAppError error = expectNexusError(() -> client.requestSignature(session, signable));
+
+      assertEquals("unsupported_signature_algorithm", error.code());
+      assertNotNull(connect.lastSignable);
+    }
   }
 
   @Test
@@ -386,6 +503,42 @@ public final class NexusAppClientTest {
       lastSignable = signable;
       assertEquals(NexusAppClient.SIGNATURE_ALGORITHM_ED25519, signable.signatureAlgorithm());
       return new NexusWalletSignature(signature);
+    }
+  }
+
+  private static final class SignatureConnect implements NexusConnectTransport {
+    private final byte[] signature;
+    private final String algorithm;
+    private NexusSignableTransaction lastSignable;
+
+    private SignatureConnect(final byte[] signature) {
+      this(signature, NexusAppClient.SIGNATURE_ALGORITHM_ED25519);
+    }
+
+    private SignatureConnect(final byte[] signature, final String algorithm) {
+      this.signature = Arrays.copyOf(signature, signature.length);
+      this.algorithm = algorithm;
+    }
+
+    @Override
+    public NexusConnectSession startConnect(
+        final NexusConnectOptions options, final NexusAppConfig config) {
+      return new NexusConnectSession("session-1", "sora://wallet/connect?session=session-1");
+    }
+
+    @Override
+    public NexusApprovedAccount awaitApproval(
+        final NexusConnectSession session, final NexusAppConfig config) {
+      return new NexusApprovedAccount(ACCOUNT_ID, PUBLIC_KEY);
+    }
+
+    @Override
+    public NexusWalletSignature requestSignature(
+        final NexusConnectSession session,
+        final NexusSignableTransaction signable,
+        final NexusAppConfig config) {
+      lastSignable = signable;
+      return new NexusWalletSignature(signature, algorithm);
     }
   }
 

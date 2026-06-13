@@ -552,11 +552,14 @@ function normalizeWalletSignatureAlgorithmTag(algorithm, fieldName = "wallet sig
   if (typeof algorithm !== "string") {
     throw new TypeError(`${fieldName} must be a string or numeric tag`);
   }
-  const normalized = algorithm.trim();
-  if (!normalized || !PRINTABLE_ASCII_RE.test(normalized)) {
+  if (!algorithm || !PRINTABLE_ASCII_RE.test(algorithm)) {
     throw new TypeError(`${fieldName} must be printable ASCII Ed25519`);
   }
-  if (normalized.toLowerCase() === "ed25519") {
+  if (algorithm !== algorithm.trim()) {
+    throw new TypeError(`${fieldName} must not contain surrounding whitespace`);
+  }
+  const normalized = algorithm.toLowerCase();
+  if (normalized === "ed25519") {
     return ALGORITHM_ED25519;
   }
   throw new TypeError(`${fieldName} must be Ed25519`);

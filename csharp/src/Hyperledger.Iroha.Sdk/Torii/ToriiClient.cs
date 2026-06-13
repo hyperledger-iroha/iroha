@@ -391,21 +391,53 @@ public sealed class ToriiClient : IDisposable
             cancellationToken);
     }
 
-    public Task<ToriiIdentifierPoliciesResponse> GetIdentifierPoliciesAsync(CancellationToken cancellationToken = default)
+    public async Task<ToriiIdentifierPoliciesResponse> GetIdentifierPoliciesAsync(CancellationToken cancellationToken = default)
     {
-        return GetAsync<ToriiIdentifierPoliciesResponse>("/v1/identifier-policies", cancellationToken: cancellationToken);
+        ToriiIdentifierPoliciesResponse response;
+        try
+        {
+            response = await GetAsync<ToriiIdentifierPoliciesResponse>(
+                "/v1/identifier-policies",
+                cancellationToken: cancellationToken);
+        }
+        catch (JsonException exception)
+        {
+            throw RewriteIdentifierPoliciesJsonException(exception);
+        }
+
+        ValidateIdentifierPoliciesResponse(response);
+        return response;
     }
 
-    public Task<ToriiIdentifierResolveResponse> ResolveIdentifierAsync(
+    public async Task<ToriiIdentifierResolveResponse> ResolveIdentifierAsync(
         ToriiIdentifierResolveRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ValidateIdentifierResolveRequest(request);
+        var normalizedRequest = request with
+        {
+            PolicyId = NormalizeIdentifierPolicyId(request.PolicyId, nameof(request.PolicyId)),
+            EncryptedInput = NormalizeOptionalIdentifierCiphertext(
+                request.EncryptedInput,
+                nameof(request.EncryptedInput)),
+        };
 
-        return PostAsync<ToriiIdentifierResolveRequest, ToriiIdentifierResolveResponse>(
-            "/v1/identifiers/resolve",
-            request,
-            cancellationToken: cancellationToken);
+        ToriiIdentifierResolveResponse response;
+        try
+        {
+            response = await PostAsync<ToriiIdentifierResolveRequest, ToriiIdentifierResolveResponse>(
+                "/v1/identifiers/resolve",
+                normalizedRequest,
+                cancellationToken: cancellationToken);
+        }
+        catch (JsonException exception)
+        {
+            throw RewriteIdentifierResolveJsonException(exception);
+        }
+
+        ValidateIdentifierResolveResponse(response);
+        return response;
     }
 
     public Task<ToriiAccountAliasIndexResolution?> ResolveAccountAliasIndexAsync(
@@ -1480,6 +1512,50 @@ public sealed class ToriiClient : IDisposable
         return value ?? throw new JsonException($"Torii response for `{response.RequestMessage?.RequestUri}` deserialized to null.");
     }
 
+    private static JsonException RewriteIdentifierPoliciesJsonException(JsonException exception)
+    {
+        const string converterPrefix = "policy.";
+        if (!exception.Message.StartsWith(converterPrefix, StringComparison.Ordinal))
+        {
+            return exception;
+        }
+
+        var itemContext = "identifier policies response.items[0]";
+        var path = exception.Path;
+        if (!string.IsNullOrEmpty(path))
+        {
+            const string itemMarker = ".items[";
+            var markerStart = path.IndexOf(itemMarker, StringComparison.Ordinal);
+            if (markerStart >= 0)
+            {
+                var indexStart = markerStart + itemMarker.Length;
+                var indexEnd = path.IndexOf(']', indexStart);
+                if (indexEnd > indexStart)
+                {
+                    itemContext = $"identifier policies response.items[{path[indexStart..indexEnd]}]";
+                }
+            }
+        }
+
+        var detail = exception.Message[converterPrefix.Length..];
+        if (detail.EndsWith(" must not be empty.", StringComparison.Ordinal))
+        {
+            detail = $"{detail[..^" must not be empty.".Length]} must be a non-empty string.";
+        }
+
+        return new JsonException($"{itemContext}.{detail}", exception);
+    }
+
+    private static JsonException RewriteIdentifierResolveJsonException(JsonException exception)
+    {
+        const string converterPrefix = "identifier receipt.";
+        return exception.Message.StartsWith(converterPrefix, StringComparison.Ordinal)
+            ? new JsonException(
+                $"identifier resolve response.{exception.Message[converterPrefix.Length..]}",
+                exception)
+            : exception;
+    }
+
     private static void ValidateMultisigResponse(ToriiMultisigResponse response, string context)
     {
         if (!response.Ok)
@@ -1488,6 +1564,500 @@ public sealed class ToriiClient : IDisposable
         }
 
         ValidateOptionalBase64(response.SigningMessageBase64, $"{context}.signing_message_b64");
+    }
+
+    private static void ValidateIdentifierResolveRequest(ToriiIdentifierResolveRequest request)
+    {
+        ValidateIdentifierPolicyId(
+            request.PolicyId,
+            "identifier resolve request.policy_id",
+            message => new ArgumentException(message, nameof(request.PolicyId)));
+    }
+
+    private static void ValidateIdentifierPoliciesResponse(ToriiIdentifierPoliciesResponse response)
+    {
+        if (response.Items is null)
+        {
+            throw new JsonException("identifier policies response.items is required.");
+        }
+
+        for (var index = 0; index < response.Items.Count; index++)
+        {
+            var item = response.Items[index];
+            ValidateIdentifierPolicyId(
+                item.PolicyId,
+                $"identifier policies response.items[{index}].policy_id",
+                static message => new JsonException(message));
+            ValidateExactNonEmptyText(
+                item.ResolverPublicKey,
+                $"identifier policies response.items[{index}].resolver_public_key",
+                static message => new JsonException(message));
+        }
+    }
+
+    private static void ValidateIdentifierResolveResponse(ToriiIdentifierResolveResponse response)
+    {
+        ValidateIdentifierPolicyId(
+            response.PolicyId,
+            "identifier resolve response.policy_id",
+            static message => new JsonException(message));
+
+        if (IsNestedIdentifierResolveResponse(response))
+        {
+            if (!string.IsNullOrEmpty(response.Signature))
+            {
+                ValidateExactHex(response.Signature, "identifier resolve response.attestation.signature");
+            }
+
+            ValidateIdentifierReceiptSignaturePayload(
+                response.SignaturePayload,
+                "identifier resolve response");
+            return;
+        }
+
+        ValidateExactHex(response.Signature, "identifier resolve response.signature");
+        ValidateExactHex(response.SignaturePayloadHex, "identifier resolve response.signature_payload_hex");
+        ValidateIdentifierReceiptSignaturePayload(
+            response.SignaturePayload,
+            "identifier resolve response.signature_payload");
+    }
+
+    private static bool IsNestedIdentifierResolveResponse(ToriiIdentifierResolveResponse response)
+    {
+        if (!string.IsNullOrEmpty(response.SignaturePayloadHex)
+            || response.SignaturePayload is not JsonObject payloadObject)
+        {
+            return false;
+        }
+
+        return payloadObject.TryGetPropertyValue("payload", out var payload)
+            && payload is JsonObject
+            && payloadObject.TryGetPropertyValue("attestation", out var attestation)
+            && attestation is JsonObject;
+    }
+
+    private static void ValidateIdentifierReceiptSignaturePayload(JsonNode? payload, string context)
+    {
+        if (payload is not JsonObject payloadObject)
+        {
+            return;
+        }
+
+        ValidateOpeningSignature(payloadObject, context);
+        ValidateAttestationSignature(payloadObject, context);
+        ValidateIdentifierReceiptAttestation(payloadObject, context);
+        ValidateIdentifierReceiptPayloadPolicyId(payloadObject, context);
+        ValidateIdentifierReceiptPayloadExactFields(payloadObject, context);
+
+        if (payloadObject.TryGetPropertyValue("payload", out var nestedPayload)
+            && nestedPayload is JsonObject nestedPayloadObject)
+        {
+            ValidateOpeningSignature(nestedPayloadObject, $"{context}.payload");
+            ValidateIdentifierReceiptPayloadPolicyId(nestedPayloadObject, $"{context}.payload");
+            ValidateIdentifierReceiptPayloadExactFields(nestedPayloadObject, $"{context}.payload");
+        }
+
+        if (payloadObject.TryGetPropertyValue("attestation", out var attestation)
+            && attestation is JsonObject attestationObject)
+        {
+            ValidateAttestationSignature(attestationObject, $"{context}.attestation");
+            ValidateIdentifierReceiptAttestation(attestationObject, $"{context}.attestation");
+        }
+    }
+
+    private static void ValidateIdentifierReceiptPayloadExactFields(JsonObject payload, string context)
+    {
+        ValidateOptionalExactJsonStringProperty(payload, "account_id", $"{context}.account_id");
+        ValidateOptionalExactJsonStringProperty(payload, "opaque_id", $"{context}.opaque_id");
+        ValidateOptionalExactJsonStringProperty(payload, "receipt_hash", $"{context}.receipt_hash");
+        ValidateOptionalExactJsonStringProperty(payload, "uaid", $"{context}.uaid");
+
+        if (TryGetOptionalJsonObject(payload, "execution", $"{context}.execution", out var execution))
+        {
+            ValidateOptionalExactJsonStringProperty(execution, "program_id", $"{context}.execution.program_id");
+            ValidateOptionalExactJsonStringProperty(execution, "program_digest", $"{context}.execution.program_digest");
+            ValidateOptionalExactJsonStringProperty(execution, "backend", $"{context}.execution.backend");
+            ValidateOptionalExactJsonStringProperty(execution, "verification_mode", $"{context}.execution.verification_mode");
+            ValidateOptionalExactJsonStringProperty(
+                execution,
+                "input_ciphertext_hash",
+                $"{context}.execution.input_ciphertext_hash");
+            ValidateOptionalExactJsonStringProperty(
+                execution,
+                "output_ciphertext_hash",
+                $"{context}.execution.output_ciphertext_hash");
+            ValidateOptionalExactJsonStringProperty(
+                execution,
+                "parameter_digest",
+                $"{context}.execution.parameter_digest");
+            ValidateOptionalExactJsonStringProperty(
+                execution,
+                "evaluation_key_digest",
+                $"{context}.execution.evaluation_key_digest");
+            ValidateOptionalExactJsonStringProperty(execution, "output_hash", $"{context}.execution.output_hash");
+            ValidateOptionalExactJsonStringProperty(
+                execution,
+                "associated_data_hash",
+                $"{context}.execution.associated_data_hash");
+            ValidateOptionalUnsignedInteger(execution, "executed_at_ms", $"{context}.execution.executed_at_ms");
+            ValidateOptionalUnsignedInteger(execution, "expires_at_ms", $"{context}.execution.expires_at_ms");
+        }
+
+        if (TryGetOptionalJsonObject(payload, "opening", $"{context}.opening", out var opening)
+            && TryGetOptionalJsonObject(opening, "payload", $"{context}.opening.payload", out var openingPayload))
+        {
+            ValidateOptionalExactJsonStringProperty(
+                openingPayload,
+                "program_id",
+                $"{context}.opening.payload.program_id");
+            ValidateOptionalExactJsonStringProperty(
+                openingPayload,
+                "input_ciphertext_hash",
+                $"{context}.opening.payload.input_ciphertext_hash");
+            ValidateOptionalExactJsonStringProperty(
+                openingPayload,
+                "output_ciphertext_hash",
+                $"{context}.opening.payload.output_ciphertext_hash");
+            ValidateOptionalExactJsonStringProperty(
+                openingPayload,
+                "parameter_digest",
+                $"{context}.opening.payload.parameter_digest");
+            ValidateOptionalExactJsonStringProperty(
+                openingPayload,
+                "evaluation_key_digest",
+                $"{context}.opening.payload.evaluation_key_digest");
+            ValidateOptionalExactJsonStringProperty(
+                openingPayload,
+                "opened_output_hash",
+                $"{context}.opening.payload.opened_output_hash");
+            ValidateOptionalUnsignedInteger(
+                openingPayload,
+                "opened_at_ms",
+                $"{context}.opening.payload.opened_at_ms");
+            ValidateOptionalUnsignedInteger(
+                openingPayload,
+                "expires_at_ms",
+                $"{context}.opening.payload.expires_at_ms");
+        }
+    }
+
+    private static bool TryGetOptionalJsonObject(
+        JsonObject payload,
+        string propertyName,
+        string context,
+        out JsonObject value)
+    {
+        if (!payload.TryGetPropertyValue(propertyName, out var node) || node is null)
+        {
+            value = new JsonObject();
+            return false;
+        }
+
+        if (node is JsonObject jsonObject)
+        {
+            value = jsonObject;
+            return true;
+        }
+
+        throw new JsonException($"{context} must be an object.");
+    }
+
+    private static void ValidateOpeningSignature(JsonObject payload, string context)
+    {
+        if (!payload.TryGetPropertyValue("opening", out var opening)
+            || opening is not JsonObject openingObject
+            || !openingObject.TryGetPropertyValue("signature", out var signature))
+        {
+            return;
+        }
+
+        ValidateExactHex(RequireJsonString(signature, $"{context}.opening.signature"), $"{context}.opening.signature");
+    }
+
+    private static void ValidateAttestationSignature(JsonObject payload, string context)
+    {
+        if (!payload.TryGetPropertyValue("signature", out var signature))
+        {
+            return;
+        }
+
+        ValidateExactHex(RequireJsonString(signature, $"{context}.signature"), $"{context}.signature");
+    }
+
+    private static void ValidateIdentifierReceiptAttestation(JsonObject attestation, string context)
+    {
+        var hasKind = attestation.TryGetPropertyValue("kind", out var kindNode);
+        var hasProofBackend = attestation.TryGetPropertyValue("proof_backend", out _);
+        var hasProofB64 = attestation.TryGetPropertyValue("proof_b64", out _);
+        if (!hasKind)
+        {
+            if (hasProofBackend || hasProofB64)
+            {
+                throw new JsonException($"{context}.kind is required when proof fields are present.");
+            }
+            return;
+        }
+
+        var kind = RequireExactJsonString(kindNode, $"{context}.kind");
+        switch (kind)
+        {
+            case "signed":
+                if (hasProofBackend || hasProofB64)
+                {
+                    throw new JsonException($"{context} signed attestations must not include proof fields.");
+                }
+                break;
+            case "proof":
+                _ = RequireExactJsonStringProperty(attestation, "proof_backend", $"{context}.proof_backend");
+                var proofB64 = RequireExactJsonStringProperty(attestation, "proof_b64", $"{context}.proof_b64");
+                ValidateExactBase64(proofB64, $"{context}.proof_b64");
+                break;
+            default:
+                throw new JsonException($"{context}.kind must be signed or proof.");
+        }
+    }
+
+    private static void ValidateIdentifierReceiptPayloadPolicyId(JsonObject payload, string context)
+    {
+        if (!payload.TryGetPropertyValue("policy_id", out var policyId))
+        {
+            return;
+        }
+
+        ValidateIdentifierPolicyId(
+            RequireJsonStringForJson(policyId, $"{context}.policy_id"),
+            $"{context}.policy_id",
+            static message => new JsonException(message));
+    }
+
+    private static void ValidateIdentifierPolicyId(
+        string? value,
+        string field,
+        Func<string, Exception> createException)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw createException($"{field} must be a non-empty policy id.");
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw createException($"{field} must not contain surrounding whitespace.");
+        }
+
+        if (ContainsControlCharacter(value))
+        {
+            throw createException($"{field} must not contain control characters.");
+        }
+
+        var parts = value.Split('#');
+        if (parts.Length != 2)
+        {
+            throw createException($"{field} must use `kind#rule`.");
+        }
+
+        ValidateIdentifierPolicyIdComponent(parts[0], $"{field}.kind", createException);
+        ValidateIdentifierPolicyIdComponent(parts[1], $"{field}.rule", createException);
+    }
+
+    private static void ValidateIdentifierPolicyIdComponent(
+        string value,
+        string field,
+        Func<string, Exception> createException)
+    {
+        if (value.Length == 0)
+        {
+            throw createException($"{field} must not be empty.");
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw createException($"{field} must not contain surrounding whitespace.");
+        }
+
+        if (ContainsControlCharacter(value))
+        {
+            throw createException($"{field} must not contain control characters.");
+        }
+    }
+
+    private static bool ContainsControlCharacter(string value)
+    {
+        foreach (var character in value)
+        {
+            if (char.IsControl(character))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void ValidateExactNonEmptyText(
+        string? value,
+        string field,
+        Func<string, Exception> createException)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw createException($"{field} must be a non-empty string.");
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw createException($"{field} must not contain surrounding whitespace.");
+        }
+
+        if (ContainsControlCharacter(value))
+        {
+            throw createException($"{field} must not contain control characters.");
+        }
+    }
+
+    private static void ValidateOptionalExactJsonStringProperty(
+        JsonObject payload,
+        string propertyName,
+        string context)
+    {
+        if (!payload.TryGetPropertyValue(propertyName, out var value) || value is null)
+        {
+            return;
+        }
+
+        _ = RequireExactJsonString(value, context);
+    }
+
+    private static void ValidateOptionalUnsignedInteger(
+        JsonObject payload,
+        string propertyName,
+        string context)
+    {
+        if (!payload.TryGetPropertyValue(propertyName, out var value) || value is null)
+        {
+            return;
+        }
+
+        if (value is not JsonValue jsonValue)
+        {
+            throw new JsonException($"{context} must be an unsigned integer.");
+        }
+
+        if (jsonValue.TryGetValue<string>(out var text))
+        {
+            _ = RequireExactJsonString(value, context);
+            if (text.StartsWith("-", StringComparison.Ordinal))
+            {
+                throw new JsonException($"{context} must be non-negative.");
+            }
+            if (text.Length == 0
+                || !ulong.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out _))
+            {
+                throw new JsonException($"{context} must be an unsigned integer.");
+            }
+            return;
+        }
+
+        if (jsonValue.TryGetValue<long>(out var signedInteger))
+        {
+            if (signedInteger < 0)
+            {
+                throw new JsonException($"{context} must be non-negative.");
+            }
+            return;
+        }
+
+        if (jsonValue.TryGetValue<ulong>(out _))
+        {
+            return;
+        }
+
+        throw new JsonException($"{context} must be an unsigned integer.");
+    }
+
+    private static string RequireExactJsonStringProperty(JsonObject payload, string propertyName, string context)
+    {
+        if (!payload.TryGetPropertyValue(propertyName, out var value))
+        {
+            throw new JsonException($"{context} is required.");
+        }
+
+        return RequireExactJsonString(value, context);
+    }
+
+    private static string RequireExactJsonString(JsonNode? node, string context)
+    {
+        var value = RequireJsonStringForJson(node, context);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new JsonException($"{context} must be a non-empty string.");
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{context} must not contain surrounding whitespace.");
+        }
+
+        if (ContainsControlCharacter(value))
+        {
+            throw new JsonException($"{context} must not contain control characters.");
+        }
+
+        return value;
+    }
+
+    private static void ValidateExactBase64(string value, string field)
+    {
+        foreach (var character in value)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                throw new JsonException($"{field} must not contain whitespace.");
+            }
+        }
+
+        try
+        {
+            if (Convert.FromBase64String(value).Length == 0)
+            {
+                throw new JsonException($"{field} must not decode to empty bytes.");
+            }
+        }
+        catch (FormatException ex)
+        {
+            throw new JsonException($"{field} must be valid base64.", ex);
+        }
+    }
+
+    private static string RequireJsonStringForJson(JsonNode? node, string context)
+    {
+        if (node is JsonValue value && value.TryGetValue<string>(out var text))
+        {
+            return text;
+        }
+
+        throw new JsonException($"{context} must be a string.");
+    }
+
+    private static void ValidateExactHex(string? value, string field)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new JsonException($"{field} must be a non-empty hex string.");
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must not contain surrounding whitespace.");
+        }
+
+        var body = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? value[2..]
+            : value;
+        if (body.Length == 0 || body.Length % 2 != 0 || !IsHex(body))
+        {
+            throw new JsonException($"{field} must be an exact hex string.");
+        }
     }
 
     private static void ValidateOptionalBase64(string? value, string field)
@@ -2661,6 +3231,40 @@ public sealed class ToriiClient : IDisposable
         }
 
         return value.Trim();
+    }
+
+    private static string NormalizeIdentifierPolicyId(string? value, string paramName)
+    {
+        var exact = NormalizeExactIdentifierValue(value, paramName);
+        var separator = exact.IndexOf('#', StringComparison.Ordinal);
+        if (separator <= 0 || separator != exact.LastIndexOf('#') || separator == exact.Length - 1)
+        {
+            throw new ArgumentException("Value must use `kind#rule`.", paramName);
+        }
+
+        NormalizeExactIdentifierValue(exact[..separator], $"{paramName}.kind");
+        NormalizeExactIdentifierValue(exact[(separator + 1)..], $"{paramName}.rule");
+        return exact;
+    }
+
+    private static string? NormalizeOptionalIdentifierCiphertext(string? value, string paramName)
+    {
+        return value is null ? null : NormalizeExactIdentifierValue(value, paramName);
+    }
+
+    private static string NormalizeExactIdentifierValue(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("Value cannot be null or whitespace.", paramName);
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Value must not contain surrounding whitespace.", paramName);
+        }
+
+        return value;
     }
 
     private static string? NormalizeOptionalValue(string? value)

@@ -1541,10 +1541,18 @@ def complete_bundle(module):
             deployment["adapter_verifier_vk_hash"] = (
                 "0x" + eth_module.eth_source_adapter_verifier_vk_hash().hex()
             )
+            args = module._evm_source_bridge_args(material, deployment)
+            deployment["evm_source_gate_hash"] = (
+                "0x" + eth_module.eth_source_gate_hash(args).hex()
+            )
         if profile.chain == "bsc":
             bsc_module = module._load_sibling_module("sccp_bsc_source_bridge_evidence.py")
             deployment["adapter_verifier_vk_hash"] = (
                 "0x" + bsc_module.bsc_source_adapter_verifier_vk_hash().hex()
+            )
+            args = module._evm_source_bridge_args(material, deployment)
+            deployment["evm_source_gate_hash"] = (
+                "0x" + bsc_module.bsc_source_gate_hash(args).hex()
             )
         if profile.solana_full_light_client_audit_required:
             solana_module = module._load_sibling_module("sccp_solana_source_state_evidence.py")
@@ -2105,6 +2113,81 @@ version = 1
         module.tomllib = original_tomllib
 
 
+def test_all_lanes_minimal_toml_parser_redacts_sensitive_duplicate_keys():
+    module = load_evidence_module()
+    original_tomllib = module.tomllib
+    module.tomllib = None
+    try:
+        cases = (
+            (
+                (
+                    "[[zk.sccp_destination_rollouts]]\n"
+                    'secret-token-duplicate-key = "first"\n'
+                    'secret-token-duplicate-key = "second"\n'
+                ),
+                "operator evidence:3: duplicate key with sensitive name",
+                ("secret-token-duplicate-key", "first", "second"),
+            ),
+            (
+                (
+                    "[[zk.sccp_destination_rollouts]]\n"
+                    'route|operator-duplicate-key = "first"\n'
+                    'route|operator-duplicate-key = "second"\n'
+                ),
+                "operator evidence:3: duplicate key with malformed name",
+                ("route|operator-duplicate-key", "first", "second"),
+            ),
+        )
+        for toml_text, expected, redacted_tokens in cases:
+            try:
+                module._load_toml(toml_text, label="operator evidence")
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected
+                for token in redacted_tokens:
+                    assert token not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "minimal TOML loader accepted unsafe duplicate key"
+                )
+    finally:
+        module.tomllib = original_tomllib
+
+
+def test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names():
+    module = load_evidence_module()
+    original_tomllib = module.tomllib
+    module.tomllib = None
+    try:
+        cases = (
+            (
+                "[[zk.secret-token-section]]\nversion = 1\n",
+                "operator evidence:1: unsupported zk section with sensitive name",
+                "secret-token-section",
+            ),
+            (
+                "[[zk.route|operator-section]]\nversion = 1\n",
+                "operator evidence:1: unsupported zk section with malformed name",
+                "route|operator-section",
+            ),
+        )
+        for toml_text, expected, redacted_token in cases:
+            try:
+                module._load_toml(toml_text, label="operator evidence")
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected
+                assert redacted_token not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "minimal TOML loader accepted unsafe unsupported section"
+                )
+    finally:
+        module.tomllib = original_tomllib
+
+
 def test_all_lanes_loader_redacts_toml_parser_failures():
     module = load_evidence_module()
 
@@ -2126,10 +2209,66 @@ def test_all_lanes_loader_redacts_toml_parser_failures():
             assert rendered == "operator evidence: invalid TOML"
             assert "secret-token" not in rendered
             assert "parser detail" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
         else:
             raise AssertionError("all-lanes TOML loader accepted parser failure")
     finally:
         module.tomllib = original_tomllib
+
+
+def test_all_lanes_minimal_toml_parser_redacts_json_exception_causes():
+    module = load_evidence_module()
+    original_tomllib = module.tomllib
+    module.tomllib = None
+    try:
+        cases = (
+            (
+                '[[zk.sccp_route_allowlists]]\nroute_id = "secret-token string',
+                "operator evidence:2: invalid string",
+                "secret-token string",
+            ),
+            (
+                '[[zk.sccp_route_allowlists]]\nallowed_domains = ["secret-token array",',
+                "operator evidence:2: invalid array",
+                "secret-token array",
+            ),
+        )
+        for toml_text, expected, secret in cases:
+            try:
+                module._load_toml(toml_text, label="operator evidence")
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected
+                assert "secret-token" not in rendered
+                assert secret not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError("minimal TOML loader accepted invalid JSON value")
+    finally:
+        module.tomllib = original_tomllib
+
+
+def test_all_lanes_metadata_comment_redacts_json_exception_causes():
+    module = load_evidence_module()
+
+    try:
+        module._route_allowlist_comment_metadata(
+            '# sccp_route_canary_status = "secret-token comment\n'
+            "[[zk.sccp_route_allowlists]]\n"
+            "version = 1\n",
+            label="operator evidence",
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "operator evidence:1: invalid metadata comment"
+        assert "secret-token" not in rendered
+        assert "secret-token comment" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("all-lanes metadata comment accepted invalid JSON")
 
 
 def test_all_lanes_cli_redacts_top_level_exception_details(
@@ -2242,7 +2381,16 @@ def test_all_lanes_evidence_bundle_is_ready():
         assert lane["production_ready"] is True
         assert lane["blockers"] == []
         source_adapter_gate = lane["source_adapter_gate"]
-        if lane["chain"] == "sol":
+        if lane["chain"] in ("eth", "bsc"):
+            deployment = deployments_by_domain[lane["domain"]]
+            assert source_adapter_gate["required"] is True
+            assert source_adapter_gate["ready"] is True
+            assert source_adapter_gate["gate_hash"] == deployment[
+                "evm_source_gate_hash"
+            ]
+            assert set(source_adapter_gate["audit_hashes"]) == {"evm_source_gate_hash"}
+            assert source_adapter_gate["blockers"] == []
+        elif lane["chain"] == "sol":
             deployment = deployments_by_domain[lane["domain"]]
             assert source_adapter_gate["required"] is True
             assert source_adapter_gate["ready"] is True
@@ -2275,14 +2423,6 @@ def test_all_lanes_evidence_bundle_is_ready():
                 "tron_dpos_source_gate_hash"
             }
             assert source_adapter_gate["blockers"] == []
-        else:
-            assert source_adapter_gate == {
-                "required": False,
-                "ready": True,
-                "gate_hash": "",
-                "audit_hashes": {},
-                "blockers": [],
-            }
         evm_live_metadata = lane["evm_live_metadata"]
         if lane["chain"] == "eth":
             assert evm_live_metadata == {
@@ -2494,6 +2634,34 @@ def test_all_lanes_evidence_rejects_unknown_record_fields():
     assert "domain 4 (ton): unexpected field unexpected_route_hash" in blockers
 
 
+def test_all_lanes_evidence_redacts_unsafe_unknown_record_fields():
+    module = load_evidence_module()
+    cases = (
+        (
+            "secret-token-material-field",
+            "unexpected field with sensitive name",
+        ),
+        (
+            "route|operator-material-field",
+            "unexpected field with malformed name",
+        ),
+        (
+            7,
+            "unexpected non-string field name",
+        ),
+    )
+    for field, expected in cases:
+        records = complete_bundle(module)
+        records["sccp_source_verifier_materials"][0][field] = "operator-controlled"
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False
+        assert expected in blockers
+        assert str(field) not in blockers
+
+
 def test_all_lanes_evidence_rejects_reused_source_material_role_hashes():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -2672,23 +2840,109 @@ def test_all_lanes_evidence_rejects_reused_light_client_audit_role_hashes():
     ) in blockers
 
 
-def test_all_lanes_evidence_rejects_ton_audit_hash_reusing_template_material():
+def test_all_lanes_evidence_rejects_source_adapter_audit_hash_template_replays():
     module = load_evidence_module()
+    solana_module = module._load_sibling_module("sccp_solana_source_state_evidence.py")
     ton_module = module._load_sibling_module("sccp_ton_source_state_evidence.py")
-    records = complete_bundle(module)
-    ton_deployment = records["sccp_source_adapter_engine_deployments"][3]
-    template_hash = ton_module._ton_template_component_hash(
-        ton_module.TON_SOURCE_TRUST_ANCHOR_ID,
-        "source-trust-anchor",
+    cases = (
+        (
+            module.SCCP_DOMAIN_SOL,
+            module.SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS,
+            solana_module._template_component_hashes(),
+        ),
+        (
+            module.SCCP_DOMAIN_TON,
+            module.TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS,
+            ton_module._template_component_hashes(),
+        ),
     )
-    ton_deployment["ton_masterchain_config_verifier_hash"] = "0x" + template_hash.hex()
 
-    summary = module.validate_evidence_bundle(records)
+    for domain, audit_fields, template_hashes in cases:
+        profile = module.LANE_PROFILES[domain]
+        for audit_field in audit_fields:
+            for template_field, template_hash in template_hashes.items():
+                records = complete_bundle(module)
+                deployment_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+                deployment = records["sccp_source_adapter_engine_deployments"][
+                    deployment_index
+                ]
+                deployment[audit_field] = "0x" + template_hash.hex()
 
-    assert summary["production_ready"] is False
-    blockers = "\n".join(summary["blockers"])
-    assert "domain 4 (ton): TON full light-client gate cannot be recomputed" in blockers
-    assert "built-in template material" not in blockers
+                summary = module.validate_evidence_bundle(records)
+
+                assert summary["production_ready"] is False, (
+                    domain,
+                    audit_field,
+                    template_field,
+                )
+                assert (
+                    f"domain {domain} ({profile.chain}): {audit_field} must be "
+                    "deployed audit evidence, not built-in template material"
+                ) in "\n".join(summary["blockers"])
+
+
+def test_all_lanes_evidence_rejects_source_material_template_hashes_for_all_lanes():
+    module = load_evidence_module()
+    eth_module = module._load_sibling_module("sccp_eth_source_bridge_evidence.py")
+    bsc_module = module._load_sibling_module("sccp_bsc_source_bridge_evidence.py")
+    solana_module = module._load_sibling_module("sccp_solana_source_state_evidence.py")
+    ton_module = module._load_sibling_module("sccp_ton_source_state_evidence.py")
+    tron_module = module._load_sibling_module("sccp_tron_source_bridge_evidence.py")
+    template_cases = [
+        (
+            module.SCCP_DOMAIN_ETH,
+            field,
+            eth_module._evm_family_template_component_hash(component_id, component_kind),
+        )
+        for field, (component_id, component_kind) in (
+            eth_module.ETH_TEMPLATE_COMPONENTS.items()
+        )
+    ]
+    template_cases.extend(
+        (
+            module.SCCP_DOMAIN_BSC,
+            field,
+            bsc_module._evm_family_template_component_hash(component_id, component_kind),
+        )
+        for field, (component_id, component_kind) in (
+            bsc_module.bsc_template_components().items()
+        )
+    )
+    template_cases.extend(
+        (module.SCCP_DOMAIN_SOL, field, template_hash)
+        for field, template_hash in solana_module._template_component_hashes().items()
+    )
+    template_cases.extend(
+        (module.SCCP_DOMAIN_TON, field, template_hash)
+        for field, template_hash in ton_module._template_component_hashes().items()
+    )
+    template_cases.extend(
+        (
+            module.SCCP_DOMAIN_TRON,
+            field,
+            tron_module._tron_template_component_hash(component_id, component_kind),
+        )
+        for field, (component_id, component_kind) in (
+            tron_module.TRON_TEMPLATE_COMPONENTS.items()
+        )
+    )
+
+    assert template_cases
+    for domain, field, template_hash in template_cases:
+        records = complete_bundle(module)
+        material_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+        profile = module.LANE_PROFILES[domain]
+        records["sccp_source_verifier_materials"][material_index][field] = (
+            "0x" + template_hash.hex()
+        )
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False, (domain, field)
+        assert (
+            f"domain {domain} ({profile.chain}): {field} must be deployed "
+            "evidence, not built-in template material"
+        ) in "\n".join(summary["blockers"])
 
 
 def test_all_lanes_evidence_rejects_unknown_sections(tmp_path, capsys):
@@ -2711,6 +2965,62 @@ def test_all_lanes_evidence_rejects_unknown_sections(tmp_path, capsys):
     else:
         assert False, "unknown TOML sections must abort the CLI preflight"
     assert "unsupported zk section sccp_shadow_rollouts" in capsys.readouterr().err
+
+
+def test_all_lanes_evidence_redacts_unsafe_direct_section_names():
+    module = load_evidence_module()
+
+    cases = (
+        (
+            "secret-token-direct-section",
+            "unsupported evidence section with sensitive name",
+        ),
+        (
+            "route|operator-direct-section",
+            "unsupported evidence section with malformed name",
+        ),
+    )
+    for section, expected in cases:
+        records = complete_bundle(module)
+        records[section] = [{"domain": 1}]
+
+        summary = module.validate_evidence_bundle(records)
+
+        blockers = "\n".join(summary["blockers"])
+        assert summary["production_ready"] is False
+        assert expected in blockers
+        assert section not in blockers
+
+
+def test_all_lanes_loader_redacts_unsupported_zk_section_names(tmp_path):
+    module = load_evidence_module()
+    if module.tomllib is None:
+        return
+
+    cases = (
+        (
+            '[[zk."secret-token-zk-section"]]\ndomain = 1\n',
+            "unsupported zk section with sensitive name",
+            "secret-token-zk-section",
+        ),
+        (
+            '[[zk."route|operator-zk-section"]]\ndomain = 1\n',
+            "unsupported zk section with malformed name",
+            "route|operator-zk-section",
+        ),
+    )
+    for index, (toml_text, expected_detail, redacted_token) in enumerate(cases):
+        path = tmp_path / f"unsafe-section-{index}.toml"
+        path.write_text(toml_text, encoding="utf-8")
+
+        try:
+            module.load_evidence_bundle([path])
+        except ValueError as exc:
+            rendered = str(exc)
+            assert expected_detail in rendered
+            assert redacted_token not in rendered
+        else:
+            raise AssertionError("unsafe unsupported TOML section was accepted")
 
 
 def test_all_lanes_evidence_rejects_malformed_direct_sections():
@@ -5237,6 +5547,25 @@ def test_all_lanes_redacts_solana_live_base64_comment_failures():
     assert "canonical base64" not in blockers
 
 
+def test_all_lanes_base64_helper_redacts_parser_causes():
+    module = load_evidence_module()
+
+    try:
+        module._decode_canonical_base64(
+            "secret-token all-lanes base64",
+            label="Solana Program account data base64 metadata",
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "Solana Program account data base64 metadata must be base64"
+        assert "secret-token" not in rendered
+        assert "all-lanes base64" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("all-lanes base64 helper accepted invalid base64")
+
+
 def test_all_lanes_rejects_solana_programdata_invalid_executable_base64():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -6087,6 +6416,16 @@ def test_all_lanes_evidence_rejects_malformed_governed_blocker_containers():
         for rollout in records["sccp_destination_rollouts"]
         if rollout["domain"] == module.SCCP_DOMAIN_TRON
     )
+    sol_destination = next(
+        rollout
+        for rollout in records["sccp_destination_rollouts"]
+        if rollout["domain"] == module.SCCP_DOMAIN_SOL
+    )
+    eth_route = next(
+        route
+        for route in records["sccp_route_allowlists"]
+        if route["domain"] == module.SCCP_DOMAIN_ETH
+    )
     bsc_route = next(
         route
         for route in records["sccp_route_allowlists"]
@@ -6097,11 +6436,20 @@ def test_all_lanes_evidence_rejects_malformed_governed_blocker_containers():
         for route in records["sccp_route_allowlists"]
         if route["domain"] == module.SCCP_DOMAIN_SOL
     )
+    ton_route = next(
+        route
+        for route in records["sccp_route_allowlists"]
+        if route["domain"] == module.SCCP_DOMAIN_TON
+    )
 
+    confusable_blocker = "operator public bl\u043ecker"
     eth_destination["blockers"] = "operator says destination rollout is ready"
     tron_destination["blockers"] = [123]
+    sol_destination["blockers"] = ["operator\nsecret-token-governed-blocker"]
+    eth_route["blockers"] = ["operator secret-token-governed-blocker"]
     bsc_route["blockers"] = [""]
     sol_route["blockers"] = [" route canary still pending"]
+    ton_route["blockers"] = ["operator|governed-blocker", confusable_blocker]
 
     summary = module.validate_evidence_bundle(records)
 
@@ -6123,8 +6471,27 @@ def test_all_lanes_evidence_rejects_malformed_governed_blocker_containers():
         "domain 3 (sol): route allowlist blockers[0] must be a non-empty "
         "canonical string"
     ) in blockers
+    assert (
+        "domain 3 (sol): destination rollout blockers[0] contains control "
+        "character"
+    ) in blockers
+    assert (
+        "domain 1 (eth): route allowlist blockers[0] contains sensitive name"
+        in blockers
+    )
+    assert (
+        "domain 4 (ton): route allowlist blockers[0] contains "
+        "Markdown-unsafe character"
+    ) in blockers
+    assert (
+        "domain 4 (ton): route allowlist blockers[1] contains non-ASCII "
+        "character"
+    ) in blockers
     assert "domain 2 (bsc): route allowlist blockers must be empty" in blockers
     assert "domain 3 (sol): route allowlist blockers must be empty" in blockers
+    assert "secret-token-governed-blocker" not in blockers
+    assert "operator|governed-blocker" not in blockers
+    assert confusable_blocker not in blockers
 
 
 
@@ -6163,11 +6530,19 @@ def test_all_lanes_evidence_rejects_source_gate_audit_hash_role_reuse():
     tron_deployment["tron_dpos_source_gate_hash"] = tron_destination[
         "destination_binding_hash"
     ]
+    _, bsc_deployment, _ = by_domain[module.SCCP_DOMAIN_BSC]
+    bsc_deployment["evm_source_gate_hash"] = bsc_deployment[
+        "deployment_receipt_hash"
+    ]
 
     summary = module.validate_evidence_bundle(records)
 
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
+    assert (
+        "domain 2 (bsc): source adapter deployment role hash "
+        "evm_source_gate_hash must not reuse deployment_receipt_hash"
+    ) in blockers
     assert (
         "domain 3 (sol): source_adapter_gate hash role "
         "audit_hashes.solana_tower_replay_verifier_hash must not reuse "
@@ -6185,10 +6560,41 @@ def test_all_lanes_evidence_rejects_source_gate_audit_hash_role_reuse():
     ) in blockers
 
 
+def test_all_lanes_evidence_rejects_missing_evm_source_gate_hash():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+    records["sccp_source_adapter_engine_deployments"][eth_index].pop(
+        "evm_source_gate_hash"
+    )
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    blockers = "\n".join(summary["blockers"])
+    assert "domain 1 (eth): evm_source_gate_hash" in blockers
+    eth_gate = next(
+        lane["source_adapter_gate"]
+        for lane in summary["lanes"]
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    assert eth_gate["required"] is True
+    assert eth_gate["ready"] is False
+    assert "evm_source_gate_hash must be a non-zero 32-byte hex value" in (
+        "\n".join(eth_gate["blockers"])
+    )
+
+
 def test_all_lanes_evidence_recomputes_audit_and_tron_config_hashes():
     module = load_evidence_module()
     records = complete_bundle(module)
 
+    records["sccp_source_adapter_engine_deployments"][0][
+        "evm_source_gate_hash"
+    ] = hex32(0xAC)
+    records["sccp_source_adapter_engine_deployments"][1][
+        "evm_source_gate_hash"
+    ] = hex32(0xAD)
     records["sccp_source_adapter_engine_deployments"][2][
         "solana_full_light_client_gate_hash"
     ] = hex32(0xAB)
@@ -6205,16 +6611,28 @@ def test_all_lanes_evidence_recomputes_audit_and_tron_config_hashes():
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
     assert "domain 3 (sol): solana_full_light_client_gate_hash does not match" in blockers
+    assert "domain 1 (eth): evm_source_gate_hash does not match" in blockers
+    assert "domain 2 (bsc): evm_source_gate_hash does not match" in blockers
     assert "domain 4 (ton): ton_full_light_client_gate_hash does not match" in blockers
     assert "domain 5 (tron): TRON DPoS source gate cannot be recomputed" in blockers
     assert "domain 5 (tron): source_bridge_config_hash does not match" in blockers
     lanes = {lane["domain"]: lane for lane in summary["lanes"]}
+    eth_gate = lanes[module.SCCP_DOMAIN_ETH]["source_adapter_gate"]
+    bsc_gate = lanes[module.SCCP_DOMAIN_BSC]["source_adapter_gate"]
     sol_gate = lanes[module.SCCP_DOMAIN_SOL]["source_adapter_gate"]
     ton_gate = lanes[module.SCCP_DOMAIN_TON]["source_adapter_gate"]
     tron_gate = lanes[module.SCCP_DOMAIN_TRON]["source_adapter_gate"]
+    assert eth_gate["ready"] is False
+    assert bsc_gate["ready"] is False
     assert sol_gate["ready"] is False
     assert ton_gate["ready"] is False
     assert tron_gate["ready"] is False
+    assert "evm_source_gate_hash does not match" in "\n".join(
+        eth_gate["blockers"]
+    )
+    assert "evm_source_gate_hash does not match" in "\n".join(
+        bsc_gate["blockers"]
+    )
     assert "solana_full_light_client_gate_hash does not match" in "\n".join(
         sol_gate["blockers"]
     )
@@ -6249,7 +6667,11 @@ def test_all_lanes_evidence_redacts_source_gate_recompute_failures(
             tron_source_bridge_config_hash=fail_recompute,
         ),
         "sccp_eth_source_bridge_evidence.py": SimpleNamespace(
+            eth_source_gate_hash=fail_recompute,
             eth_source_bridge_config_hash=fail_recompute,
+        ),
+        "sccp_bsc_source_bridge_evidence.py": SimpleNamespace(
+            bsc_source_gate_hash=fail_recompute,
         ),
     }
 
@@ -6260,6 +6682,30 @@ def test_all_lanes_evidence_redacts_source_gate_recompute_failures(
     )
 
     cases = (
+        (
+            lambda material, deployment: module._check_evm_source_gate(
+                module.LANE_PROFILES[module.SCCP_DOMAIN_ETH],
+                material,
+                deployment,
+            ),
+            (
+                records["sccp_source_verifier_materials"][0],
+                records["sccp_source_adapter_engine_deployments"][0],
+            ),
+            "EVM source gate cannot be recomputed",
+        ),
+        (
+            lambda material, deployment: module._check_evm_source_gate(
+                module.LANE_PROFILES[module.SCCP_DOMAIN_BSC],
+                material,
+                deployment,
+            ),
+            (
+                records["sccp_source_verifier_materials"][1],
+                records["sccp_source_adapter_engine_deployments"][1],
+            ),
+            "EVM source gate cannot be recomputed",
+        ),
         (
             module._check_solana_full_light_client_gate,
             (
@@ -6343,6 +6789,7 @@ def test_all_lanes_evidence_rejects_lane_foreign_audit_fields():
     eth_deployment["solana_tower_replay_verifier_hash"] = hex32(0x90)
     eth_deployment["solana_full_light_client_gate_hash"] = hex32(0x91)
     solana_deployment = records["sccp_source_adapter_engine_deployments"][2]
+    solana_deployment["evm_source_gate_hash"] = hex32(0x96)
     solana_deployment["ton_masterchain_config_verifier_hash"] = hex32(0x92)
     solana_deployment["ton_full_light_client_gate_hash"] = hex32(0x93)
     bsc_deployment = records["sccp_source_adapter_engine_deployments"][1]
@@ -6362,6 +6809,10 @@ def test_all_lanes_evidence_rejects_lane_foreign_audit_fields():
     )
     assert (
         "domain 3 (sol): ton_masterchain_config_verifier_hash must be empty for this lane"
+        in blockers
+    )
+    assert (
+        "domain 3 (sol): evm_source_gate_hash must be empty for this lane"
         in blockers
     )
     assert (
@@ -6914,6 +7365,102 @@ def test_all_lanes_release_checklist_requires_source_gate_hash_and_audits():
     ) in blockers
 
 
+def test_all_lanes_release_checklist_redacts_unsafe_source_gate_audit_fields():
+    module = load_evidence_module()
+    base_lane = {
+        "domain": module.SCCP_DOMAIN_SOL,
+        "chain": "sol",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_record_hashes": {
+            "source_verifier_material_hash": hex32(0x62),
+            "source_adapter_engine_deployment_hash": hex32(0x63),
+        },
+        "source_adapter_gate": {
+            "required": True,
+            "ready": True,
+            "gate_hash": hex32(0x61),
+            "audit_hashes": {
+                "solana_tower_replay_verifier_hash": hex32(0x70),
+                "solana_full_accountsdb_lattice_verifier_hash": hex32(0x71),
+                "solana_bank_fork_choice_verifier_hash": hex32(0x72),
+                "solana_full_light_client_gate_hash": hex32(0x61),
+            },
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+            "destination_binding_hash": hex32(0x65),
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_allowlist_hash": hex32(0x68),
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": hex32(0x69),
+                "evidence_source": "solana_live_programdata_snapshot",
+                "evidence_bound": True,
+            },
+        },
+        "blockers": [],
+    }
+
+    cases = (
+        (
+            "secret-token-audit-field",
+            hex32(0x73),
+            "domain 3 (sol): source adapter gate audit hashes contains "
+            "unexpected field with sensitive name",
+        ),
+        (
+            "route|operator-audit-field",
+            hex32(0x74),
+            "domain 3 (sol): source adapter gate audit hashes contains "
+            "unexpected field with malformed name",
+        ),
+        (
+            7,
+            hex32(0x75),
+            "domain 3 (sol): source adapter gate audit hashes contains "
+            "non-string field name",
+        ),
+        (
+            "secret-token-replayed-audit-field",
+            hex32(0x69),
+            "domain 3 (sol): source adapter gate audit hashes contains "
+            "unexpected field with sensitive name",
+        ),
+    )
+    for field, value, expected_blocker in cases:
+        lane = copy.deepcopy(base_lane)
+        lane["source_adapter_gate"]["audit_hashes"][field] = value
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        blockers = "\n".join(items["governed_deployment_evidence"]["blockers"])
+
+        assert checklist["ready"] is False
+        assert expected_blocker in blockers
+        if isinstance(field, str):
+            assert field not in blockers
+
+    safe_lane = copy.deepcopy(base_lane)
+    safe_lane["source_adapter_gate"]["audit_hashes"]["operator_override"] = hex32(0x73)
+
+    checklist = module._release_checklist([safe_lane], [])
+    items = {item["id"]: item for item in checklist["items"]}
+    blockers = "\n".join(items["governed_deployment_evidence"]["blockers"])
+
+    assert (
+        "domain 3 (sol): source adapter gate audit hashes contains unexpected "
+        "field: operator_override"
+    ) in blockers
+
+
 def test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay():
     module = load_evidence_module()
     route_canary_hash = hex32(0x66)
@@ -6978,7 +7525,7 @@ def test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay():
     ) in blockers
 
 
-def test_all_lanes_release_checklist_rejects_non_required_source_gate_material():
+def test_all_lanes_release_checklist_rejects_evm_source_gate_policy_downgrade():
     module = load_evidence_module()
     lane = {
         "domain": module.SCCP_DOMAIN_ETH,
@@ -7017,6 +7564,9 @@ def test_all_lanes_release_checklist_rejects_non_required_source_gate_material()
 
     assert checklist["ready"] is False
     assert items["governed_deployment_evidence"]["ready"] is False
+    assert (
+        "domain 1 (eth): source adapter gate required flag must match lane policy"
+    ) in blockers
     assert (
         "domain 1 (eth): source adapter gate hash must be empty when not "
         "required"

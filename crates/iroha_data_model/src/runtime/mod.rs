@@ -6,7 +6,7 @@
 
 use std::{string::String, vec::Vec};
 
-use iroha_crypto::{Hash, KeyPair, Signature};
+use iroha_crypto::{Error as CryptoError, Hash, KeyPair, Signature};
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
@@ -170,15 +170,26 @@ impl RuntimeUpgradeManifest {
     }
 
     /// Attach provenance by signing the canonical payload with the provided key pair.
-    #[must_use]
-    pub fn signed(mut self, key_pair: &KeyPair) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns a crypto error if the selected signing backend rejects the
+    /// key material or payload.
+    pub fn try_signed(mut self, key_pair: &KeyPair) -> Result<Self, CryptoError> {
         let payload = self.signature_payload_bytes();
-        let signature = Signature::new(key_pair.private_key(), &payload);
+        let signature = Signature::try_new(key_pair.private_key(), &payload)?;
         self.provenance.push(ManifestProvenance {
             signer: key_pair.public_key().clone(),
             signature,
         });
-        self
+        Ok(self)
+    }
+
+    /// Attach provenance by signing the canonical payload with the provided key pair.
+    #[must_use]
+    pub fn signed(self, key_pair: &KeyPair) -> Self {
+        self.try_signed(key_pair)
+            .expect("runtime upgrade manifest signing should succeed")
     }
 }
 
@@ -437,7 +448,7 @@ mod tests {
     #[test]
     fn signature_payload_excludes_provenance_signatures() {
         let kp = KeyPair::random();
-        let mut manifest = RuntimeUpgradeManifest {
+        let manifest = RuntimeUpgradeManifest {
             name: "ABI V1".to_string(),
             description: "Activate ABI v1".to_string(),
             abi_version: 1,
@@ -455,14 +466,13 @@ mod tests {
         };
 
         let payload = manifest.signature_payload_bytes();
-        let signature = Signature::new(kp.private_key(), &payload);
-        manifest.provenance.push(ManifestProvenance {
-            signer: kp.public_key().clone(),
-            signature: signature.clone(),
-        });
+        let signed = manifest.try_signed(&kp).expect("sign runtime manifest");
+        let provenance = signed.provenance.first().expect("manifest provenance");
 
-        assert_eq!(payload, manifest.signature_payload_bytes());
-        signature
+        assert_eq!(payload, signed.signature_payload_bytes());
+        assert_eq!(provenance.signer, kp.public_key().clone());
+        provenance
+            .signature
             .verify(kp.public_key(), &payload)
             .expect("signature must verify");
     }

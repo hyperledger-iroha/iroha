@@ -32,6 +32,20 @@ struct StoredDaReceipt {
 
 const STORED_RECEIPT_VERSION: u16 = 1;
 
+/// Encode a DA receipt spool record using the production wrapper schema.
+#[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
+pub(crate) fn encode_receipt_for_spool_test(
+    sequence: u64,
+    receipt: DaIngestReceipt,
+) -> Result<Vec<u8>, norito::core::Error> {
+    let stored = StoredDaReceipt {
+        version: STORED_RECEIPT_VERSION,
+        sequence,
+        receipt,
+    };
+    norito::to_bytes(&stored)
+}
+
 /// Receipt entry captured from the spool.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DaReceiptEntry {
@@ -160,6 +174,16 @@ pub enum DaReceiptQueueError {
         expected: StorageTicketId,
         /// Storage ticket observed in the new receipt.
         observed: StorageTicketId,
+    },
+    /// Receipt reused a sequence number with different signed receipt evidence.
+    #[error("receipt evidence conflict for lane {lane:?} epoch {epoch} sequence {sequence}")]
+    ReceiptEvidenceConflict {
+        /// Lane identifier that conflicted.
+        lane: LaneId,
+        /// Epoch that conflicted.
+        epoch: u64,
+        /// Sequence that conflicted.
+        sequence: u64,
     },
     /// Receipt sequence regressed relative to the cursor.
     #[error(
@@ -422,7 +446,7 @@ pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaR
             source,
         })?;
         let path = entry.path();
-        if !is_da_receipt_file(&path) {
+        if !is_da_receipt_file(&path)? {
             continue;
         }
 
@@ -450,10 +474,30 @@ pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaR
     Ok(receipts)
 }
 
-fn is_da_receipt_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("da-receipt-") && name.ends_with(".norito"))
+fn is_da_receipt_file(path: &Path) -> Result<bool, DaReceiptSpoolError> {
+    let Some(name) = path.file_name() else {
+        return Ok(false);
+    };
+    if let Some(name) = name.to_str() {
+        return Ok(name.starts_with("da-receipt-") && name.ends_with(".norito"));
+    }
+    if non_utf8_artifact_name_matches(name, b"da-receipt-", b".norito") {
+        return Err(malformed_receipt_filename(path));
+    }
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn non_utf8_artifact_name_matches(name: &std::ffi::OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    let bytes = name.as_bytes();
+    bytes.starts_with(prefix) && bytes.ends_with(suffix)
+}
+
+#[cfg(not(unix))]
+fn non_utf8_artifact_name_matches(_name: &std::ffi::OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
+    false
 }
 
 #[derive(Clone, Copy)]
@@ -648,6 +692,13 @@ pub fn plan_committable_receipts(
                     observed: entry.receipt.storage_ticket,
                 });
             }
+            if existing.receipt != entry.receipt {
+                return Err(DaReceiptQueueError::ReceiptEvidenceConflict {
+                    lane: entry.lane_epoch.lane_id,
+                    epoch: entry.lane_epoch.epoch,
+                    sequence: entry.sequence,
+                });
+            }
             continue;
         }
         lane_map.insert(entry.sequence, entry);
@@ -801,8 +852,18 @@ pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) -> DaRe
             }
         };
         let path = entry.path();
-        if !is_da_receipt_file(&path) {
-            continue;
+        match is_da_receipt_file(&path) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(err) => {
+                report.skipped_invalid = report.skipped_invalid.saturating_add(1);
+                iroha_logger::warn!(
+                    ?err,
+                    path = %path.display(),
+                    "skipping invalid DA receipt filename during stale cleanup"
+                );
+                continue;
+            }
         }
         report.scanned_receipts = report.scanned_receipts.saturating_add(1);
         let data = match std::fs::read(&path) {
@@ -1030,6 +1091,54 @@ mod tests {
             ),
             "corrupt receipt artifacts must reject the whole spool load"
         );
+    }
+
+    #[test]
+    fn load_receipt_entries_rejects_receipt_shaped_directory() {
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let path = dir.path().join(receipt_file_name(&receipt, 3, [0x7c; 32]));
+        std::fs::create_dir(&path).expect("create receipt-shaped directory");
+
+        assert!(
+            matches!(
+                load_receipt_entries(dir.path()),
+                Err(DaReceiptSpoolError::ReadFile { path: observed, .. }) if observed == path
+            ),
+            "receipt-shaped non-files must reject the whole spool load"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn receipt_file_matcher_rejects_non_utf8_receipt_shaped_filename() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let path = PathBuf::from(OsString::from_vec(b"da-receipt-\xFF.norito".to_vec()));
+
+        let err = is_da_receipt_file(&path).expect_err("non-UTF8 shaped artifact rejects");
+        match err {
+            DaReceiptSpoolError::MalformedFilename { path: seen } => assert_eq!(seen, path),
+            _ => panic!("expected malformed filename for non-UTF8 DA artifact, got {err:?}"),
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn load_receipt_entries_rejects_non_utf8_receipt_shaped_filename() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join(PathBuf::from(OsString::from_vec(
+            b"da-receipt-\xFF.norito".to_vec(),
+        )));
+        std::fs::write(&path, b"ignored").expect("write invalid utf8 filename");
+
+        let err = load_receipt_entries(dir.path()).expect_err("non-UTF8 DA artifact rejects");
+        match err {
+            DaReceiptSpoolError::MalformedFilename { path: seen } => assert_eq!(seen, path),
+            _ => panic!("expected malformed filename for non-UTF8 DA artifact, got {err:?}"),
+        }
     }
 
     #[test]
@@ -1474,6 +1583,40 @@ mod tests {
         assert!(matches!(
             result,
             Err(DaReceiptQueueError::StorageTicketConflict { sequence: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn plan_committable_receipts_flags_same_manifest_receipt_evidence_conflict() {
+        let lane = LaneId::new(6);
+        let receipt_a = sample_receipt(lane.as_u32(), 1, 1);
+        let mut receipt_b = sample_receipt(lane.as_u32(), 1, 1);
+        receipt_b.manifest_hash = receipt_a.manifest_hash;
+        receipt_b.storage_ticket = receipt_a.storage_ticket;
+        receipt_b.blob_hash = BlobDigest::new([0x42; 32]);
+
+        let entries = vec![
+            DaReceiptEntry {
+                lane_epoch: LaneEpoch::new(lane, 1),
+                sequence: 1,
+                manifest_hash: ManifestDigest::new(*receipt_a.manifest_hash.as_bytes()),
+                receipt: receipt_a,
+            },
+            DaReceiptEntry {
+                lane_epoch: LaneEpoch::new(lane, 1),
+                sequence: 1,
+                manifest_hash: ManifestDigest::new(*receipt_b.manifest_hash.as_bytes()),
+                receipt: receipt_b,
+            },
+        ];
+        let lane_config = lane_config_for(lane);
+        let sealed = BTreeSet::new();
+        let cursors = BTreeMap::new();
+
+        let result = plan_committable_receipts(&lane_config, &cursors, &sealed, entries);
+        assert!(matches!(
+            result,
+            Err(DaReceiptQueueError::ReceiptEvidenceConflict { sequence: 1, .. })
         ));
     }
 }

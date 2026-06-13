@@ -98,10 +98,22 @@ fn tx_gossip_frame_payload_cap(
     }
     let dummy_keypair = tx_gossip_frame_probe_keypair();
     let dummy_authority = AccountId::new(dummy_keypair.public_key().clone());
-    let dummy_signed =
-        iroha_data_model::transaction::TransactionBuilder::new(chain_id.clone(), dummy_authority)
-            .with_instructions(std::iter::empty::<InstructionBox>())
-            .sign(dummy_keypair.private_key());
+    let dummy_signed = match iroha_data_model::transaction::TransactionBuilder::new(
+        chain_id.clone(),
+        dummy_authority,
+    )
+    .with_instructions(std::iter::empty::<InstructionBox>())
+    .try_sign(dummy_keypair.private_key())
+    {
+        Ok(transaction) => transaction,
+        Err(err) => {
+            iroha_logger::warn!(
+                %err,
+                "failed to sign transaction gossip frame-size probe"
+            );
+            return 0;
+        }
+    };
     let probe_payload_len = plaintext_cap;
     let payload = Arc::new(vec![0u8; probe_payload_len]);
     let probe_gossip = TransactionGossip {
@@ -3689,6 +3701,15 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 .expect("checked probe public key algorithm"),
             Algorithm::Ed25519
         );
+        let chain_id: ChainId = "probe-signing".parse().expect("chain id");
+        let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new(chain_id, authority)
+            .with_instructions(std::iter::empty::<InstructionBox>())
+            .try_sign(keypair.private_key())
+            .expect("checked transaction gossip frame probe signing");
+        transaction
+            .verify_signature()
+            .expect("transaction gossip frame probe signature should verify");
     }
 
     #[tokio::test(flavor = "current_thread")]

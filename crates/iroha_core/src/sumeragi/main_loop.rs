@@ -9,6 +9,7 @@ use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
     convert::TryFrom,
+    ffi::OsStr,
     fs,
     num::NonZeroUsize,
     ops::Bound::{Excluded, Unbounded},
@@ -72,6 +73,33 @@ use thiserror::Error;
 compile_error!(
     "The `bls` feature is mandatory for iroha_core consensus; rebuild with `--features bls`"
 );
+
+fn try_sign_consensus_preimage(
+    private_key: &PrivateKey,
+    preimage: &[u8],
+) -> std::result::Result<Vec<u8>, iroha_crypto::Error> {
+    Signature::try_new(private_key, preimage).map(|signature| signature.payload().to_vec())
+}
+
+#[cfg(test)]
+mod checked_consensus_signing_tests {
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+
+    use super::try_sign_consensus_preimage;
+
+    #[test]
+    fn consensus_preimage_checked_signature_verifies() {
+        let keypair = KeyPair::from_seed(vec![0x42; 32], Algorithm::BlsNormal);
+        let preimage = b"sumeragi checked consensus signing";
+
+        let payload = try_sign_consensus_preimage(keypair.private_key(), preimage)
+            .expect("checked consensus signature");
+
+        Signature::from_bytes(&payload)
+            .verify(keypair.public_key(), preimage)
+            .expect("signature verifies");
+    }
+}
 
 use iroha_data_model::consensus::Qc;
 use iroha_genesis::GENESIS_DOMAIN_ID;
@@ -12146,11 +12174,54 @@ impl SpoolDirStamp {
     }
 }
 
-fn is_da_spool_file(name: &str) -> bool {
-    (name.starts_with("da-commitment-")
-        || name.starts_with("da-pin-intent-")
-        || name.starts_with("da-receipt-"))
-        && name.ends_with(".norito")
+fn da_spool_file_name(name: &OsStr) -> Result<Option<&str>, std::io::Error> {
+    if let Some(name) = name.to_str() {
+        return Ok((name.ends_with(".norito")
+            && ((name.starts_with("da-commitment-")
+                && !name.starts_with("da-commitment-schedule-"))
+                || name.starts_with("da-pin-intent-")
+                || name.starts_with("da-receipt-")))
+        .then_some(name));
+    }
+    if raw_da_spool_file_name_matches(name, b"da-commitment-schedule-", b".norito") {
+        return Ok(None);
+    }
+    if raw_da_spool_file_name_matches(name, b"da-commitment-", b".norito")
+        || raw_da_spool_file_name_matches(name, b"da-pin-intent-", b".norito")
+        || raw_da_spool_file_name_matches(name, b"da-receipt-", b".norito")
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "DA spool artifact filename is not valid UTF-8",
+        ));
+    }
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn raw_da_spool_file_name_matches(name: &OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let bytes = name.as_bytes();
+    bytes.starts_with(prefix) && bytes.ends_with(suffix)
+}
+
+#[cfg(not(unix))]
+fn raw_da_spool_file_name_matches(_name: &OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
+    false
+}
+
+fn manifest_spool_file_name(name: &OsStr) -> Result<Option<&str>, std::io::Error> {
+    if let Some(name) = name.to_str() {
+        return Ok((name.starts_with("manifest-") && name.ends_with(".norito")).then_some(name));
+    }
+    if raw_da_spool_file_name_matches(name, b"manifest-", b".norito") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "manifest spool artifact filename is not valid UTF-8",
+        ));
+    }
+    Ok(None)
 }
 
 fn scan_da_spool_stamp(spool_dir: &Path) -> Result<Option<SpoolDirStamp>, std::io::Error> {
@@ -12168,28 +12239,40 @@ fn scan_da_spool_stamp(spool_dir: &Path) -> Result<Option<SpoolDirStamp>, std::i
         let entry = match entry {
             Ok(value) => value,
             Err(err) => {
-                warn!(?err, "failed to read DA spool entry");
-                continue;
+                return Err(std::io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to read DA spool entry in `{}`: {err}",
+                        spool_dir.display()
+                    ),
+                ));
             }
         };
-        let name = match entry.file_name().to_str() {
-            Some(value) => value.to_string(),
-            None => continue,
-        };
-        if !is_da_spool_file(&name) {
+        let file_name = entry.file_name();
+        let Some(name) = da_spool_file_name(&file_name)?.map(ToOwned::to_owned) else {
             continue;
-        }
+        };
         let metadata = match entry.metadata() {
             Ok(meta) => meta,
             Err(err) => {
-                warn!(
-                    ?err,
-                    path = %entry.path().display(),
-                    "failed to read DA spool metadata"
-                );
-                continue;
+                return Err(std::io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to read DA spool metadata `{}`: {err}",
+                        entry.path().display()
+                    ),
+                ));
             }
         };
+        if !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "DA spool artifact `{}` is not a regular file",
+                    entry.path().display()
+                ),
+            ));
+        }
         entries.push((name, metadata.len(), metadata.modified().ok()));
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -23871,12 +23954,20 @@ impl Actor {
             }
         }
 
-        let bls_signature = Signature::new(
+        let bls_signature = match try_sign_consensus_preimage(
             self.common_config.key_pair.private_key(),
             &body.signature_preimage(),
-        )
-        .payload()
-        .to_vec();
+        ) {
+            Ok(signature) => signature,
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    sender = ?sender,
+                    "dropping native AMX request because local consensus signing failed"
+                );
+                return None;
+            }
+        };
         Some(NativeAmxVoteV1 {
             body,
             signer: local_peer,
@@ -24040,18 +24131,30 @@ impl Actor {
         view: u64,
         candidate: &crate::merge::MergeLedgerCandidate,
         message_digest: Hash,
-    ) -> MergeCommitteeSignature {
-        let signature = Signature::new(
+    ) -> Option<MergeCommitteeSignature> {
+        let bls_sig = match try_sign_consensus_preimage(
             self.common_config.key_pair.private_key(),
             message_digest.as_ref(),
-        );
-        MergeCommitteeSignature {
+        ) {
+            Ok(signature) => signature,
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    signer,
+                    epoch = candidate.epoch_id,
+                    view,
+                    "skipping merge committee signature because local consensus signing failed"
+                );
+                return None;
+            }
+        };
+        Some(MergeCommitteeSignature {
             epoch_id: candidate.epoch_id,
             view,
             signer,
             message_digest,
-            bls_sig: signature.payload().to_vec(),
-        }
+            bls_sig,
+        })
     }
 
     fn handle_merge_entry_candidates(&mut self) -> Result<()> {
@@ -24084,8 +24187,9 @@ impl Actor {
             };
             ordered_keys.push(key);
 
-            let local_signature = local_index
-                .map(|signer| self.build_merge_signature(signer, view, &candidate, message_digest));
+            let local_signature = local_index.and_then(|signer| {
+                self.build_merge_signature(signer, view, &candidate, message_digest)
+            });
 
             let mut broadcast_signature: Option<MergeCommitteeSignature> = None;
             {
@@ -25085,8 +25189,20 @@ impl Actor {
         };
 
         let preimage = rbc_ready_preimage(&self.chain_id, mode_tag, &ready);
-        let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
-        ready.signature = signature.payload().to_vec();
+        ready.signature =
+            match try_sign_consensus_preimage(self.common_config.key_pair.private_key(), &preimage)
+            {
+                Ok(signature) => signature,
+                Err(err) => {
+                    iroha_logger::warn!(
+                        ?err,
+                        height,
+                        view = view_idx,
+                        "skipping RBC ready because local consensus signing failed"
+                    );
+                    return None;
+                }
+            };
         Some(ready)
     }
 
@@ -25149,8 +25265,20 @@ impl Actor {
         };
 
         let preimage = rbc_deliver_preimage(&self.chain_id, mode_tag, &deliver);
-        let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
-        deliver.signature = signature.payload().to_vec();
+        deliver.signature =
+            match try_sign_consensus_preimage(self.common_config.key_pair.private_key(), &preimage)
+            {
+                Ok(signature) => signature,
+                Err(err) => {
+                    iroha_logger::warn!(
+                        ?err,
+                        height,
+                        view = view_idx,
+                        "skipping RBC deliver because local consensus signing failed"
+                    );
+                    return None;
+                }
+            };
         Some(deliver)
     }
 
@@ -46327,31 +46455,43 @@ fn scan_manifest_spool(spool_dir: &Path) -> Result<Option<ManifestSpoolScan>, st
         let entry = match entry {
             Ok(value) => value,
             Err(err) => {
-                warn!(?err, "failed to read manifest spool entry");
-                continue;
+                return Err(std::io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to read manifest spool entry in `{}`: {err}",
+                        spool_dir.display()
+                    ),
+                ));
             }
         };
-        let name = match entry.file_name().to_str() {
-            Some(value) => value.to_string(),
-            None => continue,
-        };
-        if !name.starts_with("manifest-") || !name.ends_with(".norito") {
+        let file_name = entry.file_name();
+        let Some(name) = manifest_spool_file_name(&file_name)?.map(ToOwned::to_owned) else {
             continue;
-        }
+        };
         let Some(key) = parse_manifest_spool_key(&name) else {
             continue;
         };
         let metadata = match entry.metadata() {
             Ok(meta) => meta,
             Err(err) => {
-                warn!(
-                    ?err,
-                    path = %entry.path().display(),
-                    "failed to read manifest spool metadata"
-                );
-                continue;
+                return Err(std::io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to read manifest spool metadata `{}`: {err}",
+                        entry.path().display()
+                    ),
+                ));
             }
         };
+        if !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "manifest spool artifact `{}` is not a regular file",
+                    entry.path().display()
+                ),
+            ));
+        }
         entries.push((
             name,
             key,
@@ -46790,11 +46930,11 @@ fn manifest_available_for_commitment(
     spool_dir: &Path,
     record: &DaCommitmentRecord,
     policy: DaManifestPolicy,
-) -> (bool, CacheOutcome) {
+) -> (Result<bool, ManifestGuardError>, CacheOutcome) {
     let (outcome, cache_outcome) =
         manifest_guard_outcome(manifest_cache, spool_dir, record, policy);
     let allowed = match outcome {
-        ManifestGuardOutcome::Pass => true,
+        ManifestGuardOutcome::Pass => Ok(true),
         ManifestGuardOutcome::Warn(err) => {
             warn!(
                 ?err,
@@ -46804,7 +46944,17 @@ fn manifest_available_for_commitment(
                 ?policy,
                 "proceeding with DA commitment without a verified manifest (audit-only lane)"
             );
-            true
+            Ok(true)
+        }
+        ManifestGuardOutcome::Reject(err @ ManifestGuardError::Missing { .. }) => {
+            warn!(
+                ?err,
+                lane = record.lane_id.as_u32(),
+                epoch = record.epoch,
+                sequence = record.sequence,
+                "deferring DA commitment: strict manifest is not available yet"
+            );
+            Ok(false)
         }
         ManifestGuardOutcome::Reject(err) => {
             warn!(
@@ -46814,7 +46964,7 @@ fn manifest_available_for_commitment(
                 sequence = record.sequence,
                 "dropping DA commitment: manifest guard failed"
             );
-            false
+            Err(err)
         }
     };
     (allowed, cache_outcome)

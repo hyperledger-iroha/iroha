@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 #[cfg(feature = "rand")]
 use rand::rngs::OsRng;
 #[cfg(feature = "rand")]
-use rand_core::TryRngCore;
+use rand_core::TryCryptoRng;
 use w3f_bls::{
     EngineBLS, PublicKey as W3fPublicKey, SerializableToBytes as _, Signature as W3fSignature,
 };
@@ -26,10 +26,12 @@ pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
 use crate::{Algorithm, Error, KeyGenOption, ParseError};
 
 #[cfg(feature = "rand")]
-fn checked_os_seed(context: &str) -> Result<Zeroizing<Vec<u8>>, Error> {
+fn checked_seed_from_rng<R>(context: &str, rng: &mut R) -> Result<Zeroizing<Vec<u8>>, Error>
+where
+    R: TryCryptoRng,
+{
     let mut seed = Zeroizing::new(vec![0u8; 32]);
-    OsRng
-        .try_fill_bytes(seed.as_mut_slice())
+    rng.try_fill_bytes(seed.as_mut_slice())
         .map_err(|err| Error::KeyGen(format!("BLS OS RNG failed during {context}: {err}")))?;
     ensure_bls_seed_material_not_all_zero(context, seed.as_slice())?;
     Ok(seed)
@@ -123,16 +125,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
     ) -> Result<(PublicKey<C>, SecretKey<C>), Error> {
         let sk = match option {
             #[cfg(feature = "rand")]
-            KeyGenOption::Random => {
-                let seed = checked_os_seed("key generation")?;
-                let bytes = Zeroizing::new(if C::NORMAL {
-                    w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_seed(seed.as_slice()).to_bytes()
-                } else {
-                    w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_seed(seed.as_slice())
-                        .to_bytes()
-                });
-                Self::secret_key_from_generated_bytes(bytes.as_slice())?
-            }
+            KeyGenOption::Random => return Self::random_keypair_from_rng(&mut OsRng),
             KeyGenOption::UseSeed(ref mut seed) => {
                 if bls_seed_material_is_all_zero(seed) {
                     seed.zeroize();
@@ -151,6 +144,25 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             KeyGenOption::FromPrivateKey(key) => key,
         };
 
+        let public_key =
+            Self::derive_public_key(&sk).map_err(|err| Error::KeyGen(err.to_string()))?;
+        Ok((public_key, sk))
+    }
+
+    #[cfg(feature = "rand")]
+    pub(super) fn random_keypair_from_rng<R>(
+        rng: &mut R,
+    ) -> Result<(PublicKey<C>, SecretKey<C>), Error>
+    where
+        R: TryCryptoRng,
+    {
+        let seed = checked_seed_from_rng("key generation", rng)?;
+        let bytes = Zeroizing::new(if C::NORMAL {
+            w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_seed(seed.as_slice()).to_bytes()
+        } else {
+            w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_seed(seed.as_slice()).to_bytes()
+        });
+        let sk = Self::secret_key_from_generated_bytes(bytes.as_slice())?;
         let public_key =
             Self::derive_public_key(&sk).map_err(|err| Error::KeyGen(err.to_string()))?;
         Ok((public_key, sk))

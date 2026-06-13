@@ -22,8 +22,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
-#[cfg(test)]
-use norito::codec::Encode;
 
 use super::{
     Error, Execute,
@@ -507,11 +505,8 @@ mod tests {
     ) -> (VpnLeaseRecordV1, VpnSessionReceiptV1, VpnUsageVoucherV1) {
         let key_pair = KeyPair::random();
         voucher_body.sequence = 9;
-        let voucher = VpnUsageVoucherV1 {
-            body: voucher_body,
-            client_public_key: key_pair.public_key().clone(),
-            signature: iroha_crypto::Signature::new(key_pair.private_key(), &voucher_body.encode()),
-        };
+        let voucher = VpnUsageVoucherV1::try_sign(voucher_body, key_pair.private_key())
+            .expect("vpn usage voucher fixture should sign");
         let client_account_id = AccountId::new(key_pair.public_key().clone());
         let operator_key = KeyPair::random();
         let tariff = iroha_data_model::soranet::vpn::VpnTariffV1 {
@@ -521,27 +516,27 @@ mod tests {
             egress_fee_nanos_per_mib: 200,
         };
         let receipt = VpnSessionReceiptV1 {
-            session_id: voucher_body.session_id,
-            quote_id: voucher_body.quote_id,
+            session_id: voucher.body.session_id,
+            quote_id: voucher.body.quote_id,
             payment_tx_hash: [0x44; 32],
             account_hash: account_hash(&client_account_id),
-            relay_id: voucher_body.relay_id,
-            ingress_bytes: voucher_body.ingress_bytes,
-            egress_bytes: voucher_body.egress_bytes,
+            relay_id: voucher.body.relay_id,
+            ingress_bytes: voucher.body.ingress_bytes,
+            egress_bytes: voucher.body.egress_bytes,
             cover_bytes: 0,
             uptime_secs: 2,
             started_at_ms: 1_000,
             ended_at_ms: 3_000,
             exit_class: iroha_data_model::soranet::vpn::VpnExitClassV1::Standard,
             meter_hash: [0x55; 32],
-            earned_fee_nanos: tariff.earned_fee_nanos(&voucher_body),
-            highest_voucher_sequence: voucher_body.sequence,
+            earned_fee_nanos: tariff.earned_fee_nanos(&voucher.body),
+            highest_voucher_sequence: voucher.body.sequence,
             client_voucher_hash: voucher.hash(),
         };
         let record = VpnLeaseRecordV1 {
             lease_id: [0xAA; 32],
-            session_id: voucher_body.session_id,
-            quote_id: voucher_body.quote_id,
+            session_id: voucher.body.session_id,
+            quote_id: voucher.body.quote_id,
             client_account_id,
             operator_account_id: AccountId::new(operator_key.public_key().clone()),
             metering_public_key: key_pair.public_key().clone(),
@@ -549,7 +544,7 @@ mod tests {
             lease_fee: tariff.lease_fee_numeric(),
             lease_fee_nanos: tariff.lease_fee_nanos,
             custody_account_id: AccountId::new(KeyPair::random().public_key().clone()),
-            relay_id: voucher_body.relay_id,
+            relay_id: voucher.body.relay_id,
             tariff,
             quote_policy: iroha_data_model::soranet::vpn::VpnQuotePolicyV1 {
                 exit_class: iroha_data_model::soranet::vpn::VpnExitClassV1::Standard,

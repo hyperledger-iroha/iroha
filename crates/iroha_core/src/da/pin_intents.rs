@@ -122,7 +122,7 @@ pub fn load_pin_intents(
             source,
         })?;
         let path = entry.path();
-        if !is_da_pin_file(&path) {
+        if !is_da_pin_file(&path)? {
             continue;
         }
 
@@ -156,10 +156,30 @@ pub fn load_pin_intents(
     Ok(Some(intents))
 }
 
-fn is_da_pin_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("da-pin-intent-") && name.ends_with(".norito"))
+fn is_da_pin_file(path: &Path) -> Result<bool, DaPinIntentSpoolError> {
+    let Some(name) = path.file_name() else {
+        return Ok(false);
+    };
+    if let Some(name) = name.to_str() {
+        return Ok(name.starts_with("da-pin-intent-") && name.ends_with(".norito"));
+    }
+    if non_utf8_artifact_name_matches(name, b"da-pin-intent-", b".norito") {
+        return Err(malformed_filename(path));
+    }
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn non_utf8_artifact_name_matches(name: &std::ffi::OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    let bytes = name.as_bytes();
+    bytes.starts_with(prefix) && bytes.ends_with(suffix)
+}
+
+#[cfg(not(unix))]
+fn non_utf8_artifact_name_matches(_name: &std::ffi::OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
+    false
 }
 
 #[derive(Clone, Copy)]
@@ -553,6 +573,54 @@ mod tests {
             ),
             "corrupt pin-intent artifacts must reject the whole spool load"
         );
+    }
+
+    #[test]
+    fn load_pin_intents_rejects_pin_intent_shaped_directory() {
+        let dir = tempdir().expect("tempdir");
+        let intent = sample_intent(1, 1);
+        let path = dir.path().join(pin_intent_file_name(&intent, [0x7b; 32]));
+        std::fs::create_dir(&path).expect("create pin-intent-shaped directory");
+
+        assert!(
+            matches!(
+                load_pin_intents(dir.path()),
+                Err(DaPinIntentSpoolError::ReadFile { path: observed, .. }) if observed == path
+            ),
+            "pin-intent-shaped non-files must reject the whole spool load"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pin_intent_file_matcher_rejects_non_utf8_pin_intent_shaped_filename() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let path = PathBuf::from(OsString::from_vec(b"da-pin-intent-\xFF.norito".to_vec()));
+
+        let err = is_da_pin_file(&path).expect_err("non-UTF8 shaped artifact rejects");
+        match err {
+            DaPinIntentSpoolError::MalformedFilename { path: seen } => assert_eq!(seen, path),
+            _ => panic!("expected malformed filename for non-UTF8 DA artifact, got {err:?}"),
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn load_pin_intents_rejects_non_utf8_pin_intent_shaped_filename() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join(PathBuf::from(OsString::from_vec(
+            b"da-pin-intent-\xFF.norito".to_vec(),
+        )));
+        std::fs::write(&path, b"ignored").expect("write invalid utf8 filename");
+
+        let err = load_pin_intents(dir.path()).expect_err("non-UTF8 DA artifact rejects");
+        match err {
+            DaPinIntentSpoolError::MalformedFilename { path: seen } => assert_eq!(seen, path),
+            _ => panic!("expected malformed filename for non-UTF8 DA artifact, got {err:?}"),
+        }
     }
 
     #[test]

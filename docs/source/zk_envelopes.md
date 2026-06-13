@@ -291,7 +291,9 @@ Verifier behavior (native STARK)
 - STARK `OpenVerifyEnvelope` construction, preverification, and guardrails bind
   circuit ids to the selected STARK family as well: the generic `stark/fri`
   entry point rejects circuit ids that advertise another proof family, including
-  slash and colon forms such as `halo2/...`, `halo2:...`, and `kzg:...`, and
+  slash and colon forms such as `halo2/...`, `halo2:...`, and `kzg:...`;
+  trusted-setup aliases such as `bn254`, `bls12_381`, `universal-srs`, and
+  profile-prefixed `stark/fri/<profile>:structured-reference-string`; and
   profile-specific STARK backends reject decoded circuit ids that advertise a
   different STARK profile or the generic `stark/fri:` prefix.
 - Generic STARK `OpenVerifyEnvelope` construction and verification reserve the

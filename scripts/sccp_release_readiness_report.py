@@ -1321,6 +1321,24 @@ def _sccp_unready_transparent_proof_config_gate_inventory_errors(
         ]
 
 
+def _tron_deploy_operator_boolean_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for TRON deploy operator booleans."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_tron_deploy_operator_boolean_inventory_errors")
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP TRON deploy operator boolean source inventory "
+            "cannot run release-bundle verifier helper"
+        ]
+
+
 def _ethereum_source_bridge_config_gate_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -2426,9 +2444,11 @@ def _parse_phase_assignment_name(raw_name: str, label: str) -> str:
     # Source-inventory markers:
     # - phase result name contains surrounding whitespace
     # - phase result name contains Markdown-unsafe character
+    # - phase result name contains sensitive name
     # - phase result name contains malformed phase
     # - phase evidence name contains surrounding whitespace
     # - phase evidence name contains Markdown-unsafe character
+    # - phase evidence name contains sensitive name
     # - phase evidence name contains malformed phase
     if not raw_name:
         raise argparse.ArgumentTypeError(f"{label} name is empty")
@@ -2446,6 +2466,8 @@ def _parse_phase_assignment_name(raw_name: str, label: str) -> str:
         raise argparse.ArgumentTypeError(
             f"{label} name contains Markdown-unsafe character"
         )
+    if any(marker in raw_name.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        raise argparse.ArgumentTypeError(f"{label} name contains sensitive name")
     allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
     if (
         any(character not in allowed for character in raw_name)
@@ -2702,6 +2724,7 @@ def _native_evm_prover_bundle_artifact_summary(
 
     rows: list[dict[str, Any]] = []
     by_sdk: dict[str, dict[str, Any]] = {}
+    semantic_sdk_order: list[str] = []
     for index, artifact in enumerate(artifacts):
         label = f"native_sdk_artifacts[{index}]"
         if not isinstance(artifact, dict):
@@ -2719,10 +2742,21 @@ def _native_evm_prover_bundle_artifact_summary(
         if sdk_key_blocker is not None:
             blockers.append(sdk_key_blocker)
             continue
+        semantic_sdk_order.append(sdk)
         if sdk in by_sdk:
-            blockers.append(f"native_sdk_artifacts contains duplicate sdk: {sdk}")
+            if _native_evm_sdk_name_has_sensitive_marker(sdk):
+                blockers.append(
+                    "native_sdk_artifacts contains duplicate sdk with sensitive name"
+                )
+            else:
+                blockers.append(f"native_sdk_artifacts contains duplicate sdk: {sdk}")
         expected_implementation = NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS.get(sdk)
         if expected_implementation is None:
+            if _native_evm_sdk_name_has_sensitive_marker(sdk):
+                blockers.append(
+                    "native_sdk_artifacts contains unknown sdk with sensitive name"
+                )
+                continue
             blockers.append(f"native_sdk_artifacts contains unknown sdk: {sdk}")
         elif implementation != expected_implementation:
             blockers.append(
@@ -2758,6 +2792,8 @@ def _native_evm_prover_bundle_artifact_summary(
 
     for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(by_sdk)):
         blockers.append(f"native_sdk_artifacts missing sdk: {sdk}")
+    if semantic_sdk_order != sorted(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
+        blockers.append("native_sdk_artifacts must match expected SDK order")
 
     return sorted(rows, key=lambda row: row["sdk"]), blockers
 
@@ -2805,7 +2841,12 @@ def _native_evm_prover_sdk_results_by_sdk(
     for sdk in sorted(
         set(canonical_results) - set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)
     ):
-        blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
+        if _native_evm_sdk_name_has_sensitive_marker(sdk):
+            blockers.append(
+                f"{prefix} sdk_results contains unknown sdk with sensitive name"
+            )
+        else:
+            blockers.append(f"{prefix} sdk_results contains unknown sdk: {sdk}")
     for sdk in sorted(
         set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(canonical_results)
     ):
@@ -2824,10 +2865,7 @@ def _native_evm_prover_sdk_result_key_blocker(
     if not sdk.isascii():
         return f"{prefix} sdk_results sdk key must be printable ASCII"
     if sdk.strip() != sdk:
-        return (
-            f"{prefix} sdk_results sdk key must not contain surrounding whitespace: "
-            f"{sdk!r}"
-        )
+        return f"{prefix} sdk_results sdk key must not contain surrounding whitespace"
     if any(character.isspace() for character in sdk):
         return f"{prefix} sdk_results sdk key must not contain whitespace"
     allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
@@ -2860,7 +2898,34 @@ def _native_evm_prover_field_name_blocker(
             f"{label} contains {field_kind} field name with Markdown-unsafe "
             "character"
         )
+    if any(marker in key.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        return f"{label} contains {field_kind} field name with sensitive name"
     return f"{label} contains {field_kind} field: {key}"
+
+
+SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (
+    "secret-token",
+    "private-key",
+    "private_key",
+    "password",
+    "bearer",
+    "authorization",
+    "api-key",
+    "api_key",
+    "client-secret",
+    "client_secret",
+    "token",
+)
+
+
+def _native_evm_sdk_name_has_sensitive_marker(sdk: str) -> bool:
+    return any(marker in sdk.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS)
+
+
+def _native_evm_sdk_name_blocker(label: str, sdk: str, issue: str) -> str:
+    if _native_evm_sdk_name_has_sensitive_marker(sdk):
+        return f"{label} contains {issue} sdk with sensitive name"
+    return f"{label} contains {issue} sdk: {sdk}"
 
 
 def _required_record_summary_unknown_field_blocker(
@@ -2887,6 +2952,8 @@ def _native_evm_prover_duplicate_json_key_blocker(label: str, key: Any) -> str:
         return f"{label} JSON contains duplicate key with whitespace"
     if _path_markdown_unsafe_character(key) is not None:
         return f"{label} JSON contains duplicate key with Markdown-unsafe character"
+    if any(marker in key.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        return f"{label} JSON contains duplicate key with sensitive key name"
     return f"{label} JSON contains duplicate key: {key}"
 
 
@@ -4588,6 +4655,50 @@ def _string_list_or_schema_blockers(value: Any, label: str) -> list[str]:
     return blockers
 
 
+def _native_evm_validation_blocker_issue(
+    item: Any,
+    label: str,
+    index: int,
+) -> str | None:
+    item_label = f"{label}[{index}]"
+    if not isinstance(item, str) or not item or item.strip() != item:
+        return f"{item_label} must be a non-empty canonical string"
+    if _path_control_character(item) is not None:
+        return f"{item_label} contains control character"
+    if not item.isascii():
+        return f"{item_label} contains non-ASCII character"
+    if _path_markdown_unsafe_character(item) is not None:
+        return f"{item_label} contains Markdown-unsafe character"
+    if any(marker in item.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        # Source-inventory marker: validation_blockers[0] contains sensitive name
+        return f"{item_label} contains sensitive name"
+    return None
+
+
+def _native_evm_validation_blockers(value: Any, label: str) -> list[str]:
+    if not isinstance(value, list):
+        return [f"{label} must be a list of non-empty canonical strings"]
+    blockers: list[str] = []
+    for index, item in enumerate(value):
+        issue = _native_evm_validation_blocker_issue(item, label, index)
+        blockers.append(issue if issue is not None else item)
+    return blockers
+
+
+def _public_blocker_text_issue(item: Any) -> str | None:
+    if not isinstance(item, str) or not item or item.strip() != item:
+        return "non-empty canonical string"
+    if _path_control_character(item) is not None:
+        return "control character"
+    if not item.isascii():
+        return "non-ASCII character"
+    if _path_markdown_unsafe_character(item) is not None:
+        return "Markdown-unsafe character"
+    if any(marker in item.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+        return "sensitive name"
+    return None
+
+
 def _active_launch_lane_blockers_for_checklist(
     value: Any,
     lane_label: str,
@@ -4791,22 +4902,27 @@ def _active_launch_governed_deployment_metadata_blockers(
         return blockers + [f"{lane_label}: source adapter gate summary is missing"]
     if source_gate.get("ready") is not True:
         blockers.append(f"{lane_label}: source adapter gate summary must be ready")
-    if source_gate.get("required") is not False:
+    if source_gate.get("required") is not True:
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate summary must not be required"
+            f"{lane_label}: active EVM source adapter gate summary must be required"
         )
-    if source_gate.get("gate_hash") not in ("", None):
+    gate_hash = source_gate.get("gate_hash")
+    if not _is_nonzero_hex32(gate_hash):
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate hash must be empty"
+            f"{lane_label}: active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string"
         )
     audit_hashes = source_gate.get("audit_hashes")
     if not isinstance(audit_hashes, dict):
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate audit hashes must be empty"
+            f"{lane_label}: active EVM source adapter gate audit hashes must be an object"
         )
-    elif audit_hashes:
+    elif set(audit_hashes) != {"evm_source_gate_hash"}:
         blockers.append(
-            f"{lane_label}: active EVM source adapter gate audit hashes must be empty"
+            f"{lane_label}: active EVM source adapter gate audit hashes must contain only evm_source_gate_hash"
+        )
+    elif audit_hashes.get("evm_source_gate_hash") != gate_hash:
+        blockers.append(
+            f"{lane_label}: active EVM source adapter gate hash must match audit hash evm_source_gate_hash"
         )
     return blockers
 
@@ -4987,7 +5103,7 @@ def _active_launch_release_checklist(
     if canary.get("evidence_bound") is not True:
         canary_blockers.append(f"{lane_label}: route canary evidence is not bound")
 
-    native_prover_blockers = _string_list_or_schema_blockers(
+    native_prover_blockers = _native_evm_validation_blockers(
         native_prover_bundle.get("validation_blockers"),
         "native EVM prover validation_blockers",
     )
@@ -5249,6 +5365,9 @@ def _build_report(
     )
     unready_transparent_proof_config_gate_blockers = (
         _sccp_unready_transparent_proof_config_gate_inventory_errors()
+    )
+    tron_deploy_operator_boolean_gate_blockers = (
+        _tron_deploy_operator_boolean_gate_inventory_errors()
     )
     ethereum_source_bridge_config_gate_blockers = (
         _ethereum_source_bridge_config_gate_inventory_errors()
@@ -5833,7 +5952,15 @@ def _build_report(
                 else "blocked"
             ),
             "validation_blockers": unready_transparent_proof_config_gate_blockers,
-        }
+        },
+        "tron_deploy_operator_boolean_gate": {
+            "validation_status": (
+                "passed"
+                if not tron_deploy_operator_boolean_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": tron_deploy_operator_boolean_gate_blockers,
+        },
     }
     release_checklist = _active_launch_release_checklist(evidence, native_prover_bundle)
     failed_phases = [
@@ -5927,10 +6054,11 @@ def _build_report(
         and not readiness_markdown_invariants_gate_blockers
         and not retired_network_surface_gate_blockers
         and not unready_transparent_proof_config_gate_blockers
+        and not tron_deploy_operator_boolean_gate_blockers
     )
     blockers = _active_launch_blockers(evidence)
     blockers.extend(
-        _string_list_or_schema_blockers(
+        _native_evm_validation_blockers(
             native_prover_bundle.get("validation_blockers"),
             "native EVM prover validation_blockers",
         )
@@ -6003,6 +6131,7 @@ def _build_report(
     blockers.extend(readiness_markdown_invariants_gate_blockers)
     blockers.extend(retired_network_surface_gate_blockers)
     blockers.extend(unready_transparent_proof_config_gate_blockers)
+    blockers.extend(tron_deploy_operator_boolean_gate_blockers)
     blockers.extend(
         f"production corridor phase {phase} is {phase_status[phase]}"
         for phase in failed_phases
@@ -6215,6 +6344,47 @@ def _markdown_string_list_cell(value: Any, *, field_label: str) -> str:
         return "-"
     if not all(isinstance(item, str) and item for item in value):
         return f"`<invalid {field_label}>`"
+    if any(_public_blocker_text_issue(item) is not None for item in value):
+        return f"`<invalid {field_label}>`"
+    return "<br>".join(value)
+
+
+def _user_prover_validation_blockers_cell(value: Any) -> str:
+    field_label = "validation_blockers"
+    if not isinstance(value, list):
+        return f"`<invalid {field_label}>`"
+    if not value:
+        return "-"
+    if not all(isinstance(item, str) and item for item in value):
+        return f"`<invalid {field_label}>`"
+    for item in value:
+        if _path_control_character(item) is not None:
+            return f"`<invalid {field_label}>`"
+        if not item.isascii() or item.strip() != item:
+            return f"`<invalid {field_label}>`"
+        if _path_markdown_unsafe_character(item) is not None:
+            return f"`<invalid {field_label}>`"
+        if any(marker in item.lower() for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS):
+            return f"`<invalid {field_label}>`"
+    return "<br>".join(value)
+
+
+def _native_evm_validation_blockers_cell(value: Any) -> str:
+    field_label = "validation_blockers"
+    if not isinstance(value, list):
+        return f"`<invalid {field_label}>`"
+    if not value:
+        return "-"
+    for index, item in enumerate(value):
+        if (
+            _native_evm_validation_blocker_issue(
+                item,
+                "native EVM prover validation_blockers",
+                index,
+            )
+            is not None
+        ):
+            return f"`<invalid {field_label}>`"
     return "<br>".join(value)
 
 
@@ -6224,6 +6394,8 @@ def _markdown_string_list_items(value: Any, *, field_label: str) -> list[str]:
     if not value:
         return ["- None"]
     if not all(isinstance(item, str) and item for item in value):
+        return [f"- `<invalid {field_label}>`"]
+    if any(_public_blocker_text_issue(item) is not None for item in value):
         return [f"- `<invalid {field_label}>`"]
     return [f"- {item}" for item in value]
 
@@ -6358,9 +6530,8 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
         validation = surface["validation_status"]
         validation_blockers = surface.get("validation_blockers")
         if not isinstance(validation_blockers, list) or validation_blockers:
-            validation += ": " + _markdown_string_list_cell(
-                validation_blockers,
-                field_label="validation_blockers",
+            validation += ": " + _user_prover_validation_blockers_cell(
+                validation_blockers
             )
         lines.append(
             "| `{lanes}` | `{proof_backend}` | {sdk_helpers} | {submission} | "
@@ -6405,9 +6576,8 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
         )
     else:
         sdk_cell = "-"
-    native_blocker_text = _markdown_string_list_cell(
-        native_bundle.get("validation_blockers"),
-        field_label="validation_blockers",
+    native_blocker_text = _native_evm_validation_blockers_cell(
+        native_bundle.get("validation_blockers")
     )
     parity_artifact = native_bundle.get("cross_sdk_fixture_parity_artifact")
     parity_cell = (
@@ -6561,7 +6731,7 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP Ethereum sync-committee roster source inventory must pin exact 512-authority mainnet rosters, unit validator weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee payload vectors across public SDKs before local finality evidence can be accepted.",
             "- SCCP Ethereum source-bridge config source inventory must pin bridge-address/network/code-hash config hashing and negative config-drift tests.",
             "- SCCP Ethereum EVM source-adapter deployment source inventory must pin the active deployment gate, source-bridge network/config binding, and negative drift tests.",
-            "- SCCP source-material template rejection source inventory must pin ETH, BSC, Solana, TON, and TRON evidence-script guards and negative tests that reject built-in template verifier hashes before source material can satisfy production readiness.",
+            "- SCCP source-material template rejection source inventory must pin ETH, BSC, Solana, TON, and TRON evidence-script guards, aggregate all-lanes copied-evidence guards, strict release-bundle public JSON guards, and negative tests that reject built-in template verifier hashes before source material can satisfy production readiness.",
             "- SCCP source-material role validation source inventory must pin ETH, BSC, Solana, TON, and TRON zero-hash, role-reuse, canonical adapter-verifier, full-light-client audit role-separation guards, and redacted all-lanes-TOML/source validator/source-record/source-gate/TON-live-accountStates/address/code-BoC/TON-destination-code-BoC/TRON-live-API/metadata/full-TOML/TRON-witness-JSON blockers before source material can satisfy production readiness.",
             "- SCCP EVM contract smoke Ethereum mainnet network-id source inventory must pin ETH chain-id vectors, BSC rejection vectors, and accepted-event network-id assertions.",
             "- SCCP EVM contract smoke production-surface source inventory must pin verifier-code/key, destination-binding, domain-overflow, proof-shape, cross-deployment, and replay rejection smoke coverage.",

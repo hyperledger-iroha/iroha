@@ -2030,13 +2030,13 @@ test("resolveAliasByIndex posts numeric payload", async () => {
   assert.equal(resolved?.account_id, FIXTURE_ALICE_ID);
 });
 
-test("resolveAlias normalizes payload fields", async () => {
+test("resolveAlias parses exact payload fields", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
       createResponse({
         status: 200,
         jsonData: {
-          alias: " GB82WEST12345698765432 ",
+          alias: "GB82WEST12345698765432",
           account_id: FIXTURE_ALICE_ID,
           index: "5",
           source: "iso_bridge",
@@ -2115,6 +2115,38 @@ test("resolveAlias rejects malformed payloads", async () => {
     /alias resolve response\.alias must not be empty/,
   );
 
+  const paddedAliasClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          alias: ` ${VALID_IBAN}`,
+          account_id: FIXTURE_ALICE_ID,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => paddedAliasClient.resolveAlias(VALID_IBAN),
+    /alias resolve response\.alias must not contain surrounding whitespace/,
+  );
+
+  const paddedAccountClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          alias: VALID_IBAN,
+          account_id: ` ${FIXTURE_ALICE_ID}`,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => paddedAccountClient.resolveAlias(VALID_IBAN),
+    /alias resolve response\.account_id must not contain surrounding whitespace/,
+  );
+
   const invalidSourceClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
       createResponse({
@@ -2130,6 +2162,23 @@ test("resolveAlias rejects malformed payloads", async () => {
   await assert.rejects(
     () => invalidSourceClient.resolveAlias(VALID_IBAN),
     /alias resolve response\.source must be a string/,
+  );
+
+  const paddedSourceClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          alias: VALID_IBAN,
+          account_id: FIXTURE_ALICE_ID,
+          source: " iso_bridge",
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => paddedSourceClient.resolveAlias(VALID_IBAN),
+    /alias resolve response\.source must not contain surrounding whitespace/,
   );
 });
 
@@ -20675,6 +20724,61 @@ test("proposeMultisig rejects malformed success responses", async () => {
         creation_time_ms: -1,
       }).proposeMultisig(request),
     /creation_time_ms/,
+  );
+});
+
+test("multisig response decoders reject non-exact resolved account ids", async () => {
+  const paddedAccountId = `${FIXTURE_ALICE_ID} `;
+  const clientWithResponse = (jsonData) =>
+    new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+  const selector = { multisigAccountAlias: "cbdc@banka" };
+  const proposalId = "f".repeat(64);
+  const pattern = /resolved_multisig_account_id must not contain surrounding whitespace/;
+
+  await assert.rejects(
+    () =>
+      clientWithResponse({
+        ok: true,
+        resolved_multisig_account_id: paddedAccountId,
+      }).proposeMultisig({
+        ...selector,
+        signerAccountId: FIXTURE_ALICE_ID,
+        instructions: [{ Custom: { payload: { probe: true } } }],
+      }),
+    pattern,
+  );
+  await assert.rejects(
+    () =>
+      clientWithResponse({
+        resolved_multisig_account_id: paddedAccountId,
+        spec: { quorum: 2 },
+      }).getMultisigSpec(selector),
+    pattern,
+  );
+  await assert.rejects(
+    () =>
+      clientWithResponse({
+        resolved_multisig_account_id: paddedAccountId,
+        proposals: [],
+      }).listMultisigProposals(selector),
+    pattern,
+  );
+  await assert.rejects(
+    () =>
+      clientWithResponse({
+        resolved_multisig_account_id: paddedAccountId,
+        proposal_id: proposalId,
+        instructions_hash: proposalId,
+        proposal: { approvals: [] },
+      }).getMultisigProposal({ ...selector, instructionsHash: proposalId }),
+    pattern,
   );
 });
 

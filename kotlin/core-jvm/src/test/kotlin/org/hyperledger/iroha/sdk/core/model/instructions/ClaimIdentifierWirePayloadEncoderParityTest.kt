@@ -152,6 +152,37 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
     }
 
     @Test
+    fun `claim identifier rejects account mismatch before encoding`() {
+        val accountId = sampleAuthority(0x41)
+        val payload = samplePayload(accountId = accountId)
+        val receipt = IdentifierResolutionReceipt(
+            payload = payload,
+            attestation = IdentifierReceiptAttestation(
+                kind = "signed",
+                signature = "A1B2C3D4",
+                proofBackend = null,
+                proofB64 = null,
+            ),
+        )
+
+        val err = assertFailsWith<IllegalArgumentException> {
+            ClaimIdentifierWirePayloadEncoder.encode("${accountId}x", receipt)
+        }
+        assertTrue(
+            err.message?.contains("ClaimIdentifier accountId must match receipt.accountId") == true,
+            "mismatched ClaimIdentifier account must fail before encoding",
+        )
+
+        val paddedErr = assertFailsWith<IllegalArgumentException> {
+            ClaimIdentifierWirePayloadEncoder.encode(" $accountId ", receipt)
+        }
+        assertTrue(
+            paddedErr.message?.contains("accountId must not contain surrounding whitespace") == true,
+            "padded ClaimIdentifier account must fail before encoding",
+        )
+    }
+
+    @Test
     fun `identifier receipt canonical encoder rejects non-exact execution tags and proof backends`() {
         for (policyId in listOf(" phone#retail", "phone#retail ", "phone #retail", "phone# retail")) {
             assertFailsWith<IllegalArgumentException>("policy_id exactness $policyId") {

@@ -170,6 +170,61 @@ def test_ton_hex_parser_rejects_zero_and_wrong_width():
         raise AssertionError("short TON verifier code hash was accepted")
 
 
+def test_ton_destination_direct_parsers_redact_parser_causes(tmp_path):
+    module = load_evidence_module()
+
+    fixed_hex_payload = "secret-token-ton-destination-fixed-hex"
+    fixed_hex_payload += "g" * (64 - len(fixed_hex_payload))
+    code_hex_payload = "secret-token-ton-destination-code-hex"
+    if len(code_hex_payload) % 2:
+        code_hex_payload += "g"
+
+    cases = (
+        (
+            lambda: module.parse_hex_bytes(
+                fixed_hex_payload,
+                label="verifier code hash",
+                byte_length=32,
+            ),
+            "verifier code hash must be hex",
+        ),
+        (
+            lambda: module.parse_code_boc_hex(
+                code_hex_payload,
+                label="code BoC",
+            ),
+            "code BoC must be hex",
+        ),
+        (
+            lambda: module.parse_code_boc_base64(
+                "secret-token-ton-destination-code-boc",
+                label="code BoC",
+            ),
+            "code BoC must be base64 or base64url",
+        ),
+        (
+            lambda: module.parse_code_boc_file(
+                str(tmp_path / "secret-token-ton-destination-file-path.boc"),
+                label="code BoC",
+            ),
+            "code BoC file cannot be read",
+        ),
+    )
+
+    for parse, expected_message in cases:
+        try:
+            parse()
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert "destination" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("TON destination parser leaked nested details")
+
+
 def test_ton_code_boc_inline_parsers_reject_padded_values(tmp_path):
     module = load_evidence_module()
 
@@ -337,6 +392,57 @@ def test_ton_last_transaction_lt_requires_canonical_ascii_decimal():
             assert "--toml requires --last-transaction-lt" in str(exc)
         else:
             raise AssertionError(f"noncanonical TON LT metadata {value!r} was accepted")
+
+
+def test_ton_destination_account_metadata_redacts_parser_causes():
+    module = load_evidence_module()
+
+    args = ton_args(module)
+    args.account_status = "secret-token-ton-destination-account-status"
+    try:
+        module._json_summary(
+            args,
+            bytes.fromhex(TON_DESTINATION_BINDING_VECTOR),
+            True,
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "account_status must be active"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("TON destination account status parser detail leaked")
+
+    args = ton_args(module)
+    args.last_transaction_lt = "secret-token-ton-destination-last-lt"
+    try:
+        module._json_summary(
+            args,
+            bytes.fromhex(TON_DESTINATION_BINDING_VECTOR),
+            True,
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "last_transaction_lt must be a positive decimal"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("TON destination last-transaction parser detail leaked")
+
+    args = ton_args(module)
+    args.last_transaction_lt = "secret-token-ton-destination-toml-lt"
+    try:
+        module._require_toml_account_metadata(args, output="toml")
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "--toml requires --last-transaction-lt"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("TON destination TOML LT parser detail leaked")
 
 
 def test_ton_destination_binding_hash_matches_rust_vector():

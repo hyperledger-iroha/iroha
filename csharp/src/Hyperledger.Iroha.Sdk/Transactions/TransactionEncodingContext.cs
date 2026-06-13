@@ -33,7 +33,7 @@ internal sealed class TransactionEncodingContext
     public byte[] EncodeChainId(string chainId)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(EncodeString(chainId.Trim()));
+        writer.WriteField(EncodeString(RequireExactNonBlank(chainId, nameof(chainId))));
         return writer.ToArray();
     }
 
@@ -77,22 +77,21 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeName(string value)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        return EncodeString(value.Trim());
+        return EncodeString(RequireExactNonBlank(value, nameof(value)));
     }
 
     public byte[] EncodeOptionalString(string? value)
     {
-        var normalized = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
         var writer = new OfflineNoritoWriter();
-        if (normalized is null)
+        if (value is null)
         {
             writer.WriteByte(0);
             return writer.ToArray();
         }
 
+        value = RequireExactNonBlank(value, nameof(value));
         writer.WriteByte(1);
-        writer.WriteField(EncodeString(normalized));
+        writer.WriteField(EncodeString(value));
         return writer.ToArray();
     }
 
@@ -170,9 +169,8 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeNumeric(string value)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        var trimmed = RequireExactNonBlank(value, nameof(value));
 
-        var trimmed = value.Trim();
         var sign = 1;
         if (trimmed[0] == '-')
         {
@@ -279,18 +277,17 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeNftId(string nftId)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(nftId);
+        var exactNftId = RequireExactNonBlank(nftId, nameof(nftId));
 
-        var trimmed = nftId.Trim();
-        var separatorIndex = trimmed.IndexOf('$');
-        if (separatorIndex <= 0 || separatorIndex != trimmed.LastIndexOf('$') || separatorIndex == trimmed.Length - 1)
+        var separatorIndex = exactNftId.IndexOf('$');
+        if (separatorIndex <= 0 || separatorIndex != exactNftId.LastIndexOf('$') || separatorIndex == exactNftId.Length - 1)
         {
             throw new ArgumentException($"Invalid NFT id `{nftId}`.", nameof(nftId));
         }
 
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(EncodeName(trimmed[(separatorIndex + 1)..]));
-        writer.WriteField(EncodeName(trimmed[..separatorIndex]));
+        writer.WriteField(EncodeName(exactNftId[(separatorIndex + 1)..]));
+        writer.WriteField(EncodeName(exactNftId[..separatorIndex]));
         return writer.ToArray();
     }
 
@@ -402,13 +399,13 @@ internal sealed class TransactionEncodingContext
 
     private byte[] EncodeAssetDefinitionAddress(string literal)
     {
-        var trimmed = literal.Trim();
-        if (trimmed.Length == 0 || trimmed.IndexOfAny([':', '#', '@', '$']) >= 0)
+        var exactLiteral = RequireExactNonBlank(literal, nameof(literal));
+        if (exactLiteral.IndexOfAny([':', '#', '@', '$']) >= 0)
         {
             throw new ArgumentException($"Invalid asset definition id `{literal}`.", nameof(literal));
         }
 
-        var payload = DecodeBase58(trimmed);
+        var payload = DecodeBase58(exactLiteral);
         if (payload.Length != 21 || payload[0] != AssetDefinitionVersion)
         {
             throw new ArgumentException($"Invalid asset definition id `{literal}`.", nameof(literal));
@@ -448,7 +445,9 @@ internal sealed class TransactionEncodingContext
 
     private static string CanonicalizeAccountId(string accountId)
     {
-        return AccountAddress.Parse(accountId.Trim(), DefaultNetworkPrefix).ToI105(DefaultNetworkPrefix);
+        return AccountAddress.Parse(
+            RequireExactNonBlank(accountId, nameof(accountId)),
+            DefaultNetworkPrefix).ToI105(DefaultNetworkPrefix);
     }
 
     private static string FormatPublicKeyMultihash(ulong functionCode, ReadOnlySpan<byte> payload)
@@ -521,9 +520,8 @@ internal sealed class TransactionEncodingContext
 
     private static byte[] DecodeFixedBytesLiteral(string literal, int expectedLength)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(literal);
+        var normalized = RequireExactNonBlank(literal, nameof(literal));
 
-        var normalized = literal.Trim();
         if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
             normalized = normalized[2..];
@@ -545,5 +543,22 @@ internal sealed class TransactionEncodingContext
         }
 
         return bytes;
+    }
+
+    private static string RequireExactNonBlank(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("Value cannot be null or whitespace.", paramName);
+        }
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Value must not contain surrounding whitespace.", paramName);
+        }
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Value must not contain control characters.", paramName);
+        }
+        return value;
     }
 }

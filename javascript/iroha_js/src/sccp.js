@@ -1568,6 +1568,22 @@ const normalizeNativeEvmProverProductionAttestationHash = (value, label) => {
   return normalized;
 };
 
+const requireNativeEvmProverHashRoleSeparation = (entries, label) => {
+  const seen = new Map();
+  for (const [role, hash] of entries) {
+    if (typeof hash !== "string" || hash.length === 0) {
+      continue;
+    }
+    const previous = seen.get(hash);
+    if (previous !== undefined) {
+      throw new TypeError(
+        `${label} hashes must be role-separated: ${role} matches ${previous}`,
+      );
+    }
+    seen.set(hash, role);
+  }
+};
+
 const bytesToBigInt = (bytes) => BigInt(`0x${bytesToHex(bytes, false)}`);
 
 const bigIntToBytes32 = (value) => {
@@ -8463,6 +8479,11 @@ const normalizeNativeEvmProverArtifactPath = (value, label) => {
       `${label} must not contain URI schemes or drive prefixes`,
     );
   }
+  if (value.includes("%")) {
+    throw new TypeError(
+      `${label} must not contain percent-encoded path segments`,
+    );
+  }
   if (value.startsWith("/") || value.includes("\\")) {
     throw new TypeError(`${label} must be a relative POSIX path`);
   }
@@ -9480,6 +9501,16 @@ const validateNativeEvmProverParityFixture = (
         ]),
     ),
   );
+  requireNativeEvmProverHashRoleSeparation(
+    [
+      ["receiptProofHash", receiptProofHash],
+      ["sourceProofHash", sourceProofHash],
+      ["calldataHash", calldataHash],
+      ["toriiSubmitPayloadHash", toriiSubmitPayloadHash],
+      ["productionAttestationHash", productionAttestationHash],
+    ],
+    "nativeProverParityFixture",
+  );
   return immutableProverCallbackValue({
     schema,
     domain,
@@ -9901,6 +9932,18 @@ const validateNativeEvmProverSelfTestFixture = (
         ]),
     ),
   );
+  requireNativeEvmProverHashRoleSeparation(
+    [
+      ["requestHash", requestHash],
+      ["witnessHash", witnessHash],
+      ["sourceProofHash", sourceProofHash],
+      ["proofHash", proofHash],
+      ["calldataHash", calldataHash],
+      ["toriiSubmitPayloadHash", toriiSubmitPayloadHash],
+      ["productionAttestationHash", productionAttestationHash],
+    ],
+    "nativeProverSelfTestFixture",
+  );
   return immutableProverCallbackValue({
     schema,
     domain,
@@ -10303,6 +10346,86 @@ function assertNativeEvmProvingKeyFormat(bytes, label) {
   );
 }
 
+function requireVerifiedNativeEvmProverReportHashRoleSeparation(
+  nativeProverBundle,
+  crossSdkFixtureParity,
+  nativeProverSelfTest,
+) {
+  requireNativeEvmProverHashRoleSeparation(
+    [
+      ["proofArtifactHash", nativeProverBundle.proofArtifactHash],
+      ["provingKeyHash", nativeProverBundle.provingKeyHash],
+      ["verifierKeyHash", nativeProverBundle.verifierKeyHash],
+      [
+        "verifierKeyArtifactHash",
+        nativeProverBundle.verifierKeyArtifactHash ===
+        nativeProverBundle.verifierKeyHash
+          ? ""
+          : nativeProverBundle.verifierKeyArtifactHash,
+      ],
+      ["destinationBindingHash", nativeProverBundle.destinationBindingHash],
+      [
+        "auditHashes.circuit_security_audit",
+        nativeProverBundle.auditHashes.circuit_security_audit,
+      ],
+      [
+        "auditHashes.native_implementation_audit",
+        nativeProverBundle.auditHashes.native_implementation_audit,
+      ],
+      [
+        "auditHashes.reproducible_build_attestation",
+        nativeProverBundle.auditHashes.reproducible_build_attestation,
+      ],
+      [
+        "auditHashes.cross_sdk_fixture_parity",
+        nativeProverBundle.auditHashes.cross_sdk_fixture_parity,
+      ],
+      [
+        "auditHashes.native_prover_self_test",
+        nativeProverBundle.auditHashes.native_prover_self_test,
+      ],
+      [
+        "auditHashes.no_wasm_no_remote_scan",
+        nativeProverBundle.auditHashes.no_wasm_no_remote_scan,
+      ],
+      [
+        "crossSdkFixtureParity.receiptProofHash",
+        crossSdkFixtureParity.receiptProofHash,
+      ],
+      [
+        "crossSdkFixtureParity.sourceProofHash",
+        crossSdkFixtureParity.sourceProofHash,
+      ],
+      ["crossSdkFixtureParity.calldataHash", crossSdkFixtureParity.calldataHash],
+      [
+        "crossSdkFixtureParity.toriiSubmitPayloadHash",
+        crossSdkFixtureParity.toriiSubmitPayloadHash,
+      ],
+      [
+        "crossSdkFixtureParity.productionAttestationHash",
+        crossSdkFixtureParity.productionAttestationHash,
+      ],
+      ["nativeProverSelfTest.requestHash", nativeProverSelfTest.requestHash],
+      ["nativeProverSelfTest.witnessHash", nativeProverSelfTest.witnessHash],
+      [
+        "nativeProverSelfTest.sourceProofHash",
+        nativeProverSelfTest.sourceProofHash,
+      ],
+      ["nativeProverSelfTest.proofHash", nativeProverSelfTest.proofHash],
+      ["nativeProverSelfTest.calldataHash", nativeProverSelfTest.calldataHash],
+      [
+        "nativeProverSelfTest.toriiSubmitPayloadHash",
+        nativeProverSelfTest.toriiSubmitPayloadHash,
+      ],
+      [
+        "nativeProverSelfTest.productionAttestationHash",
+        nativeProverSelfTest.productionAttestationHash,
+      ],
+    ],
+    "nativeProverReports",
+  );
+}
+
 const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
   requireNativeEvmProverBundleObject(
     input,
@@ -10478,6 +10601,11 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     JSON.parse(selfTestJson),
     nativeProverBundle,
     profile,
+  );
+  requireVerifiedNativeEvmProverReportHashRoleSeparation(
+    nativeProverBundle,
+    crossSdkFixtureParity,
+    nativeProverSelfTest,
   );
   const sdk = strictOptionalResultField(input, "sdk", "sdk");
   const implementationBytes = optionalNativeEvmProverArtifactBytes(
@@ -10956,6 +11084,11 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
     ),
     nativeProverBundle,
     profile,
+  );
+  requireVerifiedNativeEvmProverReportHashRoleSeparation(
+    nativeProverBundle,
+    crossSdkFixtureParity,
+    nativeProverSelfTest,
   );
   const sdk = strictOptionalResultField(
     input,
@@ -16539,9 +16672,7 @@ export class EthereumMainnetSccp {
       options.execution_provider ??
       this.executionProvider;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({
-        executionProvider: provider,
-      });
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
     }
     const transactionHashInput = maybeStrictOptionalResultField(
       input,
@@ -17086,18 +17217,14 @@ export class EthereumMainnetSccp {
       this.executionProvider;
     let providerValidated = false;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({
-        executionProvider: provider,
-      });
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
       providerValidated = true;
     }
     if (typeof submit === "function") {
       return submit(submission, options);
     }
     if (!providerValidated) {
-      await this.validateExecutionProviderMainnet({
-        executionProvider: provider,
-      });
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
     }
     const boundBridgeAddress =
       wrappedEthereumMainnetProofResultBridgeAddress(input);

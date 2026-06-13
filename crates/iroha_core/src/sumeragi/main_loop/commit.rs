@@ -133,6 +133,19 @@ fn pending_allows_stale_view_commit_qc_fetch(
         )
 }
 
+fn sign_vote_with_local_key(
+    chain_id: &iroha_data_model::ChainId,
+    mode_tag: &str,
+    private_key: &iroha_crypto::PrivateKey,
+    vote: &mut crate::sumeragi::consensus::Vote,
+) -> Result<(), iroha_crypto::Error> {
+    vote.bls_sig.clear();
+    let preimage = vote_preimage(chain_id, mode_tag, vote);
+    let signature = Signature::try_new(private_key, &preimage)?;
+    vote.bls_sig = signature.payload().to_vec();
+    Ok(())
+}
+
 #[derive(Debug)]
 pub(super) struct CommitResult {
     pub(super) id: u64,
@@ -5769,9 +5782,22 @@ impl Actor {
             bls_sig: Vec::new(),
         };
         let (_, mode_tag, _) = self.consensus_context_for_height(height);
-        let preimage = vote_preimage(&self.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
-        vote.bls_sig = signature.payload().to_vec();
+        if let Err(err) = sign_vote_with_local_key(
+            &self.common_config.chain,
+            mode_tag,
+            self.common_config.key_pair.private_key(),
+            &mut vote,
+        ) {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                signer,
+                error = %err,
+                "failed to sign local consensus vote; skipping vote"
+            );
+            return None;
+        }
         Some(vote)
     }
 
@@ -10129,10 +10155,11 @@ mod tests {
         (1..=5)
             .map(|idx| {
                 PeerId::new(
-                    KeyPair::from_seed(
+                    KeyPair::try_from_seed(
                         format!("p2p-topology-trusted-{idx}").into_bytes(),
                         Algorithm::BlsNormal,
                     )
+                    .expect("generate checked P2P topology fixture keypair")
                     .public_key()
                     .clone(),
                 )
@@ -11176,6 +11203,37 @@ mod tests {
     }
 
     #[test]
+    fn sign_vote_with_local_key_attaches_verifiable_signature() {
+        let chain = "test-chain".parse::<ChainId>().expect("chain id");
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Prepare,
+            block_hash: sample_block(3, 0).hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 3,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: vec![0xAA; 4],
+        };
+
+        sign_vote_with_local_key(&chain, PERMISSIONED_TAG, key_pair.private_key(), &mut vote)
+            .expect("local vote signing succeeds");
+
+        assert!(!vote.bls_sig.is_empty());
+        assert_ne!(vote.bls_sig, vec![0xAA; 4]);
+        let preimage = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
+        Signature::from_bytes(&vote.bls_sig)
+            .verify(key_pair.public_key(), &preimage)
+            .expect("signed vote verifies against local key");
+    }
+
+    #[test]
     fn block_sync_update_targets_cap_and_excludes_local() {
         let local = PeerId::new(KeyPair::random().public_key().clone());
         let peers: Vec<_> = (0..6)
@@ -11609,7 +11667,8 @@ mod tests {
         let mut signatures = Vec::with_capacity(signers.len());
         for idx in signers {
             let kp = keypairs.get(idx).expect("keypair for signer");
-            let sig = Signature::new(kp.private_key(), &preimage);
+            let sig = Signature::try_new(kp.private_key(), &preimage)
+                .expect("sign checked commit QC fixture");
             signatures.push(sig.payload().to_vec());
         }
         let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -11633,9 +11692,11 @@ mod tests {
             view_change_index: view,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair =
+            KeyPair::try_random().expect("generate checked commit block fixture keypair");
         let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let signature = SignatureOf::try_from_hash(&private_key, header.hash())
+            .expect("sign checked commit block fixture hash");
         let block_signature = BlockSignature::new(0, signature);
         SignedBlock::presigned(block_signature, header, Vec::<SignedTransaction>::new())
     }

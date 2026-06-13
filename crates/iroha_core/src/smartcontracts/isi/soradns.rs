@@ -616,7 +616,8 @@ mod tests {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let mut record = sample_record(&keypair);
         let payload = signing_payload_bytes(&record).expect("payload");
-        record.builder_signature = Signature::new(keypair.private_key(), &payload);
+        record.builder_signature = Signature::try_new(keypair.private_key(), &payload)
+            .expect("directory record should sign");
         (record, keypair)
     }
 

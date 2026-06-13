@@ -3,9 +3,13 @@
 
 use integration_tests::{
     sorafs_gateway_capability_refusal,
-    sorafs_gateway_conformance::{ScenarioOutcome, default_suite_report},
+    sorafs_gateway_conformance::{ScenarioOutcome, default_suite_report, generate_attestation},
 };
+use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_data_model::account::AccountAddress;
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::json::Value;
+use std::time::{Duration, UNIX_EPOCH};
 
 #[test]
 fn sorafs_gateway_conformance_suite_passes() {
@@ -79,6 +83,40 @@ fn sorafs_gateway_suite_report_json_contains_expected_fields() {
         refusal.get("details"),
         Some(&expected_c1.details),
         "capability refusal JSON must include details map"
+    );
+}
+
+#[test]
+fn sorafs_gateway_attestation_signature_verifies_and_rejects_wrong_key() {
+    let report = default_suite_report();
+    let signer = AccountAddress::from_account_id(&ALICE_ID).expect("Alice address encodes");
+    let bundle = generate_attestation(
+        &report,
+        &ALICE_KEYPAIR,
+        &signer,
+        UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+    )
+    .expect("attestation generation succeeds");
+    let envelope: Value =
+        norito::json::from_slice(&bundle.envelope_bytes).expect("attestation envelope is JSON");
+    let signature_hex = envelope
+        .get("attestation")
+        .and_then(Value::as_object)
+        .and_then(|attestation| attestation.get("signature_hex"))
+        .and_then(Value::as_str)
+        .expect("attestation signature is present");
+    let signature_bytes = hex::decode(signature_hex).expect("attestation signature is hex");
+    let signature = Signature::from_bytes(&signature_bytes);
+
+    signature
+        .verify(ALICE_KEYPAIR.public_key(), &bundle.report_json)
+        .expect("attestation signature verifies with Alice key");
+    let wrong_key = KeyPair::from_seed(vec![0x5A; 32], Algorithm::Ed25519);
+    assert!(
+        signature
+            .verify(wrong_key.public_key(), &bundle.report_json)
+            .is_err(),
+        "attestation signature must reject a wrong key"
     );
 }
 

@@ -970,7 +970,8 @@ pub fn generate_attestation(
     let report_json =
         norito::json::to_vec(&report_value).wrap_err("failed to serialize conformance report")?;
     let digest = blake3::hash(&report_json);
-    let signature = Signature::new(key_pair.private_key(), &report_json);
+    let signature = Signature::try_new(key_pair.private_key(), &report_json)
+        .wrap_err("failed to sign SoraFS gateway conformance report")?;
     let (pk_alg, pk_bytes) = key_pair
         .public_key()
         .try_to_bytes()

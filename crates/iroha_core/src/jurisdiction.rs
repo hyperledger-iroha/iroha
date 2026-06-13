@@ -1088,6 +1088,18 @@ mod tests {
         BTreeSet::from([JdgSignatureScheme::SimpleThreshold])
     }
 
+    fn checked_jdg_signature_payload(
+        keypair: &iroha_crypto::KeyPair,
+        signing_hash: &Hash,
+    ) -> Vec<u8> {
+        let signature = Signature::try_new(keypair.private_key(), signing_hash.as_ref())
+            .expect("checked JDG attestation fixture signature");
+        signature
+            .verify(keypair.public_key(), signing_hash.as_ref())
+            .expect("checked JDG attestation fixture signature verifies");
+        signature.payload().to_vec()
+    }
+
     fn sample_scope() -> JdgAttestationScope {
         JdgAttestationScope {
             jurisdiction_id: iroha_data_model::jurisdiction::JurisdictionId::new(b"JUR1".to_vec())
@@ -1108,7 +1120,10 @@ mod tests {
             seal: SignatureOf::from_signature(Signature::from_bytes(&[0u8])),
             sdn_public_key: sdn_keypair.public_key().clone(),
         };
-        let seal = SignatureOf::from_hash(sdn_keypair.private_key(), commitment.signing_hash());
+        let seal = SignatureOf::try_from_hash(sdn_keypair.private_key(), commitment.signing_hash())
+            .expect("checked JDG SDN commitment fixture seal");
+        seal.verify_hash(sdn_keypair.public_key(), commitment.signing_hash())
+            .expect("checked JDG SDN commitment fixture seal verifies");
         commitment.seal = seal;
 
         let signer = iroha_crypto::KeyPair::random().public_key().clone();
@@ -1425,11 +1440,7 @@ mod tests {
         let signing_hash = attestation.signing_hash();
         let signatures = signer_indexes
             .iter()
-            .map(|idx| {
-                Signature::new(signers[*idx].private_key(), signing_hash.as_ref())
-                    .payload()
-                    .to_vec()
-            })
+            .map(|idx| checked_jdg_signature_payload(&signers[*idx], &signing_hash))
             .collect();
         attestation.signature.signatures = signatures;
         attestation
@@ -1484,11 +1495,7 @@ mod tests {
         let signing_hash = attestation.signing_hash();
         let signatures: Vec<Vec<u8>> = signer_indexes
             .iter()
-            .map(|idx| {
-                Signature::new(signers[*idx].private_key(), signing_hash.as_ref())
-                    .payload()
-                    .to_vec()
-            })
+            .map(|idx| checked_jdg_signature_payload(&signers[*idx], &signing_hash))
             .collect();
         let signature_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
         let aggregated =

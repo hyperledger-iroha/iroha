@@ -486,7 +486,21 @@ allowlist, telemetry app-package binding, and queue empty-after-handoff check
 before raw artifacts can be promoted into a signed slot. When the slot assembler reads attached device identity
 through ADB `getprop`, each response must be exactly one LF-terminated value
 and the value itself must not require trimming before it can be bound into
-signed slot metadata. The shared Android device-lab
+signed slot metadata. The on-device lab exporter also fails closed if
+`Build.MODEL` and `Build.DEVICE` do not both identify the same standard
+Kagemusha matrix family through exact Pixel model/codename matches or the
+standard Samsung S23/S24 model-prefix and codename pairs, preventing unsupported
+near matches from producing Pixel-labeled or otherwise covered raw slots before
+host-side assembly. The host assembler applies the same binding to explicit
+`--device-family` values, so an operator-supplied family must match the family
+inferred from model/codename evidence before a signed slot can be published;
+one-sided or conflicting standard model/codename evidence also fails closed
+instead of trusting whichever field matched first.
+The assembler writes the exact model and codename into `slot.json` and signed
+evidence, and the scanner recomputes the standard matrix family from those
+signed fields, rejects one-sided or conflicting standard model/codename pairs,
+and requires telemetry to repeat the same identity values.
+The shared Android device-lab
 JSON loader rejects duplicate keys and non-standard `NaN`/`Infinity` constants
 before slot metadata, attestation, signed evidence, D2D handoff, or
 wallet-integrity schema validation, and caps those JSON inputs at 16 MiB from
@@ -612,7 +626,12 @@ signer blocker instead of being hidden by `Path.is_dir()`.
 Scanner summary construction also normalizes finite float values in direct
 report inputs as unsupported summary values and redacts non-finite numbers, so
 release-facing summary JSON cannot preserve injected floating-point scalars that
-the scanner itself would not emit.
+the scanner itself would not emit. When Kagemusha production evidence or the
+standard matrix is requested, scanner summary coverage and
+`duplicate_bindings` rollups only admit reports with safe slot ids, canonical
+family/model/codename identity, ABI 7, canonical signed-evidence timestamps,
+non-zero artifact digests, a signer digest present in the supplied trusted
+signer pins, and safe release artifact path/digest pairs.
 Scanner slot inventory also classifies expected top-level directories,
 `sha256sum.txt`, and recursive file-count entries with `lstat()`, so summary
 presence and file-count fields do not follow symlinks or hide unreadable
@@ -675,9 +694,15 @@ instead of tracebacks. Manifest inventory discovery reports unreadable artifact 
 structured slot-artifact blockers instead of omitting those files from
 `sha256sum.txt` coverage, and direct hardlink artifact validation reports the
 same unreadable metadata before hardlink checks. Digest-time artifact validators
-for `sha256sum.txt`, slot metadata bindings, and signed-evidence artifact
-digests also distinguish missing files from unreadable leaf metadata before
-classifying symlink, non-regular, hardlink, or read failures.
+for `sha256sum.txt`, slot metadata bindings, nested attestation/D2D/wallet
+transcript bindings, signed-evidence payload fields, and signed-evidence
+artifact digests reject all-zero SHA-256 placeholders and distinguish missing
+files from unreadable leaf metadata before classifying symlink, non-regular,
+hardlink, or read failures.
+The raw Android slot puller and slot assembler apply the same non-zero
+SHA-256 rule to attestation source digests and assembled metadata artifact
+bindings before a raw device result can be installed or promoted to signed
+production slot evidence.
 
 Capture the production ignored proof log into the same artifact directory and
 build the evidence JSON from those local bytes. Enable `pipefail` before the
@@ -716,6 +741,7 @@ python3 scripts/kagemusha_finalize_lineage_proof_staged_run.py \
   --staged-artifact-dir <staged>/artifacts/kagemusha \
   --exit-file <staged-exit-file> \
   --elapsed-seconds-file <staged-elapsed-seconds-file> \
+  --max-generated-at-future-skew-seconds 300 \
   --artifact-dir artifacts/kagemusha \
   --out artifacts/kagemusha/lineage-proof-evidence.json
 
@@ -750,15 +776,18 @@ python3 scripts/kagemusha_run_recursive_compact_keygen_staged.py \
 python3 scripts/kagemusha_finalize_recursive_compact_key_staged_run.py \
   --staged-artifact-dir <staged>/artifacts/kagemusha \
   --exit-file <staged-exit-file> \
+  --max-generated-at-future-skew-seconds 300 \
   --artifact-dir artifacts/kagemusha \
   --out artifacts/kagemusha/recursive-compact-key-evidence.json
 ```
 
 The staged Reserved-lineage finalizer performs the same artifact, proof-log,
 command, timestamp, and digest checks as the direct helper, but additionally
-requires the detached wrapper's zero exit marker and refuses to overwrite any
-published lineage artifact or `lineage-proof-evidence.json` unless `--replace`
-is explicit. After installing each staged file into the published artifact
+rejects noncanonical or future-dated `--generated-at-utc` during preflight
+before creating the temporary publish stage. It requires the detached wrapper's
+zero exit marker and refuses to overwrite any published lineage artifact or
+`lineage-proof-evidence.json` unless `--replace` is explicit. After installing
+each staged file into the published artifact
 directory, it reopens the published file through the identity-bound artifact
 reader and byte-compares it against the staged source so post-install drift
 fails before the final evidence check, then syncs the captured published
@@ -816,7 +845,9 @@ success marker to be exactly `0\n`, requires the staged elapsed-seconds file
 to be the runner's exact positive decimal line with six fractional digits and
 one trailing newline, rejects exit-code, elapsed-second, proof-log-size, or
 lineage-key-artifact log-size drift between the marker, elapsed file, report,
-and staged logs, and still
+and staged logs, requires each init, append, and proof execution report to
+carry a zero exit code plus a non-zero SHA-256 digest that matches the staged
+child log bytes, and still
 refuses to publish any artifacts from nonzero staged exits. Marker failures are
 reported with control-character and secret-looking marker values redacted
 before success-only elapsed, command, timestamp, or run-report checks
@@ -859,7 +890,10 @@ compares the exact bytes before returning.
 The compact-key finalizer requires that
 run report whenever the exit marker claims success, requires the success marker
 to be exactly `0\n`, rejects exit-code or
-generator-log-size drift between the marker, report, and staged log, and still
+generator-log-size drift between the marker, report, and staged log, requires
+the staged execution report to carry a zero exit code plus a non-zero SHA-256
+digest that matches the staged generator log bytes, rejects elapsed-time drift
+between the run report and execution report, and still
 refuses to publish any artifacts from nonzero staged exits. It also reopens each
 published key artifact, generator log, and evidence JSON after the final
 install and compares the identity-bound readback against the staged bytes before
@@ -933,8 +967,9 @@ certificate-chain file with
 bundle-relative path, SHA-256 digest, and byte size computed from bytes whose
 opened file identity matches the preflight `lstat()` identity and remains
 path-bound after the read, and revalidates each slot
-name, signed-evidence summary field set, signed-evidence timestamp, summary
-digest, and slot-relative artifact path before
+name, signed-evidence summary field set, signed-evidence timestamp, signed
+device family/model/codename binding, summary digest, and slot-relative artifact
+path before
 constructing manifest paths. The verifier rejects summary drift,
 release-manifest drift, duplicate JSON keys,
 unexpected top-level, section-level, evidence-inventory, evidence-entry,
@@ -943,8 +978,8 @@ release section/evidence fields, malformed release section states, timestamps,
 ABI constants, projected ABI-6 limits/modes, circuit ids, digest maps, size
 maps, section map inventories, checked-file inventories, Android family
 coverage, readiness-summary Android matrix lists, Android trusted-signer pins,
-readiness-summary trusted-signer digest lists, duplicate-binding slot lists, and
-malformed summary
+readiness-summary trusted-signer digest lists, duplicate-binding slot lists,
+duplicate-binding value inventories, and malformed summary
 digests, malformed, noncanonical, or future-dated summary/manifest timestamps,
 including nested readiness-summary and release-manifest lineage/compact
 evidence-section timestamps plus Android readiness timestamp bounds, non-standard
@@ -1098,20 +1133,51 @@ normalize malformed direct report error lists to explicit safe placeholders,
 normalize malformed direct Kagemusha report sections, render duplicate-binding
 slot lists through safe slot labels, redact unsafe direct binding slot labels in duplicate and
 malformed-digest blockers, reject malformed direct binding digests before
-duplicate checks, require canonical device-family strings before matrix
+duplicate checks, reject all-zero binding digest placeholders, require canonical device-family strings before matrix
 coverage, and only reflect duplicate-binding values and trusted-signer
-summary keys that are canonical lowercase SHA-256 hex digests. Direct
+summary keys that are non-zero canonical lowercase SHA-256 hex digests. Raw
+scanner duplicate-binding diagnostics also ignore all-zero binding placeholders.
+The direct
+device-lab scanner summary and the production-readiness summary both require
+complete signed evidence before a status-ok direct report can count toward
+standard matrix coverage or release-facing `duplicate_bindings` metadata.
+Duplicate-binding blockers still catch copied evidence from incomplete direct
+reports, but release-facing duplicate summaries only reflect slots admitted
+through the complete signed-evidence gates. Direct
 signed-evidence summary fields are also revalidated before reflection:
 timestamps must be canonical UTC, digest fields must be non-zero lowercase
 SHA-256, artifact paths must be canonical safe relative paths, and multiple
 validated reports must not collapse to the same redacted signed-evidence summary
-slot label.
+slot label. If a direct signed-evidence report carries a partial or
+non-standard device-family/model/codename tuple, readiness keeps the blocker but
+omits all three identity fields from the per-slot signed-evidence summary
+instead of publishing misbound identity metadata. Signed-evidence summary slot
+keys must be safe real slot ids; unsafe, redacted, traversal-shaped, or
+control-character slot names keep blockers but are omitted instead of being
+published under placeholder keys. Direct reports with any
+missing or malformed release-facing signed-evidence field keep their blockers
+but are omitted from the per-slot signed-evidence summary and do not count
+toward standard device-family coverage. Their
+`android_device_lab.slots[*].kagemusha` release-facing fields are omitted until
+the same slot is admitted into the complete signed-evidence summary. Duplicate
+or colliding slot reports cannot borrow another report's admitted
+signed-evidence entry; each slot report must exactly match the admitted
+per-slot signed-evidence fields before its Kagemusha details or device family
+are reflected. The signed-at
+timestamp, signed-evidence artifact digest, and signer public-key digest are
+reflected only as a complete provenance group. Release-artifact path/digest
+bindings for the APK, D2D transcript, wallet integrity transcript, and
+attestation certificate chain use the same all-or-nothing reflection rule.
 The readiness rollup validates caller-provided trusted-signer maps before
-Android root classification and only reflects canonical signer-key SHA-256 ids
-in summaries. Direct release-bundle builders apply the same trusted-signer map
+Android root classification and only reflects non-zero canonical signer-key
+SHA-256 ids in summaries; direct signer maps reject non-mapping containers, mixed malformed
+digest keys without invoking caller-controlled key representations, and
+non-`Path` values before slot metadata reads. Direct
+release-bundle builders apply the same trusted-signer map
 preflight before bundle-root metadata checks, the verify-existing path applies
-it before manifest loading, and blocked manifests emit only canonical signer
-digests. They also reuse the repo-root alias validator so parent-segment or
+it before manifest loading, and blocked manifests emit only non-zero canonical
+signer digests from the same mapping-safe sanitizer. They also reuse the
+repo-root alias validator so parent-segment or
 backslash-bearing `--repo-root` aliases stop before bundle-root metadata reads
 or release-bundle JSON loads.
 Direct release-bundle build and verify calls also validate `repo_root` before
@@ -1126,6 +1192,17 @@ per-slot `signed_evidence` map, device-family lists, and trusted signer digest
 list, are also compared with freshly computed device-lab evidence during both
 readiness-summary comparison and existing-manifest verification before generic
 summary or manifest drift.
+Each per-slot signed-evidence summary entry carries `device_family`,
+`device_model`, and `device_codename`; both readiness-summary validation and
+release-bundle verification require non-empty exact strings and recompute the
+standard matrix family from the model and codename before accepting the entry.
+Build-time release-bundle comparison also reports exact signed-evidence and
+slot identity drift with Android-specific blockers before the broader summary
+metadata drift checks, so same-family model/codename substitutions do not hide
+behind generic drift diagnostics.
+Existing release-bundle verification applies the same exact identity binding to
+manifest `android_device_lab.signed_evidence` entries before generic manifest
+drift.
 Android covered-family summary drift now fails with an Android-specific blocker
 before generic summary drift.
 Build-time readiness-summary comparison also rejects Android signed-evidence
@@ -1173,7 +1250,19 @@ validation, metadata reads, or destination directory creation, and its
 device-lab root path preflight rejects control-character, parent-segment, and
 backslash-bearing roots before root classification or directory creation. Slot
 assembler source metadata strings also reject control characters before they
-can be copied into signed slot metadata. The signed-slot assembler source digest preflights reject blank or noncanonical attestation challenge, app-signing, and offline-policy SHA-256 fields before unsigned staging output or signed evidence can be published.
+can be copied into signed slot metadata. The signed-slot assembler can now
+derive missing device identity from validated source artifacts before trying
+ADB: attestation result/report provide fingerprint and OS build hints, and
+telemetry provides model/codename hints. Those source identity hints use the
+same no-surrounding-whitespace, no-control-character, and no-secret-material
+validation as explicit overrides, require duplicate source hints to agree, and
+require explicit overrides to match captured hints when both are present.
+Present-but-empty source identity fields are rejected instead of being treated
+as missing, and explicit empty identity overrides are rejected instead of
+falling back to source artifacts or ADB. Malformed or conflicting hints fail before any slot is installed.
+The signed-slot assembler source digest preflights reject blank or noncanonical
+attestation challenge, app-signing, and offline-policy SHA-256 fields before
+unsigned staging output or signed evidence can be published.
 The Android raw puller and signed-slot assembler now also report temporary
 staging directory removal failures and block success when the original staging
 directory cannot be removed; identity-swapped staging directories are still
@@ -1191,7 +1280,12 @@ control characters before evidence assembly or tar path normalization, and
 noncanonical tar member spellings such as `./` or repeated separators fail
 instead of being normalized into accepted evidence paths. It also accepts only
 the uncompressed `tar -cf -` stream emitted by the Android exporter, so
-compressed archive streams fail before extraction.
+compressed archive streams fail before extraction, and caps the total raw tar
+entry count so empty-directory flooding cannot exhaust host-side staging before
+slot validation. The local raw output root is tightened to `0700`, and extracted
+raw artifact directories are forced to `0700` and files to `0600` before
+installation, so evidence confidentiality does not depend on the host process
+umask.
 All of these release-output writers also fail closed if the parent-directory
 sync after atomic replacement fails, so a release/readiness artifact is not
 accepted as durable when the directory entry cannot be fsynced. The readiness
@@ -1200,6 +1294,9 @@ before that fsync, so a replaced output cannot be accepted after its target
 directory has been exchanged. The staged lineage and compact-key finalizers use
 the same identity discipline for rollback cleanup: failed publish paths are
 removed only while their publish-time identity is still present.
+Both staged finalizers also reject noncanonical or future-dated
+`--generated-at-utc` values during preflight, before temporary publish staging
+or artifact copying starts.
 If a staged finalizer cannot remove a publish-time file during rollback, that
 cleanup failure is returned with the original publish failure instead of being
 silently swallowed. Finalizer temporary staging directory cleanup also reports
@@ -1453,6 +1550,16 @@ The confidential-transfer-v2 and unshield prover builders use the same
 process-local optimization for canonical circuits: they reuse cached derived
 Halo2 IPA proving keys for canonical verifier-key envelopes and retain the
 existing arbitrary-key derivation path for noncanonical test/custom keys.
+The native privacy bridge keeps those builders fail-closed by default and
+dispatches to the real Halo2 IPA prover/verifier only when
+`privacy-production-enabled` is compiled in. Android production builds must pass
+that feature to the cargo-ndk bridge build only after the production gate
+evidence is complete. Kotlin/JVM and Java Android derive their public privacy
+readiness booleans from the native Norito capability archive when the bridge is
+loaded; malformed, duplicate, incomplete, or missing native evidence keeps the
+SDK capability surface fail-closed. Unshield v3 also rejects overflowing input
+amount sums before proving, so malformed witness archives return the proving
+failure status instead of wrapping the private total.
 The Offline recursive prover and chain verifier require the literal
 `offline-note-recursive` circuit id; alias spellings such as
 `halo2/ipa:offline-note-recursive` are rejected before proof generation or
@@ -2124,10 +2231,64 @@ language can preflight. Swift exposes the witness helpers as
 Java Android expose the same names, JavaScript/Node and Python use the native
 snake/camel-case bridge names, and C# exposes
 `LineageWitnessFromInitResult`/`LineageWitnessAppendResult` DTO wrappers.
+Swift, Kotlin/JVM, Java Android, JavaScript/Node, and Python also expose typed
+ABI-6 recursive-spend request codecs for init, append, verify, and redeem, plus
+verify-result and bundle summary decoders. Those codecs validate nested Norito
+archives, canonical nonzero note amounts, nonnegative block heights, previous
+lineage-record gaps, and append-output transition compatibility before native
+dispatch. Their request-layout regressions decode the emitted archives and pin
+raw embedded record/bundle/proof payloads, Norito `Option` child-length framing,
+and Rust `[u8; N]` fixed-array encoding as per-element compact
+length-prefixed bytes without an extra sequence-length header. Swift exposes
+the same surface through value-typed request/result structs,
+`KagemushaRecursiveSpendRequestCodecs.encode*Request(...)`,
+`decodeVerifyResult(...)`, `decodeBundle(...)`, and typed
+`KagemushaRecursiveSpendProver` overloads. JavaScript/Node exposes the same
+surface through object request inputs, TypeScript declarations,
+`encodeKagemushaRecursiveSpend*Request(...)`,
+`decodeKagemushaRecursiveSpendVerifyResult(...)`,
+`decodeKagemushaRecursiveSpendBundle(...)`, and typed native convenience
+wrappers that delegate only after request encoding succeeds. Python exposes the
+same surface through frozen request/result dataclasses,
+`encode_kagemusha_recursive_spend_*_request(...)`,
+`decode_kagemusha_recursive_spend_verify_result(...)`,
+`decode_kagemusha_recursive_spend_bundle(...)`, and typed native convenience
+wrappers that delegate only after request encoding succeeds.
 Python, Swift, JavaScript/Node, Kotlin/JVM, Java Android, and C# also fail
 closed when proof-producing native calls return no archive or a zero-length
 archive, so missing native proof material cannot be coerced into a successful SDK
-result. Swift's native bridge caps Kagemusha native output lengths before
+result. C# Torii identifier policy summaries and flat resolve receipts also
+reject padded proof metadata, duplicate JSON fields, and negative receipt
+timestamps before wallet or verifier code can trust the returned account
+binding. Kotlin/JVM and Java Android `ClaimIdentifier` wire encoders require
+the caller account id to be exact before comparing it with the receipt account,
+so padded account strings cannot be normalized into a signed identifier claim.
+Kotlin/JVM, Java Android, Swift, and JavaScript/Node identifier claim-record
+parsers also require exact returned `policy_id`, `opaque_id`, `receipt_hash`,
+`uaid`, and `account_id` strings, so Torii receipt-hash claim lookups cannot
+trim persisted claim state before wallet code consumes it.
+The same non-C# SDK surfaces now fail closed on padded RAM-LFE execute and
+receipt-verify response program IDs, hash fields, backend tags, verification
+modes, and exposed output ciphertext before proof material reaches wallet code.
+Their RAM-LFE program-policy list parsers also require exact returned program
+IDs, owners, resolver keys, backend and verification-mode tags, input
+encryption metadata, and proof-verifier metadata, so policy material cannot be
+trusted after whitespace trimming or case normalization. JavaScript/Node also
+preserves the returned `proof_verifier` object on program-policy summaries,
+matching the Java, Kotlin/JVM, and Swift policy metadata surfaces.
+Identifier-policy summaries use the same `proof_verifier` exactness, and
+JavaScript/Node now preserves that object instead of dropping it during
+normalization. The same JavaScript/Node, Swift, Kotlin/JVM, and Java Android
+identifier-policy parsers also reject padded or case-normalized returned owner,
+normalization, backend, input-encryption, input-parameter, nested
+`norito_length_encoding`, and note metadata before encrypted identifier policy
+material reaches wallet code. Account-alias resolution parsers on those same
+non-C# SDKs also reject padded returned `alias`, `account_id`, alternate
+`account_ids`, and `source` fields before wallet code trusts alias bindings.
+Multisig response parsers also reject padded, alias-shaped, or otherwise
+non-canonical returned `resolved_multisig_account_id` values before proposal or
+spec state is trusted by wallet code.
+Swift's native bridge caps Kagemusha native output lengths before
 copying native pointers into `Data`, so over-cap native outputs are rejected
 and freed at the bridge boundary. The Swift dynamic loader now requires bridge
 ABI 6 or later and the
