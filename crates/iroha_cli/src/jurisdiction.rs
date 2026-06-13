@@ -319,7 +319,7 @@ mod tests {
         signer: &KeyPair,
         sdn_keypair: &KeyPair,
         include_sdn_commitment: bool,
-    ) -> JdgAttestation {
+    ) -> Result<JdgAttestation> {
         let mut sdn_commitments = Vec::new();
         if include_sdn_commitment {
             let mut commitment = JdgSdnCommitment {
@@ -330,11 +330,12 @@ mod tests {
                 sdn_public_key: sdn_keypair.public_key().clone(),
             };
             commitment.seal =
-                SignatureOf::from_hash(sdn_keypair.private_key(), commitment.signing_hash());
+                SignatureOf::try_from_hash(sdn_keypair.private_key(), commitment.signing_hash())
+                    .wrap_err("failed to sign test JDG SDN commitment seal")?;
             sdn_commitments.push(commitment);
         }
 
-        JdgAttestation {
+        Ok(JdgAttestation {
             version: JDG_ATTESTATION_VERSION_V1,
             scope: scope.clone(),
             pre_state_version: Hash::prehashed([0x11; 32]),
@@ -357,7 +358,7 @@ mod tests {
                 signer_bitmap: Some(vec![0b0000_0001]),
                 signatures: vec![vec![0x55]],
             },
-        }
+        })
     }
 
     fn write_json_payload<T: JsonSerialize>(value: &T) -> NamedTempFile {
@@ -370,11 +371,11 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn verifies_attestation_with_registry() {
+    fn verifies_attestation_with_registry() -> Result<()> {
         let scope = sample_scope();
         let signer = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let sdn_keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let attestation = sample_attestation(&scope, &signer, &sdn_keypair, true);
+        let attestation = sample_attestation(&scope, &signer, &sdn_keypair, true)?;
         let registry = vec![JdgSdnKeyRecord {
             public_key: sdn_keypair.public_key().clone(),
             activated_at: scope.block_range.start_height,
@@ -407,14 +408,15 @@ mod tests {
         assert!(summary.registry_loaded);
         assert_eq!(summary.sdn_commitments, 1);
         assert_eq!(summary.signer_count, 1);
+        Ok(())
     }
 
     #[test]
-    fn rejects_missing_sdn_commitments_when_required() {
+    fn rejects_missing_sdn_commitments_when_required() -> Result<()> {
         let scope = sample_scope();
         let signer = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let sdn_keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let attestation = sample_attestation(&scope, &signer, &sdn_keypair, false);
+        let attestation = sample_attestation(&scope, &signer, &sdn_keypair, false)?;
         let registry = vec![JdgSdnKeyRecord {
             public_key: sdn_keypair.public_key().clone(),
             activated_at: scope.block_range.start_height,
@@ -442,5 +444,6 @@ mod tests {
                 || msg.contains("missing commitments"),
             "unexpected error: {msg}"
         );
+        Ok(())
     }
 }

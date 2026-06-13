@@ -715,8 +715,10 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
-        let signature = SignatureOf::from_hash(key_pair.private_key(), header.hash());
+        let key_pair =
+            KeyPair::try_random().expect("generate checked pending block fixture keypair");
+        let signature = SignatureOf::try_from_hash(key_pair.private_key(), header.hash())
+            .expect("sign checked pending block fixture hash");
         SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new())
     }
 

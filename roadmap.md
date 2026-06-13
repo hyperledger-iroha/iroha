@@ -1225,7 +1225,13 @@ and completed history lives in [`status.md`](./status.md).
   `source_material_template_rejection_gate` source inventory pins ETH, BSC,
   Solana, TON, and TRON evidence-script guards plus negative tests so
   template-derived source verifier material cannot satisfy production readiness
-  silently.
+  silently. The aggregate all-lanes evidence validator also rejects copied
+  source-material records that replay those built-in template component hashes
+  before release readiness can pass. Copied Solana and TON source-adapter audit
+  verifier hashes are rejected at the same boundary if they replay built-in
+  source-material template component hashes, and strict release-bundle public
+  JSON validation rejects the same replay in copied cryptographic-evidence rows
+  and all-lanes source-adapter gate summaries.
   The companion `source_material_role_validation_gate` pins zero-hash,
   role-reuse, canonical source-adapter verifier, and full-light-client audit
   role-separation guards across the same source families before source material
@@ -1353,10 +1359,13 @@ and completed history lives in [`status.md`](./status.md).
   route/destination hashes matching the sibling lane records before Markdown or
   public JSON output is written. Copied route-canary evidence hashes must also
   stay distinct from same-lane governed hashes, same-lane canary roles, other
-  lane canary evidence hashes, and other lane governed hashes before public
-  output is written. The bundle builder's pre-render regression now exercises
-  cross-lane replay against another lane's canary evidence hash, source-material
-  hash, destination-binding hash, and route-allowlist hash. EVM-family copied route canaries must also
+  lane canary evidence hashes, and other lane governed hashes, including
+  source-adapter gate hashes and audit hashes, before public output is written.
+  The bundle builder's pre-render regression now exercises cross-lane replay
+  against another lane's canary evidence hash, source-material hash,
+  source-adapter gate audit hash, destination-binding hash, and route-allowlist
+  hash, and the strict verifier now rejects the same published-artifact drift.
+  EVM-family copied route canaries must also
   preserve non-zero and distinct transcript hash roles, positive/u32 receipt
   metadata, lane-bound target domain, `proof_version = 1`, SORA proof source,
   and finalized message-proof booleans before bundle output is written.
@@ -1393,6 +1402,10 @@ and completed history lives in [`status.md`](./status.md).
   boolean/null fields, optional bytes32 text, optional block-number fields,
   source-adapter audit-hash maps, or audit-hash keys before
   `--allow-not-ready` diagnostics can render or write public artifacts.
+  Source-adapter audit hashes in copied cryptographic-evidence rows must also
+  stay role-separated from source material, source deployment, destination,
+  route-allowlist, and route-canary evidence hashes before public output is
+  written.
   Release-readiness and strict bundle source inventory must pin the direct
   public-row schema regressions as well, including zero governed hashes,
   route-canary/source-gate domain-policy drift, exact JSON type drift, and BSC
@@ -1616,9 +1629,13 @@ and completed history lives in [`status.md`](./status.md).
   Default and per-SDK helper symbols must be schema-classified before helper
   string derivation, helper inventory, UI-hook matching, or Markdown-presence
   checks, so table-breaking or confusable helper names become category-only
-  blockers. If a copied report corrupts the per-SDK helper map or any helper
-  entry, readiness Markdown must render an invalid-marker cell instead of
-  falling back to raw `sdk_helpers` text or rendering the raw helper.
+  blockers. Copied top-level JS helper lists and per-SDK helper maps must also
+  match the verifier-owned expected helper inventories exactly, not merely
+  contain the required helpers, so safe-looking extra helper claims cannot
+  over-advertise portal/mobile submission coverage before public output is
+  rendered or verified. If a copied report corrupts the per-SDK helper map or
+  any helper entry, readiness Markdown must render an invalid-marker cell
+  instead of falling back to raw `sdk_helpers` text or rendering the raw helper.
   Public `sdk_helper_symbols_by_sdk` map keys must be schema-classified before
   unknown-SDK, helper-list, or Markdown-presence diagnostics, so malformed
   padded, control-character, whitespace, Markdown-unsafe, and
@@ -2204,12 +2221,15 @@ and completed history lives in [`status.md`](./status.md).
 - SCCP native EVM prover manifests must carry exactly one artifact row for each
   required public SDK; duplicate SDK rows and missing SDK rows remain readiness
   and published-bundle blockers even if the native manifest is rehashed.
-  Manifest SDK artifact rows must also remain canonical objects with all
-  required fields, no unknown fields, approved SDK/implementation bindings, and
-  artifact hashes matching their committed roles. SDK implementation artifact
-  paths and hashes are checked with the same local-artifact and hash-binding
-  rules as the primary prover payloads. Duplicate JSON keys inside SDK artifact
-  rows must fail before implementation hashes are trusted.
+  Manifest and public readiness-report SDK artifact rows must also stay in the
+  verifier-owned sorted SDK order before Markdown rendering or bundle
+  verification can pass. Manifest SDK artifact rows must also remain canonical
+  objects with all required fields, no unknown fields, approved
+  SDK/implementation bindings, and artifact hashes matching their committed
+  roles. SDK implementation artifact paths and hashes are checked with the same
+  local-artifact and hash-binding rules as the primary prover payloads.
+  Duplicate JSON keys inside SDK artifact rows must fail before implementation
+  hashes are trusted.
 - SCCP native EVM prover manifests must also keep their root object and
   `audit_hashes` map schemas exact. Rehashed manifests that add unknown root
   fields, add unexpected audit-hash roles, or omit required audit-hash roles are
@@ -3729,6 +3749,13 @@ and completed history lives in [`status.md`](./status.md).
   SoraDNS ISI directory-record fixtures now sign through `Signature::try_new`,
   with submit-draft and publish-directory instruction regressions covering the
   checked builder signature;
+  SoraFS gateway conformance attestations now sign reports through
+  `Signature::try_new`, with regression coverage that verifies the emitted
+  envelope signature and rejects a wrong key;
+  irohad Soracloud runtime provider advert/admission fixtures and recording
+  mutation-sink heartbeat/Inrou provenance fixtures now use checked signing,
+  with remote provider hydration and local heartbeat/Inrou regressions covering
+  the paths;
   VPN usage vouchers now expose `VpnUsageVoucherV1::try_sign`, verify checked
   voucher signatures, and reject tampered or wrong-key voucher signatures in
   focused regressions;
@@ -3739,6 +3766,9 @@ and completed history lives in [`status.md`](./status.md).
   `VpnUsageVoucherV1::try_sign`, with the filtered receipt suite covering
   WSV-grace success and wrong-key, tampered, malformed, replayed, and
   substituted receipt/voucher cases;
+  Torii operator replay and content auth signed-header fixtures now use checked
+  Ed25519 key generation plus `Signature::try_new`, with replay, role-gate, and
+  sponsor regressions covering the verified canonical request signatures;
   `sora-vpn-helper` usage voucher control-cell envelopes now sign through
   `Signature::try_new`, propagate controller signing errors, and exercise the
   fallible envelope builder in the cumulative voucher signer regression;
@@ -3839,7 +3869,32 @@ and completed history lives in [`status.md`](./status.md).
   and reject a wrong block-signature key in focused coverage; `iroha_crypto`
   packed signature alignment fixtures now use checked Ed25519 key generation,
   `Signature::try_new`, and `SignatureOf::try_from_hash`, with raw and typed
-  signature wrong-key rejection coverage;
+  signature wrong-key rejection coverage; Ed25519 aggregate and deterministic
+  batch verification fixtures now use checked Ed25519 key generation plus
+  `Signature::try_new`, preserving tampered-signature, empty-input,
+  invalid-member, order-binding, and wrong-key rejection coverage; ML-DSA
+  keypair fixture signing now uses checked seeded key generation plus
+  `Signature::try_new`, preserving modified-message, wrong-key,
+  invalid-signature-length, mismatched-key, malformed-key, and inconsistent
+  private-key-import negative coverage; internal `Signature`/`SignatureOf`
+  fixtures now use checked random key generation plus `Signature::try_new` and
+  `SignatureOf::try_from_hash`, with Ed25519, secp256k1, BLS normal/small,
+  verify-cache, and typed roundtrip regressions rejecting wrong-key verification
+  where applicable; top-level `iroha_crypto` private-key export, random keypair,
+  ML-DSA parsed-key, keypair serialization, BLS aggregate/PoP, and public-key
+  payload fixtures now use checked seed/random key generation plus
+  `Signature::try_new`, with wrong-key Ed25519, secp256k1, and ML-DSA
+  random-signature rejection plus existing BLS bad-signature, duplicate-key,
+  canceling-key, malformed-PoP, unhashed-PoP, and malformed-public-key
+  regressions on checked fixtures;
+  Torii offline issuer attestation, body-auth, multisig witness, and signed
+  lineage fixtures now use checked seeded Ed25519 key generation plus
+  `Signature::try_new`, with wrong-verifier receipt,
+  stale/replay/tampered body proof, multisig, certificate usage-limit,
+  signed-balance tamper, and refill lineage coverage on checked fixtures;
+  native AMX BLS vote fixtures now use checked seeded/random key generation
+  plus `Signature::try_new`, verifying each vote preimage signature before
+  aggregate-QC ordering and rejection regressions consume it;
   transaction builders, multisig signature bundles, and sealed transaction
   commitments now route through fallible `SignatureOf::try_new` APIs while
   retaining compatibility wrappers for existing callers;
@@ -5924,6 +5979,9 @@ and completed history lives in [`status.md`](./status.md).
   RBC global state-change exit classification,
   RBC evidence protocol/fault provenance,
   RBC global evidence-change effect classification,
+  RBC delivered-entry mutation classifier,
+  RBC corruption-entry mutation classifier,
+  RBC corruption-repair exit classifier,
   RBC header installation provenance,
   RBC header evidence monotonicity,
   RBC digest installation provenance,

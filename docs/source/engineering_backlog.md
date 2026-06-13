@@ -5167,6 +5167,13 @@ redistributable schemas, and official trust/revocation bundles.
     SoraDNS ISI directory-record fixtures now sign through `Signature::try_new`,
     with submit-draft and publish-directory instruction regressions covering the
     checked builder signature;
+    SoraFS gateway conformance attestations now sign reports through
+    `Signature::try_new`, with regression coverage that verifies the emitted
+    envelope signature and rejects a wrong key;
+    irohad Soracloud runtime provider advert/admission fixtures and recording
+    mutation-sink heartbeat/Inrou provenance fixtures now use checked signing,
+    with remote provider hydration and local heartbeat/Inrou regressions covering
+    the paths;
     VPN usage vouchers now expose `VpnUsageVoucherV1::try_sign`, verify checked
     voucher signatures, and reject tampered or wrong-key voucher signatures in
     focused regressions;
@@ -5177,6 +5184,10 @@ redistributable schemas, and official trust/revocation bundles.
     `VpnUsageVoucherV1::try_sign`, with the filtered receipt suite covering
     WSV-grace success and wrong-key, tampered, malformed, replayed, and
     substituted receipt/voucher cases;
+    Torii operator replay and content auth signed-header fixtures now use
+    checked Ed25519 key generation plus `Signature::try_new`, with replay,
+    role-gate, and sponsor regressions covering the verified canonical request
+    signatures;
     `sora-vpn-helper` usage voucher control-cell envelopes now sign through
     `Signature::try_new`, propagate controller signing errors, and exercise the
     fallible envelope builder in the cumulative voucher signer regression;
@@ -5275,7 +5286,32 @@ redistributable schemas, and official trust/revocation bundles.
     block-signature key in the focused regression; `iroha_crypto` packed
     signature alignment fixtures now use checked Ed25519 key generation,
     `Signature::try_new`, and `SignatureOf::try_from_hash`, with raw and typed
-    signature wrong-key rejection coverage. The
+    signature wrong-key rejection coverage; Ed25519 aggregate and deterministic
+    batch verification fixtures now use checked Ed25519 key generation plus
+    `Signature::try_new`, preserving tampered-signature, empty-input,
+    invalid-member, order-binding, and wrong-key rejection coverage; ML-DSA
+    keypair fixture signing now uses checked seeded key generation plus
+    `Signature::try_new`, preserving modified-message, wrong-key,
+    invalid-signature-length, mismatched-key, malformed-key, and inconsistent
+    private-key-import negative coverage; internal `Signature`/`SignatureOf`
+    fixtures now use checked random key generation plus `Signature::try_new` and
+    `SignatureOf::try_from_hash`, with Ed25519, secp256k1, BLS normal/small,
+    verify-cache, and typed roundtrip regressions rejecting wrong-key
+    verification where applicable; top-level `iroha_crypto` private-key export,
+    random keypair, ML-DSA parsed-key, keypair serialization, BLS aggregate/PoP,
+    and public-key payload fixtures now use checked seed/random key generation
+    plus `Signature::try_new`, with wrong-key Ed25519, secp256k1, and ML-DSA
+    random-signature rejection plus existing BLS bad-signature, duplicate-key,
+    canceling-key, malformed-PoP, unhashed-PoP, and malformed-public-key
+    regressions on checked fixtures; Torii offline issuer attestation,
+    body-auth, multisig witness, and signed lineage fixtures now use checked
+    seeded Ed25519 key generation plus `Signature::try_new`, with wrong-verifier
+    receipt, stale/replay/tampered body proof, multisig, certificate
+    usage-limit, signed-balance tamper, and refill lineage coverage on checked
+    fixtures; native AMX BLS vote fixtures now use checked seeded/random key
+    generation plus `Signature::try_new`, verifying each vote preimage
+    signature before aggregate-QC ordering and rejection regressions consume it.
+    The
     ML-DSA key
     path now rejects inconsistent imported secrets and exposes
     `KeyPair::try_from_seed`, `KeyPair::try_random`,

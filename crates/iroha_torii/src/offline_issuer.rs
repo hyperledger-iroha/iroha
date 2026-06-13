@@ -2006,9 +2006,19 @@ mod tests {
     const NOW_MS: u64 = 1_700_000_000_000;
     const REPORT_BYTES: &[u8] = b"offline-platform-attestation";
 
+    fn checked_seed_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("generate checked offline issuer fixture keypair")
+    }
+
+    fn checked_signature(key_pair: &KeyPair, message: &[u8]) -> Signature {
+        Signature::try_new(key_pair.private_key(), message)
+            .expect("sign checked offline issuer fixture")
+    }
+
     fn sample_issuer() -> (OfflineIssuerRuntime, KeyPair) {
-        let issuer_key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-        let verifier_key_pair = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
+        let issuer_key_pair = checked_seed_keypair(0x11);
+        let verifier_key_pair = checked_seed_keypair(0x22);
         let authority = AccountId::new(issuer_key_pair.public_key().clone());
         (
             OfflineIssuerRuntime {
@@ -2050,7 +2060,7 @@ mod tests {
         note_key: [u8; 32],
         assertion_key: Vec<u8>,
     ) -> ParsedOfflineRequest {
-        let account_key_pair = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
+        let account_key_pair = checked_seed_keypair(0x33);
         let account_id = AccountId::new(account_key_pair.public_key().clone());
         let account_literal = account_id.to_string();
         let asset_definition_id = AssetDefinitionId::new(
@@ -2249,7 +2259,7 @@ mod tests {
         ]);
         let signature = {
             let bytes = json::to_vec(&unsigned).expect("receipt json");
-            Signature::new(verifier.private_key(), &bytes)
+            checked_signature(verifier, &bytes)
         };
         let mut map = value_object(unsigned).expect("receipt object");
         map.insert(
@@ -2321,7 +2331,7 @@ mod tests {
     }
 
     fn signer_account(seed: u8) -> (KeyPair, AccountId, String) {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = checked_seed_keypair(seed);
         let account = AccountId::new(key_pair.public_key().clone());
         let literal = account.canonical_i105().expect("i105 account");
         (key_pair, account, literal)
@@ -2396,7 +2406,7 @@ mod tests {
             timestamp_ms,
             nonce,
         );
-        let signature = Signature::new(key_pair.private_key(), &message);
+        let signature = checked_signature(key_pair, &message);
         insert_field(
             &mut value,
             "signature_base64",
@@ -2447,7 +2457,7 @@ mod tests {
             .iter()
             .map(|signer| CanonicalRequestSignatureWitnessV1 {
                 signer: signer.public_key().clone(),
-                signature: Signature::new(signer.private_key(), &message),
+                signature: checked_signature(signer, &message),
             })
             .collect();
         insert_field(
@@ -2489,8 +2499,8 @@ mod tests {
     #[test]
     fn body_auth_accepts_multisig_witness() {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(Default::default());
-        let signer_one = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
-        let signer_two = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
+        let signer_one = checked_seed_keypair(0x41);
+        let signer_two = checked_seed_keypair(0x42);
         let policy = MultisigPolicy::new(
             2,
             vec![
@@ -2527,6 +2537,18 @@ mod tests {
         )
         .expect("valid multisig body auth");
         assert_eq!(parsed.account_id, account);
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_wrong_verifier_signature() {
+        let (issuer, _verifier) = sample_issuer();
+        let wrong_verifier = checked_seed_keypair(0x23);
+        let request = sample_request(&wrong_verifier, [0xA5; 32], vec![0xB6; 65]);
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_ATTESTATION_RECEIPT_INVALID"
+        );
     }
 
     #[test]

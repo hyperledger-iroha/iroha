@@ -92,6 +92,14 @@ vars == <<
   gst
 >>
 
+RbcProgressSurfaceVars == <<
+  rbcState,
+  headerSeen,
+  digestValid,
+  chunkCount,
+  readyVotes
+>>
+
 Phases == {"Propose", "Prepare", "CommitVote", "NewView", "Committed"}
 RbcStates == {
   "Idle",
@@ -11290,6 +11298,49 @@ RbcEvidenceChangeMatchesLocalEffectClassificationStep ==
           \/ /\ readyVotes' < readyVotes
              /\ RbcReadyVotesDecreaseOnlyByProposalOrInitStep)
 
+RbcProgressMutationMatchesLocalClassificationStep ==
+  (\/ rbcState' # rbcState
+   \/ headerSeen' # headerSeen
+   \/ digestValid' # digestValid
+   \/ chunkCount' # chunkCount
+   \/ readyVotes' # readyVotes) =>
+    /\ RbcStateOnlyChangesByProtocolOrFaultStep
+    /\ RbcEvidenceOnlyChangesByProtocolOrFaultStep
+    /\ ((rbcState' # rbcState) =>
+          /\ RbcStateChangeMatchesLocalExitClassificationStep
+          /\ rbcState \in {"Idle", "Init", "Chunking", "ChunksComplete", "ReadyPartial", "ReadyQuorum", "Corrupted"})
+    /\ ((\/ headerSeen' # headerSeen
+          \/ digestValid' # digestValid
+          \/ chunkCount' # chunkCount
+          \/ readyVotes' # readyVotes) =>
+          RbcEvidenceChangeMatchesLocalEffectClassificationStep)
+    /\ ((/\ rbcState # "Delivered"
+          /\ rbcState' = "Delivered") =>
+          /\ RbcDeliveryEntryOnlyByDeliverStep
+          /\ RbcDeliveryEntryMatchesReadyQuorumExitAndCommitBranchStep)
+    /\ ((/\ rbcState # "Corrupted"
+          /\ rbcState' = "Corrupted") =>
+          RbcCorruptionEntryOnlyByFaultStep)
+    /\ ((/\ rbcState = "Corrupted"
+          /\ rbcState' # "Corrupted") =>
+          RbcCorruptionExitOnlyByInitStep)
+
+RbcProgressDeliveredEntryMatchesLocalClassificationStep ==
+  (/\ rbcState # "Delivered"
+   /\ rbcState' = "Delivered") =>
+    /\ RbcDeliveryEntryOnlyByDeliverStep
+    /\ RbcDeliveryEntryMatchesReadyQuorumExitAndCommitBranchStep
+
+RbcProgressCorruptionEntryMatchesLocalClassificationStep ==
+  (/\ rbcState # "Corrupted"
+   /\ rbcState' = "Corrupted") =>
+    RbcCorruptionEntryOnlyByFaultStep
+
+RbcProgressCorruptionExitMatchesLocalClassificationStep ==
+  (/\ rbcState = "Corrupted"
+   /\ rbcState' # "Corrupted") =>
+    RbcCorruptionExitOnlyByInitStep
+
 RbcWithheldEntryOnlyByStutteringFromWithheldStep ==
   (rbcState' = "Withheld") =>
     /\ rbcState = "Withheld"
@@ -12305,6 +12356,24 @@ RbcEvidenceOnlyChangesByProtocolOrFault ==
 
 RbcEvidenceChangeAlwaysMatchesLocalEffectClassification ==
   [] [RbcEvidenceChangeMatchesLocalEffectClassificationStep]_vars
+
+RbcProgressDeliveredEntryAlwaysMatchesLocalClassification ==
+  [] [RbcProgressDeliveredEntryMatchesLocalClassificationStep]_RbcProgressSurfaceVars
+
+RbcProgressCorruptionEntryAlwaysMatchesLocalClassification ==
+  [] [RbcProgressCorruptionEntryMatchesLocalClassificationStep]_RbcProgressSurfaceVars
+
+RbcProgressCorruptionExitAlwaysMatchesLocalClassification ==
+  [] [RbcProgressCorruptionExitMatchesLocalClassificationStep]_RbcProgressSurfaceVars
+
+RbcProgressMutationAlwaysMatchesLocalClassification ==
+  /\ RbcStateOnlyChangesByProtocolOrFault
+  /\ RbcStateChangeAlwaysMatchesLocalExitClassification
+  /\ RbcEvidenceOnlyChangesByProtocolOrFault
+  /\ RbcEvidenceChangeAlwaysMatchesLocalEffectClassification
+  /\ RbcProgressDeliveredEntryAlwaysMatchesLocalClassification
+  /\ RbcProgressCorruptionEntryAlwaysMatchesLocalClassification
+  /\ RbcProgressCorruptionExitAlwaysMatchesLocalClassification
 
 RbcHeaderInstallationOnlyByProposalOrInit ==
   [] [RbcHeaderInstallationOnlyByProposalOrInitStep]_vars
