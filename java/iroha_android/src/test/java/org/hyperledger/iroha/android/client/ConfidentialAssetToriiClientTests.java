@@ -19,6 +19,7 @@ public final class ConfidentialAssetToriiClientTests {
     merklePathsUsesCanonicalPostPathAndParsesBody();
     emptyLatestRootIsNotNullableOnWireButNullInByteHelper();
     rootsRejectNonCanonicalHexAndNullLatest();
+    rootsAndMerklePathsRejectNumericStrings();
     nonSuccessResponsesSurfaceOfflineToriiException();
     System.out.println("[IrohaAndroid] ConfidentialAssetToriiClientTests passed.");
   }
@@ -137,6 +138,51 @@ public final class ConfidentialAssetToriiClientTests {
     }
   }
 
+  private static void rootsAndMerklePathsRejectNumericStrings() {
+    final String commitment = "02".repeat(32);
+    final String sibling = "00".repeat(32);
+    final String root = "03".repeat(32);
+    expectIllegalArgument(
+        () -> ZkRootsResponse.parse("{\"latest\":\"\",\"roots\":[],\"height\":\"0\"}"
+            .getBytes(StandardCharsets.UTF_8)));
+    expectIllegalArgument(
+        () -> ZkRootsResponse.parse("{\"latest\":\"\",\"roots\":[],\"height\":0.0}"
+            .getBytes(StandardCharsets.UTF_8)));
+    expectIllegalArgument(
+        () ->
+            ZkMerklePathResponse.parse(
+                """
+                {
+                  "root": "%s",
+                  "frontier_len": "3",
+                  "tree_depth": 1,
+                  "paths": []
+                }
+                """
+                    .formatted(root)
+                    .getBytes(StandardCharsets.UTF_8)));
+    expectIllegalArgument(
+        () ->
+            ZkMerklePathResponse.parse(
+                """
+                {
+                  "root": "%s",
+                  "frontier_len": 3,
+                  "tree_depth": 1,
+                  "paths": [{
+                    "commitment": "%s",
+                    "leaf_index": 2,
+                    "siblings": ["%s"],
+                    "directions": ["0"],
+                    "witness_nodes": ["%s"],
+                    "root": "%s"
+                  }]
+                }
+                """
+                    .formatted(root, commitment, sibling, root, root)
+                    .getBytes(StandardCharsets.UTF_8)));
+  }
+
   private static void nonSuccessResponsesSurfaceOfflineToriiException() {
     final ConfidentialAssetToriiClient client =
         ConfidentialAssetToriiClient.builder()
@@ -169,6 +215,15 @@ public final class ConfidentialAssetToriiClientTests {
       }
     }
     return "";
+  }
+
+  private static void expectIllegalArgument(final Runnable runnable) {
+    try {
+      runnable.run();
+      throw new AssertionError("expected IllegalArgumentException");
+    } catch (final IllegalArgumentException expected) {
+      // Expected path.
+    }
   }
 
   private static final class StubExecutor implements HttpTransportExecutor {

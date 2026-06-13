@@ -131,9 +131,14 @@ class ZkMerklePathResponse(
             return ByteArray(value.size) { index ->
                 val raw = value[index]
                 val parsed = when (raw) {
-                    is Number -> raw.toLong()
-                    is String -> raw.trim().toLong()
-                    else -> error("$field[$index] must be an integer")
+                    is Byte -> raw.toLong()
+                    is Short -> raw.toLong()
+                    is Int -> raw.toLong()
+                    is Long -> raw
+                    is java.math.BigInteger -> raw.takeIf {
+                        it == java.math.BigInteger.ZERO || it == java.math.BigInteger.ONE
+                    }?.toLong() ?: throw IllegalArgumentException("$field[$index] must be 0 or 1")
+                    else -> throw IllegalArgumentException("$field[$index] must be a JSON integer")
                 }
                 require(parsed == 0L || parsed == 1L) { "$field[$index] must be 0 or 1" }
                 parsed.toByte()
@@ -142,9 +147,20 @@ class ZkMerklePathResponse(
 
         private fun jsonInt(value: Any?, field: String): Int {
             val parsed = when (value) {
-                is Number -> value.toLong()
-                is String -> value.trim().toLong()
-                else -> error("$field must be an integer")
+                is Byte -> value.toLong()
+                is Short -> value.toLong()
+                is Int -> value.toLong()
+                is Long -> value
+                is java.math.BigInteger -> {
+                    require(
+                        value >= java.math.BigInteger.ZERO &&
+                            value <= java.math.BigInteger.valueOf(Int.MAX_VALUE.toLong()),
+                    ) {
+                        "$field is outside u32-compatible Int range"
+                    }
+                    value.toLong()
+                }
+                else -> throw IllegalArgumentException("$field must be a JSON integer")
             }
             require(parsed in 0..Int.MAX_VALUE) { "$field is outside u32-compatible Int range" }
             return parsed.toInt()

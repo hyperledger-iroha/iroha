@@ -69,12 +69,14 @@ final class ZkMerklePathJson {
     for (int i = 0; i < list.size(); i++) {
       final Object item = list.get(i);
       final long parsed;
-      if (item instanceof Number number) {
+      if (item instanceof Byte
+          || item instanceof Short
+          || item instanceof Integer
+          || item instanceof Long) {
+        final Number number = (Number) item;
         parsed = number.longValue();
-      } else if (item instanceof String string) {
-        parsed = Long.parseLong(string.trim());
       } else {
-        throw new IllegalArgumentException(field + "[" + i + "] must be an integer");
+        throw new IllegalArgumentException(field + "[" + i + "] must be a JSON integer");
       }
       if (parsed != 0L && parsed != 1L) {
         throw new IllegalArgumentException(field + "[" + i + "] must be 0 or 1");
@@ -86,12 +88,14 @@ final class ZkMerklePathJson {
 
   private static int jsonInt(final Object value, final String field) {
     final long parsed;
-    if (value instanceof Number number) {
+    if (value instanceof Byte
+        || value instanceof Short
+        || value instanceof Integer
+        || value instanceof Long) {
+      final Number number = (Number) value;
       parsed = number.longValue();
-    } else if (value instanceof String string) {
-      parsed = Long.parseLong(string.trim());
     } else {
-      throw new IllegalArgumentException(field + " must be an integer");
+      throw new IllegalArgumentException(field + " must be a JSON integer");
     }
     if (parsed < 0 || parsed > Integer.MAX_VALUE) {
       throw new IllegalArgumentException(field + " is outside u32-compatible Int range");

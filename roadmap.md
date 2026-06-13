@@ -18,8 +18,10 @@ and completed history lives in [`status.md`](./status.md).
   Kotlin/JVM plus Android Java Torii Merkle providers call it directly.
   Torii-backed providers verify returned sibling paths against requested
   commitments and roots, and SDK path models enforce leaf-index direction
-  consistency before wallet or prover code receives paths. Keep local providers
-  limited to audited caller-supplied frontier material.
+  consistency before wallet or prover code receives paths. The SDK Torii
+  clients also reject quoted or fractional numeric fields in zk roots/path
+  responses so wallet code sees the same integer shapes the node emits. Keep
+  local providers limited to audited caller-supplied frontier material.
 - Confidential-v2 SDK note derivation and encrypted note payload handling now
   exist for Kotlin/JVM and Android Java, with Rust-vector parity for owner tags,
   note commitments, nullifiers, asset tags, and chain tags, Rust-fixture parity

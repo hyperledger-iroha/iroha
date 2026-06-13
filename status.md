@@ -2,6 +2,18 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 ZK Torii client JSON numeric exactness
+
+- Hardened Kotlin/JVM and Android Java `/v1/zk/roots` and
+  `/v1/zk/merkle-path` response parsers so numeric fields must be JSON integer
+  numbers, not quoted or fractional values that the node does not emit.
+- Added adversarial client parser tests for quoted `height`, quoted
+  `frontier_len`, and quoted Merkle path direction bytes while preserving the
+  canonical POST request/response coverage.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
 ## 2026-06-13 Confidential encrypted payload ciphertext cap
 
 - Capped confidential encrypted note ciphertexts at 64 KiB in the Rust data

@@ -99,9 +99,20 @@ class ZkRootsResponse(
 
         private fun jsonInt(value: Any?, field: String): Int {
             val parsed = when (value) {
-                is Number -> value.toLong()
-                is String -> value.trim().toLong()
-                else -> error("$field must be an integer")
+                is Byte -> value.toLong()
+                is Short -> value.toLong()
+                is Int -> value.toLong()
+                is Long -> value
+                is java.math.BigInteger -> {
+                    require(
+                        value >= java.math.BigInteger.ZERO &&
+                            value <= java.math.BigInteger.valueOf(Int.MAX_VALUE.toLong()),
+                    ) {
+                        "$field is outside u32-compatible Int range"
+                    }
+                    value.toLong()
+                }
+                else -> throw IllegalArgumentException("$field must be a JSON integer")
             }
             require(parsed in 0..Int.MAX_VALUE) { "$field is outside u32-compatible Int range" }
             return parsed.toInt()

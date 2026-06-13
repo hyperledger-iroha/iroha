@@ -113,6 +113,50 @@ class ConfidentialAssetToriiClientTest {
     }
 
     @Test
+    fun rootsAndMerklePathsRejectNumericStrings() {
+        val commitment = "02".repeat(32)
+        val sibling = "00".repeat(32)
+        val root = "03".repeat(32)
+        assertFailsWith<IllegalArgumentException> {
+            ZkRootsResponse.parse("""{"latest":"","roots":[],"height":"0"}""".toByteArray(StandardCharsets.UTF_8))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ZkRootsResponse.parse("""{"latest":"","roots":[],"height":0.0}""".toByteArray(StandardCharsets.UTF_8))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ZkMerklePathResponse.parse(
+                """
+                {
+                  "root": "$root",
+                  "frontier_len": "3",
+                  "tree_depth": 1,
+                  "paths": []
+                }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ZkMerklePathResponse.parse(
+                """
+                {
+                  "root": "$root",
+                  "frontier_len": 3,
+                  "tree_depth": 1,
+                  "paths": [{
+                    "commitment": "$commitment",
+                    "leaf_index": 2,
+                    "siblings": ["$sibling"],
+                    "directions": ["0"],
+                    "witness_nodes": ["$root"],
+                    "root": "$root"
+                  }]
+                }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+    }
+
+    @Test
     fun nonSuccessResponsesSurfaceOfflineToriiException() {
         val client = ConfidentialAssetToriiClient.builder()
             .executor(CapturingExecutor("""{"error":"not ready"}""", status = 503, message = "Unavailable"))
