@@ -2,6 +2,23 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Privacy localnet lifecycle host parity
+
+- Mirrored the 19-reference localnet lifecycle evidence gate into the JS NAPI
+  and Python PyO3 native hosts so bridge, JavaScript, and Python capability
+  archives enforce the same shield-to-redeem evidence contract.
+- Strengthened the JavaScript FFI contract parity guard to require the
+  lifecycle evidence fields, lifecycle audit-reference labels, `19` ready audit
+  references, and adversarial lifecycle rejection coverage in every native host
+  implementation.
+- Focused validation passed:
+  - `rustfmt --edition 2024 --check crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --test --test-name-pattern "native privacy FFI capabilities accept internal evidence while defaulting fail-closed" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `cargo test -p iroha_js_host privacy_capabilities_accept_exact_internal_evidence_for_all_rows --lib`
+  - `cargo test -p iroha_js_host privacy_production_evidence_rejects_adversarial_bindings_for_all_rows --lib`
+  - `cargo test -p iroha_python_rs privacy_capabilities_accept_exact_internal_evidence_for_all_rows --lib`
+  - `cargo test -p iroha_python_rs privacy_production_evidence_rejects_adversarial_bindings_for_all_rows --lib`
+
 ## 2026-06-13 Privacy localnet lifecycle evidence gate
 
 - Tightened the privacy production evidence gate so localnet acceptance must

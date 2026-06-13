@@ -18,7 +18,9 @@ and completed history lives in [`status.md`](./status.md).
   init/verify, recursive append/verify, unshield proof, redeem tx, replay
   rejection, restart replay rejection, and state recovery must each have
   distinct production artifact hashes in the ready-gate audit references.
-  Generic smoke-only localnet evidence is not sufficient for release signoff.
+  Generic smoke-only localnet evidence is not sufficient for release signoff,
+  and the same contract must remain mirrored across `connect_norito_bridge`,
+  `iroha_js_host`, and `iroha_python_rs`.
 - ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
   endpoint for current confidential-v2 commitment inclusion paths, and the
   Kotlin/JVM plus Android Java Torii Merkle providers call it directly.
