@@ -300,13 +300,34 @@ pub(crate) mod taikai_ingest {
                 match OpenOptions::new().write(true).create_new(true).open(&path) {
                     Ok(mut file) => {
                         let now = current_unix_seconds();
-                        let _ = writeln!(file, "{now}");
+                        if let Err(err) = writeln!(file, "{now}") {
+                            let mut message = format!(
+                                "failed to write Taikai routing manifest lock `{}`: {err}",
+                                path.display()
+                            );
+                            if let Err(cleanup_err) = fs::remove_file(&path) {
+                                if cleanup_err.kind() != ErrorKind::NotFound {
+                                    message.push_str(&format!(
+                                        "; failed to remove incomplete lock: {cleanup_err}"
+                                    ));
+                                }
+                            }
+                            return Err(internal_error(message));
+                        }
                         return Ok(Self { path });
                     }
                     Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-                        if attempt == 0 && lock_is_stale(&path).unwrap_or(false) {
-                            let _ = fs::remove_file(&path);
-                            continue;
+                        if attempt == 0 {
+                            let stale = lock_is_stale(&path).map_err(|err| {
+                                internal_error(format!(
+                                    "failed to inspect Taikai routing manifest lock `{}`: {err}",
+                                    path.display()
+                                ))
+                            })?;
+                            if stale {
+                                remove_stale_lock(&path, slug)?;
+                                continue;
+                            }
                         }
                         return Err((
                             StatusCode::SERVICE_UNAVAILABLE,
@@ -324,6 +345,17 @@ pub(crate) mod taikai_ingest {
                 }
             }
             unreachable!("lock acquisition attempts exhausted without returning");
+        }
+    }
+
+    fn remove_stale_lock(path: &Path, slug: &str) -> Result<(), (StatusCode, String)> {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(internal_error(format!(
+                "failed to remove stale Taikai routing manifest lock `{}` for alias slug `{slug}`: {err}",
+                path.display()
+            ))),
         }
     }
 
@@ -376,7 +408,7 @@ pub(crate) mod taikai_ingest {
     fn lock_is_stale(path: &Path) -> io::Result<bool> {
         match fs::metadata(path) {
             Ok(metadata) => {
-                let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+                let modified = metadata.modified()?;
                 let elapsed = SystemTime::now()
                     .duration_since(modified)
                     .unwrap_or_default();
@@ -525,21 +557,21 @@ pub(crate) mod taikai_ingest {
         {
             Ok(mut file) => {
                 if let Err(err) = file.write_all(rendered.as_bytes()) {
-                    let _ = fs::remove_file(&tmp_path);
+                    remove_temp_artifact(&tmp_path)?;
                     return Err(err);
                 }
                 if let Err(err) = file.sync_all() {
-                    let _ = fs::remove_file(&tmp_path);
+                    remove_temp_artifact(&tmp_path)?;
                     return Err(err);
                 }
             }
             Err(err) => {
-                let _ = fs::remove_file(&tmp_path);
+                remove_temp_artifact(&tmp_path)?;
                 return Err(err);
             }
         }
         if let Err(err) = fs::rename(&tmp_path, path) {
-            let _ = fs::remove_file(&tmp_path);
+            remove_temp_artifact(&tmp_path)?;
             return Err(err);
         }
         if let Some(parent) = path.parent() {
@@ -937,7 +969,7 @@ pub(crate) mod taikai_ingest {
                 remove_result
             }
             Err(err) => {
-                let _ = fs::remove_file(tmp_path);
+                remove_temp_artifact(tmp_path)?;
                 Err(err)
             }
         }
@@ -971,7 +1003,65 @@ pub(crate) mod taikai_ingest {
         match fs::remove_file(tmp_path) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(err),
+            Err(err) => Err(io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to remove Taikai temp artifact {}: {err}",
+                    tmp_path.display()
+                ),
+            )),
+        }
+    }
+
+    #[cfg(test)]
+    mod temp_cleanup_tests {
+        use tempfile::tempdir;
+
+        use super::*;
+
+        #[test]
+        fn taikai_temp_artifact_cleanup_reports_unremovable_path() {
+            let dir = tempdir().expect("tempdir");
+            let tmp_path = dir.path().join(".taikai.tmp");
+            fs::create_dir(&tmp_path).expect("block temp cleanup");
+
+            let err = remove_temp_artifact(&tmp_path).expect_err("directory cleanup should fail");
+
+            assert!(
+                err.to_string()
+                    .contains("failed to remove Taikai temp artifact"),
+                "unexpected error: {err}"
+            );
+            assert!(
+                tmp_path.is_dir(),
+                "failed cleanup should leave temp path visible for operator repair"
+            );
+        }
+
+        #[test]
+        fn taikai_install_artifact_reports_temp_cleanup_failure_after_link_error() {
+            let dir = tempdir().expect("tempdir");
+            let tmp_path = dir.path().join(".taikai.tmp");
+            let target_path = dir.path().join("taikai-target.norito");
+            fs::create_dir(&tmp_path).expect("block temp cleanup");
+
+            let err =
+                install_artifact_without_overwrite(&tmp_path, &target_path, b"expected", "taikai")
+                    .expect_err("directory temp artifact should fail cleanup");
+
+            assert!(
+                err.to_string()
+                    .contains("failed to remove Taikai temp artifact"),
+                "unexpected error: {err}"
+            );
+            assert!(
+                tmp_path.is_dir(),
+                "failed cleanup should leave temp path visible for operator repair"
+            );
+            assert!(
+                !target_path.exists(),
+                "failed hard-link install must not create the target artifact"
+            );
         }
     }
 
@@ -1038,7 +1128,7 @@ pub(crate) mod taikai_ingest {
         match write_temp_artifact(&tmp_path, bytes) {
             Ok(()) => {}
             Err(err) => {
-                let _ = fs::remove_file(&tmp_path);
+                remove_temp_artifact(&tmp_path)?;
                 return Err(err);
             }
         }
@@ -1265,6 +1355,8 @@ pub(crate) mod taikai_ingest {
         }
     }
 
+    pub(crate) type AnchorSendError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
     #[async_trait]
     pub(crate) trait AnchorSender: Send + Sync {
         async fn send(
@@ -1272,7 +1364,7 @@ pub(crate) mod taikai_ingest {
             endpoint: &reqwest::Url,
             body: String,
             api_token: Option<&str>,
-        ) -> Result<(), reqwest::Error>;
+        ) -> Result<(), AnchorSendError>;
     }
 
     #[async_trait]
@@ -1282,7 +1374,7 @@ pub(crate) mod taikai_ingest {
             endpoint: &reqwest::Url,
             body: String,
             api_token: Option<&str>,
-        ) -> Result<(), reqwest::Error> {
+        ) -> Result<(), AnchorSendError> {
             let mut request = self
                 .client
                 .post(endpoint.clone())
@@ -1311,41 +1403,112 @@ pub(crate) mod taikai_ingest {
         }
     }
 
-    async fn persist_anchor_request_capture(
+    fn persist_anchor_request_capture(
         spool_dir: &Path,
         base_id: &str,
         body: &str,
-    ) -> Result<(), std::io::Error> {
+    ) -> io::Result<()> {
         let request_path = spool_dir.join(format!(
             "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
         ));
-        match async_fs::metadata(&request_path).await {
-            Ok(metadata) => {
-                if !metadata.is_file() {
-                    return Err(io::Error::new(
-                        ErrorKind::AlreadyExists,
-                        format!(
-                            "Taikai anchor request capture path is not a file: {}",
-                            request_path.display()
-                        ),
-                    ));
-                }
-                let existing = async_fs::read_to_string(&request_path).await?;
-                if existing == body {
-                    return Ok(());
-                }
-                return Err(io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!(
-                        "Taikai anchor request capture already exists with different contents: {}",
-                        request_path.display()
-                    ),
-                ));
+        let Some(name) = request_path.file_name().and_then(|name| name.to_str()) else {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "Taikai anchor request capture path is not valid UTF-8: {}",
+                    request_path.display()
+                ),
+            ));
+        };
+        let tmp_path =
+            request_path.with_file_name(format!(".{name}.tmp-{}", artifact_temp_suffix()));
+
+        match write_temp_artifact(&tmp_path, body.as_bytes()) {
+            Ok(()) => {}
+            Err(err) => {
+                remove_temp_artifact(&tmp_path)?;
+                return Err(err);
             }
-            Err(err) if err.kind() == ErrorKind::NotFound => {}
-            Err(err) => return Err(err),
         }
-        async_fs::write(&request_path, body).await
+        install_anchor_request_capture(&tmp_path, &request_path, body.as_bytes())
+    }
+
+    fn install_anchor_request_capture(
+        tmp_path: &Path,
+        request_path: &Path,
+        expected: &[u8],
+    ) -> io::Result<()> {
+        match fs::hard_link(tmp_path, request_path) {
+            Ok(()) => {
+                let sync_result = sync_parent_dir(request_path);
+                let remove_result = remove_temp_artifact(tmp_path);
+                sync_result?;
+                remove_result
+            }
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                let existing_result =
+                    validate_existing_anchor_request_capture(request_path, expected);
+                let remove_result = remove_temp_artifact(tmp_path);
+                existing_result?;
+                remove_result
+            }
+            Err(err) => {
+                remove_temp_artifact(tmp_path)?;
+                Err(err)
+            }
+        }
+    }
+
+    fn validate_existing_anchor_request_capture(
+        request_path: &Path,
+        expected: &[u8],
+    ) -> io::Result<()> {
+        if !fs::metadata(request_path)?.is_file() {
+            return Err(io::Error::new(
+                ErrorKind::AlreadyExists,
+                format!(
+                    "Taikai anchor request capture path is not a file: {}",
+                    request_path.display()
+                ),
+            ));
+        }
+        let existing = fs::read(request_path)?;
+        if existing == expected {
+            return Ok(());
+        }
+        Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "Taikai anchor request capture already exists with different contents: {}",
+                request_path.display()
+            ),
+        ))
+    }
+
+    fn persist_anchor_sentinel(path: &Path, marker: &str) -> io::Result<()> {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "Taikai anchor sentinel path is not valid UTF-8: {}",
+                    path.display()
+                ),
+            ));
+        };
+        let tmp_path = path.with_file_name(format!(".{name}.tmp-{}", artifact_temp_suffix()));
+
+        match write_temp_artifact(&tmp_path, marker.as_bytes()) {
+            Ok(()) => {}
+            Err(err) => {
+                remove_temp_artifact(&tmp_path)?;
+                return Err(err);
+            }
+        }
+        if let Err(err) = fs::rename(&tmp_path, path) {
+            remove_temp_artifact(&tmp_path)?;
+            return Err(err);
+        }
+        sync_parent_dir(path)
     }
 
     async fn run_anchor_worker<S>(
@@ -1400,20 +1563,25 @@ pub(crate) mod taikai_ingest {
                         .unwrap_or_default()
                         .as_secs()
                         .to_string();
-                    if let Err(err) = async_fs::write(&upload.sentinel_path, marker).await {
-                        iroha_logger::warn!(
-                            ?err,
-                            path = ?upload.sentinel_path,
-                            "failed to write Taikai anchor sentinel"
-                        );
-                    }
+                    persist_anchor_sentinel(&upload.sentinel_path, &marker).map_err(|err| {
+                        format!(
+                            "failed to persist Taikai anchor sentinel `{}`: {err}",
+                            upload.sentinel_path.display()
+                        )
+                    })?;
                 }
                 Err(err) => {
+                    let base_id = upload.base_id.as_str();
+                    let message = format!(
+                        "failed to deliver Taikai envelope `{}` to anchor service: {err}",
+                        base_id
+                    );
                     iroha_logger::warn!(
                         ?err,
-                        base = upload.base_id,
+                        base = base_id,
                         "failed to deliver Taikai envelope to anchor service"
                     );
+                    return Err(message);
                 }
             }
         }
@@ -1457,7 +1625,15 @@ pub(crate) mod taikai_ingest {
                 "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
             ));
             match async_fs::metadata(&sentinel_path).await {
-                Ok(_) => continue,
+                Ok(metadata) => {
+                    if metadata.is_file() {
+                        continue;
+                    }
+                    return Err(format!(
+                        "Taikai anchor sentinel `{}` is not a regular file",
+                        sentinel_path.display()
+                    ));
+                }
                 Err(err) if err.kind() == ErrorKind::NotFound => {}
                 Err(err) => {
                     return Err(format!(
@@ -1554,18 +1730,16 @@ pub(crate) mod taikai_ingest {
                 format!("failed to encode Taikai anchor payload for `{base_id}`: {err}")
             })?;
 
-            persist_anchor_request_capture(spool_dir, base_id, &body)
-                .await
-                .map_err(|err| {
-                    format!(
-                        "failed to persist Taikai anchor request payload `{}`: {err}",
-                        spool_dir
-                            .join(format!(
-                                "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
-                            ))
-                            .display()
-                    )
-                })?;
+            persist_anchor_request_capture(spool_dir, base_id, &body).map_err(|err| {
+                format!(
+                    "failed to persist Taikai anchor request payload `{}`: {err}",
+                    spool_dir
+                        .join(format!(
+                            "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
+                        ))
+                        .display()
+                )
+            })?;
 
             result.push(PendingUpload {
                 base_id: base_id.to_string(),

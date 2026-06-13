@@ -699,9 +699,9 @@ fn load_duplicate_da_artifacts(
         persistence::load_pdp_commitment_from_spool(spool_dir, storage_ticket)
             .wrap_err("failed to load duplicate DA PDP commitment artifact")?;
     let (receipt_path, receipt) = receipt_log
-        .durable_receipt_for_duplicate(lane_epoch, sequence, fingerprint)
-        .wrap_err("failed to load duplicate DA receipt artifact")?
-        .ok_or_else(|| eyre!("durable duplicate DA receipt was not found"))?;
+        .receipt_for_duplicate(lane_epoch, sequence, fingerprint)
+        .wrap_err("failed to load duplicate DA receipt")?
+        .ok_or_else(|| eyre!("duplicate DA receipt was not found"))?;
 
     if receipt.storage_ticket != *storage_ticket {
         return Err(eyre!(
@@ -1291,7 +1291,12 @@ fn encrypt_governance_metadata(
                         })?;
                     encryptor = Some(enc);
                 }
-                let encryptor = encryptor.as_ref().expect("initialised above");
+                let Some(encryptor) = encryptor.as_ref() else {
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Torii governance metadata encryptor was not initialised".into(),
+                    ));
+                };
 
                 match entry.encryption {
                     MetadataEncryption::None => {
@@ -1742,6 +1747,7 @@ fn record_da_receipt_metrics(
     let (outcome_label, cursor_advanced) = match outcome {
         ReceiptInsertOutcome::Stored { cursor_advanced } => ("stored", *cursor_advanced),
         ReceiptInsertOutcome::Duplicate { .. } => ("duplicate", false),
+        ReceiptInsertOutcome::ReceiptConflict { .. } => ("receipt_conflict", false),
         ReceiptInsertOutcome::ManifestConflict { .. } => ("manifest_conflict", false),
         ReceiptInsertOutcome::StaleSequence { .. } => ("stale_sequence", false),
     };
@@ -1819,6 +1825,13 @@ fn da_spool_rejection_response(
         saw_receipt_log = true;
         match outcome {
             ReceiptInsertOutcome::Stored { .. } | ReceiptInsertOutcome::Duplicate { .. } => {}
+            ReceiptInsertOutcome::ReceiptConflict { .. } => {
+                return Some(build_error_response(
+                    StatusCode::CONFLICT,
+                    "receipt sequence already used for different receipt evidence",
+                    format,
+                ));
+            }
             ReceiptInsertOutcome::ManifestConflict { .. } => {
                 return Some(build_error_response(
                     StatusCode::CONFLICT,

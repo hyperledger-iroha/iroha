@@ -64789,6 +64789,108 @@ async fn rbc_session_ttl_prunes_retained_status_without_live_session() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_session_ttl_keeps_retained_status_when_snapshot_removal_fails() {
+    let rbc_dir = tempfile::tempdir().expect("tempdir");
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.rbc.session_ttl = Duration::from_secs(1);
+    let rbc_store_cfg = crate::sumeragi::RbcStoreConfig {
+        dir: rbc_dir.path().to_path_buf(),
+        max_sessions: 16,
+        soft_sessions: 8,
+        max_bytes: 1 << 20,
+        soft_bytes: 1 << 20,
+        ttl: Duration::from_secs(60),
+    };
+    let mut harness = test_actor_harness_with_config(1, consensus_cfg, Some(rbc_store_cfg)).await;
+    let key = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x2B; Hash::LENGTH])),
+        5,
+        0,
+    );
+    let payload = b"retained-unremovable-stale-payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+    assert!(
+        session.record_deliver(0, vec![0xAB]),
+        "DELIVER should be recorded before persistence"
+    );
+    let roster = harness.actor.effective_commit_topology();
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+    harness.actor.update_rbc_status_entry(key, &session, false);
+    harness.actor.persist_rbc_session(key, &session);
+
+    let (path, tmp_path) =
+        crate::sumeragi::rbc_store::session_paths_for_tests(rbc_dir.path(), &key);
+    assert!(path.exists(), "persisted main session should exist");
+    fs::create_dir(&tmp_path).expect("create unremovable temp snapshot artifact");
+
+    harness
+        .actor
+        .clear_rbc_runtime_state_preserving_snapshot(key, false);
+    assert!(
+        harness.actor.subsystems.da_rbc.rbc.sessions.is_empty(),
+        "test precondition: retained status and persisted snapshot remain without a live session"
+    );
+    let stale_time = SystemTime::now() - Duration::from_secs(2);
+    harness.actor.subsystems.da_rbc.rbc.status_handle.update_at(
+        key,
+        session.total_chunks(),
+        session.received_chunks(),
+        u64::try_from(session.ready_signatures.len()).unwrap_or(u64::MAX),
+        session.delivered,
+        session.payload_hash(),
+        stale_time,
+        session.recovered_from_disk(),
+    );
+
+    assert!(
+        !harness.actor.prune_stale_rbc_sessions(SystemTime::now()),
+        "failed persisted cleanup should not report pruning progress"
+    );
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .get(&key)
+            .is_some(),
+        "stale status must remain visible when snapshot cleanup fails"
+    );
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_sessions
+            .contains(&key),
+        "persisted snapshot marker must remain for retry"
+    );
+    assert!(
+        path.exists(),
+        "main session must remain visible when temp cleanup fails"
+    );
+    assert!(
+        tmp_path.exists(),
+        "unremovable temp artifact must remain visible for operator repair"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn seed_rbc_session_flushes_pending_ready() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.rbc.chunk_max_bytes = 1024;
@@ -65767,6 +65869,29 @@ fn manifest_cache_hits_on_repeated_lookup() {
         super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
     assert!(result.is_ok(), "manifest should be accepted");
     assert_eq!(outcome, super::CacheOutcome::Hit);
+}
+
+#[test]
+fn spool_stamp_changes_for_same_size_same_mtime_content_replacement() {
+    let original = super::SpoolStampEntry {
+        name: "da-commitment-adversarial.norito".to_owned(),
+        len: 128,
+        modified: std::time::UNIX_EPOCH + Duration::from_secs(42),
+        content_hash: [0x11; 32],
+    };
+    let replacement = super::SpoolStampEntry {
+        content_hash: [0x22; 32],
+        ..original.clone()
+    };
+
+    assert_eq!(original.name, replacement.name);
+    assert_eq!(original.len, replacement.len);
+    assert_eq!(original.modified, replacement.modified);
+    assert_ne!(
+        super::SpoolDirStamp::from_entries(&[original]),
+        super::SpoolDirStamp::from_entries(&[replacement]),
+        "content replacement with unchanged metadata must invalidate spool caches"
+    );
 }
 
 #[test]

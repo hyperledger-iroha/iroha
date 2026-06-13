@@ -1,6 +1,8 @@
 //! Async DA spool batching for Torii ingest persistence.
 
 use std::{
+    any::Any,
+    panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -47,20 +49,40 @@ impl DaSpoolAction {
 
     fn execute(self) -> DaSpoolActionReport {
         let kind = self.kind;
-        match (self.run)() {
-            Ok(output) => DaSpoolActionReport {
+        let run = self.run;
+        match catch_unwind(AssertUnwindSafe(move || (run)())) {
+            Ok(Ok(output)) => DaSpoolActionReport {
                 kind,
                 outcome: DaSpoolActionOutcome::Ok,
                 error: None,
                 output: Some(output),
             },
-            Err(error) => DaSpoolActionReport {
+            Ok(Err(error)) => DaSpoolActionReport {
                 kind,
                 outcome: DaSpoolActionOutcome::Error,
                 error: Some(error),
                 output: None,
             },
+            Err(payload) => DaSpoolActionReport {
+                kind,
+                outcome: DaSpoolActionOutcome::Error,
+                error: Some(format!(
+                    "DA spool action `{kind}` panicked: {}",
+                    panic_payload_message(payload.as_ref())
+                )),
+                output: None,
+            },
         }
+    }
+}
+
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_owned()
     }
 }
 

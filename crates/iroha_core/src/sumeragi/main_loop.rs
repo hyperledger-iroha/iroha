@@ -12151,19 +12151,36 @@ struct SpoolDirStamp {
     total_bytes: u64,
 }
 
+#[derive(Debug, Clone)]
+struct SpoolStampEntry {
+    name: String,
+    len: u64,
+    modified: SystemTime,
+    content_hash: [u8; 32],
+}
+
 impl SpoolDirStamp {
-    fn from_entries(entries: &[(String, u64, Option<SystemTime>)]) -> Self {
+    fn from_entries(entries: &[SpoolStampEntry]) -> Self {
         let mut hasher = Blake3Hasher::new();
         let mut total_bytes = 0u64;
-        for (name, len, modified) in entries {
-            hasher.update(name.as_bytes());
-            hasher.update(&len.to_le_bytes());
-            total_bytes = total_bytes.saturating_add(*len);
-            let stamp = modified
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .unwrap_or_default();
-            hasher.update(&stamp.as_secs().to_le_bytes());
-            hasher.update(&stamp.subsec_nanos().to_le_bytes());
+        for entry in entries {
+            hasher.update(entry.name.as_bytes());
+            hasher.update(&entry.len.to_le_bytes());
+            total_bytes = total_bytes.saturating_add(entry.len);
+            match entry.modified.duration_since(UNIX_EPOCH) {
+                Ok(stamp) => {
+                    hasher.update(&[0]);
+                    hasher.update(&stamp.as_secs().to_le_bytes());
+                    hasher.update(&stamp.subsec_nanos().to_le_bytes());
+                }
+                Err(err) => {
+                    let stamp = err.duration();
+                    hasher.update(&[1]);
+                    hasher.update(&stamp.as_secs().to_le_bytes());
+                    hasher.update(&stamp.subsec_nanos().to_le_bytes());
+                }
+            }
+            hasher.update(&entry.content_hash);
         }
         let fingerprint = *hasher.finalize().as_bytes();
         Self {
@@ -12172,6 +12189,54 @@ impl SpoolDirStamp {
             total_bytes,
         }
     }
+}
+
+fn spool_stamp_entry(
+    name: String,
+    path: &Path,
+    metadata: &fs::Metadata,
+    kind: &str,
+) -> Result<SpoolStampEntry, std::io::Error> {
+    let modified = metadata.modified().map_err(|err| {
+        std::io::Error::new(
+            err.kind(),
+            format!(
+                "failed to read {kind} spool modified time `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    let bytes = fs::read(path).map_err(|err| {
+        std::io::Error::new(
+            err.kind(),
+            format!(
+                "failed to read {kind} spool artifact `{}` for cache stamp: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    let len = u64::try_from(bytes.len()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{kind} spool artifact `{}` is too large", path.display()),
+        )
+    })?;
+    if len != metadata.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{kind} spool artifact `{}` changed while computing cache stamp",
+                path.display()
+            ),
+        ));
+    }
+    let content_hash = *blake3_hash(&bytes).as_bytes();
+    Ok(SpoolStampEntry {
+        name,
+        len,
+        modified,
+        content_hash,
+    })
 }
 
 fn da_spool_file_name(name: &OsStr) -> Result<Option<&str>, std::io::Error> {
@@ -12273,9 +12338,9 @@ fn scan_da_spool_stamp(spool_dir: &Path) -> Result<Option<SpoolDirStamp>, std::i
                 ),
             ));
         }
-        entries.push((name, metadata.len(), metadata.modified().ok()));
+        entries.push(spool_stamp_entry(name, &entry.path(), &metadata, "DA")?);
     }
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(Some(SpoolDirStamp::from_entries(&entries)))
 }
 
@@ -46392,7 +46457,7 @@ impl ManifestSpoolKey {
 #[derive(Debug, Clone)]
 struct ManifestSpoolEntry {
     path: PathBuf,
-    file_modified: Option<SystemTime>,
+    file_modified: SystemTime,
     file_len: u64,
     digest: Option<ManifestDigest>,
 }
@@ -46414,7 +46479,13 @@ impl ManifestSpoolEntry {
                 source,
             })?;
         let file_len = metadata.len();
-        let file_modified = metadata.modified().ok();
+        let file_modified =
+            metadata
+                .modified()
+                .map_err(|source| ManifestSpoolLookupError::Read {
+                    path: self.path.clone(),
+                    source,
+                })?;
         if self.file_len != file_len || self.file_modified != file_modified {
             self.file_len = file_len;
             self.file_modified = file_modified;
@@ -46492,30 +46563,26 @@ fn scan_manifest_spool(spool_dir: &Path) -> Result<Option<ManifestSpoolScan>, st
                 ),
             ));
         }
-        entries.push((
-            name,
-            key,
-            entry.path(),
-            metadata.len(),
-            metadata.modified().ok(),
-        ));
+        let path = entry.path();
+        let stamp_entry = spool_stamp_entry(name, &path, &metadata, "manifest")?;
+        entries.push((stamp_entry, key, path));
     }
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.sort_by(|a, b| a.0.name.cmp(&b.0.name));
 
     let stamp_entries = entries
         .iter()
-        .map(|(name, _, _, len, modified)| (name.clone(), *len, *modified))
+        .map(|(entry, _, _)| entry.clone())
         .collect::<Vec<_>>();
     let stamp = SpoolDirStamp::from_entries(&stamp_entries);
 
     let mut map = BTreeMap::new();
-    for (_, key, path, file_len, file_modified) in entries {
+    for (stamp_entry, key, path) in entries {
         map.entry(key)
             .or_insert_with(Vec::new)
             .push(ManifestSpoolEntry {
                 path,
-                file_modified,
-                file_len,
+                file_modified: stamp_entry.modified,
+                file_len: stamp_entry.len,
                 digest: None,
             });
     }

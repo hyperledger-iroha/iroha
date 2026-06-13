@@ -41,6 +41,13 @@ pub(super) fn load_session_from_dir(
     ChunkStore::load_session_from_dir(dir, key, expected_chain_hash, expected_manifest)
 }
 
+#[cfg(test)]
+pub(super) fn session_paths_for_tests(dir: &Path, key: &SessionKey) -> (PathBuf, PathBuf) {
+    let path = ChunkStore::make_session_path(dir, key);
+    let tmp_path = temp_session_path(&path);
+    (path, tmp_path)
+}
+
 /// Metadata extracted from a persisted RBC session snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PersistedSessionMetadata {
@@ -289,7 +296,7 @@ impl ChunkStore {
         let _suppressor = panic_hook::ScopedSuppressor::new();
         if self.max_sessions == 0 || self.max_bytes == 0 {
             // Storage disabled; ensure any existing file is removed.
-            let _ = self.remove(&key);
+            self.remove(&key)?;
             return Ok(PersistOutcome {
                 removed: Vec::new(),
                 pressure: StorePressure::Normal {
@@ -314,7 +321,7 @@ impl ChunkStore {
     ) -> io::Result<PersistOutcome> {
         let _suppressor = panic_hook::ScopedSuppressor::new();
         if self.max_sessions == 0 || self.max_bytes == 0 {
-            let _ = self.remove(&persisted.key());
+            self.remove(&persisted.key())?;
             return Ok(PersistOutcome {
                 removed: Vec::new(),
                 pressure: StorePressure::Normal {
@@ -337,16 +344,17 @@ impl ChunkStore {
 
     /// Remove a persisted session explicitly.
     ///
+    /// Removes both the crash-recovery temp snapshot and the main snapshot for the session.
+    ///
     /// # Errors
-    /// Returns an error if the underlying filesystem operation fails for a reason other than a
-    /// missing file.
+    /// Returns an error if either underlying filesystem operation fails for a reason other than a
+    /// missing file. The temp snapshot is removed first so a failed temp cleanup does not hide the
+    /// main snapshot from later operator repair or restart recovery.
     pub fn remove(&self, key: &SessionKey) -> io::Result<()> {
         let path = Self::make_session_path(&self.dir, key);
-        match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(err),
-        }
+        let tmp_path = temp_session_path(&path);
+        Self::delete_path(&tmp_path)?;
+        Self::delete_path(&path)
     }
 
     fn write_session(&self, persisted: &PersistedSession) -> io::Result<()> {
@@ -439,7 +447,7 @@ impl ChunkStore {
             let Some(bytes) = bytes.as_deref() else {
                 continue;
             };
-            let Some(persisted) = Self::decode_persisted_session_guarded(bytes, candidate_path)
+            let Some(persisted) = Self::decode_persisted_session_guarded(bytes, candidate_path)?
             else {
                 continue;
             };
@@ -448,7 +456,8 @@ impl ChunkStore {
                 candidate_path,
                 Some(expected_chain_hash),
                 Some(expected_manifest),
-            ) else {
+            )?
+            else {
                 continue;
             };
             let candidate = CandidateEntry {
@@ -460,7 +469,7 @@ impl ChunkStore {
             if Self::candidate_newer_than_selected(&candidate, selected.as_ref()) {
                 selected = Some(candidate);
             } else if candidate.is_temp {
-                let _ = Self::delete_path(&candidate.path);
+                Self::delete_path(&candidate.path)?;
             }
         }
         let Some(selected) = selected else {
@@ -469,7 +478,7 @@ impl ChunkStore {
         if selected.is_temp {
             promote_temp_session(&selected.path, &selected.main_path)?;
         } else {
-            let _ = Self::delete_path(&tmp_path);
+            Self::delete_path(&tmp_path)?;
         }
         Ok(Some(selected.persisted))
     }
@@ -594,7 +603,7 @@ impl ChunkStore {
         for path in temp_paths {
             match fs::read(&path) {
                 Ok(data) => {
-                    let Some(persisted) = Self::decode_persisted_session_guarded(&data, &path)
+                    let Some(persisted) = Self::decode_persisted_session_guarded(&data, &path)?
                     else {
                         continue;
                     };
@@ -603,7 +612,8 @@ impl ChunkStore {
                         &path,
                         expected_chain_hash,
                         expected_manifest,
-                    ) else {
+                    )?
+                    else {
                         continue;
                     };
                     let key = persisted.key();
@@ -613,7 +623,7 @@ impl ChunkStore {
                         main_path: path.with_extension(""),
                         is_temp: true,
                     };
-                    Self::insert_newest_candidate(&mut candidates, key, candidate);
+                    Self::insert_newest_candidate(&mut candidates, key, candidate)?;
                 }
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
                     debug!(
@@ -635,7 +645,7 @@ impl ChunkStore {
         for path in main_paths {
             match fs::read(&path) {
                 Ok(data) => {
-                    let Some(persisted) = Self::decode_persisted_session_guarded(&data, &path)
+                    let Some(persisted) = Self::decode_persisted_session_guarded(&data, &path)?
                     else {
                         continue;
                     };
@@ -644,7 +654,8 @@ impl ChunkStore {
                         &path,
                         expected_chain_hash,
                         expected_manifest,
-                    ) else {
+                    )?
+                    else {
                         continue;
                     };
                     let key = persisted.key();
@@ -654,7 +665,7 @@ impl ChunkStore {
                         main_path: path.clone(),
                         is_temp: false,
                     };
-                    Self::insert_newest_candidate(&mut candidates, key, candidate);
+                    Self::insert_newest_candidate(&mut candidates, key, candidate)?;
                 }
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
                     debug!(
@@ -694,7 +705,7 @@ impl ChunkStore {
         candidates: &mut BTreeMap<SessionKey, CandidateEntry>,
         key: SessionKey,
         candidate: CandidateEntry,
-    ) {
+    ) -> io::Result<()> {
         match candidates.entry(key) {
             std::collections::btree_map::Entry::Vacant(slot) => {
                 slot.insert(candidate);
@@ -703,13 +714,14 @@ impl ChunkStore {
                 if Self::candidate_newer_than_selected(&candidate, Some(slot.get())) {
                     let previous = slot.insert(candidate);
                     if previous.is_temp {
-                        let _ = Self::delete_path(&previous.path);
+                        Self::delete_path(&previous.path)?;
                     }
                 } else if candidate.is_temp {
-                    let _ = Self::delete_path(&candidate.path);
+                    Self::delete_path(&candidate.path)?;
                 }
             }
         }
+        Ok(())
     }
 
     fn candidate_newer_than_selected(
@@ -730,16 +742,16 @@ impl ChunkStore {
         path: &Path,
         expected_chain_hash: Option<&Hash>,
         expected_manifest: Option<&SoftwareManifest>,
-    ) -> Option<PersistedSession> {
+    ) -> io::Result<Option<PersistedSession>> {
         if persisted.invalid {
             warn!(?path, "Skipping persisted RBC session marked invalid");
-            let _ = Self::delete_path(path);
-            return None;
+            Self::delete_path(path)?;
+            return Ok(None);
         }
         if persisted.key_mismatch_with_path(path) {
             warn!(?path, "RBC persisted session key mismatch; removing file");
-            let _ = Self::delete_path(path);
-            return None;
+            Self::delete_path(path)?;
+            return Ok(None);
         }
         if !persist_version_supported(persisted.format_version()) {
             warn!(
@@ -748,8 +760,8 @@ impl ChunkStore {
                 supported = PERSIST_VERSION,
                 "Dropping RBC persisted session with unsupported format version"
             );
-            let _ = Self::delete_path(path);
-            return None;
+            Self::delete_path(path)?;
+            return Ok(None);
         }
         let Some(updated_at) = persisted.updated_at() else {
             warn!(
@@ -757,8 +769,8 @@ impl ChunkStore {
                 last_updated_ms = persisted.last_updated_ms,
                 "Dropping RBC persisted session with unrepresentable timestamp"
             );
-            let _ = Self::delete_path(path);
-            return None;
+            Self::delete_path(path)?;
+            return Ok(None);
         };
         if let Err(err) = SystemTime::now().duration_since(updated_at) {
             warn!(
@@ -767,8 +779,8 @@ impl ChunkStore {
                 last_updated_ms = persisted.last_updated_ms,
                 "Dropping RBC persisted session with future timestamp"
             );
-            let _ = Self::delete_path(path);
-            return None;
+            Self::delete_path(path)?;
+            return Ok(None);
         }
         if let Some(expected) = expected_chain_hash {
             if &persisted.chain_hash != expected {
@@ -776,8 +788,8 @@ impl ChunkStore {
                     ?path,
                     "Dropping RBC persisted session with mismatched chain hash"
                 );
-                let _ = Self::delete_path(path);
-                return None;
+                Self::delete_path(path)?;
+                return Ok(None);
             }
         }
         if let Some(expected) = expected_manifest {
@@ -786,8 +798,8 @@ impl ChunkStore {
                     ?path,
                     "Dropping RBC persisted session with mismatched software manifest"
                 );
-                let _ = Self::delete_path(path);
-                return None;
+                Self::delete_path(path)?;
+                return Ok(None);
             }
         }
         if let Err(reason) = validate_chunks(&persisted) {
@@ -796,28 +808,31 @@ impl ChunkStore {
                 %reason,
                 "Dropping RBC persisted session due to chunk integrity failure"
             );
-            let _ = Self::delete_path(path);
-            return None;
+            Self::delete_path(path)?;
+            return Ok(None);
         }
-        Some(persisted)
+        Ok(Some(persisted))
     }
 
-    fn decode_persisted_session_guarded(data: &[u8], path: &Path) -> Option<PersistedSession> {
+    fn decode_persisted_session_guarded(
+        data: &[u8],
+        path: &Path,
+    ) -> io::Result<Option<PersistedSession>> {
         let result = panic_hook::with_hook_suppressed(|| {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 decode_from_bytes::<PersistedSession>(data)
             }))
         });
         match result {
-            Ok(Ok(persisted)) => Some(persisted),
+            Ok(Ok(persisted)) => Ok(Some(persisted)),
             Ok(Err(err)) => {
                 warn!(
                     ?err,
                     ?path,
                     "failed to decode persisted RBC session; removing file"
                 );
-                let _ = Self::delete_path(path);
-                None
+                Self::delete_path(path)?;
+                Ok(None)
             }
             Err(panic) => {
                 warn!(
@@ -829,8 +844,8 @@ impl ChunkStore {
                 } else if let Some(msg) = panic.downcast_ref::<String>() {
                     debug!(?path, panic = %msg, "RBC decode panic message");
                 }
-                let _ = Self::delete_path(path);
-                None
+                Self::delete_path(path)?;
+                Ok(None)
             }
         }
     }
@@ -993,7 +1008,13 @@ impl ChunkStore {
         match fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(err),
+            Err(err) => Err(io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to remove persisted RBC session `{}`: {err}",
+                    path.display()
+                ),
+            )),
         }
     }
 
@@ -1597,6 +1618,23 @@ mod tests {
         path
     }
 
+    fn assert_cleanup_error(err: &io::Error, path: &Path) {
+        assert_ne!(
+            err.kind(),
+            io::ErrorKind::NotFound,
+            "cleanup failures should preserve the underlying filesystem error"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("failed to remove persisted RBC session"),
+            "cleanup error should describe the failed removal: {message}"
+        );
+        assert!(
+            message.contains(&path.display().to_string()),
+            "cleanup error should include the session path: {message}"
+        );
+    }
+
     fn assert_persisted_session_rejected_and_deleted(
         label: &str,
         path_key: SessionKey,
@@ -1793,6 +1831,58 @@ mod tests {
         assert_eq!(load.sessions.len(), 1, "temp session should load");
         assert!(path.exists(), "temp session should be promoted");
         assert!(!tmp_path.exists(), "temp session should be removed");
+    }
+
+    #[test]
+    fn remove_deletes_main_and_temp_session_artifacts() {
+        let dir = tempdir().unwrap();
+        let key = session_key(52);
+        let store = store_for_tests(dir.path());
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut main = sample_persisted_session(key, chain_hash, manifest.clone());
+        main.last_updated_ms = 10;
+        let mut temp = sample_persisted_session(key, chain_hash, manifest);
+        temp.last_updated_ms = 20;
+
+        let (path, tmp_path) = session_paths_for_tests(dir.path(), &key);
+        fs::write(&path, to_bytes(&main).expect("encode main session"))
+            .expect("write main session");
+        fs::write(&tmp_path, to_bytes(&temp).expect("encode temp session"))
+            .expect("write temp session");
+
+        store.remove(&key).expect("remove persisted session");
+
+        assert!(!path.exists(), "main session should be removed");
+        assert!(!tmp_path.exists(), "temp session should be removed");
+    }
+
+    #[test]
+    fn remove_rejects_unremovable_temp_without_hiding_main_session() {
+        let dir = tempdir().unwrap();
+        let key = session_key(53);
+        let store = store_for_tests(dir.path());
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let main = sample_persisted_session(key, chain_hash, manifest);
+
+        let (path, tmp_path) = session_paths_for_tests(dir.path(), &key);
+        fs::write(&path, to_bytes(&main).expect("encode main session"))
+            .expect("write main session");
+        fs::create_dir(&tmp_path).expect("create unremovable temp session artifact");
+
+        let err = store
+            .remove(&key)
+            .expect_err("unremovable temp session should fail explicit removal");
+        assert_ne!(err.kind(), io::ErrorKind::NotFound);
+        assert!(
+            path.exists(),
+            "main session must remain visible when temp cleanup fails"
+        );
+        assert!(
+            tmp_path.exists(),
+            "unremovable temp artifact must remain visible for repair"
+        );
     }
 
     #[test]
@@ -2257,6 +2347,121 @@ mod tests {
         assert!(
             message.contains(&tmp_path.display().to_string()),
             "error should include the unreadable temp session path: {message}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_entries_rejects_unremovable_corrupt_session_file() {
+        let dir = tempdir().unwrap();
+        let store = store_for_tests(dir.path());
+        let key = session_key(54);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        fs::write(&path, b"corrupt").expect("write corrupt session");
+        set_unix_file_mode(dir.path(), 0o500);
+
+        let err = match store.load(&chain_hash, &manifest) {
+            Ok(_) => panic!("unremovable corrupt session should fail store recovery"),
+            Err(err) => err,
+        };
+        set_unix_file_mode(dir.path(), 0o700);
+        assert_cleanup_error(&err, &path);
+        assert!(
+            path.exists(),
+            "failed cleanup should leave the corrupt session visible"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_entries_rejects_unremovable_invalid_session_file() {
+        let dir = tempdir().unwrap();
+        let store = store_for_tests(dir.path());
+        let key = session_key(55);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+        persisted.invalid = true;
+        let path = write_persisted_session_at(dir.path(), &key, &persisted);
+        set_unix_file_mode(dir.path(), 0o500);
+
+        let err = match store.load(&chain_hash, &manifest) {
+            Ok(_) => panic!("unremovable invalid session should fail store recovery"),
+            Err(err) => err,
+        };
+        set_unix_file_mode(dir.path(), 0o700);
+        assert_cleanup_error(&err, &path);
+        assert!(
+            path.exists(),
+            "failed cleanup should leave the invalid session visible"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_entries_rejects_unremovable_stale_temp_session() {
+        let dir = tempdir().unwrap();
+        let store = store_for_tests(dir.path());
+        let key = session_key(56);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut main = sample_persisted_session(key, chain_hash, manifest.clone());
+        main.last_updated_ms = 20;
+        let mut temp = sample_persisted_session(key, chain_hash, manifest.clone());
+        temp.last_updated_ms = 10;
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::write(&path, to_bytes(&main).expect("encode main session"))
+            .expect("write main session");
+        fs::write(&tmp_path, to_bytes(&temp).expect("encode temp session"))
+            .expect("write stale temp session");
+        set_unix_file_mode(dir.path(), 0o500);
+
+        let err = match store.load(&chain_hash, &manifest) {
+            Ok(_) => panic!("unremovable stale temp session should fail store recovery"),
+            Err(err) => err,
+        };
+        set_unix_file_mode(dir.path(), 0o700);
+        assert_cleanup_error(&err, &tmp_path);
+        assert!(path.exists(), "main session should remain visible");
+        assert!(
+            tmp_path.exists(),
+            "failed cleanup should leave the stale temp session visible"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_session_from_dir_rejects_unremovable_stale_temp_session() {
+        let dir = tempdir().unwrap();
+        let key = session_key(57);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut main = sample_persisted_session(key, chain_hash, manifest.clone());
+        main.last_updated_ms = 20;
+        let mut temp = sample_persisted_session(key, chain_hash, manifest.clone());
+        temp.last_updated_ms = 10;
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::write(&path, to_bytes(&main).expect("encode main session"))
+            .expect("write main session");
+        fs::write(&tmp_path, to_bytes(&temp).expect("encode temp session"))
+            .expect("write stale temp session");
+        set_unix_file_mode(dir.path(), 0o500);
+
+        let err = match ChunkStore::load_session_from_dir(dir.path(), &key, &chain_hash, &manifest)
+        {
+            Ok(_) => panic!("unremovable stale temp session should fail direct recovery"),
+            Err(err) => err,
+        };
+        set_unix_file_mode(dir.path(), 0o700);
+        assert_cleanup_error(&err, &tmp_path);
+        assert!(path.exists(), "main session should remain visible");
+        assert!(
+            tmp_path.exists(),
+            "failed cleanup should leave the stale temp session visible"
         );
     }
 
@@ -2968,6 +3173,55 @@ mod tests {
         assert!(
             !ChunkStore::make_session_path(dir.path(), &key).exists(),
             "disabled store should remove the old snapshot for the same key"
+        );
+    }
+
+    #[test]
+    fn disabled_store_reports_cleanup_failure_on_session_persist() {
+        let dir = tempdir().unwrap();
+        let key = session_key(58);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut session = RbcSession::test_new(1, None, None, 0);
+        session.test_note_chunk(0, vec![0xD1; 8], 0);
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        fs::create_dir(&path).expect("block session path with directory");
+        let disabled = ChunkStore::new(dir.path().to_path_buf(), Duration::ZERO, 0, 0, 0, 1 << 20)
+            .expect("disabled chunk store init");
+
+        let err = match disabled.persist_session(key, &session, &chain_hash, &manifest, &[]) {
+            Ok(_) => panic!("disabled store should report failed session cleanup"),
+            Err(err) => err,
+        };
+
+        assert_cleanup_error(&err, &path);
+        assert!(
+            path.is_dir(),
+            "failed cleanup should leave evidence visible"
+        );
+    }
+
+    #[test]
+    fn disabled_store_reports_cleanup_failure_on_snapshot_persist() {
+        let dir = tempdir().unwrap();
+        let key = session_key(59);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest);
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        fs::create_dir(&path).expect("block session path with directory");
+        let disabled = ChunkStore::new(dir.path().to_path_buf(), Duration::ZERO, 0, 0, 0, 1 << 20)
+            .expect("disabled chunk store init");
+
+        let err = match disabled.persist_snapshot(&persisted) {
+            Ok(_) => panic!("disabled store should report failed snapshot cleanup"),
+            Err(err) => err,
+        };
+
+        assert_cleanup_error(&err, &path);
+        assert!(
+            path.is_dir(),
+            "failed cleanup should leave evidence visible"
         );
     }
 
