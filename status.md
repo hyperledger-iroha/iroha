@@ -7,10 +7,11 @@ Last updated: 2026-06-13
 - Added native bridge builders for current-hop Pallas open-envelope archives
   from `KagemushaVerifiedFoldRecordBundle` and the one-envelope
   previous-proof archive required by Reserved-lineage append.
-- Exposed the builders through the C header plus Kotlin/JVM and Android Java
-  JNI wrappers, and updated typed recursive-spend request codecs so init and
-  append requests can derive required Pallas archives from typed evidence
-  instead of asking SDK callers to fabricate native envelope bytes.
+- Exposed the builders through the C header, Swift public wrappers, and
+  Kotlin/JVM plus Android Java JNI wrappers, and updated typed recursive-spend
+  request codecs so init and append requests can derive required Pallas
+  archives from typed evidence instead of asking SDK callers to fabricate
+  native envelope bytes.
 - Added Rust coverage that verifies generated Pallas openings and feeds them
   through recursive aggregation and append-opening preflight validation.
 - Kept source parity deterministic in normal worktrees: the SDK parity guard

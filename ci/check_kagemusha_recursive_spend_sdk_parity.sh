@@ -6330,6 +6330,10 @@ def check_swift(texts, errors):
         texts,
         prover,
         (
+            "public static func buildPallasOpenEnvelopesArchive(",
+            "public static func buildPreviousProofOpenEnvelopesArchive(",
+            "kagemushaBuildPallasOpenEnvelopesArchive(",
+            "kagemushaBuildPreviousProofOpenEnvelopesArchive(",
             "invalidInputArchive",
             "oversizedInputArchive",
             "emptyInputPayload",
@@ -6349,8 +6353,27 @@ def check_swift(texts, errors):
     )
     require_contains(
         texts,
+        bridge,
+        REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_C_SYMBOLS
+        + (
+            "kagemushaBuildPallasOpenEnvelopesArchiveFn",
+            "kagemushaBuildPreviousProofOpenEnvelopesArchiveFn",
+            "func kagemushaBuildPallasOpenEnvelopesArchive(recordBundleArchive: Data)",
+            "func kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundleArchive: Data)",
+            "probeKagemushaArchiveFunction(kagemushaBuildPallasOpenEnvelopesArchiveFn)",
+            "probeKagemushaArchiveFunction(kagemushaBuildPreviousProofOpenEnvelopesArchiveFn)",
+            "kagemushaBuildPallasOpenEnvelopesArchiveFn != nil",
+            "kagemushaBuildPreviousProofOpenEnvelopesArchiveFn != nil",
+        ),
+        "Swift recursive spend Pallas open-envelope builder bridge",
+        errors,
+    )
+    require_contains(
+        texts,
         test,
         (
+            "buildPallasOpenEnvelopesArchive",
+            "buildPreviousProofOpenEnvelopesArchive",
             "testRejectsMalformedInputArchivesBeforeBridgeCall",
             "testRejectsOversizedInputArchivesBeforeBridgeCall",
             "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",

@@ -307,7 +307,10 @@ and completed history lives in [`status.md`](./status.md).
   verifier-backend labels, Torii verifier-key request/event validation, and
   Offline Cash/Kagemusha ABI-7 support files. The
   Swift typed recursive-spend request tests must keep malformed redeem
-  `publicAmount` values rejected before native dispatch. The
+  `publicAmount` values rejected before native dispatch. Swift recursive-spend
+  wrappers must also keep native bridge builders for current-hop and
+  previous-proof Pallas open-envelope archives exposed and covered by the same
+  input/output Norito archive guard tests. The
   payload-bench workflow path inventory and JavaScript parity meta-test must
   stay in lockstep with that expanded Swift parse surface.
 - Kagemusha Python SDK validation must keep the focused Python 3.11 runner on
