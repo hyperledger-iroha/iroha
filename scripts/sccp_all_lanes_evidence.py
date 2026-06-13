@@ -1132,6 +1132,80 @@ def _expect_role_hash_fields_are_distinct(
             seen[raw] = field
 
 
+def _source_material_template_hashes(profile: LaneProfile) -> dict[str, bytes]:
+    """Return built-in source-material template hashes for a launch lane."""
+
+    if profile.chain == "eth":
+        module = _load_sibling_module("sccp_eth_source_bridge_evidence.py")
+        return {
+            field: module._evm_family_template_component_hash(
+                component_id,
+                component_kind,
+            )
+            for field, (component_id, component_kind) in (
+                module.ETH_TEMPLATE_COMPONENTS.items()
+            )
+        }
+    if profile.chain == "bsc":
+        module = _load_sibling_module("sccp_bsc_source_bridge_evidence.py")
+        return {
+            field: module._evm_family_template_component_hash(
+                component_id,
+                component_kind,
+            )
+            for field, (component_id, component_kind) in (
+                module.bsc_template_components().items()
+            )
+        }
+    if profile.chain == "sol":
+        module = _load_sibling_module("sccp_solana_source_state_evidence.py")
+        return module._template_component_hashes()
+    if profile.chain == "ton":
+        module = _load_sibling_module("sccp_ton_source_state_evidence.py")
+        return module._template_component_hashes()
+    if profile.chain == "tron":
+        module = _load_sibling_module("sccp_tron_source_bridge_evidence.py")
+        return {
+            field: module._tron_template_component_hash(component_id, component_kind)
+            for field, (component_id, component_kind) in (
+                module.TRON_TEMPLATE_COMPONENTS.items()
+            )
+        }
+    return {}
+
+
+def _reject_source_material_template_hashes(
+    errors: list[str],
+    profile: LaneProfile,
+    record: dict[str, Any],
+) -> None:
+    template_hashes = _source_material_template_hashes(profile)
+    for field, template_hash in template_hashes.items():
+        raw = _hex_bytes(record.get(field), byte_length=32)
+        if raw == template_hash:
+            errors.append(
+                f"{field} must be deployed evidence, not built-in template material"
+            )
+
+
+def _reject_source_adapter_audit_template_hashes(
+    errors: list[str],
+    profile: LaneProfile,
+    record: dict[str, Any],
+    fields: tuple[str, ...],
+) -> None:
+    template_hashes = _source_material_template_hashes(profile)
+    for field in fields:
+        raw = _hex_bytes(record.get(field), byte_length=32)
+        if raw is None:
+            continue
+        if any(raw == template_hash for template_hash in template_hashes.values()):
+            errors.append(
+                f"{field} must be deployed audit evidence, "
+                "not built-in template material"
+            )
+
+
 def _expect_distinct_byte_values(
     errors: list[str],
     fields: tuple[tuple[str, bytes | None], ...],
@@ -1686,6 +1760,7 @@ def _check_source_material(profile: LaneProfile, record: dict[str, Any]) -> list
         SOURCE_VERIFIER_MATERIAL_ROLE_HASH_FIELDS,
         label="source verifier material role hash",
     )
+    _reject_source_material_template_hashes(errors, profile, record)
     return errors
 
 
@@ -2026,6 +2101,12 @@ def _check_deployment(
     if profile.solana_full_light_client_audit_required:
         for field in SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS:
             _expect_nonzero_hex(errors, record, field)
+        _reject_source_adapter_audit_template_hashes(
+            errors,
+            profile,
+            record,
+            SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS,
+        )
         errors.extend(_check_solana_full_light_client_gate(material, record))
     else:
         for field in SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS:
@@ -2034,6 +2115,12 @@ def _check_deployment(
     if profile.ton_full_light_client_audit_required:
         for field in TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS:
             _expect_nonzero_hex(errors, record, field)
+        _reject_source_adapter_audit_template_hashes(
+            errors,
+            profile,
+            record,
+            TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS,
+        )
         errors.extend(_check_ton_full_light_client_gate(material, record))
     else:
         for field in TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS:

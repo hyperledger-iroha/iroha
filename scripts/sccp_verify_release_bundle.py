@@ -3420,6 +3420,37 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_all_lanes_evidence.py",
+        (
+            "def _source_material_template_hashes(",
+            "def _reject_source_material_template_hashes(",
+            "def _reject_source_adapter_audit_template_hashes(",
+            "not built-in template material",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_all_lanes_evidence_test.py",
+        (
+            "test_all_lanes_evidence_rejects_source_material_template_hashes_for_all_lanes",
+            "test_all_lanes_evidence_rejects_source_adapter_audit_hash_template_replays",
+            "not built-in template material",
+        ),
+    ),
+    (
+        "scripts/sccp_release_bundle.py",
+        (
+            "def _source_adapter_gate_template_audit_errors(",
+            "not built-in template material",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_rejects_public_source_adapter_gate_template_audit_replays",
+            "not built-in template material",
+        ),
+    ),
+    (
         "scripts/sccp_release_readiness_report.py",
         (
             "def _sccp_source_material_template_rejection_gate_inventory_errors(",
@@ -4761,6 +4792,8 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def _integer_list_field_errors(",
             "must not contain duplicate integers",
             "contains {field_kind} field name with sensitive name",
+            "def _source_adapter_gate_hash_role_fields(",
+            "source_adapter_gate.audit_hashes",
         ),
     ),
     (
@@ -4805,6 +4838,8 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "blockers must be empty when ready",
             "blockers must be empty ",
             "when gate is required",
+            "def _source_adapter_gate_hash_role_fields(",
+            "source_adapter_gate.audit_hashes",
             "def _route_canary_common_semantic_errors(",
             "status must be passed",
             "evidence_source must be {expected_source}",
@@ -4877,6 +4912,8 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def test_release_bundle_rejects_copied_evidence_source_gate_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_route_canary_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_route_canary_evidence_hash_replay_before_render",
+            "def test_release_bundle_rejects_copied_route_canary_source_gate_replay_before_render",
+            "def test_release_bundle_verifier_rejects_route_canary_source_gate_hash_replay",
             "def test_release_bundle_rejects_copied_evidence_evm_route_canary_transcript_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_tron_route_canary_transcript_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_solana_ton_route_canary_drift_before_render",
@@ -7841,6 +7878,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "source_adapter_gate_audit_hashes must be empty when gate is not required",
             "source_adapter_gate_required must be a boolean",
             "source_adapter_gate_audit_hashes must be an object",
+            "source_adapter_gate hash role",
             "def _cryptographic_evidence_lane_binding_errors(",
             "readiness report cryptographic_evidence does not cover every lane",
             "_expected_cryptographic_evidence(report_evidence)",
@@ -7885,6 +7923,8 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "route_canary_block_number must be null or a positive u64 integer",
             "route_canary_block_timestamp must be null or a non-negative u64 integer",
             "def _cryptographic_evidence_source_adapter_gate_bundle_errors(",
+            "def _cryptographic_evidence_source_adapter_gate_hash_role_errors(",
+            "source_adapter_gate hash role",
             "source_adapter_gate_required must be false for this domain",
             "source_adapter_gate_required must be true for this domain",
             "source_adapter_gate_hash must be empty when gate is not required",
@@ -7910,6 +7950,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_rejects_oversized_copied_crypto_evidence_receipt_before_render",
             "test_release_bundle_rejects_oversized_copied_tron_crypto_evidence_before_render",
             "test_release_bundle_rejects_copied_crypto_source_adapter_gate_drift_before_render",
+            "test_release_bundle_rejects_copied_crypto_source_adapter_gate_hash_role_replay",
             "evm_message_proof_accepted_transaction for finalized ",
             "test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render",
             "test_release_bundle_verifier_rejects_unbound_crypto_evidence",
@@ -7921,6 +7962,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_crypto_evidence_lane_binding_drift",
             "test_release_bundle_verifier_rejects_crypto_evidence_inventory_drift",
             "test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift",
+            "test_release_bundle_verifier_rejects_crypto_source_gate_hash_role_replay",
             "test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift",
             "test_release_bundle_verifier_rejects_crypto_evidence_malformed_source_adapter_gate_audit_keys",
             "test_release_bundle_verifier_suppresses_crypto_evidence_malformed_markdown_leaks",
@@ -7965,6 +8007,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "USER_PROVER_REQUIRED_LANE_BACKENDS",
             "USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK",
             "def _submission_surface_inventory_errors(",
+            "must match expected helpers",
             "readiness report user_prover_submission_surfaces is missing",
             "_submission_surface_inventory_errors(surfaces)",
             "_expected_submission_surfaces(report)",
@@ -8039,6 +8082,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "must match copied corridor phases",
             "contains duplicate ",
             "required helper:",
+            "must match expected helpers",
             "contains SDK key with",
             "contains SDK key with sensitive name",
             "contains phase with",
@@ -8067,6 +8111,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "test_release_bundle_rejects_malformed_copied_submission_surface_before_render",
             "test_release_bundle_rejects_blocked_copied_submission_surface_before_render",
             "test_release_bundle_rejects_copied_submission_surface_binding_before_render",
+            "test_release_bundle_rejects_copied_submission_surface_extra_helpers_before_render",
             "test_release_bundle_verifier_required_helper_inventory_matches_report",
             "test_release_bundle_verifier_expected_submission_surfaces_are_independent",
             "test_release_bundle_verifier_helper_inventory_is_independent",
@@ -8092,6 +8137,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "validation_blockers contains blocker with sensitive name",
             "test_release_bundle_verifier_rejects_submission_surface_backend_mismatch",
             "test_release_bundle_verifier_rejects_missing_required_submission_surface_helper",
+            "test_release_bundle_verifier_rejects_submission_surface_extra_helpers",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper_map_keys",
             "secret-token-sdk",
             "sdk_helper_symbols_by_sdk contains SDK key with sensitive name",
@@ -14856,6 +14902,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
         errors.append(f"{label} sdk_artifacts must be a non-empty list")
     else:
         seen_sdks: set[str] = set()
+        semantic_sdk_order: list[str] = []
         for index, row in enumerate(sdk_artifacts):
             row_label = f"{label} sdk_artifacts[{index}]"
             if not isinstance(row, dict):
@@ -14875,6 +14922,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
             if sdk_key_blocker is not None:
                 errors.append(sdk_key_blocker)
                 continue
+            semantic_sdk_order.append(sdk)
             if sdk in seen_sdks:
                 errors.append(
                     _native_evm_sdk_name_blocker(
@@ -14930,6 +14978,8 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                     )
         for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - seen_sdks):
             errors.append(f"{label} sdk_artifacts missing sdk: {sdk}")
+        if semantic_sdk_order != sorted(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
+            errors.append(f"{label} sdk_artifacts must match expected SDK order")
     errors.extend(_native_evm_prover_summary_path_role_errors(label, status))
     if status.get("validation_status") != "passed":
         errors.append(f"{label} validation_status must be passed")
@@ -15597,7 +15647,7 @@ def _render_readiness_markdown(
             "- SCCP Ethereum sync-committee roster source inventory must pin exact 512-authority mainnet rosters, unit validator weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee payload vectors across public SDKs before local finality evidence can be accepted.",
             "- SCCP Ethereum source-bridge config source inventory must pin bridge-address/network/code-hash config hashing and negative config-drift tests.",
             "- SCCP Ethereum EVM source-adapter deployment source inventory must pin the active deployment gate, source-bridge network/config binding, and negative drift tests.",
-            "- SCCP source-material template rejection source inventory must pin ETH, BSC, Solana, TON, and TRON evidence-script guards and negative tests that reject built-in template verifier hashes before source material can satisfy production readiness.",
+            "- SCCP source-material template rejection source inventory must pin ETH, BSC, Solana, TON, and TRON evidence-script guards, aggregate all-lanes copied-evidence guards, strict release-bundle public JSON guards, and negative tests that reject built-in template verifier hashes before source material can satisfy production readiness.",
             "- SCCP source-material role validation source inventory must pin ETH, BSC, Solana, TON, and TRON zero-hash, role-reuse, canonical adapter-verifier, full-light-client audit role-separation guards, and redacted all-lanes-TOML/source validator/source-record/source-gate/TON-live-accountStates/address/code-BoC/TON-destination-code-BoC/TRON-live-API/metadata/full-TOML/TRON-witness-JSON blockers before source material can satisfy production readiness.",
             "- SCCP EVM contract smoke Ethereum mainnet network-id source inventory must pin ETH chain-id vectors, BSC rejection vectors, and accepted-event network-id assertions.",
             "- SCCP EVM contract smoke production-surface source inventory must pin verifier-code/key, destination-binding, domain-overflow, proof-shape, cross-deployment, and replay rejection smoke coverage.",
@@ -16918,6 +16968,28 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
                 "readiness report cryptographic evidence row "
                 "source_adapter_gate_audit_hashes must be empty when gate is not required"
             )
+    role_fields: list[tuple[str, Any]] = [
+        ("source_verifier_material_hash", row.get("source_verifier_material_hash")),
+        (
+            "source_adapter_engine_deployment_hash",
+            row.get("source_adapter_engine_deployment_hash"),
+        ),
+        ("destination_binding_hash", row.get("destination_binding_hash")),
+        ("route_allowlist_hash", row.get("route_allowlist_hash")),
+        ("route_canary_evidence_hash", row.get("route_canary_evidence_hash")),
+    ]
+    role_fields.extend(
+        (f"source_adapter_gate_audit_hashes.{field}", value)
+        for field, value in sorted(semantic_audit_hashes.items())
+    )
+    errors.extend(
+        _distinct_nonzero_hex_field_errors(
+            "readiness report cryptographic evidence row "
+            "source_adapter_gate hash role",
+            tuple(role_fields),
+            byte_length=32,
+        )
+    )
     return errors
 
 
@@ -17720,6 +17792,12 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
                     "readiness report user prover submission surface row "
                     f"sdk_helper_symbols_by_sdk[{sdk}] contains duplicate symbols"
                 )
+            expected_helpers = expected_helpers_by_sdk.get(sdk)
+            if expected_helpers is not None and helpers != list(expected_helpers):
+                errors.append(
+                    "readiness report user prover submission surface row "
+                    f"sdk_helper_symbols_by_sdk[{sdk}] must match expected helpers"
+                )
             for marker in USER_PROVER_SDK_HOOK_MARKERS.get(sdk, ()):
                 if not any(
                     _helper_matches_hook_marker(sdk, helper, marker)
@@ -17739,6 +17817,18 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
             errors.append(
                 "readiness report user prover submission surface row "
                 "sdk_helper_symbols_by_sdk[js-sdk] must match sdk_helper_symbols"
+            )
+        expected_js_helpers = (
+            expected_helpers_by_sdk.get("js-sdk")
+            if isinstance(expected_helpers_by_sdk, dict)
+            else None
+        )
+        if expected_js_helpers is not None and helper_symbols != list(
+            expected_js_helpers
+        ):
+            errors.append(
+                "readiness report user prover submission surface row "
+                "sdk_helper_symbols must match expected helpers"
             )
     errors.extend(
         _string_list_field_errors(label, row, "required_phases", allow_empty=False)
@@ -17889,6 +17979,13 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
                             f"sdk_helper_symbols_by_sdk[{sdk}] missing "
                             f"required helper: {helper}"
                         )
+                if all(isinstance(helper, str) for helper in helpers) and helpers != list(
+                    expected_helpers
+                ):
+                    errors.append(
+                        f"{label} lanes {lanes} "
+                        f"sdk_helper_symbols_by_sdk[{sdk}] must match expected helpers"
+                    )
             helper_symbols = row.get("sdk_helper_symbols")
             expected_js_helpers = expected_helpers_by_sdk.get("js-sdk", ())
             if isinstance(helper_symbols, list):
@@ -17898,6 +17995,13 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
                             f"{label} lanes {lanes} sdk_helper_symbols "
                             f"missing required helper: {helper}"
                         )
+                if all(isinstance(helper, str) for helper in helper_symbols) and (
+                    helper_symbols != list(expected_js_helpers)
+                ):
+                    errors.append(
+                        f"{label} lanes {lanes} "
+                        "sdk_helper_symbols must match expected helpers"
+                    )
         required_phases = row.get("required_phases")
         if isinstance(lanes, str) and isinstance(expected_backend, str):
             expected_required_phases = _expected_submission_surface_required_phases(
@@ -18305,6 +18409,45 @@ def _canonical_nonzero_fixed_hex_value(value: Any, *, byte_length: int) -> str |
     return value
 
 
+def _source_adapter_gate_hash_role_fields(
+    label: str,
+    lane: dict[str, Any],
+) -> tuple[tuple[str, Any], ...]:
+    source_gate = lane.get("source_adapter_gate")
+    if not isinstance(source_gate, dict):
+        return ()
+
+    fields: list[tuple[str, Any]] = []
+    seen_hashes: set[str] = set()
+
+    gate_hash = _canonical_nonzero_fixed_hex_value(
+        source_gate.get("gate_hash"),
+        byte_length=32,
+    )
+    if gate_hash is not None:
+        fields.append(("source_adapter_gate_hash", gate_hash))
+        seen_hashes.add(gate_hash)
+
+    audit_hashes = source_gate.get("audit_hashes")
+    if not isinstance(audit_hashes, dict):
+        return tuple(fields)
+
+    for audit_key, audit_hash in sorted(audit_hashes.items(), key=lambda item: str(item[0])):
+        if _all_lanes_audit_hash_key_blocker(label, audit_key) is not None:
+            continue
+        audit_hash_value = _canonical_nonzero_fixed_hex_value(
+            audit_hash,
+            byte_length=32,
+        )
+        if audit_hash_value is None or audit_hash_value in seen_hashes:
+            continue
+        fields.append(
+            (f"source_adapter_gate.audit_hashes.{audit_key}", audit_hash_value)
+        )
+        seen_hashes.add(audit_hash_value)
+    return tuple(fields)
+
+
 def _route_canary_common_hash_role_errors(
     label: str,
     lane: dict[str, Any],
@@ -18324,6 +18467,7 @@ def _route_canary_common_hash_role_errors(
                 )
             )
         )
+    fields.extend(_source_adapter_gate_hash_role_fields(label, lane))
     if isinstance(route_allowlist, dict):
         fields.append(
             ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
@@ -18465,6 +18609,13 @@ def _all_lanes_route_canary_cross_lane_errors(
             )
             if value is not None:
                 governed_hashes.setdefault(value, (lane_label, "route_allowlist_hash"))
+        for field, value in _source_adapter_gate_hash_role_fields(lane_label, lane):
+            governed_hash = _canonical_nonzero_fixed_hex_value(
+                value,
+                byte_length=32,
+            )
+            if governed_hash is not None:
+                governed_hashes.setdefault(governed_hash, (lane_label, field))
 
     seen_canaries: dict[str, str] = {}
     for index, lane in enumerate(lanes):

@@ -10155,10 +10155,11 @@ mod tests {
         (1..=5)
             .map(|idx| {
                 PeerId::new(
-                    KeyPair::from_seed(
+                    KeyPair::try_from_seed(
                         format!("p2p-topology-trusted-{idx}").into_bytes(),
                         Algorithm::BlsNormal,
                     )
+                    .expect("generate checked P2P topology fixture keypair")
                     .public_key()
                     .clone(),
                 )
@@ -11666,7 +11667,8 @@ mod tests {
         let mut signatures = Vec::with_capacity(signers.len());
         for idx in signers {
             let kp = keypairs.get(idx).expect("keypair for signer");
-            let sig = Signature::new(kp.private_key(), &preimage);
+            let sig = Signature::try_new(kp.private_key(), &preimage)
+                .expect("sign checked commit QC fixture");
             signatures.push(sig.payload().to_vec());
         }
         let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -11690,9 +11692,11 @@ mod tests {
             view_change_index: view,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair =
+            KeyPair::try_random().expect("generate checked commit block fixture keypair");
         let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let signature = SignatureOf::try_from_hash(&private_key, header.hash())
+            .expect("sign checked commit block fixture hash");
         let block_signature = BlockSignature::new(0, signature);
         SignedBlock::presigned(block_signature, header, Vec::<SignedTransaction>::new())
     }

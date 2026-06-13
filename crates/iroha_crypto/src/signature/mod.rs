@@ -699,22 +699,39 @@ mod tests {
     use super::*;
     use crate::{Algorithm, HashOf, KeyGenOption, KeyPair, PublicKeyCompact};
 
+    #[cfg(feature = "rand")]
+    fn checked_random_keypair(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).expect("generate checked random keypair")
+    }
+
+    fn checked_signature(key_pair: &KeyPair, message: &[u8]) -> Signature {
+        Signature::try_new(key_pair.private_key(), message).expect("sign checked signature fixture")
+    }
+
     #[test]
     #[cfg(feature = "rand")]
     fn create_signature_ed25519() {
-        let key_pair = KeyPair::random_with_algorithm(crate::Algorithm::Ed25519);
+        let key_pair = checked_random_keypair(Algorithm::Ed25519);
+        let wrong_key = checked_random_keypair(Algorithm::Ed25519);
         let message = b"Test message to sign.";
-        let signature = Signature::new(key_pair.private_key(), message);
+        let signature = checked_signature(&key_pair, message);
         signature.verify(key_pair.public_key(), message).unwrap();
+        signature
+            .verify(wrong_key.public_key(), message)
+            .expect_err("Ed25519 signature rejects wrong key");
     }
 
     #[test]
     #[cfg(feature = "rand")]
     fn create_signature_secp256k1() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let key_pair = checked_random_keypair(Algorithm::Secp256k1);
+        let wrong_key = checked_random_keypair(Algorithm::Secp256k1);
         let message = b"Test message to sign.";
-        let signature = Signature::new(key_pair.private_key(), message);
+        let signature = checked_signature(&key_pair, message);
         signature.verify(key_pair.public_key(), message).unwrap();
+        signature
+            .verify(wrong_key.public_key(), message)
+            .expect_err("secp256k1 signature rejects wrong key");
     }
 
     #[test]
@@ -742,28 +759,36 @@ mod tests {
     #[test]
     #[cfg(all(feature = "rand", feature = "bls"))]
     fn create_signature_bls_normal() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let key_pair = checked_random_keypair(Algorithm::BlsNormal);
+        let wrong_key = checked_random_keypair(Algorithm::BlsNormal);
         let message = b"Test message to sign.";
-        let signature = Signature::new(key_pair.private_key(), message);
+        let signature = checked_signature(&key_pair, message);
         signature.verify(key_pair.public_key(), message).unwrap();
+        signature
+            .verify(wrong_key.public_key(), message)
+            .expect_err("BLS normal signature rejects wrong key");
     }
 
     #[test]
     #[cfg(all(feature = "rand", feature = "bls"))]
     fn create_signature_bls_small() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsSmall);
+        let key_pair = checked_random_keypair(Algorithm::BlsSmall);
+        let wrong_key = checked_random_keypair(Algorithm::BlsSmall);
         let message = b"Test message to sign.";
-        let signature = Signature::new(key_pair.private_key(), message);
+        let signature = checked_signature(&key_pair, message);
         signature.verify(key_pair.public_key(), message).unwrap();
+        signature
+            .verify(wrong_key.public_key(), message)
+            .expect_err("BLS small signature rejects wrong key");
     }
 
     #[test]
     #[cfg(feature = "rand")]
     fn signature_verify_cache_separates_keys() {
-        let key_one = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let key_two = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_one = checked_random_keypair(Algorithm::Ed25519);
+        let key_two = checked_random_keypair(Algorithm::Ed25519);
         let message = b"Signature verify cache test";
-        let signature = Signature::new(key_one.private_key(), message);
+        let signature = checked_signature(&key_one, message);
 
         signature.verify(key_one.public_key(), message).unwrap();
         assert!(
@@ -879,9 +904,10 @@ mod tests {
     fn signature_of_roundtrip() {
         use norito::codec::{Decode, Encode};
 
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_pair = checked_random_keypair(Algorithm::Ed25519);
         let hash = HashOf::new(&());
-        let sig = SignatureOf::from_hash(key_pair.private_key(), hash);
+        let sig = SignatureOf::try_from_hash(key_pair.private_key(), hash)
+            .expect("sign checked SignatureOf roundtrip fixture");
         let bytes = sig.encode();
         // Decode inner Signature from the same bare codec payload.
         let decoded_sig = Signature::decode(&mut &bytes[..]).expect("decode inner signature");

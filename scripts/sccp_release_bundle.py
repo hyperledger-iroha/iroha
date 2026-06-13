@@ -803,6 +803,74 @@ def _source_adapter_gate_hash_key_for_domain_chain(
     return str(key) if key is not None else None
 
 
+def _source_adapter_gate_template_audit_errors(
+    label: str,
+    domain: Any,
+    audit_hashes: Any,
+) -> list[str]:
+    if type(domain) is not int or not isinstance(audit_hashes, dict):
+        return []
+    all_lanes = _all_lanes_module()
+    profile = all_lanes.LANE_PROFILES.get(domain)
+    if profile is None:
+        return []
+    if domain == _sccp_domain_sol():
+        audit_fields = all_lanes.SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS
+    elif domain == _sccp_domain_ton():
+        audit_fields = all_lanes.TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS
+    else:
+        return []
+    template_hashes = tuple(
+        all_lanes._source_material_template_hashes(profile).values()
+    )
+    errors: list[str] = []
+    for audit_field in audit_fields:
+        audit_hash = audit_hashes.get(audit_field)
+        if not _is_canonical_bytes32_hex_text(audit_hash):
+            continue
+        if bytes.fromhex(audit_hash[2:]) in template_hashes:
+            errors.append(
+                f"{label} {audit_field} must be deployed audit evidence, "
+                "not built-in template material"
+            )
+    return errors
+
+
+def _source_adapter_gate_hash_role_fields(
+    label: str,
+    lane: dict[str, Any],
+) -> tuple[tuple[str, Any], ...]:
+    source_gate = lane.get("source_adapter_gate")
+    if not isinstance(source_gate, dict):
+        return ()
+
+    fields: list[tuple[str, Any]] = []
+    seen_hashes: set[str] = set()
+
+    gate_hash = source_gate.get("gate_hash")
+    if _is_nonzero_bytes32_hex_text(gate_hash):
+        assert isinstance(gate_hash, str)
+        fields.append(("source_adapter_gate_hash", gate_hash))
+        seen_hashes.add(gate_hash)
+
+    audit_hashes = source_gate.get("audit_hashes")
+    if not isinstance(audit_hashes, dict):
+        return tuple(fields)
+
+    audit_label = f"{label}.source_adapter_gate audit_hashes"
+    for audit_key, audit_hash in sorted(audit_hashes.items(), key=lambda item: str(item[0])):
+        if _source_adapter_gate_audit_key_error(audit_key, audit_label) is not None:
+            continue
+        if not _is_nonzero_bytes32_hex_text(audit_hash):
+            continue
+        assert isinstance(audit_hash, str)
+        if audit_hash in seen_hashes:
+            continue
+        fields.append((f"source_adapter_gate.audit_hashes.{audit_key}", audit_hash))
+        seen_hashes.add(audit_hash)
+    return tuple(fields)
+
+
 def _route_canary_source_by_domain() -> dict[int, str]:
     global _ROUTE_CANARY_SOURCE_BY_DOMAIN
     if _ROUTE_CANARY_SOURCE_BY_DOMAIN is None:
@@ -954,6 +1022,13 @@ def _source_adapter_gate_semantic_errors(
                 f"{label}.source_adapter_gate gate_hash must match "
                 f"audit_hashes.{expected_gate_key}"
             )
+        errors.extend(
+            _source_adapter_gate_template_audit_errors(
+                audit_label,
+                domain,
+                semantic_audit_hashes,
+            )
+        )
     if type(ready) is bool and not ready:
         errors.append(
             f"{label}.source_adapter_gate ready must be true when gate is required"
@@ -1068,6 +1143,13 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
                 f"{label} source_adapter_gate_hash must match "
                 f"source_adapter_gate_audit_hashes.{expected_gate_key}"
             )
+        errors.extend(
+            _source_adapter_gate_template_audit_errors(
+                f"{label} source_adapter_gate_audit_hashes",
+                domain,
+                semantic_audit_hashes,
+            )
+        )
     else:
         if expected_audit_keys is not None:
             errors.append(
@@ -1082,6 +1164,35 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
                 f"{label} source_adapter_gate_audit_hashes must be empty when gate is not required"
             )
     return errors
+
+
+def _cryptographic_evidence_source_adapter_gate_hash_role_errors(
+    label: str,
+    payload: dict[str, Any],
+    audit_hashes: Any,
+) -> list[str]:
+    if not isinstance(audit_hashes, dict):
+        return []
+
+    audit_label = f"{label} source_adapter_gate_audit_hashes"
+    fields: list[tuple[str, Any]] = [
+        ("source_verifier_material_hash", payload.get("source_verifier_material_hash")),
+        (
+            "source_adapter_engine_deployment_hash",
+            payload.get("source_adapter_engine_deployment_hash"),
+        ),
+        ("destination_binding_hash", payload.get("destination_binding_hash")),
+        ("route_allowlist_hash", payload.get("route_allowlist_hash")),
+        ("route_canary_evidence_hash", payload.get("route_canary_evidence_hash")),
+    ]
+    for audit_key, audit_hash in sorted(audit_hashes.items(), key=lambda item: str(item[0])):
+        if _source_adapter_gate_audit_key_error(audit_key, audit_label) is not None:
+            continue
+        fields.append((f"source_adapter_gate_audit_hashes.{audit_key}", audit_hash))
+    return _distinct_nonzero_bytes32_field_errors(
+        f"{label} source_adapter_gate hash role",
+        tuple(fields),
+    )
 
 
 def _route_canary_common_semantic_errors(
@@ -1166,6 +1277,7 @@ def _route_canary_common_semantic_errors(
                     if isinstance(lane.get("source_record_hashes"), dict)
                     else None,
                 ),
+                *_source_adapter_gate_hash_role_fields(label, lane),
                 ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash")),
                 (
                     "destination_binding_hash",
@@ -1613,6 +1725,10 @@ def _all_lanes_route_canary_cross_lane_bundle_errors(
             if _is_nonzero_bytes32_hex_text(value):
                 assert isinstance(value, str)
                 governed_hashes.setdefault(value, (lane_label, "route_allowlist_hash"))
+        for field, value in _source_adapter_gate_hash_role_fields(lane_label, lane):
+            if _is_nonzero_bytes32_hex_text(value):
+                assert isinstance(value, str)
+                governed_hashes.setdefault(value, (lane_label, field))
 
     errors: list[str] = []
     seen_canaries: dict[str, str] = {}
@@ -2942,6 +3058,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
             errors.append(f"{label} validation_blockers must be empty")
 
     seen_sdks: set[str] = set()
+    semantic_sdk_order: list[str] = []
     if "sdk_artifacts" in payload:
         sdk_rows = _require_report_list(
             payload.get("sdk_artifacts"),
@@ -2974,6 +3091,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                 errors.append(sdk_error)
             else:
                 assert isinstance(sdk, str)
+                semantic_sdk_order.append(sdk)
                 if sdk in seen_sdks:
                     errors.append(
                         _native_evm_sdk_name_error(
@@ -3044,6 +3162,8 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                 set(_native_evm_required_implementations()) - seen_sdks
             ):
                 errors.append(f"{label}.sdk_artifacts missing sdk: {sdk}")
+            if semantic_sdk_order != sorted(_native_evm_required_implementations()):
+                errors.append(f"{label}.sdk_artifacts must match expected SDK order")
 
     seen_audit_hashes: dict[str, str] = {}
     for key, value in sorted(semantic_audit_hashes.items()):
@@ -3223,6 +3343,13 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                     )
     errors.extend(
         _cryptographic_evidence_source_adapter_gate_bundle_errors(
+            label,
+            payload,
+            audit_hashes,
+        )
+    )
+    errors.extend(
+        _cryptographic_evidence_source_adapter_gate_hash_role_errors(
             label,
             payload,
             audit_hashes,
@@ -3620,6 +3747,23 @@ def _submission_surface_binding_bundle_errors(
                             f"{lanes} sdk_helper_symbols_by_sdk[{sdk}] missing "
                             f"required helper: {helper}"
                         )
+                if (
+                    all(
+                        _submission_surface_helper_symbol_error(
+                            helper,
+                            f"{label}.user_prover_submission_surfaces "
+                            f"sdk_helper_symbols_by_sdk[{sdk}]",
+                        )
+                        is None
+                        for helper in helpers
+                    )
+                    and helpers != list(expected_helpers)
+                ):
+                    errors.append(
+                        f"{label}.user_prover_submission_surfaces lanes "
+                        f"{lanes} sdk_helper_symbols_by_sdk[{sdk}] must match "
+                        "expected helpers"
+                    )
             helper_symbols = surface.get("sdk_helper_symbols")
             expected_js_helpers = expected_helper_sets.get("js-sdk", ())
             if isinstance(helper_symbols, list):
@@ -3630,6 +3774,22 @@ def _submission_surface_binding_bundle_errors(
                             f"{lanes} sdk_helper_symbols missing required "
                             f"helper: {helper}"
                         )
+                if (
+                    all(
+                        _submission_surface_helper_symbol_error(
+                            helper,
+                            f"{label}.user_prover_submission_surfaces "
+                            "sdk_helper_symbols",
+                        )
+                        is None
+                        for helper in helper_symbols
+                    )
+                    and helper_symbols != list(expected_js_helpers)
+                ):
+                    errors.append(
+                        f"{label}.user_prover_submission_surfaces lanes "
+                        f"{lanes} sdk_helper_symbols must match expected helpers"
+                    )
     for expected_lanes in expected_by_lanes:
         if expected_lanes not in seen_lanes:
             errors.append(

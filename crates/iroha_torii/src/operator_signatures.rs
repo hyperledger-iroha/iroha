@@ -507,7 +507,7 @@ mod tests {
 
     use super::*;
     use axum::routing::get;
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use tower::ServiceExt as _;
 
@@ -540,9 +540,14 @@ mod tests {
 
     impl TryCryptoRng for FailingOperatorNonceRng {}
 
+    fn checked_ed25519_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked operator signature fixture keypair")
+    }
+
     #[test]
     fn operator_signatures_rejects_replay() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_ed25519_keypair();
         let cfg = ToriiOperatorSignatures {
             enabled: true,
             allow_node_key: true,
@@ -568,7 +573,11 @@ mod tests {
             ts,
             nonce,
         );
-        let signature = Signature::new(key_pair.private_key(), &msg);
+        let signature = Signature::try_new(key_pair.private_key(), &msg)
+            .expect("checked operator replay fixture signature");
+        signature
+            .verify(key_pair.public_key(), &msg)
+            .expect("checked operator replay fixture signature verifies");
         let mut headers = HeaderMap::new();
         headers.insert(
             HEADER_OPERATOR_PUBLIC_KEY,
@@ -602,7 +611,7 @@ mod tests {
 
     #[test]
     fn operator_signatures_accepts_valid_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_ed25519_keypair();
         let cfg = ToriiOperatorSignatures {
             enabled: true,
             allow_node_key: false,
@@ -613,7 +622,7 @@ mod tests {
         };
         let auth = OperatorSignatures::new(
             cfg,
-            KeyPair::random().public_key().clone(),
+            checked_ed25519_keypair().public_key().clone(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         );
@@ -629,7 +638,7 @@ mod tests {
 
     #[test]
     fn signed_request_headers_authorize_successfully() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_ed25519_keypair();
         let cfg = ToriiOperatorSignatures {
             enabled: true,
             allow_node_key: true,
@@ -654,7 +663,7 @@ mod tests {
 
     #[test]
     fn signed_request_headers_reports_nonce_rng_failure() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_ed25519_keypair();
         let uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION
             .parse()
             .expect("configuration URI");

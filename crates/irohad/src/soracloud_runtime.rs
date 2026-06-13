@@ -228,10 +228,7 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
             (*self.chain_id).clone(),
             self.authority.clone(),
             instruction,
-            soracloud_runtime_submission_metadata(
-                &self.state,
-                self.gas_asset_id.as_deref(),
-            ),
+            soracloud_runtime_submission_metadata(&self.state, self.gas_asset_id.as_deref()),
             &self.key_pair,
             endpoint,
         )?;
@@ -15403,7 +15400,10 @@ mod tests {
             signature: sorafs_manifest::AdvertSignature {
                 algorithm: SignatureAlgorithm::Ed25519,
                 public_key: advert_public_payload.to_vec(),
-                signature: Signature::new(&advert_key, &body_bytes).payload().to_vec(),
+                signature: Signature::try_new(&advert_key, &body_bytes)
+                    .wrap_err("sign Soracloud provider advert fixture")?
+                    .payload()
+                    .to_vec(),
             },
             signature_strict: true,
             allow_unknown_capabilities: false,
@@ -15445,7 +15445,8 @@ mod tests {
             retention_epoch: expires_at + 600,
             council_signatures: vec![CouncilSignature {
                 signer: council_public_payload,
-                signature: Signature::new(&council_key, &proposal_digest)
+                signature: Signature::try_new(&council_key, &proposal_digest)
+                    .wrap_err("sign Soracloud provider admission fixture")?
                     .payload()
                     .to_vec(),
             }],
@@ -15768,10 +15769,11 @@ mod tests {
                     heartbeat_expires_at_ms,
                     provenance: ManifestProvenance {
                         signer: ALICE_KEYPAIR.public_key().clone(),
-                        signature: iroha_crypto::Signature::new(
-                            ALICE_KEYPAIR.private_key(),
+                        signature: sign_soracloud_runtime_provenance(
+                            &ALICE_KEYPAIR,
                             &payload,
-                        ),
+                            "sign test model host heartbeat provenance",
+                        )?,
                     },
                 },
             ));
@@ -15788,10 +15790,11 @@ mod tests {
                     capability: capability.clone(),
                     provenance: ManifestProvenance {
                         signer: ALICE_KEYPAIR.public_key().clone(),
-                        signature: iroha_crypto::Signature::new(
-                            ALICE_KEYPAIR.private_key(),
+                        signature: sign_soracloud_runtime_provenance(
+                            &ALICE_KEYPAIR,
                             &payload,
-                        ),
+                            "sign test Inrou host advert provenance",
+                        )?,
                     },
                 },
             ));

@@ -2840,23 +2840,109 @@ def test_all_lanes_evidence_rejects_reused_light_client_audit_role_hashes():
     ) in blockers
 
 
-def test_all_lanes_evidence_rejects_ton_audit_hash_reusing_template_material():
+def test_all_lanes_evidence_rejects_source_adapter_audit_hash_template_replays():
     module = load_evidence_module()
+    solana_module = module._load_sibling_module("sccp_solana_source_state_evidence.py")
     ton_module = module._load_sibling_module("sccp_ton_source_state_evidence.py")
-    records = complete_bundle(module)
-    ton_deployment = records["sccp_source_adapter_engine_deployments"][3]
-    template_hash = ton_module._ton_template_component_hash(
-        ton_module.TON_SOURCE_TRUST_ANCHOR_ID,
-        "source-trust-anchor",
+    cases = (
+        (
+            module.SCCP_DOMAIN_SOL,
+            module.SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS,
+            solana_module._template_component_hashes(),
+        ),
+        (
+            module.SCCP_DOMAIN_TON,
+            module.TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS,
+            ton_module._template_component_hashes(),
+        ),
     )
-    ton_deployment["ton_masterchain_config_verifier_hash"] = "0x" + template_hash.hex()
 
-    summary = module.validate_evidence_bundle(records)
+    for domain, audit_fields, template_hashes in cases:
+        profile = module.LANE_PROFILES[domain]
+        for audit_field in audit_fields:
+            for template_field, template_hash in template_hashes.items():
+                records = complete_bundle(module)
+                deployment_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+                deployment = records["sccp_source_adapter_engine_deployments"][
+                    deployment_index
+                ]
+                deployment[audit_field] = "0x" + template_hash.hex()
 
-    assert summary["production_ready"] is False
-    blockers = "\n".join(summary["blockers"])
-    assert "domain 4 (ton): TON full light-client gate cannot be recomputed" in blockers
-    assert "built-in template material" not in blockers
+                summary = module.validate_evidence_bundle(records)
+
+                assert summary["production_ready"] is False, (
+                    domain,
+                    audit_field,
+                    template_field,
+                )
+                assert (
+                    f"domain {domain} ({profile.chain}): {audit_field} must be "
+                    "deployed audit evidence, not built-in template material"
+                ) in "\n".join(summary["blockers"])
+
+
+def test_all_lanes_evidence_rejects_source_material_template_hashes_for_all_lanes():
+    module = load_evidence_module()
+    eth_module = module._load_sibling_module("sccp_eth_source_bridge_evidence.py")
+    bsc_module = module._load_sibling_module("sccp_bsc_source_bridge_evidence.py")
+    solana_module = module._load_sibling_module("sccp_solana_source_state_evidence.py")
+    ton_module = module._load_sibling_module("sccp_ton_source_state_evidence.py")
+    tron_module = module._load_sibling_module("sccp_tron_source_bridge_evidence.py")
+    template_cases = [
+        (
+            module.SCCP_DOMAIN_ETH,
+            field,
+            eth_module._evm_family_template_component_hash(component_id, component_kind),
+        )
+        for field, (component_id, component_kind) in (
+            eth_module.ETH_TEMPLATE_COMPONENTS.items()
+        )
+    ]
+    template_cases.extend(
+        (
+            module.SCCP_DOMAIN_BSC,
+            field,
+            bsc_module._evm_family_template_component_hash(component_id, component_kind),
+        )
+        for field, (component_id, component_kind) in (
+            bsc_module.bsc_template_components().items()
+        )
+    )
+    template_cases.extend(
+        (module.SCCP_DOMAIN_SOL, field, template_hash)
+        for field, template_hash in solana_module._template_component_hashes().items()
+    )
+    template_cases.extend(
+        (module.SCCP_DOMAIN_TON, field, template_hash)
+        for field, template_hash in ton_module._template_component_hashes().items()
+    )
+    template_cases.extend(
+        (
+            module.SCCP_DOMAIN_TRON,
+            field,
+            tron_module._tron_template_component_hash(component_id, component_kind),
+        )
+        for field, (component_id, component_kind) in (
+            tron_module.TRON_TEMPLATE_COMPONENTS.items()
+        )
+    )
+
+    assert template_cases
+    for domain, field, template_hash in template_cases:
+        records = complete_bundle(module)
+        material_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+        profile = module.LANE_PROFILES[domain]
+        records["sccp_source_verifier_materials"][material_index][field] = (
+            "0x" + template_hash.hex()
+        )
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False, (domain, field)
+        assert (
+            f"domain {domain} ({profile.chain}): {field} must be deployed "
+            "evidence, not built-in template material"
+        ) in "\n".join(summary["blockers"])
 
 
 def test_all_lanes_evidence_rejects_unknown_sections(tmp_path, capsys):

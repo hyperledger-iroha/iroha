@@ -17,8 +17,17 @@ mod mldsa_tests {
         payload
     }
 
+    fn checked_mldsa_keypair_from_seed(label: &[u8]) -> KeyPair {
+        KeyPair::try_from_seed(label.to_vec(), Algorithm::MlDsa)
+            .expect("generate checked seeded ML-DSA keypair")
+    }
+
+    fn checked_mldsa_signature(keypair: &KeyPair, message: &[u8]) -> Signature {
+        Signature::try_new(keypair.private_key(), message).expect("sign checked ML-DSA fixture")
+    }
+
     fn seeded_pair(label: &[u8]) -> (mldsa65::PublicKey, mldsa65::SecretKey) {
-        let kp = KeyPair::from_seed(label.to_vec(), Algorithm::MlDsa);
+        let kp = checked_mldsa_keypair_from_seed(label);
         let pk_bytes = checked_mldsa_public_key_payload(&kp);
         let sk_bytes = kp.private_key().to_bytes().1;
         let pk = mldsa65::PublicKey::from_bytes(pk_bytes)
@@ -112,10 +121,10 @@ mod mldsa_tests {
 
     #[test]
     fn keypair_from_seed_signs_and_verifies() {
-        let kp = KeyPair::from_seed(b"ml-dsa-sign".to_vec(), Algorithm::MlDsa);
+        let kp = checked_mldsa_keypair_from_seed(b"ml-dsa-sign");
         let message = b"ml-dsa signing smoke test";
 
-        let signature = Signature::new(kp.private_key(), message);
+        let signature = checked_mldsa_signature(&kp, message);
 
         assert!(
             signature.verify(kp.public_key(), message).is_ok(),
@@ -125,7 +134,7 @@ mod mldsa_tests {
 
     #[test]
     fn fallible_signature_constructor_signs_and_verifies() {
-        let kp = KeyPair::from_seed(b"ml-dsa-try-sign".to_vec(), Algorithm::MlDsa);
+        let kp = checked_mldsa_keypair_from_seed(b"ml-dsa-try-sign");
         let message = b"ml-dsa fallible signing smoke test";
 
         let signature =
@@ -138,7 +147,7 @@ mod mldsa_tests {
 
     #[test]
     fn typed_fallible_signature_constructors_sign_and_verify() {
-        let kp = KeyPair::from_seed(b"ml-dsa-typed-try-sign".to_vec(), Algorithm::MlDsa);
+        let kp = checked_mldsa_keypair_from_seed(b"ml-dsa-typed-try-sign");
         let value = ();
 
         let signature =
@@ -156,9 +165,9 @@ mod mldsa_tests {
 
     #[test]
     fn signature_rejects_modified_message() {
-        let kp = KeyPair::from_seed(b"ml-dsa-modified-message".to_vec(), Algorithm::MlDsa);
+        let kp = checked_mldsa_keypair_from_seed(b"ml-dsa-modified-message");
         let message = b"ml-dsa original message";
-        let signature = Signature::new(kp.private_key(), message);
+        let signature = checked_mldsa_signature(&kp, message);
 
         let result = signature.verify(kp.public_key(), b"ml-dsa modified message");
 
@@ -167,10 +176,10 @@ mod mldsa_tests {
 
     #[test]
     fn signature_rejects_different_mldsa_public_key() {
-        let signer = KeyPair::from_seed(b"ml-dsa-signer".to_vec(), Algorithm::MlDsa);
-        let verifier = KeyPair::from_seed(b"ml-dsa-verifier".to_vec(), Algorithm::MlDsa);
+        let signer = checked_mldsa_keypair_from_seed(b"ml-dsa-signer");
+        let verifier = checked_mldsa_keypair_from_seed(b"ml-dsa-verifier");
         let message = b"ml-dsa public key mismatch";
-        let signature = Signature::new(signer.private_key(), message);
+        let signature = checked_mldsa_signature(&signer, message);
 
         let result = signature.verify(verifier.public_key(), message);
 
@@ -179,7 +188,7 @@ mod mldsa_tests {
 
     #[test]
     fn signature_rejects_invalid_mldsa_signature_length() {
-        let kp = KeyPair::from_seed(b"ml-dsa-short-signature".to_vec(), Algorithm::MlDsa);
+        let kp = checked_mldsa_keypair_from_seed(b"ml-dsa-short-signature");
         let signature = Signature::from_bytes(&[0u8; 8]);
 
         let result = signature.verify(kp.public_key(), b"message");
@@ -189,12 +198,9 @@ mod mldsa_tests {
 
     #[test]
     fn mldsa_signature_payload_bytes_roundtrip() {
-        let kp = KeyPair::from_seed(
-            b"ml-dsa-signature-payload-roundtrip".to_vec(),
-            Algorithm::MlDsa,
-        );
+        let kp = checked_mldsa_keypair_from_seed(b"ml-dsa-signature-payload-roundtrip");
         let message = b"ml-dsa signature payload roundtrip";
-        let signature = Signature::new(kp.private_key(), message);
+        let signature = checked_mldsa_signature(&kp, message);
 
         let decoded = Signature::from_bytes(signature.payload());
 

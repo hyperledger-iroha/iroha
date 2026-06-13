@@ -8,6 +8,16 @@ use iroha_crypto::{
 type ByteBuffers = Vec<Vec<u8>>;
 type Ed25519Batch = (ByteBuffers, ByteBuffers, ByteBuffers);
 
+fn checked_ed25519_keypair() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked Ed25519 aggregate fixture keypair")
+}
+
+fn checked_ed25519_signature(keypair: &KeyPair, message: &[u8]) -> Signature {
+    Signature::try_new(keypair.private_key(), message)
+        .expect("sign checked Ed25519 aggregate fixture")
+}
+
 fn checked_ed25519_public_key_payload(keypair: &KeyPair) -> &[u8] {
     let (algorithm, payload) = keypair
         .public_key()
@@ -18,15 +28,30 @@ fn checked_ed25519_public_key_payload(keypair: &KeyPair) -> &[u8] {
 }
 
 #[test]
+fn checked_ed25519_aggregate_fixture_signature_rejects_wrong_key() {
+    let keypair = checked_ed25519_keypair();
+    let wrong_key = checked_ed25519_keypair();
+    let message = b"aggregate-fixture";
+    let signature = checked_ed25519_signature(&keypair, message);
+
+    signature
+        .verify(keypair.public_key(), message)
+        .expect("checked Ed25519 aggregate fixture signature verifies");
+    signature
+        .verify(wrong_key.public_key(), message)
+        .expect_err("checked Ed25519 aggregate fixture rejects wrong key");
+}
+
+#[test]
 fn ed25519_verify_aggregate_accepts_valid_signatures() {
     let mut messages = Vec::new();
     let mut signatures = Vec::new();
     let mut public_keys = Vec::new();
 
     for idx in 0u8..3 {
-        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let keypair = checked_ed25519_keypair();
         let message = vec![idx; 32];
-        let signature = Signature::new(keypair.private_key(), &message);
+        let signature = checked_ed25519_signature(&keypair, &message);
         let pk_bytes = checked_ed25519_public_key_payload(&keypair);
 
         messages.push(message);
@@ -43,14 +68,14 @@ fn ed25519_verify_aggregate_accepts_valid_signatures() {
 
 #[test]
 fn ed25519_verify_aggregate_rejects_tampered_signature() {
-    let keypair_a = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let keypair_b = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let keypair_a = checked_ed25519_keypair();
+    let keypair_b = checked_ed25519_keypair();
 
     let message_a = vec![0xA5; 16];
     let message_b = vec![0x5A; 16];
 
-    let signature_a = Signature::new(keypair_a.private_key(), &message_a);
-    let mut signature_b = Signature::new(keypair_b.private_key(), &message_b)
+    let signature_a = checked_ed25519_signature(&keypair_a, &message_a);
+    let mut signature_b = checked_ed25519_signature(&keypair_b, &message_b)
         .payload()
         .to_vec();
     signature_b[0] ^= 0xFF;
@@ -138,9 +163,9 @@ fn sample_ed25519_batch(count: u8) -> Ed25519Batch {
     let mut public_keys = Vec::new();
 
     for idx in 0..count {
-        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let keypair = checked_ed25519_keypair();
         let message = vec![idx; 32];
-        let signature = Signature::new(keypair.private_key(), &message);
+        let signature = checked_ed25519_signature(&keypair, &message);
         let pk_bytes = checked_ed25519_public_key_payload(&keypair);
 
         messages.push(message);

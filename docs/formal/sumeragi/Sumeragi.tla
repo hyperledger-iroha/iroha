@@ -11290,6 +11290,73 @@ RbcEvidenceChangeMatchesLocalEffectClassificationStep ==
           \/ /\ readyVotes' < readyVotes
              /\ RbcReadyVotesDecreaseOnlyByProposalOrInitStep)
 
+RbcProgressMutationMatchesLocalClassificationStep ==
+  (\/ rbcState' # rbcState
+   \/ headerSeen' # headerSeen
+   \/ digestValid' # digestValid
+   \/ chunkCount' # chunkCount
+   \/ readyVotes' # readyVotes) =>
+    /\ RbcStateOnlyChangesByProtocolOrFaultStep
+    /\ RbcEvidenceOnlyChangesByProtocolOrFaultStep
+    /\ ((rbcState' # rbcState) =>
+          /\ RbcStateChangeMatchesLocalExitClassificationStep
+          /\ rbcState \in {"Idle", "Init", "Chunking", "ChunksComplete", "ReadyPartial", "ReadyQuorum", "Corrupted"})
+    /\ ((\/ headerSeen' # headerSeen
+          \/ digestValid' # digestValid
+          \/ chunkCount' # chunkCount
+          \/ readyVotes' # readyVotes) =>
+          RbcEvidenceChangeMatchesLocalEffectClassificationStep)
+    /\ ((/\ rbcState # "Delivered"
+          /\ rbcState' = "Delivered") =>
+          /\ RbcDeliveryEntryOnlyByDeliverStep
+          /\ RbcDeliveryEntryMatchesReadyQuorumExitAndCommitBranchStep)
+    /\ ((/\ rbcState # "Corrupted"
+          /\ rbcState' = "Corrupted") =>
+          RbcCorruptionEntryOnlyByFaultStep)
+    /\ ((/\ rbcState = "Corrupted"
+          /\ rbcState' # "Corrupted") =>
+          RbcCorruptionExitOnlyByInitStep)
+
+RbcProgressMutationProtocolFaultProvenanceStep ==
+  (\/ rbcState' # rbcState
+   \/ headerSeen' # headerSeen
+   \/ digestValid' # digestValid
+   \/ chunkCount' # chunkCount
+   \/ readyVotes' # readyVotes) =>
+    /\ RbcStateOnlyChangesByProtocolOrFaultStep
+    /\ RbcEvidenceOnlyChangesByProtocolOrFaultStep
+
+RbcProgressStateMutationMatchesLocalClassificationStep ==
+  (rbcState' # rbcState) =>
+    /\ RbcStateOnlyChangesByProtocolOrFaultStep
+    /\ RbcEvidenceOnlyChangesByProtocolOrFaultStep
+    /\ RbcStateChangeMatchesLocalExitClassificationStep
+    /\ rbcState \in {"Idle", "Init", "Chunking", "ChunksComplete", "ReadyPartial", "ReadyQuorum", "Corrupted"}
+
+RbcProgressEvidenceMutationMatchesLocalClassificationStep ==
+  (\/ headerSeen' # headerSeen
+   \/ digestValid' # digestValid
+   \/ chunkCount' # chunkCount
+   \/ readyVotes' # readyVotes) =>
+    /\ RbcEvidenceOnlyChangesByProtocolOrFaultStep
+    /\ RbcEvidenceChangeMatchesLocalEffectClassificationStep
+
+RbcProgressDeliveredEntryMatchesLocalClassificationStep ==
+  (/\ rbcState # "Delivered"
+   /\ rbcState' = "Delivered") =>
+    /\ RbcDeliveryEntryOnlyByDeliverStep
+    /\ RbcDeliveryEntryMatchesReadyQuorumExitAndCommitBranchStep
+
+RbcProgressCorruptionEntryMatchesLocalClassificationStep ==
+  (/\ rbcState # "Corrupted"
+   /\ rbcState' = "Corrupted") =>
+    RbcCorruptionEntryOnlyByFaultStep
+
+RbcProgressCorruptionExitMatchesLocalClassificationStep ==
+  (/\ rbcState = "Corrupted"
+   /\ rbcState' # "Corrupted") =>
+    RbcCorruptionExitOnlyByInitStep
+
 RbcWithheldEntryOnlyByStutteringFromWithheldStep ==
   (rbcState' = "Withheld") =>
     /\ rbcState = "Withheld"
@@ -12305,6 +12372,32 @@ RbcEvidenceOnlyChangesByProtocolOrFault ==
 
 RbcEvidenceChangeAlwaysMatchesLocalEffectClassification ==
   [] [RbcEvidenceChangeMatchesLocalEffectClassificationStep]_vars
+
+RbcProgressMutationAlwaysHasProtocolFaultProvenance ==
+  [] [RbcProgressMutationProtocolFaultProvenanceStep]_vars
+
+RbcProgressStateMutationAlwaysMatchesLocalClassification ==
+  [] [RbcProgressStateMutationMatchesLocalClassificationStep]_vars
+
+RbcProgressEvidenceMutationAlwaysMatchesLocalClassification ==
+  [] [RbcProgressEvidenceMutationMatchesLocalClassificationStep]_vars
+
+RbcProgressDeliveredEntryAlwaysMatchesLocalClassification ==
+  [] [RbcProgressDeliveredEntryMatchesLocalClassificationStep]_vars
+
+RbcProgressCorruptionEntryAlwaysMatchesLocalClassification ==
+  [] [RbcProgressCorruptionEntryMatchesLocalClassificationStep]_vars
+
+RbcProgressCorruptionExitAlwaysMatchesLocalClassification ==
+  [] [RbcProgressCorruptionExitMatchesLocalClassificationStep]_vars
+
+RbcProgressMutationAlwaysMatchesLocalClassification ==
+  /\ RbcProgressMutationAlwaysHasProtocolFaultProvenance
+  /\ RbcProgressStateMutationAlwaysMatchesLocalClassification
+  /\ RbcProgressEvidenceMutationAlwaysMatchesLocalClassification
+  /\ RbcProgressDeliveredEntryAlwaysMatchesLocalClassification
+  /\ RbcProgressCorruptionEntryAlwaysMatchesLocalClassification
+  /\ RbcProgressCorruptionExitAlwaysMatchesLocalClassification
 
 RbcHeaderInstallationOnlyByProposalOrInit ==
   [] [RbcHeaderInstallationOnlyByProposalOrInitStep]_vars

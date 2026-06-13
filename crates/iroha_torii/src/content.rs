@@ -636,7 +636,7 @@ mod tests {
     use base64::Engine;
     use iroha_config::parameters::actual::ContentPow;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
-    use iroha_crypto::{KeyPair, Signature};
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         Registrable,
         account::Account,
@@ -702,6 +702,11 @@ mod tests {
         Guard(guard)
     }
 
+    fn checked_ed25519_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked content auth fixture keypair")
+    }
+
     fn signed_headers(
         account: &AccountId,
         key_pair: &KeyPair,
@@ -715,7 +720,11 @@ mod tests {
         let nonce = format!("content-test-{timestamp_ms}-{}", uri.path());
         let message =
             crate::canonical_request_signature_message(method, uri, &[], timestamp_ms, &nonce);
-        let signature = Signature::new(key_pair.private_key(), &message);
+        let signature = Signature::try_new(key_pair.private_key(), &message)
+            .expect("checked content signed-header fixture signature");
+        signature
+            .verify(key_pair.public_key(), &message)
+            .expect("checked content signed-header fixture signature verifies");
         let mut headers = HeaderMap::new();
         headers.insert(
             crate::HEADER_ACCOUNT,
@@ -917,7 +926,7 @@ mod tests {
     #[test]
     fn role_gate_requires_signed_headers() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_ed25519_keypair();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let state = minimal_state_with_account(&account_id, None);
         let mut manifest = sample_manifest();
@@ -935,7 +944,7 @@ mod tests {
     #[test]
     fn role_gate_rejects_missing_role() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_ed25519_keypair();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let state = minimal_state_with_account(&account_id, None);
         let mut manifest = sample_manifest();
@@ -953,7 +962,7 @@ mod tests {
     #[test]
     fn role_gate_rejects_replayed_signature() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_ed25519_keypair();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let state = minimal_state_with_account(&account_id, None);
         let mut manifest = sample_manifest();
@@ -978,7 +987,7 @@ mod tests {
     #[test]
     fn sponsor_accepts_matching_uaid() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_ed25519_keypair();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let uaid = iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(b"uaid"));
         let state = minimal_state_with_account(&account_id, Some(uaid));
@@ -994,7 +1003,7 @@ mod tests {
     #[test]
     fn sponsor_rejects_mismatched_uaid() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_ed25519_keypair();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let state = minimal_state_with_account(
             &account_id,
