@@ -385,6 +385,35 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDI
   "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1 =
   "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME =
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME =
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME =
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyRequestV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME =
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME =
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME =
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME =
+  "iroha_data_model::offline::model::KagemushaVerifiedFoldRecordBundle";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME =
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1";
+export const KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME =
+  "iroha_data_model::proof::ProofAttachment";
+export const KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME =
+  "iroha_data_model::proof::VerifyingKeyRecord";
+
+export class KagemushaRecursiveSpendRequestCodecError extends Error {
+  constructor(kind, field, message) {
+    super(message ?? `invalid Kagemusha recursive spend ${kind}: ${field}`);
+    this.name = "KagemushaRecursiveSpendRequestCodecError";
+    this.kind = kind;
+    this.field = field;
+  }
+}
 
 export function isKagemushaRecursiveCompactUnavailable(error) {
   const message =
@@ -1141,6 +1170,54 @@ export function kagemushaRecursiveSpendVerify() {
 
 export function kagemushaRecursiveSpendRedeem() {
   return unsupported("kagemushaRecursiveSpendRedeem");
+}
+
+export function buildKagemushaRecursiveSpendableNoteDescriptor() {
+  return unsupported("buildKagemushaRecursiveSpendableNoteDescriptor");
+}
+
+export function buildKagemushaRecursiveSpendVerifierRecordRef() {
+  return unsupported("buildKagemushaRecursiveSpendVerifierRecordRef");
+}
+
+export function encodeKagemushaRecursiveSpendInitRequest() {
+  return unsupported("encodeKagemushaRecursiveSpendInitRequest");
+}
+
+export function encodeKagemushaRecursiveSpendAppendRequest() {
+  return unsupported("encodeKagemushaRecursiveSpendAppendRequest");
+}
+
+export function encodeKagemushaRecursiveSpendVerifyRequest() {
+  return unsupported("encodeKagemushaRecursiveSpendVerifyRequest");
+}
+
+export function encodeKagemushaRecursiveSpendRedeemRequest() {
+  return unsupported("encodeKagemushaRecursiveSpendRedeemRequest");
+}
+
+export function decodeKagemushaRecursiveSpendVerifyResult() {
+  return unsupported("decodeKagemushaRecursiveSpendVerifyResult");
+}
+
+export function decodeKagemushaRecursiveSpendBundle() {
+  return unsupported("decodeKagemushaRecursiveSpendBundle");
+}
+
+export function kagemushaRecursiveSpendInitTyped() {
+  return unsupported("kagemushaRecursiveSpendInitTyped");
+}
+
+export function kagemushaRecursiveSpendAppendTyped() {
+  return unsupported("kagemushaRecursiveSpendAppendTyped");
+}
+
+export function kagemushaRecursiveSpendVerifyTyped() {
+  return unsupported("kagemushaRecursiveSpendVerifyTyped");
+}
+
+export function kagemushaRecursiveSpendRedeemTyped() {
+  return unsupported("kagemushaRecursiveSpendRedeemTyped");
 }
 
 export function isPrivacyNativeAvailable() {

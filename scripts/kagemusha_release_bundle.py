@@ -8,6 +8,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 import stat
 import sys
@@ -59,6 +60,9 @@ ANDROID_SLOT_RELEASE_ARTIFACTS: tuple[tuple[str, str, str], ...] = (
 ANDROID_SIGNED_EVIDENCE_SUMMARY_REQUIRED_FIELDS = frozenset(
     (
         "signed_at_utc",
+        "device_family",
+        "device_model",
+        "device_codename",
         "artifact_sha256",
         "signer_public_key_sha256",
         *(
@@ -77,6 +81,9 @@ ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS = frozenset(
         "signer_public_key_sha256",
         *(digest_field for _, _, digest_field in ANDROID_SLOT_RELEASE_ARTIFACTS),
     )
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS = frozenset(
+    ("device_family", "device_model", "device_codename")
 )
 ANDROID_DUPLICATE_BINDING_SUMMARY_FIELDS = frozenset(
     ("device_fingerprint_sha256", "attestation_challenge_sha256")
@@ -272,12 +279,12 @@ def _blocker(code: str, message: str, **extra: Any) -> dict[str, Any]:
 
 
 def _safe_trusted_signer_public_key_sha256(
-    trusted_signer_public_keys: dict[str, Path],
+    trusted_signer_public_keys: Mapping[Any, Any] | None,
 ) -> list[str]:
     return sorted(
-        key
-        for key in trusted_signer_public_keys
-        if isinstance(key, str) and device_lab.SHA256_HEX_RE.fullmatch(key)
+        device_lab._trusted_signer_public_key_sha256_set(  # type: ignore[attr-defined]
+            trusted_signer_public_keys
+        )
     )
 
 
@@ -930,7 +937,7 @@ def _check_android_signed_evidence_summary_shape(
                 blockers.append(
                     _blocker(
                         "kagemusha_release_summary_android_signed_evidence_value",
-                        "Android signed-evidence summary field must be a non-empty string",
+                        f"Android signed-evidence summary field {field} must be a non-empty string",
                         slot=display_slot,
                         field=field,
                     )
@@ -1006,6 +1013,53 @@ def _check_android_signed_evidence_summary_shape(
                         )
                         for error in path_errors
                     )
+            elif field in ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS:
+                if (
+                    value != value.strip()
+                    or device_lab._contains_control_character(value)
+                    or device_lab.SECRET_RE.search(value)
+                    or (
+                        field == "device_family"
+                        and value not in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+                    )
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_signed_evidence_value",
+                            "Android signed-evidence summary identity field must be an exact non-secret string",
+                            slot=display_slot,
+                            field=field,
+                        )
+                    )
+        device_family = entry.get("device_family")
+        device_model = entry.get("device_model")
+        device_codename = entry.get("device_codename")
+        if (
+            isinstance(device_family, str)
+            and isinstance(device_model, str)
+            and isinstance(device_codename, str)
+            and device_model
+            and device_codename
+            and device_family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            and device_model == device_model.strip()
+            and device_codename == device_codename.strip()
+            and not device_lab._contains_control_character(device_model)
+            and not device_lab._contains_control_character(device_codename)
+            and not device_lab.SECRET_RE.search(device_model)
+            and not device_lab.SECRET_RE.search(device_codename)
+        ):
+            inferred_family = device_lab.infer_kagemusha_device_family(
+                device_model,
+                device_codename,
+            )
+            if inferred_family != device_family:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_android_signed_evidence_identity",
+                        "Android signed-evidence summary model/codename must match device family",
+                        slot=display_slot,
+                    )
+                )
     return blockers
 
 
@@ -1053,6 +1107,8 @@ def _check_android_duplicate_bindings_summary_shape(
                 )
             )
             continue
+        duplicate_value_sha256_by_value: dict[str, int] = {}
+        valid_value_sha256s: list[str] = []
         for index, entry in enumerate(entries):
             if not isinstance(entry, dict):
                 blockers.append(
@@ -1105,6 +1161,21 @@ def _check_android_duplicate_bindings_summary_shape(
                         index=index,
                     )
                 )
+            else:
+                assert isinstance(value_sha256, str)
+                prior_index = duplicate_value_sha256_by_value.get(value_sha256)
+                if prior_index is not None:
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_duplicate_bindings_value_inventory",
+                            "Android duplicate-bindings summary values must be unique",
+                            field=field,
+                            index=index,
+                            prior_index=prior_index,
+                        )
+                    )
+                duplicate_value_sha256_by_value[value_sha256] = index
+                valid_value_sha256s.append(value_sha256)
             slots = entry.get("slots")
             if not isinstance(slots, list) or not slots:
                 blockers.append(
@@ -1179,6 +1250,18 @@ def _check_android_duplicate_bindings_summary_shape(
                         index=index,
                     )
                 )
+        if (
+            valid_value_sha256s
+            and len(valid_value_sha256s) == len(entries)
+            and valid_value_sha256s != sorted(set(valid_value_sha256s))
+        ):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_duplicate_bindings_value_inventory",
+                    "Android duplicate-bindings summary values must be sorted by value_sha256",
+                    field=field,
+                )
+            )
     return blockers
 
 
@@ -1364,6 +1447,8 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                 required_fields = {
                     "required",
                     "device_family",
+                    "device_model",
+                    "device_codename",
                     "native_bridge_abi_version",
                     "signed_at_utc",
                     "signed_evidence_artifact_sha256",
@@ -1404,10 +1489,13 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                         )
                     )
                 device_family = kagemusha.get("device_family")
+                device_family_valid = (
+                    isinstance(device_family, str)
+                    and device_family
+                    in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+                )
                 if (
-                    not isinstance(device_family, str)
-                    or device_family
-                    not in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+                    not device_family_valid
                 ):
                     blockers.append(
                         _blocker(
@@ -1417,7 +1505,45 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                         )
                     )
                 else:
+                    assert isinstance(device_family, str)
                     slot_device_families.append(device_family)
+                identity_fields_valid = True
+                for field in ("device_model", "device_codename"):
+                    value = kagemusha.get(field)
+                    if (
+                        not isinstance(value, str)
+                        or not value
+                        or value != value.strip()
+                        or device_lab._contains_control_character(value)
+                        or device_lab.SECRET_RE.search(value)
+                    ):
+                        identity_fields_valid = False
+                        blockers.append(
+                            _blocker(
+                                "kagemusha_release_summary_android_slots_device_identity",
+                                f"Android readiness summary Kagemusha slot identity field {field} must be an exact non-secret string",
+                                slot=display_slot,
+                                field=field,
+                            )
+                        )
+                if device_family_valid and identity_fields_valid:
+                    device_model = kagemusha.get("device_model")
+                    device_codename = kagemusha.get("device_codename")
+                    assert isinstance(device_family, str)
+                    assert isinstance(device_model, str)
+                    assert isinstance(device_codename, str)
+                    inferred_family = device_lab.infer_kagemusha_device_family(
+                        device_model,
+                        device_codename,
+                    )
+                    if inferred_family != device_family:
+                        blockers.append(
+                            _blocker(
+                                "kagemusha_release_summary_android_slots_device_identity",
+                                "Android readiness summary Kagemusha slot model/codename must match device family",
+                                slot=display_slot,
+                            )
+                        )
                 abi_version = kagemusha.get("native_bridge_abi_version")
                 if (
                     isinstance(abi_version, bool)
@@ -1538,6 +1664,9 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                 )
                 if isinstance(summary_entry, dict):
                     bindings = {
+                        "device_family": "device_family",
+                        "device_model": "device_model",
+                        "device_codename": "device_codename",
                         "signed_at_utc": "signed_at_utc",
                         "signed_evidence_artifact_sha256": "artifact_sha256",
                         "signed_evidence_signer_public_key_sha256": (
@@ -2360,6 +2489,16 @@ def _compare_android_signed_evidence_summary(
         for field in sorted(ANDROID_SIGNED_EVIDENCE_SUMMARY_REQUIRED_FIELDS):
             if summary_entry.get(field) == recomputed_entry.get(field):
                 continue
+            if field in ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_android_signed_evidence_identity_drift",
+                        "Android signed-evidence identity summary no longer matches validated device-lab evidence",
+                        slot=_display_summary_field(raw_slot),
+                        field=field,
+                    )
+                )
+                continue
             blockers.append(
                 _blocker(
                     "kagemusha_release_summary_android_signed_evidence_drift",
@@ -2370,6 +2509,25 @@ def _compare_android_signed_evidence_summary(
                 )
             )
     return blockers
+
+
+def _without_android_identity_fields(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: item
+        for key, item in value.items()
+        if key not in ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS
+    }
+
+
+def _signed_evidence_without_android_identity_fields(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    return {
+        slot: _without_android_identity_fields(entry)
+        for slot, entry in value.items()
+    }
 
 
 def _compare_android_summary_binding(
@@ -2437,7 +2595,7 @@ def _compare_android_slots_summary(
     for slot in sorted(set(summary_slots) & set(recomputed_slots)):
         summary_entry = summary_slots[slot]
         recomputed_entry = recomputed_slots[slot]
-        for field in ("status", "errors", "present", "file_counts", "kagemusha"):
+        for field in ("status", "errors", "present", "file_counts"):
             if summary_entry.get(field) == recomputed_entry.get(field):
                 continue
             blockers.append(
@@ -2448,6 +2606,37 @@ def _compare_android_slots_summary(
                     field=field,
                 )
             )
+        summary_kagemusha = summary_entry.get("kagemusha")
+        recomputed_kagemusha = recomputed_entry.get("kagemusha")
+        if isinstance(summary_kagemusha, dict) and isinstance(
+            recomputed_kagemusha,
+            dict,
+        ):
+            for field in sorted(ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS):
+                if summary_kagemusha.get(field) == recomputed_kagemusha.get(field):
+                    continue
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_android_slots_identity_drift",
+                        "Android readiness summary slot identity no longer matches validated device-lab evidence",
+                        slot=_display_summary_field(slot),
+                        field=field,
+                    )
+                )
+            if _without_android_identity_fields(
+                summary_kagemusha
+            ) == _without_android_identity_fields(recomputed_kagemusha):
+                continue
+        if summary_kagemusha == recomputed_kagemusha:
+            continue
+        blockers.append(
+            _blocker(
+                "kagemusha_release_summary_android_slots_drift",
+                "Android readiness summary slot metadata no longer matches validated device-lab evidence",
+                slot=_display_summary_field(slot),
+                field="kagemusha",
+            )
+        )
     return blockers
 
 
@@ -3609,7 +3798,6 @@ def _check_release_bundle_expected_android_summary_binding(
         "covered_device_families",
         "missing_device_families",
         "duplicate_bindings",
-        "signed_evidence",
         "trusted_signer_public_key_sha256",
     ):
         if existing_android.get(field) == expected_android.get(field):
@@ -3620,6 +3808,38 @@ def _check_release_bundle_expected_android_summary_binding(
                 "Kagemusha release bundle Android summary field does not "
                 "match freshly computed device-lab evidence",
                 field=field,
+            )
+        )
+    existing_signed = existing_android.get("signed_evidence")
+    expected_signed = expected_android.get("signed_evidence")
+    if isinstance(existing_signed, dict) and isinstance(expected_signed, dict):
+        for slot in sorted(set(existing_signed) & set(expected_signed)):
+            entry = existing_signed.get(slot)
+            expected_entry = expected_signed.get(slot)
+            if not isinstance(entry, dict) or not isinstance(expected_entry, dict):
+                continue
+            for field in sorted(ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS):
+                if entry.get(field) == expected_entry.get(field):
+                    continue
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_android_signed_evidence_identity_binding",
+                        "Kagemusha release bundle Android signed-evidence identity does not match freshly computed device-lab evidence",
+                        field=field,
+                        item=_display_summary_field(slot),
+                    )
+                )
+        if _signed_evidence_without_android_identity_fields(
+            existing_signed
+        ) == _signed_evidence_without_android_identity_fields(expected_signed):
+            return blockers
+    if existing_signed != expected_signed:
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_android_summary_binding",
+                "Kagemusha release bundle Android summary field does not "
+                "match freshly computed device-lab evidence",
+                field="signed_evidence",
             )
         )
     return blockers

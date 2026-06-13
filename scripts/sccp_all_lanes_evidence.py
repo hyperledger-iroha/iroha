@@ -998,7 +998,7 @@ def _is_nonempty_string(value: Any) -> bool:
 def _decode_canonical_base64(value: str, *, label: str) -> bytes:
     try:
         raw = base64.b64decode(value, validate=True)
-    except (ValueError, binascii.Error):
+    except (TypeError, ValueError, binascii.Error):
         raise ValueError(f"{label} must be base64") from None
     if base64.b64encode(raw).decode("ascii") != value:
         raise ValueError(f"{label} must be canonical base64")
@@ -1130,6 +1130,80 @@ def _expect_role_hash_fields_are_distinct(
             errors.append(f"{label} {field} must not reuse {previous_field}")
         else:
             seen[raw] = field
+
+
+def _source_material_template_hashes(profile: LaneProfile) -> dict[str, bytes]:
+    """Return built-in source-material template hashes for a launch lane."""
+
+    if profile.chain == "eth":
+        module = _load_sibling_module("sccp_eth_source_bridge_evidence.py")
+        return {
+            field: module._evm_family_template_component_hash(
+                component_id,
+                component_kind,
+            )
+            for field, (component_id, component_kind) in (
+                module.ETH_TEMPLATE_COMPONENTS.items()
+            )
+        }
+    if profile.chain == "bsc":
+        module = _load_sibling_module("sccp_bsc_source_bridge_evidence.py")
+        return {
+            field: module._evm_family_template_component_hash(
+                component_id,
+                component_kind,
+            )
+            for field, (component_id, component_kind) in (
+                module.bsc_template_components().items()
+            )
+        }
+    if profile.chain == "sol":
+        module = _load_sibling_module("sccp_solana_source_state_evidence.py")
+        return module._template_component_hashes()
+    if profile.chain == "ton":
+        module = _load_sibling_module("sccp_ton_source_state_evidence.py")
+        return module._template_component_hashes()
+    if profile.chain == "tron":
+        module = _load_sibling_module("sccp_tron_source_bridge_evidence.py")
+        return {
+            field: module._tron_template_component_hash(component_id, component_kind)
+            for field, (component_id, component_kind) in (
+                module.TRON_TEMPLATE_COMPONENTS.items()
+            )
+        }
+    return {}
+
+
+def _reject_source_material_template_hashes(
+    errors: list[str],
+    profile: LaneProfile,
+    record: dict[str, Any],
+) -> None:
+    template_hashes = _source_material_template_hashes(profile)
+    for field, template_hash in template_hashes.items():
+        raw = _hex_bytes(record.get(field), byte_length=32)
+        if raw == template_hash:
+            errors.append(
+                f"{field} must be deployed evidence, not built-in template material"
+            )
+
+
+def _reject_source_adapter_audit_template_hashes(
+    errors: list[str],
+    profile: LaneProfile,
+    record: dict[str, Any],
+    fields: tuple[str, ...],
+) -> None:
+    template_hashes = _source_material_template_hashes(profile)
+    for field in fields:
+        raw = _hex_bytes(record.get(field), byte_length=32)
+        if raw is None:
+            continue
+        if any(raw == template_hash for template_hash in template_hashes.values()):
+            errors.append(
+                f"{field} must be deployed audit evidence, "
+                "not built-in template material"
+            )
 
 
 def _expect_distinct_byte_values(
@@ -1686,6 +1760,7 @@ def _check_source_material(profile: LaneProfile, record: dict[str, Any]) -> list
         SOURCE_VERIFIER_MATERIAL_ROLE_HASH_FIELDS,
         label="source verifier material role hash",
     )
+    _reject_source_material_template_hashes(errors, profile, record)
     return errors
 
 
@@ -1703,7 +1778,7 @@ def _check_tron_live_source_bridge_evidence(record: dict[str, Any]) -> list[str]
             if _is_nonempty_string(address)
             else None
         )
-    except (argparse.ArgumentTypeError, ValueError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         errors.append("TRON source bridge address metadata is invalid")
         observed_address = None
     if observed_address is None or not any(observed_address):
@@ -1748,7 +1823,7 @@ def _check_tron_live_source_bridge_evidence(record: dict[str, Any]) -> list[str]
                 label="TRON source bridge runtime bytecode metadata",
             )
             derived_hash = module.runtime_bytecode_hash(runtime)
-        except (argparse.ArgumentTypeError, ValueError):
+        except (argparse.ArgumentTypeError, TypeError, ValueError):
             errors.append("TRON source bridge runtime bytecode metadata is invalid")
         else:
             if bridge_code_hash is not None and derived_hash != bridge_code_hash:
@@ -1860,7 +1935,7 @@ def _check_evm_live_source_bridge_evidence(
                 label="EVM source bridge runtime bytecode metadata",
             )
             derived_bridge_code_hash = module.runtime_bytecode_hash(bridge_runtime)
-        except (argparse.ArgumentTypeError, ValueError):
+        except (argparse.ArgumentTypeError, TypeError, ValueError):
             errors.append("EVM source bridge runtime bytecode metadata is invalid")
         else:
             if (
@@ -2026,6 +2101,12 @@ def _check_deployment(
     if profile.solana_full_light_client_audit_required:
         for field in SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS:
             _expect_nonzero_hex(errors, record, field)
+        _reject_source_adapter_audit_template_hashes(
+            errors,
+            profile,
+            record,
+            SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS,
+        )
         errors.extend(_check_solana_full_light_client_gate(material, record))
     else:
         for field in SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS:
@@ -2034,6 +2115,12 @@ def _check_deployment(
     if profile.ton_full_light_client_audit_required:
         for field in TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS:
             _expect_nonzero_hex(errors, record, field)
+        _reject_source_adapter_audit_template_hashes(
+            errors,
+            profile,
+            record,
+            TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS,
+        )
         errors.extend(_check_ton_full_light_client_gate(material, record))
     else:
         for field in TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS:
@@ -2286,7 +2373,13 @@ def _check_chain_specific_source_evidence(
             )
         else:
             return [f"unsupported lane chain {profile.chain!r}"]
-    except (SystemExit, ValueError, RuntimeError):
+    except (
+        argparse.ArgumentTypeError,
+        SystemExit,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ):
         return [f"{profile.chain} source evidence rejected by canonical validator"]
     return []
 
@@ -2502,7 +2595,7 @@ def _check_evm_source_gate(
             "evm_source_gate_hash",
             byte_length=32,
         )
-    except (SystemExit, ValueError, RuntimeError):
+    except (SystemExit, TypeError, ValueError, RuntimeError):
         return ["EVM source gate cannot be recomputed"]
     if expected != configured:
         return ["evm_source_gate_hash does not match source and deployment material"]
@@ -2537,7 +2630,7 @@ def _check_solana_full_light_client_gate(
             "solana_full_light_client_gate_hash",
             byte_length=32,
         )
-    except (SystemExit, ValueError, RuntimeError):
+    except (SystemExit, TypeError, ValueError, RuntimeError):
         return ["Solana full light-client gate cannot be recomputed"]
     if expected != configured:
         return ["solana_full_light_client_gate_hash does not match source and audit material"]
@@ -2572,7 +2665,7 @@ def _check_ton_full_light_client_gate(
             "ton_full_light_client_gate_hash",
             byte_length=32,
         )
-    except (SystemExit, ValueError, RuntimeError):
+    except (SystemExit, TypeError, ValueError, RuntimeError):
         return ["TON full light-client gate cannot be recomputed"]
     if expected != configured:
         return ["ton_full_light_client_gate_hash does not match source and audit material"]
@@ -2597,7 +2690,7 @@ def _check_tron_dpos_source_gate(
             "tron_dpos_source_gate_hash",
             byte_length=32,
         )
-    except (SystemExit, ValueError, RuntimeError):
+    except (SystemExit, TypeError, ValueError, RuntimeError):
         return ["TRON DPoS source gate cannot be recomputed"]
     if expected != configured:
         return ["tron_dpos_source_gate_hash does not match source and deployment material"]
@@ -2765,7 +2858,7 @@ def _check_tron_source_bridge_config_hash(material: dict[str, Any]) -> list[str]
             "source_bridge_config_hash",
             byte_length=32,
         )
-    except (ValueError, RuntimeError):
+    except (SystemExit, TypeError, ValueError, RuntimeError):
         return ["TRON source bridge config hash cannot be recomputed"]
     if expected != configured:
         return ["source_bridge_config_hash does not match TRON bridge address, network id, and owner"]
@@ -2799,7 +2892,7 @@ def _check_eth_source_bridge_config_hash(material: dict[str, Any]) -> list[str]:
             "source_bridge_config_hash",
             byte_length=32,
         )
-    except (ValueError, RuntimeError):
+    except (SystemExit, TypeError, ValueError, RuntimeError):
         return ["ETH source bridge config hash cannot be recomputed"]
     if expected != configured:
         return [
@@ -2833,7 +2926,13 @@ def _check_source_record_hash_comments(
     errors: list[str] = []
     try:
         hashes = _canonical_source_record_hashes(profile, material, deployment)
-    except (SystemExit, ValueError, RuntimeError):
+    except (
+        argparse.ArgumentTypeError,
+        SystemExit,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ):
         return [f"{profile.chain} source record hash metadata cannot be recomputed"]
     _check_required_hash_comment(
         errors,
@@ -3096,7 +3195,7 @@ def _check_destination_binding(
 
     try:
         expected = _expected_destination_binding(profile, material, destination)
-    except (argparse.ArgumentTypeError, SystemExit, ValueError, RuntimeError):
+    except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):
         errors.append("destination binding cannot be recomputed")
         return errors, summary
 
@@ -3253,7 +3352,7 @@ def _check_tron_live_destination_verifier_evidence(
             record.get("verifier_identity"),
             label="verifier_identity",
         )
-    except (argparse.ArgumentTypeError, ValueError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         errors.append("TRON destination verifier address metadata is invalid")
         observed_address = None
         expected_address = None
@@ -3300,7 +3399,7 @@ def _check_tron_live_destination_verifier_evidence(
                 label="TRON destination verifier runtime bytecode metadata",
             )
             derived_hash = module.runtime_bytecode_hash(runtime)
-        except (argparse.ArgumentTypeError, ValueError):
+        except (argparse.ArgumentTypeError, TypeError, ValueError):
             errors.append(
                 "TRON destination verifier runtime bytecode metadata is invalid"
             )
@@ -3427,7 +3526,7 @@ def _check_evm_live_bridge_evidence(
                 label="EVM bridge runtime bytecode metadata",
             )
             derived_bridge_code_hash = module.runtime_bytecode_hash(bridge_runtime)
-        except (argparse.ArgumentTypeError, ValueError):
+        except (argparse.ArgumentTypeError, TypeError, ValueError):
             errors.append("EVM bridge runtime bytecode metadata is invalid")
         else:
             if (
@@ -3466,7 +3565,7 @@ def _check_evm_live_bridge_evidence(
                 label="EVM verifier runtime bytecode metadata",
             )
             derived_verifier_code_hash = module.runtime_bytecode_hash(verifier_runtime)
-        except (argparse.ArgumentTypeError, ValueError):
+        except (argparse.ArgumentTypeError, TypeError, ValueError):
             errors.append("EVM verifier runtime bytecode metadata is invalid")
         else:
             if (
@@ -3674,7 +3773,7 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
                 errors.append(
                     "Solana ProgramData account metadata must differ from verifier_identity"
                 )
-        except (argparse.ArgumentTypeError, ValueError):
+        except (argparse.ArgumentTypeError, TypeError, ValueError):
             errors.append("Solana ProgramData account is not canonical")
 
     program_account_data = decode_comment_base64(
@@ -3820,7 +3919,7 @@ def _check_solana_live_programdata_evidence(record: dict[str, Any]) -> list[str]
             derived_programdata_hash = module.solana_verifier_program_code_hash(
                 programdata_executable
             )
-        except (argparse.ArgumentTypeError, ValueError):
+        except (argparse.ArgumentTypeError, TypeError, ValueError):
             errors.append(
                 "Solana ProgramData executable base64 metadata is invalid"
             )
@@ -3953,7 +4052,7 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
             derived_code_boc_root_hash = ton_module.ton_boc_single_root_hash(
                 code_boc_bytes
             )
-        except (argparse.ArgumentTypeError, ValueError):
+        except (argparse.ArgumentTypeError, TypeError, ValueError):
             errors.append("TON verifier code BoC metadata is invalid")
         else:
             if (
@@ -3974,7 +4073,7 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
                         label="TON code BoC base64 metadata",
                     )
                     comment_root = ton_module.ton_boc_single_root_hash(comment_code_boc)
-                except (argparse.ArgumentTypeError, ValueError):
+                except (argparse.ArgumentTypeError, TypeError, ValueError):
                     errors.append("TON code BoC base64 metadata is invalid")
                 else:
                     if comment_code_boc != code_boc_bytes:
@@ -4006,7 +4105,7 @@ def _check_destination_verifier_identity(
             )
         else:
             return [f"unsupported destination chain {profile.chain!r}"]
-    except (argparse.ArgumentTypeError, SystemExit, ValueError, RuntimeError):
+    except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):
         return [f"verifier_identity is not canonical for {profile.chain}"]
     return []
 
@@ -4039,7 +4138,7 @@ def _check_route_allowlist(
             source_record_hashes,
             destination_binding,
         )
-    except ValueError:
+    except (SystemExit, TypeError, ValueError, RuntimeError):
         errors.append("route_allowlist_hash cannot be recomputed")
         return errors, summary
 
@@ -5241,7 +5340,7 @@ def _check_tron_route_canary_transaction_evidence(
             ),
             label="TRON destination verifier address",
         )
-    except (argparse.ArgumentTypeError, ValueError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         errors.append("TRON route canary verifier address metadata is invalid")
         verifier_address = None
     network_id = _exact_hex_bytes(
@@ -5499,7 +5598,7 @@ def _check_ton_route_canary_live_account_evidence(
             str(destination_record.get("verifier_identity")),
             label="TON route canary verifier identity",
         )
-    except (argparse.ArgumentTypeError, ValueError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         errors.append("TON route canary verifier identity is invalid")
         verifier_identity = None
     verifier_code_hash = _exact_hex_bytes(
@@ -5686,7 +5785,7 @@ def _check_solana_route_canary_live_program_evidence(
                 programdata_executable_base64,
                 label="Solana route canary ProgramData executable",
             )
-        except (argparse.ArgumentTypeError, ValueError):
+        except (argparse.ArgumentTypeError, TypeError, ValueError):
             errors.append("Solana route canary ProgramData executable is invalid")
 
     _expect_distinct_byte_values(
@@ -5745,7 +5844,7 @@ def _check_solana_route_canary_live_program_evidence(
             programdata_metadata=programdata_metadata,
             programdata_executable=programdata_executable,
         )
-    except (argparse.ArgumentTypeError, ValueError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         errors.append("Solana route canary live program metadata is invalid")
         return errors
     if evidence_hash != expected_hash:
@@ -6684,7 +6783,13 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]] | Any) -> 
                     material,
                     deployment,
                 )
-            except (SystemExit, ValueError, RuntimeError):
+            except (
+                argparse.ArgumentTypeError,
+                SystemExit,
+                TypeError,
+                ValueError,
+                RuntimeError,
+            ):
                 blockers.append("source record hashes cannot be recomputed")
 
         if destination is None:
@@ -6852,7 +6957,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         records = load_evidence_bundle(args.toml)
         summary = validate_evidence_bundle(records)
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP all-lanes evidence validation failed",

@@ -62,5 +62,5 @@ export PATH="${BRIDGE_LIBRARY_DIR}:${PATH}"
 
 "${DOTNET_BIN}" test \
   csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
-  --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests|FullyQualifiedName~PrivacyNativeTests|FullyQualifiedName~TransactionBuilderTests|FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiClientTests|FullyQualifiedName~SignedQueryBuilderTests|FullyQualifiedName~SignedIterableQueryBuilderTests|FullyQualifiedName~VerifyingKeyBackendTagTests" \
+  --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests|FullyQualifiedName~PrivacyNativeTests|FullyQualifiedName~TransactionBuilderTests|FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiClientTests|FullyQualifiedName~SignedQueryBuilderTests|FullyQualifiedName~SignedIterableQueryBuilderTests|FullyQualifiedName~VerifyingKeyBackendTagTests|FullyQualifiedName~ToriiIdentifierReceiptTests" \
   --logger "console;verbosity=minimal"

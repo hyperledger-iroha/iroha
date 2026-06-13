@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.client
 
 import java.nio.charset.StandardCharsets
 import java.util.Base64
+import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 
 /** Minimal JSON parser for Torii contract deploy/call responses. */
 object ContractJsonParser {
@@ -106,7 +107,7 @@ object ContractJsonParser {
         check(root["ok"] == true) { "multisig response.ok must be true" }
         return MultisigResponse(
             ok = true,
-            resolvedMultisigAccountId = requiredString(root["resolved_multisig_account_id"], "multisig response.resolved_multisig_account_id"),
+            resolvedMultisigAccountId = requiredExactAccountId(root["resolved_multisig_account_id"], "multisig response.resolved_multisig_account_id"),
             submitted = optionalBoolean(root["submitted"], "multisig response.submitted"),
             proposalId = optionalString(root["proposal_id"]),
             instructionsHash = if (root.containsKey("instructions_hash") && root["instructions_hash"] != null)
@@ -153,6 +154,22 @@ object ContractJsonParser {
         val string = optionalString(value)
         check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
         return string.trim()
+    }
+
+    private fun requiredExactAccountId(value: Any?, path: String): String {
+        val string = requiredExactString(value, path)
+        return try {
+            requireCanonicalI105Address(string, path)
+        } catch (ex: IllegalArgumentException) {
+            throw IllegalStateException("$path must be a canonical I105 account id", ex)
+        }
+    }
+
+    private fun requiredExactString(value: Any?, path: String): String {
+        val string = if (value is String) value else value?.toString()
+        check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
+        check(string.trim() == string) { "$path must not contain surrounding whitespace" }
+        return string
     }
 
     private fun optionalString(value: Any?): String? {

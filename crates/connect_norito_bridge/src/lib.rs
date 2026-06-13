@@ -74,6 +74,9 @@ use sorafs_car::{
 };
 use zeroize::Zeroizing;
 
+#[cfg(feature = "privacy-production-enabled")]
+mod privacy_production;
+
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 7;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
@@ -805,6 +808,10 @@ const PRIVACY_FFI_ERROR_MALFORMED_NORITO: u32 = 2;
 const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM: u32 = 3;
 const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED: u32 = 4;
 const PRIVACY_FFI_ERROR_INVALID_REQUEST: u32 = 5;
+#[cfg(feature = "privacy-production-enabled")]
+const PRIVACY_FFI_STATUS_OK: u32 = 0;
+#[cfg(feature = "privacy-production-enabled")]
+const PRIVACY_FFI_ERROR_PROVING_FAILED: u32 = 6;
 const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES: usize = 1024;
 const PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES: usize = 1024 * 1024;
@@ -1368,6 +1375,15 @@ struct PrivacyProductionLocalnetEvidenceV1 {
     chain_id: &'static str,
     smoke_passed: bool,
     smoke_tx_hash: &'static str,
+    lifecycle_passed: bool,
+    lifecycle_shield_tx_hash: &'static str,
+    lifecycle_hop_proof_hash: &'static str,
+    lifecycle_recursive_init_hash: &'static str,
+    lifecycle_recursive_init_verify_hash: &'static str,
+    lifecycle_recursive_append_hash: &'static str,
+    lifecycle_recursive_append_verify_hash: &'static str,
+    lifecycle_unshield_proof_hash: &'static str,
+    lifecycle_redeem_tx_hash: &'static str,
     replay_rejected: bool,
     replay_rejection_hash: &'static str,
     restart_persistence_checked: bool,
@@ -1757,6 +1773,14 @@ fn privacy_production_localnet_artifact_hashes_are_valid(
 ) -> bool {
     let hashes = [
         acceptance.smoke_tx_hash,
+        acceptance.lifecycle_shield_tx_hash,
+        acceptance.lifecycle_hop_proof_hash,
+        acceptance.lifecycle_recursive_init_hash,
+        acceptance.lifecycle_recursive_init_verify_hash,
+        acceptance.lifecycle_recursive_append_hash,
+        acceptance.lifecycle_recursive_append_verify_hash,
+        acceptance.lifecycle_unshield_proof_hash,
+        acceptance.lifecycle_redeem_tx_hash,
         acceptance.replay_rejection_hash,
         acceptance.restart_replay_rejection_hash,
         acceptance.state_recovery_hash,
@@ -1785,6 +1809,7 @@ fn privacy_production_localnet_evidence_is_valid(
         && privacy_text_field_is_portable_identifier(acceptance.chain_id)
         && !privacy_evidence_text_has_non_production_marker(acceptance.chain_id)
         && acceptance.smoke_passed
+        && acceptance.lifecycle_passed
         && acceptance.replay_rejected
         && acceptance.restart_persistence_checked
         && acceptance.restart_replay_rejected
@@ -2055,6 +2080,58 @@ fn privacy_production_gate_from_evidence(
                 evidence.performance_artifact_hash
             ),
             format!("localnet_run_id:{}", evidence.localnet_acceptance.run_id),
+            format!(
+                "localnet_smoke_tx_hash:{}",
+                evidence.localnet_acceptance.smoke_tx_hash
+            ),
+            format!(
+                "localnet_replay_rejection_hash:{}",
+                evidence.localnet_acceptance.replay_rejection_hash
+            ),
+            format!(
+                "localnet_restart_replay_rejection_hash:{}",
+                evidence.localnet_acceptance.restart_replay_rejection_hash
+            ),
+            format!(
+                "localnet_state_recovery_hash:{}",
+                evidence.localnet_acceptance.state_recovery_hash
+            ),
+            format!(
+                "localnet_lifecycle_shield_tx_hash:{}",
+                evidence.localnet_acceptance.lifecycle_shield_tx_hash
+            ),
+            format!(
+                "localnet_lifecycle_hop_proof_hash:{}",
+                evidence.localnet_acceptance.lifecycle_hop_proof_hash
+            ),
+            format!(
+                "localnet_lifecycle_recursive_init_hash:{}",
+                evidence.localnet_acceptance.lifecycle_recursive_init_hash
+            ),
+            format!(
+                "localnet_lifecycle_recursive_init_verify_hash:{}",
+                evidence
+                    .localnet_acceptance
+                    .lifecycle_recursive_init_verify_hash
+            ),
+            format!(
+                "localnet_lifecycle_recursive_append_hash:{}",
+                evidence.localnet_acceptance.lifecycle_recursive_append_hash
+            ),
+            format!(
+                "localnet_lifecycle_recursive_append_verify_hash:{}",
+                evidence
+                    .localnet_acceptance
+                    .lifecycle_recursive_append_verify_hash
+            ),
+            format!(
+                "localnet_lifecycle_unshield_proof_hash:{}",
+                evidence.localnet_acceptance.lifecycle_unshield_proof_hash
+            ),
+            format!(
+                "localnet_lifecycle_redeem_tx_hash:{}",
+                evidence.localnet_acceptance.lifecycle_redeem_tx_hash
+            ),
         ],
     }
 }
@@ -2515,7 +2592,7 @@ fn privacy_gate_missing_reasons_match_requirements(
 }
 
 fn privacy_ready_gate_audit_references_are_valid(audit_references: &[String]) -> bool {
-    if audit_references.len() != 7
+    if audit_references.len() != 19
         || privacy_string_vec_has_duplicates(audit_references)
         || !audit_references
             .iter()
@@ -2550,6 +2627,80 @@ fn privacy_ready_gate_audit_references_are_valid(audit_references: &[String]) ->
     let Some(localnet_run_id) = audit_references[6].strip_prefix("localnet_run_id:") else {
         return false;
     };
+    let Some(localnet_smoke_hash) = audit_references[7].strip_prefix("localnet_smoke_tx_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_replay_hash) =
+        audit_references[8].strip_prefix("localnet_replay_rejection_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_restart_replay_hash) =
+        audit_references[9].strip_prefix("localnet_restart_replay_rejection_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_state_recovery_hash) =
+        audit_references[10].strip_prefix("localnet_state_recovery_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_shield_hash) =
+        audit_references[11].strip_prefix("localnet_lifecycle_shield_tx_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_hop_hash) =
+        audit_references[12].strip_prefix("localnet_lifecycle_hop_proof_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_init_hash) =
+        audit_references[13].strip_prefix("localnet_lifecycle_recursive_init_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_init_verify_hash) =
+        audit_references[14].strip_prefix("localnet_lifecycle_recursive_init_verify_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_append_hash) =
+        audit_references[15].strip_prefix("localnet_lifecycle_recursive_append_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_append_verify_hash) =
+        audit_references[16].strip_prefix("localnet_lifecycle_recursive_append_verify_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_unshield_hash) =
+        audit_references[17].strip_prefix("localnet_lifecycle_unshield_proof_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_redeem_hash) =
+        audit_references[18].strip_prefix("localnet_lifecycle_redeem_tx_hash:")
+    else {
+        return false;
+    };
+
+    let localnet_hashes = [
+        localnet_smoke_hash,
+        localnet_replay_hash,
+        localnet_restart_replay_hash,
+        localnet_state_recovery_hash,
+        localnet_lifecycle_shield_hash,
+        localnet_lifecycle_hop_hash,
+        localnet_lifecycle_init_hash,
+        localnet_lifecycle_init_verify_hash,
+        localnet_lifecycle_append_hash,
+        localnet_lifecycle_append_verify_hash,
+        localnet_lifecycle_unshield_hash,
+        localnet_lifecycle_redeem_hash,
+    ];
 
     privacy_text_field_is_portable_identifier(chain_id)
         && !privacy_evidence_text_has_non_production_marker(chain_id)
@@ -2560,6 +2711,15 @@ fn privacy_ready_gate_audit_references_are_valid(audit_references: &[String]) ->
         && privacy_production_evidence_hash_is_valid(fuzz_hash)
         && privacy_production_evidence_hash_is_valid(performance_hash)
         && privacy_production_localnet_run_id_is_valid(localnet_run_id)
+        && localnet_hashes.iter().all(|hash| {
+            privacy_production_evidence_hash_is_valid(hash)
+                && !privacy_evidence_text_has_non_production_marker(hash)
+        })
+        && !localnet_hashes.iter().enumerate().any(|(index, hash)| {
+            localnet_hashes[(index + 1)..]
+                .iter()
+                .any(|other| other == hash)
+        })
 }
 
 fn privacy_production_gate_invariants_hold(
@@ -3178,11 +3338,21 @@ fn privacy_result_for_request(
             );
         }
 
-        privacy_production_disabled_result(&request)
+        #[cfg(feature = "privacy-production-enabled")]
+        {
+            privacy_production_dispatch(&request, operation)
+        }
+        #[cfg(not(feature = "privacy-production-enabled"))]
+        {
+            privacy_production_disabled_result(&request)
+        }
     })();
     privacy_clear_request_byte_fields(&mut request);
     result
 }
+
+#[cfg(feature = "privacy-production-enabled")]
+use privacy_production::privacy_production_dispatch;
 
 #[cfg(any(
     target_os = "android",
@@ -3603,31 +3773,41 @@ fn parse_identifier_receipt_value(value: JsonValue) -> BridgeResult<IdentifierRe
     })
 }
 
+fn validate_identifier_claim_account(
+    account: &AccountId,
+    receipt: &IdentifierResolutionReceipt,
+) -> BridgeResult<()> {
+    if &receipt.payload.account_id != account {
+        return Err(BridgeError::IdentifierReceipt);
+    }
+    Ok(())
+}
+
 fn parse_identifier_receipt_attestation(
     value: &JsonValue,
 ) -> BridgeResult<RamLfeReceiptAttestation> {
     let object = value.as_object().ok_or(BridgeError::IdentifierReceipt)?;
-    let kind = object
-        .get("kind")
-        .and_then(JsonValue::as_str)
-        .ok_or(BridgeError::IdentifierReceipt)?;
-    match kind {
+    let kind =
+        parse_identifier_exact_str(object.get("kind").ok_or(BridgeError::IdentifierReceipt)?)?;
+    match kind.as_str() {
         "signed" => parse_identifier_receipt_signature(object.get("signature"))
             .map(RamLfeReceiptAttestation::Signed),
         "proof" => {
-            let proof_backend = object
-                .get("proof_backend")
-                .and_then(JsonValue::as_str)
-                .ok_or(BridgeError::IdentifierReceipt)?;
-            let proof_b64 = object
-                .get("proof_b64")
-                .and_then(JsonValue::as_str)
-                .ok_or(BridgeError::IdentifierReceipt)?;
+            let proof_backend = parse_identifier_exact_str(
+                object
+                    .get("proof_backend")
+                    .ok_or(BridgeError::IdentifierReceipt)?,
+            )?;
+            let proof_b64 = parse_identifier_exact_str(
+                object
+                    .get("proof_b64")
+                    .ok_or(BridgeError::IdentifierReceipt)?,
+            )?;
             let bytes = b64gp::STANDARD
-                .decode(proof_b64.trim())
+                .decode(proof_b64)
                 .map_err(|_| BridgeError::IdentifierReceipt)?;
             Ok(RamLfeReceiptAttestation::Proof(ProofBox::new(
-                proof_backend.trim().to_owned(),
+                proof_backend,
                 bytes,
             )))
         }
@@ -3674,12 +3854,12 @@ fn parse_identifier_receipt_payload_value(
     )?;
     let uaid =
         parse_identifier_uaid_value(object.get("uaid").ok_or(BridgeError::IdentifierReceipt)?)?;
-    let account_id = object
-        .get("account_id")
-        .and_then(JsonValue::as_str)
-        .map(str::to_owned)
-        .ok_or(BridgeError::IdentifierReceipt)
-        .and_then(parse_account_id)?;
+    let account_id = parse_identifier_exact_str(
+        object
+            .get("account_id")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )
+    .and_then(|value| parse_account_id(value).map_err(|_| BridgeError::IdentifierReceipt))?;
 
     Ok(IdentifierResolutionReceiptPayload {
         policy_id,
@@ -3758,49 +3938,38 @@ fn parse_identifier_output_opening_value(
 fn parse_identifier_policy_id_value(
     value: &JsonValue,
 ) -> BridgeResult<iroha_data_model::identifier::IdentifierPolicyId> {
-    if let Some(literal) = value.as_str() {
-        return literal
-            .trim()
+    if value.as_str().is_some() {
+        return parse_identifier_exact_str(value)?
             .parse()
             .map_err(|_| BridgeError::IdentifierReceipt);
     }
     let object = value.as_object().ok_or(BridgeError::IdentifierReceipt)?;
-    let kind = object
-        .get("kind")
-        .and_then(JsonValue::as_str)
-        .ok_or(BridgeError::IdentifierReceipt)?;
-    let business_rule = object
-        .get("business_rule")
-        .and_then(JsonValue::as_str)
-        .ok_or(BridgeError::IdentifierReceipt)?;
-    format!("{}#{}", kind.trim(), business_rule.trim())
+    let kind =
+        parse_identifier_exact_str(object.get("kind").ok_or(BridgeError::IdentifierReceipt)?)?;
+    let business_rule = parse_identifier_exact_str(
+        object
+            .get("business_rule")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    format!("{}#{}", kind, business_rule)
         .parse()
         .map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn parse_identifier_program_id_value(value: &JsonValue) -> BridgeResult<RamLfeProgramId> {
-    if let Some(literal) = value.as_str() {
-        return literal
-            .trim()
+    if value.as_str().is_some() {
+        return parse_identifier_exact_str(value)?
             .parse()
             .map_err(|_| BridgeError::IdentifierReceipt);
     }
     let object = value.as_object().ok_or(BridgeError::IdentifierReceipt)?;
-    object
-        .get("name")
-        .and_then(JsonValue::as_str)
-        .ok_or(BridgeError::IdentifierReceipt)?
-        .trim()
+    parse_identifier_exact_str(object.get("name").ok_or(BridgeError::IdentifierReceipt)?)?
         .parse()
         .map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn parse_identifier_receipt_backend(value: &JsonValue) -> BridgeResult<RamLfeBackend> {
-    let backend = value
-        .as_str()
-        .ok_or(BridgeError::IdentifierReceipt)?
-        .trim()
-        .to_ascii_lowercase();
+    let backend = parse_identifier_exact_str(value)?;
     match backend.as_str() {
         "hkdf-sha3-512-prf-v1" => Ok(RamLfeBackend::HkdfSha3_512PrfV1),
         "bfv-affine-sha3-256-v1" => Ok(RamLfeBackend::BfvAffineSha3_256V1),
@@ -3812,15 +3981,15 @@ fn parse_identifier_receipt_backend(value: &JsonValue) -> BridgeResult<RamLfeBac
 fn parse_identifier_receipt_verification_mode(
     value: &JsonValue,
 ) -> BridgeResult<RamLfeVerificationMode> {
-    let mode = if let Some(literal) = value.as_str() {
-        literal.trim().to_ascii_lowercase()
+    let mode = if value.as_str().is_some() {
+        parse_identifier_exact_str(value)?
     } else {
-        value
-            .as_object()
-            .and_then(|object| object.get("mode"))
-            .and_then(JsonValue::as_str)
-            .map(|literal| literal.trim().to_ascii_lowercase())
-            .ok_or(BridgeError::IdentifierReceipt)?
+        parse_identifier_exact_str(
+            value
+                .as_object()
+                .and_then(|object| object.get("mode"))
+                .ok_or(BridgeError::IdentifierReceipt)?,
+        )?
     };
     match mode.as_str() {
         "signed" => Ok(RamLfeVerificationMode::Signed),
@@ -3829,18 +3998,25 @@ fn parse_identifier_receipt_verification_mode(
     }
 }
 
-fn parse_identifier_hash_str(value: &str) -> BridgeResult<Hash> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
+fn parse_identifier_exact_str(value: &JsonValue) -> BridgeResult<String> {
+    let raw = value.as_str().ok_or(BridgeError::IdentifierReceipt)?;
+    if raw.is_empty() || raw.trim() != raw {
         return Err(BridgeError::IdentifierReceipt);
     }
-    let body = if trimmed
+    Ok(raw.to_owned())
+}
+
+fn parse_identifier_hash_str(value: &str) -> BridgeResult<Hash> {
+    if value.is_empty() || value.trim() != value {
+        return Err(BridgeError::IdentifierReceipt);
+    }
+    let body = if value
         .get(..5)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("hash:"))
     {
-        norito::literal::parse("hash", trimmed).map_err(|_| BridgeError::IdentifierReceipt)?
+        norito::literal::parse("hash", value).map_err(|_| BridgeError::IdentifierReceipt)?
     } else {
-        trimmed
+        value
     };
     Hash::from_str(body).map_err(|_| BridgeError::IdentifierReceipt)
 }
@@ -3855,9 +4031,7 @@ fn parse_identifier_hash_value(value: &JsonValue) -> BridgeResult<Hash> {
 fn parse_identifier_opaque_id_value(
     value: &JsonValue,
 ) -> BridgeResult<iroha_data_model::account::OpaqueAccountId> {
-    value
-        .as_str()
-        .ok_or(BridgeError::IdentifierReceipt)?
+    parse_identifier_exact_str(value)?
         .parse()
         .map_err(|_| BridgeError::IdentifierReceipt)
 }
@@ -3865,9 +4039,7 @@ fn parse_identifier_opaque_id_value(
 fn parse_identifier_uaid_value(
     value: &JsonValue,
 ) -> BridgeResult<iroha_data_model::nexus::UniversalAccountId> {
-    value
-        .as_str()
-        .ok_or(BridgeError::IdentifierReceipt)?
+    parse_identifier_exact_str(value)?
         .parse()
         .map_err(|_| BridgeError::IdentifierReceipt)
 }
@@ -3949,14 +4121,13 @@ fn parse_identifier_execution_payload_value(
 }
 
 fn decode_identifier_receipt_hex(value: &str) -> BridgeResult<Vec<u8>> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
+    if value.is_empty() || value.trim() != value {
         return Err(BridgeError::IdentifierReceipt);
     }
-    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+    if value.starts_with("0x") || value.starts_with("0X") {
         return Err(BridgeError::IdentifierReceipt);
     }
-    hex::decode(trimmed).map_err(|_| BridgeError::IdentifierReceipt)
+    hex::decode(value).map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn write_optional_error(out_ptr: *mut *mut c_uchar, out_len: *mut c_ulong) {
@@ -4523,6 +4694,13 @@ fn parse_proof_attachment_from_json_bytes(
         return Err(BridgeError::ProofAttachment);
     }
     let slice = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
+    parse_proof_attachment_from_json_slice(slice)
+}
+
+fn parse_proof_attachment_from_json_slice(slice: &[u8]) -> BridgeResult<ProofAttachment> {
+    if slice.is_empty() {
+        return Err(BridgeError::ProofAttachment);
+    }
     let value =
         norito::json::from_slice::<JsonValue>(slice).map_err(|_| BridgeError::ProofAttachment)?;
     parse_proof_attachment_value(&value)
@@ -7745,12 +7923,12 @@ fn zk1_read_instance_columns(payload: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
     }
     let cols = u32::from_le_bytes(payload[..4].try_into().ok()?) as usize;
     let rows = u32::from_le_bytes(payload[4..8].try_into().ok()?) as usize;
-    if cols > ZK1_MAX_INST_COLS || rows > ZK1_MAX_INST_ROWS {
+    if cols == 0 || rows == 0 || cols > ZK1_MAX_INST_COLS || rows > ZK1_MAX_INST_ROWS {
         return None;
     }
     let values = &payload[8..];
     let expected_len = cols.checked_mul(rows)?.checked_mul(32)?;
-    if values.len() < expected_len {
+    if values.len() != expected_len {
         return None;
     }
     let mut columns = vec![Vec::with_capacity(rows); cols];
@@ -9236,6 +9414,56 @@ mod offline_note_prover_tests {
             }
         }
         append_zk1_tlv(buf, *b"I10P", &payload);
+    }
+
+    #[test]
+    fn zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads() {
+        let column = [0x31_u8; Hash::LENGTH];
+        let mut valid = Vec::with_capacity(8 + Hash::LENGTH);
+        valid.extend_from_slice(&1_u32.to_le_bytes());
+        valid.extend_from_slice(&1_u32.to_le_bytes());
+        valid.extend_from_slice(&column);
+
+        assert_eq!(
+            zk1_read_instance_columns(&valid).expect("valid one-column I10P"),
+            vec![vec![column]]
+        );
+
+        let mut trailing = valid.clone();
+        trailing.push(0xA5);
+        assert!(
+            zk1_read_instance_columns(&trailing).is_none(),
+            "I10P payloads with trailing bytes must not be partially decoded"
+        );
+
+        let truncated = &valid[..valid.len() - 1];
+        assert!(
+            zk1_read_instance_columns(truncated).is_none(),
+            "I10P payloads with missing scalar bytes must reject"
+        );
+
+        for (cols, rows, label) in [
+            (0_u32, 1_u32, "zero columns"),
+            (1_u32, 0_u32, "zero rows"),
+            (
+                u32::try_from(ZK1_MAX_INST_COLS + 1).expect("test cap fits"),
+                1_u32,
+                "too many columns",
+            ),
+            (
+                1_u32,
+                u32::try_from(ZK1_MAX_INST_ROWS + 1).expect("test cap fits"),
+                "too many rows",
+            ),
+        ] {
+            let mut payload = Vec::with_capacity(8);
+            payload.extend_from_slice(&cols.to_le_bytes());
+            payload.extend_from_slice(&rows.to_le_bytes());
+            assert!(
+                zk1_read_instance_columns(&payload).is_none(),
+                "{label} must reject before public-input projection"
+            );
+        }
     }
 
     fn sample_kagemusha_recursive_spend_bundle() -> KagemushaRecursiveSpendBundleV1 {
@@ -17809,7 +18037,7 @@ mod accel_tests {
         algorithm: Option<Algorithm>,
     ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
         let chain = cstring("test-chain");
-        let (authority, private) = sample_account("bank", 0);
+        let (authority, private) = sample_account("bank", 1);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let amount = cstring("7");
         let note_commitment = [0x33_u8; 32];
@@ -18500,7 +18728,7 @@ mod accel_tests {
     fn transfer_encoder_success() {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
-        let (authority, private) = sample_account("bank", 0);
+        let (authority, private) = sample_account("bank", 1);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
         let destination = sample_destination("bank", 1);
@@ -19092,6 +19320,54 @@ mod accel_tests {
         assert_ne!(out_hash, [0u8; 32], "hash should be populated");
         unsafe {
             free(out_signed_ptr as *mut _);
+        }
+    }
+
+    #[test]
+    fn unshield_encoder_path_preserves_private_change_outputs() {
+        let _guard = chain_guard();
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let (authority, private) = sample_account("bank", 1);
+        let authority = parse_account_id(authority.to_str().expect("account").to_owned())
+            .expect("parse authority");
+        let private_key = parse_private_key(&private).expect("parse private key");
+        let asset_definition =
+            parse_asset_definition(asset_definition_literal("bank", "usd")).expect("asset");
+        let destination = authority.clone();
+        let input = [0x11_u8; 32];
+        let output = [0x22_u8; 32];
+        let proof = parse_proof_attachment_from_json_slice(
+            br#"{"backend":"groth16","proof_b64":"AA==","vk_ref":{"backend":"groth16","name":"vk1"}}"#,
+        )
+        .expect("proof");
+
+        let (signed_bytes, hash_bytes) =
+            encode_asset_transaction(chain_id, authority, 1, None, private_key, || {
+                let instruction = zk::Unshield::new_with_outputs(
+                    asset_definition,
+                    destination,
+                    7,
+                    vec![input],
+                    vec![output],
+                    proof,
+                    Some([0x33_u8; 32]),
+                );
+                Executable::from([InstructionBox::from(instruction)])
+            });
+        let signed = decode_signed_transaction(&signed_bytes).expect("decode signed transaction");
+        assert_eq!(hash_bytes, *signed.hash().as_ref());
+        match signed.instructions() {
+            Executable::Instructions(instructions) => {
+                assert_eq!(instructions.len(), 1);
+                let unshield = instructions[0]
+                    .as_any()
+                    .downcast_ref::<zk::Unshield>()
+                    .expect("unshield instruction");
+                assert_eq!(unshield.inputs, vec![input]);
+                assert_eq!(unshield.outputs, vec![output]);
+                assert_eq!(unshield.root_hint, Some([0x33_u8; 32]));
+            }
+            other => panic!("unexpected executable: {other:?}"),
         }
     }
 
@@ -20039,6 +20315,7 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key(key_slice)?;
         let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;
+        validate_identifier_claim_account(&account, &receipt)?;
 
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
@@ -20097,6 +20374,7 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
         let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;
+        validate_identifier_claim_account(&account, &receipt)?;
 
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
             chain_id,
@@ -20848,6 +21126,449 @@ fn java_native_verify_detached(
         Err(message) => {
             throw_java_illegal_argument(env, message);
             0
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_text_array(
+    env: &mut jni::JNIEnv<'_>,
+    array: &jni::objects::JByteArray<'_>,
+    context: &str,
+) -> Result<String, String> {
+    let mut bytes = read_java_byte_array(env, array, context)
+        .ok_or_else(|| format!("invalid {context} bytes"))?;
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) if !text.trim().is_empty() && text.trim() == text => text.to_owned(),
+        Ok(_) => {
+            bytes.fill(0);
+            return Err(format!(
+                "{context} must be non-empty without surrounding whitespace"
+            ));
+        }
+        Err(_) => {
+            bytes.fill(0);
+            return Err(format!("{context} must be UTF-8"));
+        }
+    };
+    bytes.fill(0);
+    Ok(text)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_optional_text_array(
+    env: &mut jni::JNIEnv<'_>,
+    array: &jni::objects::JByteArray<'_>,
+    present: jni::sys::jboolean,
+    context: &str,
+) -> Result<Option<String>, String> {
+    if present == 0 {
+        return Ok(None);
+    }
+    java_text_array(env, array, context).map(Some)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_fixed_array<const N: usize>(
+    env: &mut jni::JNIEnv<'_>,
+    array: &jni::objects::JByteArray<'_>,
+    context: &str,
+) -> Result<[u8; N], String> {
+    let bytes =
+        read_java_byte_array(env, array, context).ok_or_else(|| format!("invalid {context}"))?;
+    if bytes.len() != N {
+        return Err(format!("{context} must be exactly {N} bytes"));
+    }
+    let mut out = [0u8; N];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_fixed_32_chunks(
+    bytes: &[u8],
+    require_non_empty: bool,
+    context: &str,
+) -> Result<Vec<[u8; 32]>, String> {
+    if bytes.is_empty() {
+        if require_non_empty {
+            return Err(format!("{context} must contain at least one 32-byte entry"));
+        }
+        return Ok(Vec::new());
+    }
+    if !bytes.len().is_multiple_of(32) {
+        return Err(format!("{context} length must be a multiple of 32 bytes"));
+    }
+    Ok(bytes
+        .chunks_exact(32)
+        .map(|chunk| {
+            let mut out = [0u8; 32];
+            out.copy_from_slice(chunk);
+            out
+        })
+        .collect())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_optional_root_hint(bytes: &[u8]) -> Result<Option<[u8; 32]>, String> {
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    if bytes.len() != 32 {
+        return Err("rootHint must be exactly 32 bytes when provided".to_owned());
+    }
+    let mut root = [0u8; 32];
+    root.copy_from_slice(bytes);
+    Ok(Some(root))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_verifying_key_id(
+    value: Option<String>,
+    context: &str,
+) -> Result<Option<VerifyingKeyId>, String> {
+    value
+        .map(|text| {
+            parse_verifying_key_id_value(&text)
+                .map_err(|_| format!("{context} must use backend:name syntax"))
+        })
+        .transpose()
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_private_key(
+    algorithm_code: jni::sys::jint,
+    private_key: &jni::objects::JByteArray<'_>,
+    env: &mut jni::JNIEnv<'_>,
+) -> Result<PrivateKey, String> {
+    let algorithm = parse_algorithm_code(algorithm_code as u8)
+        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let mut private_bytes = read_java_byte_array(env, private_key, "privateKey")
+        .ok_or_else(|| "invalid private key bytes".to_owned())?;
+    let key = parse_private_key_with_algorithm(&private_bytes, algorithm)
+        .map_err(|_| "invalid private key bytes".to_owned());
+    private_bytes.fill(0);
+    key
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_signed_transaction_pair(
+    env: &mut jni::JNIEnv<'_>,
+    signed_bytes: &[u8],
+    hash_bytes: &[u8; 32],
+) -> Result<jni::sys::jobjectArray, String> {
+    let signed_array = env
+        .byte_array_from_slice(signed_bytes)
+        .map_err(|err| err.to_string())?;
+    let hash_array = env
+        .byte_array_from_slice(hash_bytes)
+        .map_err(|err| err.to_string())?;
+    let byte_array_class = env.find_class("[B").map_err(|err| err.to_string())?;
+    let array = env
+        .new_object_array(2, byte_array_class, jni::objects::JObject::null())
+        .map_err(|err| err.to_string())?;
+    env.set_object_array_element(&array, 0, &signed_array)
+        .map_err(|err| err.to_string())?;
+    env.set_object_array_element(&array, 1, &hash_array)
+        .map_err(|err| err.to_string())?;
+    Ok(array.into_raw())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::too_many_arguments)]
+fn java_native_encode_shield_signed_transaction(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    from_account: jni::objects::JByteArray<'_>,
+    amount: jni::objects::JByteArray<'_>,
+    note_commitment: jni::objects::JByteArray<'_>,
+    payload_ephemeral: jni::objects::JByteArray<'_>,
+    payload_nonce: jni::objects::JByteArray<'_>,
+    payload_ciphertext: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        if creation_time_ms < 0 || ttl_ms < 0 {
+            return Err("creationTimeMs and ttlMs must be non-negative".to_owned());
+        }
+        let chain_id: ChainId = java_text_array(env, &chain_id, "chainId")?
+            .parse()
+            .map_err(|_| "invalid chainId".to_owned())?;
+        let authority = parse_account_id(java_text_array(env, &authority, "authority")?)
+            .map_err(|_| "invalid authority".to_owned())?;
+        let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
+            .map_err(|_| "invalid asset".to_owned())?;
+        let from_account = parse_account_id(java_text_array(env, &from_account, "from")?)
+            .map_err(|_| "invalid from".to_owned())?;
+        let amount = parse_amount_u128(java_text_array(env, &amount, "amount")?)
+            .map_err(|_| "invalid amount".to_owned())?;
+        let note_commitment = java_fixed_array::<32>(env, &note_commitment, "noteCommitment")?;
+        let ephemeral =
+            java_fixed_array::<32>(env, &payload_ephemeral, "payloadEphemeralPublicKey")?;
+        let nonce = java_fixed_array::<24>(env, &payload_nonce, "payloadNonce")?;
+        let ciphertext = read_java_byte_array(env, &payload_ciphertext, "payloadCiphertext")
+            .ok_or_else(|| "invalid payload ciphertext".to_owned())?;
+        let payload = build_confidential_encrypted_payload(ephemeral, nonce, ciphertext)
+            .map_err(|_| "invalid confidential encrypted payload".to_owned())?;
+        let private_key = java_private_key(algorithm_code, &private_key, env)?;
+        let ttl =
+            parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
+        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+            chain_id,
+            authority,
+            creation_time_ms as u64,
+            ttl,
+            private_key,
+            || {
+                let instruction = zk::Shield::new(
+                    asset_definition,
+                    from_account,
+                    amount,
+                    note_commitment,
+                    payload,
+                );
+                Executable::from([InstructionBox::from(instruction)])
+            },
+        )
+        .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
+        java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::too_many_arguments)]
+fn java_native_encode_unshield_signed_transaction(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    destination: jni::objects::JByteArray<'_>,
+    public_amount: jni::objects::JByteArray<'_>,
+    inputs: jni::objects::JByteArray<'_>,
+    outputs: jni::objects::JByteArray<'_>,
+    proof_json: jni::objects::JByteArray<'_>,
+    root_hint: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        if creation_time_ms < 0 || ttl_ms < 0 {
+            return Err("creationTimeMs and ttlMs must be non-negative".to_owned());
+        }
+        let chain_id: ChainId = java_text_array(env, &chain_id, "chainId")?
+            .parse()
+            .map_err(|_| "invalid chainId".to_owned())?;
+        let authority = parse_account_id(java_text_array(env, &authority, "authority")?)
+            .map_err(|_| "invalid authority".to_owned())?;
+        let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
+            .map_err(|_| "invalid asset".to_owned())?;
+        let destination = parse_account_id(java_text_array(env, &destination, "to")?)
+            .map_err(|_| "invalid to".to_owned())?;
+        let public_amount =
+            parse_amount_u128(java_text_array(env, &public_amount, "publicAmount")?)
+                .map_err(|_| "invalid publicAmount".to_owned())?;
+        let inputs_bytes = read_java_byte_array(env, &inputs, "inputs")
+            .ok_or_else(|| "invalid inputs".to_owned())?;
+        let outputs_bytes = read_java_byte_array(env, &outputs, "outputs")
+            .ok_or_else(|| "invalid outputs".to_owned())?;
+        let inputs = java_fixed_32_chunks(&inputs_bytes, true, "inputs")?;
+        let outputs = java_fixed_32_chunks(&outputs_bytes, false, "outputs")?;
+        let proof_bytes = read_java_byte_array(env, &proof_json, "proofJson")
+            .ok_or_else(|| "invalid proofJson".to_owned())?;
+        let proof = parse_proof_attachment_from_json_slice(&proof_bytes)
+            .map_err(|_| "invalid proof attachment".to_owned())?;
+        let root_hint_bytes = read_java_byte_array(env, &root_hint, "rootHint")
+            .ok_or_else(|| "invalid rootHint".to_owned())?;
+        let root_hint = java_optional_root_hint(&root_hint_bytes)?;
+        let private_key = java_private_key(algorithm_code, &private_key, env)?;
+        let ttl =
+            parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
+        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+            chain_id,
+            authority,
+            creation_time_ms as u64,
+            ttl,
+            private_key,
+            || {
+                let instruction = zk::Unshield::new_with_outputs(
+                    asset_definition,
+                    destination,
+                    public_amount,
+                    inputs,
+                    outputs,
+                    proof,
+                    root_hint,
+                );
+                Executable::from([InstructionBox::from(instruction)])
+            },
+        )
+        .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
+        java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::too_many_arguments)]
+fn java_native_encode_register_zk_asset_signed_transaction(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    mode_code: jni::sys::jint,
+    allow_shield: jni::sys::jboolean,
+    allow_unshield: jni::sys::jboolean,
+    vk_transfer: jni::objects::JByteArray<'_>,
+    vk_transfer_present: jni::sys::jboolean,
+    vk_unshield: jni::objects::JByteArray<'_>,
+    vk_unshield_present: jni::sys::jboolean,
+    vk_shield: jni::objects::JByteArray<'_>,
+    vk_shield_present: jni::sys::jboolean,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        if creation_time_ms < 0 || ttl_ms < 0 {
+            return Err("creationTimeMs and ttlMs must be non-negative".to_owned());
+        }
+        let chain_id: ChainId = java_text_array(env, &chain_id, "chainId")?
+            .parse()
+            .map_err(|_| "invalid chainId".to_owned())?;
+        let authority = parse_account_id(java_text_array(env, &authority, "authority")?)
+            .map_err(|_| "invalid authority".to_owned())?;
+        let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
+            .map_err(|_| "invalid asset".to_owned())?;
+        let mode = parse_zk_asset_mode(mode_code as u8).map_err(|_| "invalid mode".to_owned())?;
+        let vk_transfer = java_verifying_key_id(
+            java_optional_text_array(
+                env,
+                &vk_transfer,
+                vk_transfer_present,
+                "transferVerifyingKey",
+            )?,
+            "transferVerifyingKey",
+        )?;
+        let vk_unshield = java_verifying_key_id(
+            java_optional_text_array(
+                env,
+                &vk_unshield,
+                vk_unshield_present,
+                "unshieldVerifyingKey",
+            )?,
+            "unshieldVerifyingKey",
+        )?;
+        let vk_shield = java_verifying_key_id(
+            java_optional_text_array(env, &vk_shield, vk_shield_present, "shieldVerifyingKey")?,
+            "shieldVerifyingKey",
+        )?;
+        let private_key = java_private_key(algorithm_code, &private_key, env)?;
+        let ttl =
+            parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
+        let register = zk::RegisterZkAsset::new(
+            asset_definition,
+            mode,
+            allow_shield != 0,
+            allow_unshield != 0,
+            vk_transfer,
+            vk_unshield,
+            vk_shield,
+        );
+        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+            chain_id,
+            authority,
+            creation_time_ms as u64,
+            ttl,
+            private_key,
+            move || Executable::from([InstructionBox::from(register)]),
+        )
+        .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
+        java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
         }
     }
 }
@@ -21772,6 +22493,147 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     target_os = "macos",
     target_os = "windows"
 ))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeShieldSignedTransaction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    from_account: jni::objects::JByteArray<'_>,
+    amount: jni::objects::JByteArray<'_>,
+    note_commitment: jni::objects::JByteArray<'_>,
+    payload_ephemeral: jni::objects::JByteArray<'_>,
+    payload_nonce: jni::objects::JByteArray<'_>,
+    payload_ciphertext: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_encode_shield_signed_transaction(
+        &mut env,
+        algorithm_code,
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        asset,
+        from_account,
+        amount,
+        note_commitment,
+        payload_ephemeral,
+        payload_nonce,
+        payload_ciphertext,
+        private_key,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeUnshieldSignedTransaction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    destination: jni::objects::JByteArray<'_>,
+    public_amount: jni::objects::JByteArray<'_>,
+    inputs: jni::objects::JByteArray<'_>,
+    outputs: jni::objects::JByteArray<'_>,
+    proof_json: jni::objects::JByteArray<'_>,
+    root_hint: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_encode_unshield_signed_transaction(
+        &mut env,
+        algorithm_code,
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        asset,
+        destination,
+        public_amount,
+        inputs,
+        outputs,
+        proof_json,
+        root_hint,
+        private_key,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeRegisterZkAssetSignedTransaction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    mode_code: jni::sys::jint,
+    allow_shield: jni::sys::jboolean,
+    allow_unshield: jni::sys::jboolean,
+    vk_transfer: jni::objects::JByteArray<'_>,
+    vk_transfer_present: jni::sys::jboolean,
+    vk_unshield: jni::objects::JByteArray<'_>,
+    vk_unshield_present: jni::sys::jboolean,
+    vk_shield: jni::objects::JByteArray<'_>,
+    vk_shield_present: jni::sys::jboolean,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_encode_register_zk_asset_signed_transaction(
+        &mut env,
+        algorithm_code,
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        asset,
+        mode_code,
+        allow_shield,
+        allow_unshield,
+        vk_transfer,
+        vk_transfer_present,
+        vk_unshield,
+        vk_unshield_present,
+        vk_shield,
+        vk_shield_present,
+        private_key,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativePublicKeyFromPrivate(
@@ -21835,6 +22697,147 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     signature: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jboolean {
     java_native_verify_detached(&mut env, algorithm_code, public_key, message, signature)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeShieldSignedTransaction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    from_account: jni::objects::JByteArray<'_>,
+    amount: jni::objects::JByteArray<'_>,
+    note_commitment: jni::objects::JByteArray<'_>,
+    payload_ephemeral: jni::objects::JByteArray<'_>,
+    payload_nonce: jni::objects::JByteArray<'_>,
+    payload_ciphertext: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_encode_shield_signed_transaction(
+        &mut env,
+        algorithm_code,
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        asset,
+        from_account,
+        amount,
+        note_commitment,
+        payload_ephemeral,
+        payload_nonce,
+        payload_ciphertext,
+        private_key,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeUnshieldSignedTransaction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    destination: jni::objects::JByteArray<'_>,
+    public_amount: jni::objects::JByteArray<'_>,
+    inputs: jni::objects::JByteArray<'_>,
+    outputs: jni::objects::JByteArray<'_>,
+    proof_json: jni::objects::JByteArray<'_>,
+    root_hint: jni::objects::JByteArray<'_>,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_encode_unshield_signed_transaction(
+        &mut env,
+        algorithm_code,
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        asset,
+        destination,
+        public_amount,
+        inputs,
+        outputs,
+        proof_json,
+        root_hint,
+        private_key,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeRegisterZkAssetSignedTransaction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    chain_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    ttl_ms: jni::sys::jlong,
+    ttl_present: jni::sys::jboolean,
+    asset: jni::objects::JByteArray<'_>,
+    mode_code: jni::sys::jint,
+    allow_shield: jni::sys::jboolean,
+    allow_unshield: jni::sys::jboolean,
+    vk_transfer: jni::objects::JByteArray<'_>,
+    vk_transfer_present: jni::sys::jboolean,
+    vk_unshield: jni::objects::JByteArray<'_>,
+    vk_unshield_present: jni::sys::jboolean,
+    vk_shield: jni::objects::JByteArray<'_>,
+    vk_shield_present: jni::sys::jboolean,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_encode_register_zk_asset_signed_transaction(
+        &mut env,
+        algorithm_code,
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_ms,
+        ttl_present,
+        asset,
+        mode_code,
+        allow_shield,
+        allow_unshield,
+        vk_transfer,
+        vk_transfer_present,
+        vk_unshield,
+        vk_unshield_present,
+        vk_shield,
+        vk_shield_present,
+        private_key,
+    )
 }
 
 #[cfg(any(
@@ -24484,6 +25487,17 @@ mod tests {
 
     use super::*;
 
+    #[cfg(not(feature = "privacy-production-enabled"))]
+    const PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE: u32 =
+        PRIVACY_FFI_ERROR_PRODUCTION_DISABLED;
+    #[cfg(feature = "privacy-production-enabled")]
+    const PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_INVALID_REQUEST;
+    #[cfg(not(feature = "privacy-production-enabled"))]
+    const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 =
+        PRIVACY_FFI_ERROR_PRODUCTION_DISABLED;
+    #[cfg(feature = "privacy-production-enabled")]
+    const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PROVING_FAILED;
+
     struct ResetConfig(AccelerationConfig);
 
     impl Drop for ResetConfig {
@@ -26077,6 +27091,22 @@ mod tests {
         "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
     const PRIVACY_TEST_PRODUCTION_STATE_RECOVERY_HASH: &str =
         "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_SHIELD_HASH: &str =
+        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_HOP_PROOF_HASH: &str =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_INIT_HASH: &str =
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_INIT_VERIFY_HASH: &str =
+        "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_APPEND_HASH: &str =
+        "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_APPEND_VERIFY_HASH: &str =
+        "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_UNSHIELD_HASH: &str =
+        "sha256:6666666666666666666666666666666666666666666666666666666666666666";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_REDEEM_HASH: &str =
+        "sha256:7777777777777777777777777777777777777777777777777777777777777777";
     const PRIVACY_TEST_PRODUCTION_SIGNATURE: &str = "ed25519:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const PRIVACY_TEST_UPPERCASE_PRODUCTION_SIGNATURE: &str = "ed25519:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
@@ -26181,6 +27211,17 @@ mod tests {
                 chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
                 smoke_passed: true,
                 smoke_tx_hash: PRIVACY_TEST_PRODUCTION_SMOKE_HASH,
+                lifecycle_passed: true,
+                lifecycle_shield_tx_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_SHIELD_HASH,
+                lifecycle_hop_proof_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_HOP_PROOF_HASH,
+                lifecycle_recursive_init_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_INIT_HASH,
+                lifecycle_recursive_init_verify_hash:
+                    PRIVACY_TEST_PRODUCTION_LIFECYCLE_INIT_VERIFY_HASH,
+                lifecycle_recursive_append_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_APPEND_HASH,
+                lifecycle_recursive_append_verify_hash:
+                    PRIVACY_TEST_PRODUCTION_LIFECYCLE_APPEND_VERIFY_HASH,
+                lifecycle_unshield_proof_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_UNSHIELD_HASH,
+                lifecycle_redeem_tx_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_REDEEM_HASH,
                 replay_rejected: true,
                 replay_rejection_hash: PRIVACY_TEST_PRODUCTION_REPLAY_HASH,
                 restart_persistence_checked: true,
@@ -26497,7 +27538,7 @@ mod tests {
                 algorithm.production_gate.required_gates,
                 privacy_required_production_gate_keys(entry),
             );
-            assert_eq!(algorithm.production_gate.audit_references.len(), 7);
+            assert_eq!(algorithm.production_gate.audit_references.len(), 19);
             for status in &algorithm.production_gate.gates {
                 assert_eq!(
                     status.passed,
@@ -26603,6 +27644,16 @@ mod tests {
         });
         assert_zk_ace_evidence_rejected("bad localnet smoke hash", |row| {
             row.localnet_acceptance.smoke_tx_hash = "sha256:not-a-hex-digest";
+        });
+        assert_zk_ace_evidence_rejected("localnet lifecycle failure", |row| {
+            row.localnet_acceptance.lifecycle_passed = false;
+        });
+        assert_zk_ace_evidence_rejected("bad localnet lifecycle shield hash", |row| {
+            row.localnet_acceptance.lifecycle_shield_tx_hash = "sha256:not-a-hex-digest";
+        });
+        assert_zk_ace_evidence_rejected("reused localnet lifecycle hash", |row| {
+            row.localnet_acceptance.lifecycle_redeem_tx_hash =
+                row.localnet_acceptance.lifecycle_unshield_proof_hash;
         });
         assert_zk_ace_evidence_rejected("reused localnet replay hash", |row| {
             row.localnet_acceptance.replay_rejection_hash = row.localnet_acceptance.smoke_tx_hash;
@@ -26734,6 +27785,22 @@ mod tests {
         assert_privacy_evidence_rejected_for_all_rows("bad localnet smoke hash", |row| {
             row.localnet_acceptance.smoke_tx_hash = "sha256:not-a-hex-digest";
         });
+        assert_privacy_evidence_rejected_for_all_rows("localnet lifecycle failure", |row| {
+            row.localnet_acceptance.lifecycle_passed = false;
+        });
+        assert_privacy_evidence_rejected_for_all_rows(
+            "bad localnet lifecycle append hash",
+            |row| {
+                row.localnet_acceptance.lifecycle_recursive_append_hash = "sha256:not-a-hex-digest";
+            },
+        );
+        assert_privacy_evidence_rejected_for_all_rows(
+            "reused localnet lifecycle proof hash",
+            |row| {
+                row.localnet_acceptance.lifecycle_hop_proof_hash =
+                    row.localnet_acceptance.lifecycle_shield_tx_hash;
+            },
+        );
         assert_privacy_evidence_rejected_for_all_rows("replay acceptance", |row| {
             row.localnet_acceptance.replay_rejected = false;
         });
@@ -26956,7 +28023,7 @@ mod tests {
             norito::decode_from_bytes(&build_result_archive).expect("decode build result");
         assert_eq!(
             build_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
+            PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE
         );
 
         let mut verify_request = privacy_request(
@@ -26994,8 +28061,111 @@ mod tests {
             norito::decode_from_bytes(&verify_result_archive).expect("decode verify result");
         assert_eq!(
             verify_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
+            PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE
         );
+    }
+
+    #[cfg(feature = "privacy-production-enabled")]
+    #[test]
+    fn privacy_ffi_build_then_verify_emits_ok_proof_archive() {
+        use crate::privacy_production::test_fixtures::{
+            valid_transfer_witness_bytes, valid_unshield_witness_bytes,
+        };
+
+        let cases = [
+            (
+                "confidential-transfer-v2",
+                "buildConfidentialTransferProofV2",
+                valid_transfer_witness_bytes(),
+            ),
+            (
+                "unshield",
+                "buildConfidentialUnshieldProofV3",
+                valid_unshield_witness_bytes(),
+            ),
+        ];
+
+        for (algorithm_id, entrypoint, witness) in cases {
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let mut build_request = privacy_request(algorithm_id, entrypoint, Vec::new());
+            build_request.witness = witness;
+            let build_archive = public_privacy_request_archive(&build_request);
+            let build_rc = unsafe {
+                iroha_privacy_build_proof_v1(
+                    build_archive.as_ptr(),
+                    build_archive.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+            assert_eq!(build_rc, 0, "{algorithm_id} build FFI return code");
+            let mut build_result_archive = take_privacy_output_bytes(out_ptr, out_len);
+            assert!(
+                privacy_archive_has_repeated_schema_byte(
+                    &build_result_archive,
+                    PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE,
+                ),
+                "{algorithm_id} build output must use the public build-result schema"
+            );
+            normalize_privacy_public_archive_for_decode::<PrivacyProofResultV1>(
+                &mut build_result_archive,
+            );
+            let build_result: PrivacyProofResultV1 =
+                norito::decode_from_bytes(&build_result_archive).expect("decode build result");
+            assert_eq!(
+                build_result.status, PRIVACY_FFI_STATUS_OK,
+                "{algorithm_id} build status must be OK"
+            );
+            assert_eq!(
+                build_result.error_code, 0,
+                "{algorithm_id} build error_code"
+            );
+            assert!(
+                !build_result.proof.is_empty(),
+                "{algorithm_id} build must emit a real proof envelope"
+            );
+            assert!(
+                !build_result.verified,
+                "{algorithm_id} build does not claim verified"
+            );
+            assert!(
+                build_result.message.is_empty(),
+                "{algorithm_id} build message"
+            );
+
+            let mut verify_request = privacy_request(algorithm_id, entrypoint, build_result.proof);
+            verify_request.witness.clear();
+            let verify_archive = public_privacy_request_archive(&verify_request);
+            let verify_rc = unsafe {
+                iroha_privacy_verify_proof_v1(
+                    verify_archive.as_ptr(),
+                    verify_archive.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+            assert_eq!(verify_rc, 0, "{algorithm_id} verify FFI return code");
+            let mut verify_result_archive = take_privacy_output_bytes(out_ptr, out_len);
+            normalize_privacy_public_archive_for_decode::<PrivacyProofResultV1>(
+                &mut verify_result_archive,
+            );
+            let verify_result: PrivacyProofResultV1 =
+                norito::decode_from_bytes(&verify_result_archive).expect("decode verify result");
+            assert_eq!(
+                verify_result.status, PRIVACY_FFI_STATUS_OK,
+                "{algorithm_id} verify status must be OK"
+            );
+            assert_eq!(
+                verify_result.error_code, 0,
+                "{algorithm_id} verify error_code"
+            );
+            assert!(
+                verify_result.verified,
+                "{algorithm_id} verify must confirm the proof"
+            );
+        }
     }
 
     #[cfg(any(
@@ -27045,7 +28215,7 @@ mod tests {
             norito::decode_from_bytes(&build_result_archive).expect("decode JNI build result");
         assert_eq!(
             build_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
+            PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE
         );
         assert!(build_result.proof.is_empty());
         assert!(!build_result.verified);
@@ -27074,7 +28244,7 @@ mod tests {
             norito::decode_from_bytes(&verify_result_archive).expect("decode JNI verify result");
         assert_eq!(
             verify_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
+            PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE
         );
         assert!(verify_result.proof.is_empty());
         assert!(!verify_result.verified);
@@ -27837,7 +29007,7 @@ mod tests {
             privacy_result_for_request(disabled_build, PrivacyProofOperationV1::Build);
         assert_eq!(
             disabled_build_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED,
+            PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE,
         );
         assert_privacy_result_does_not_serialize_witness(&disabled_build_result, witness);
 
@@ -27851,7 +29021,7 @@ mod tests {
             privacy_result_for_request(disabled_verify, PrivacyProofOperationV1::Verify);
         assert_eq!(
             disabled_verify_result.error_code,
-            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED,
+            PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE,
         );
         assert_privacy_result_does_not_serialize_witness(&disabled_verify_result, witness);
 
@@ -28371,6 +29541,7 @@ mod tests {
         assert!(!result.verified);
     }
 
+    #[cfg(not(feature = "privacy-production-enabled"))]
     #[test]
     fn privacy_build_proof_rejects_supported_algorithm_until_production_gate_passes() {
         let request = privacy_request(
@@ -28501,6 +29672,7 @@ mod tests {
         assert!(!jindo_result.message.contains("secret-witness"));
     }
 
+    #[cfg(not(feature = "privacy-production-enabled"))]
     #[test]
     fn privacy_verify_proof_rejects_supported_algorithm_until_production_gate_passes() {
         let mut request = privacy_request(
@@ -28778,15 +29950,11 @@ mod tests {
         hex::encode(&hash.as_ref()[..])
     }
 
-    fn sample_rwa_id_literal() -> String {
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal"
-            .to_owned()
-    }
-
-    #[test]
-    fn parse_identifier_receipt_accepts_canonical_payload_attestation() {
-        let payload = sample_identifier_receipt_payload();
-        let receipt = parse_identifier_receipt_value(json_object([
+    fn sample_identifier_receipt_json(
+        payload: &IdentifierResolutionReceiptPayload,
+        attestation: JsonValue,
+    ) -> JsonValue {
+        json_object([
             (
                 "payload",
                 json_object([
@@ -28913,18 +30081,55 @@ mod tests {
                     ),
                 ]),
             ),
-            (
-                "attestation",
-                json_object([
-                    ("kind", JsonValue::from("signed")),
-                    (
-                        "signature",
-                        JsonValue::from(sample_identifier_signature_hex()),
-                    ),
-                ]),
-            ),
-        ]))
-        .expect("parse structured torii receipt");
+            ("attestation", attestation),
+        ])
+    }
+
+    fn sample_identifier_signed_receipt_json(
+        payload: &IdentifierResolutionReceiptPayload,
+    ) -> JsonValue {
+        sample_identifier_receipt_json(
+            payload,
+            json_object([
+                ("kind", JsonValue::from("signed")),
+                (
+                    "signature",
+                    JsonValue::from(sample_identifier_signature_hex()),
+                ),
+            ]),
+        )
+    }
+
+    fn set_json_string_at_path(value: &mut JsonValue, path: &[&str], replacement: String) {
+        assert!(!path.is_empty(), "json path must not be empty");
+        let mut cursor = value;
+        for key in &path[..path.len() - 1] {
+            cursor = cursor
+                .as_object_mut()
+                .expect("path segment must be object")
+                .get_mut(*key)
+                .expect("path segment must exist");
+        }
+        cursor
+            .as_object_mut()
+            .expect("path parent must be object")
+            .insert(
+                path[path.len() - 1].to_owned(),
+                JsonValue::from(replacement),
+            );
+    }
+
+    fn sample_rwa_id_literal() -> String {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal"
+            .to_owned()
+    }
+
+    #[test]
+    fn parse_identifier_receipt_accepts_canonical_payload_attestation() {
+        let payload = sample_identifier_receipt_payload();
+        let receipt =
+            parse_identifier_receipt_value(sample_identifier_signed_receipt_json(&payload))
+                .expect("parse structured torii receipt");
 
         assert_eq!(receipt.payload, payload);
         let RamLfeReceiptAttestation::Signed(signature) = receipt.attestation else {
@@ -28934,6 +30139,158 @@ mod tests {
             hex::encode(signature.payload()),
             sample_identifier_signature_hex()
         );
+    }
+
+    #[test]
+    fn validate_identifier_claim_account_rejects_mismatched_receipt_account() {
+        let payload = sample_identifier_receipt_payload();
+        let receipt =
+            parse_identifier_receipt_value(sample_identifier_signed_receipt_json(&payload))
+                .expect("parse structured torii receipt");
+        validate_identifier_claim_account(&payload.account_id, &receipt)
+            .expect("matching claim account must pass");
+
+        let other_account = AccountId::new(KeyPair::random().public_key().clone());
+        let err = validate_identifier_claim_account(&other_account, &receipt)
+            .expect_err("mismatched claim account must fail before transaction encoding");
+        assert!(matches!(err, BridgeError::IdentifierReceipt));
+    }
+
+    #[test]
+    fn parse_identifier_receipt_rejects_padded_payload_fields() {
+        let payload = sample_identifier_receipt_payload();
+        let mut cases: Vec<(Vec<&str>, String)> = vec![
+            (vec!["payload", "policy_id"], " email#retail".to_owned()),
+            (
+                vec!["payload", "execution", "program_id"],
+                "identifier_lookup_retail ".to_owned(),
+            ),
+            (
+                vec!["payload", "execution", "backend"],
+                " bfv-programmed-sha3-256-v1".to_owned(),
+            ),
+            (
+                vec!["payload", "execution", "verification_mode"],
+                "signed ".to_owned(),
+            ),
+            (
+                vec!["payload", "execution", "program_digest"],
+                format!(" {}", hex_hash(payload.execution.program_digest)),
+            ),
+            (
+                vec!["payload", "execution", "input_ciphertext_hash"],
+                format!("{} ", hex_hash(payload.execution.input_ciphertext_hash)),
+            ),
+            (
+                vec!["payload", "opening", "payload", "program_id"],
+                " identifier_lookup_retail".to_owned(),
+            ),
+            (
+                vec!["payload", "opening", "payload", "input_ciphertext_hash"],
+                format!(
+                    "{} ",
+                    hex_hash(payload.opening.payload.input_ciphertext_hash)
+                ),
+            ),
+            (
+                vec!["payload", "opening", "signature"],
+                format!(" {}", hex::encode(payload.opening.signature.payload())),
+            ),
+            (
+                vec!["payload", "receipt_hash"],
+                format!("{} ", hex_hash(payload.receipt_hash)),
+            ),
+            (
+                vec!["payload", "opaque_id"],
+                format!(" {}", payload.opaque_id),
+            ),
+            (vec!["payload", "uaid"], format!("{} ", payload.uaid)),
+            (
+                vec!["payload", "account_id"],
+                format!(" {}", payload.account_id),
+            ),
+            (
+                vec!["attestation", "signature"],
+                format!("{} ", sample_identifier_signature_hex()),
+            ),
+            (vec!["attestation", "kind"], " signed".to_owned()),
+        ];
+        cases.push((
+            vec!["payload", "execution", "associated_data_hash"],
+            format!(" {}", hex_hash(payload.execution.associated_data_hash)),
+        ));
+
+        for (path, replacement) in cases {
+            let mut value = sample_identifier_signed_receipt_json(&payload);
+            set_json_string_at_path(&mut value, &path, replacement);
+            let err = parse_identifier_receipt_value(value)
+                .expect_err("padded identifier receipt field must fail");
+            assert!(
+                matches!(err, BridgeError::IdentifierReceipt),
+                "unexpected error for {path:?}: {err:?}"
+            );
+        }
+
+        for (kind, business_rule) in [(" email", "retail"), ("email", "retail ")] {
+            let mut policy_object_value = sample_identifier_signed_receipt_json(&payload);
+            policy_object_value
+                .as_object_mut()
+                .expect("receipt object")
+                .get_mut("payload")
+                .expect("payload")
+                .as_object_mut()
+                .expect("payload object")
+                .insert(
+                    "policy_id".to_owned(),
+                    json_object([
+                        ("kind", JsonValue::from(kind)),
+                        ("business_rule", JsonValue::from(business_rule)),
+                    ]),
+                );
+            let err = parse_identifier_receipt_value(policy_object_value)
+                .expect_err("padded policy-id object fields must fail");
+            assert!(matches!(err, BridgeError::IdentifierReceipt));
+        }
+    }
+
+    #[test]
+    fn parse_identifier_receipt_rejects_padded_proof_attestation_fields() {
+        let payload = sample_identifier_receipt_payload();
+        let canonical = sample_identifier_receipt_json(
+            &payload,
+            json_object([
+                ("kind", JsonValue::from("proof")),
+                ("proof_backend", JsonValue::from("halo2/ipa")),
+                ("proof_b64", JsonValue::from("AQID")),
+            ]),
+        );
+        parse_identifier_receipt_value(canonical)
+            .expect("canonical proof attestation receipt must parse");
+
+        for (path, replacement) in [
+            (
+                vec!["attestation", "proof_backend"],
+                " halo2/ipa".to_owned(),
+            ),
+            (vec!["attestation", "proof_b64"], "AQID ".to_owned()),
+            (vec!["attestation", "kind"], " proof".to_owned()),
+        ] {
+            let mut value = sample_identifier_receipt_json(
+                &payload,
+                json_object([
+                    ("kind", JsonValue::from("proof")),
+                    ("proof_backend", JsonValue::from("halo2/ipa")),
+                    ("proof_b64", JsonValue::from("AQID")),
+                ]),
+            );
+            set_json_string_at_path(&mut value, &path, replacement);
+            let err = parse_identifier_receipt_value(value)
+                .expect_err("padded proof attestation field must fail");
+            assert!(
+                matches!(err, BridgeError::IdentifierReceipt),
+                "unexpected error for {path:?}: {err:?}"
+            );
+        }
     }
 
     #[test]

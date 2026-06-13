@@ -23,8 +23,8 @@ object ClaimIdentifierWirePayloadEncoder {
     /** Encodes a `ClaimIdentifier` instruction as a wire-framed [InstructionBox]. */
     @JvmStatic
     fun encode(accountId: String, receipt: IdentifierResolutionReceipt): InstructionBox {
-        val normalizedAccountId = requireNonBlank(accountId, "accountId")
-        val receiptAccountId = requireNonBlank(receipt.accountId, "receipt.accountId")
+        val normalizedAccountId = requireExactNonBlank(accountId, "accountId")
+        val receiptAccountId = requireExactNonBlank(receipt.accountId, "receipt.accountId")
         require(normalizedAccountId == receiptAccountId) { "ClaimIdentifier accountId must match receipt.accountId" }
         val accountPayload = TransferWirePayloadEncoder.encodeAccountIdPayload(normalizedAccountId)
         val receiptPayload = IdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload)
@@ -140,9 +140,10 @@ object ClaimIdentifierWirePayloadEncoder {
         return value
     }
 
-    private fun requireNonBlank(value: String?, field: String): String {
-        val trimmed = value?.trim() ?: ""
-        require(trimmed.isNotEmpty()) { "$field must not be blank" }
-        return trimmed
+    private fun requireExactNonBlank(value: String?, field: String): String {
+        val exact = value ?: ""
+        require(exact.isNotBlank()) { "$field must not be blank" }
+        require(exact.trim() == exact) { "$field must not contain surrounding whitespace" }
+        return exact
     }
 }

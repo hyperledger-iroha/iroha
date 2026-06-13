@@ -332,6 +332,18 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
       "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest",
     );
     assert.equal(
+      crypto.KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+      "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1",
+    );
+    assert.equal(
+      crypto.KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME,
+      "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1",
+    );
+    assert.equal(
+      crypto.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+      "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1",
+    );
+    assert.equal(
       crypto.normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
       crypto.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
     );
@@ -463,6 +475,18 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     assert.throws(
       () => crypto.kagemushaRecursiveSpendInit(Buffer.from([1])),
       /kagemushaRecursiveSpendInit is unavailable in browser-only crypto builds/,
+    );
+    assert.throws(
+      () => crypto.encodeKagemushaRecursiveSpendInitRequest({}),
+      /encodeKagemushaRecursiveSpendInitRequest is unavailable in browser-only crypto builds/,
+    );
+    assert.throws(
+      () => crypto.decodeKagemushaRecursiveSpendBundle(Buffer.from([1])),
+      /decodeKagemushaRecursiveSpendBundle is unavailable in browser-only crypto builds/,
+    );
+    assert.throws(
+      () => crypto.kagemushaRecursiveSpendVerifyTyped({}),
+      /kagemushaRecursiveSpendVerifyTyped is unavailable in browser-only crypto builds/,
     );
     assert.throws(
       () => crypto.kagemushaRecursiveSpendTransitionProfileInit(Buffer.from([1])),

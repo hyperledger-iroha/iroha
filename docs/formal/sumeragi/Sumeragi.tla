@@ -12399,6 +12399,16 @@ RbcInitEntryOnlyByProposalOrInit ==
 RbcCorruptionExitOnlyByInit ==
   [] [RbcCorruptionExitOnlyByInitStep]_vars
 
+RbcProgressMutationAlwaysMatchesLocalClassification ==
+  /\ RbcStateOnlyChangesByProtocolOrFault
+  /\ RbcStateChangeAlwaysMatchesLocalExitClassification
+  /\ RbcEvidenceOnlyChangesByProtocolOrFault
+  /\ RbcEvidenceChangeAlwaysMatchesLocalEffectClassification
+  /\ RbcDeliveryEntryOnlyByDeliver
+  /\ RbcDeliveryEntryAlwaysMatchesReadyQuorumExitAndCommitBranch
+  /\ RbcCorruptionEntryOnlyByFault
+  /\ RbcCorruptionExitOnlyByInit
+
 RbcCorruptedInitRepairAlwaysResetsEvidence ==
   [] [RbcCorruptedInitRepairResetsEvidenceStep]_vars
 

@@ -628,6 +628,16 @@ mod tests {
         use iroha_data_model::block::BlockHeader;
         use iroha_data_model::peer::PeerId;
 
+        fn checked_seed_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
+            KeyPair::try_from_seed(seed, algorithm)
+                .expect("generate checked vote verification fixture keypair")
+        }
+
+        fn checked_signature(key_pair: &KeyPair, message: &[u8]) -> Signature {
+            Signature::try_new(key_pair.private_key(), message)
+                .expect("sign checked vote verification fixture")
+        }
+
         #[test]
         fn vote_verify_uses_multi_message_batch_for_distinct_preimages() {
             reset_vote_verify_batch_metrics_for_tests();
@@ -639,7 +649,7 @@ mod tests {
             let mut peers = Vec::new();
             for idx in 0..4u8 {
                 let seed = vec![idx + 1; 32];
-                let kp = KeyPair::from_seed(seed, Algorithm::BlsNormal);
+                let kp = checked_seed_keypair(seed, Algorithm::BlsNormal);
                 peers.push(PeerId::from(kp.public_key().clone()));
                 keypairs.push(kp);
             }
@@ -674,7 +684,7 @@ mod tests {
                     super::PERMISSIONED_TAG,
                     &vote,
                 );
-                let sig = Signature::new(kp.private_key(), &preimage);
+                let sig = checked_signature(kp, &preimage);
                 vote.bls_sig = sig.payload().to_vec();
                 let key = VoteVerifyKey::from_vote(&vote);
                 works.push(VoteVerifyWork {
@@ -719,7 +729,7 @@ mod tests {
             let handle = spawn_vote_verify_workers(None, 1, 1, 1);
             let work_tx = handle.work_txs[0].clone();
 
-            let signer = KeyPair::from_seed(b"ed25519-vote-signer".to_vec(), Algorithm::Ed25519);
+            let signer = checked_seed_keypair(b"ed25519-vote-signer".to_vec(), Algorithm::Ed25519);
             let topology = Arc::new(super::network_topology::Topology::new(vec![PeerId::from(
                 signer.public_key().clone(),
             )]));
@@ -746,6 +756,74 @@ mod tests {
             work_tx
                 .send(VoteVerifyWork {
                     id: 7,
+                    key,
+                    vote,
+                    signature_topology: topology,
+                    pops: Arc::new(BTreeMap::new()),
+                    chain_id,
+                    mode_tag: super::PERMISSIONED_TAG,
+                })
+                .expect("send vote verify work");
+            drop(work_tx);
+
+            let result = handle
+                .result_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("vote verify result");
+            assert!(matches!(
+                result.signature_result,
+                Err(VoteSignatureError::SignatureInvalid)
+            ));
+
+            drop(handle.work_txs);
+            for join in handle.join_handles {
+                if let Err(err) = join.join() {
+                    panic!("vote verify worker panicked: {err:?}");
+                }
+            }
+        }
+
+        #[test]
+        fn vote_verify_rejects_bls_signature_from_wrong_validator_key() {
+            let handle = spawn_vote_verify_workers(None, 1, 1, 1);
+            let work_tx = handle.work_txs[0].clone();
+
+            let signer = checked_seed_keypair(vec![0x51; 32], Algorithm::BlsNormal);
+            let wrong_signer = checked_seed_keypair(vec![0x52; 32], Algorithm::BlsNormal);
+            let topology = Arc::new(super::network_topology::Topology::new(vec![PeerId::from(
+                signer.public_key().clone(),
+            )]));
+            let chain_id: ChainId = "vote-wrong-key-test".parse().expect("chain id");
+            let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0x24; Hash::LENGTH],
+            ));
+            let mut vote = crate::sumeragi::consensus::Vote {
+                phase: crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+                post_state_root: Hash::prehashed([1u8; Hash::LENGTH]),
+                height: 1,
+                view: 0,
+                epoch: 0,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
+                highest_qc: None,
+                signer: 0,
+                bls_sig: Vec::new(),
+            };
+            let preimage = crate::sumeragi::consensus::vote_preimage(
+                &chain_id,
+                super::PERMISSIONED_TAG,
+                &vote,
+            );
+            vote.bls_sig = checked_signature(&wrong_signer, &preimage)
+                .payload()
+                .to_vec();
+            let key = VoteVerifyKey::from_vote(&vote);
+
+            work_tx
+                .send(VoteVerifyWork {
+                    id: 8,
                     key,
                     vote,
                     signature_topology: topology,

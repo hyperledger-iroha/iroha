@@ -76,11 +76,10 @@ mod signature_tests {
 
     #[test]
     fn query_signature_decode_from_slice_roundtrip() {
-        let authority = AccountId::new(
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
-                .parse()
-                .expect("public key"),
-        );
+        let public_key = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+            .parse()
+            .expect("public key");
+        let authority = AccountId::new(public_key.clone());
         let private_key: iroha_crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -96,7 +95,11 @@ mod signature_tests {
             request: QueryRequest::Continue(cursor),
         };
 
-        let signature = iroha_crypto::SignatureOf::new(&private_key, &payload);
+        let signature = iroha_crypto::SignatureOf::try_new(&private_key, &payload)
+            .expect("checked query signature fixture");
+        signature
+            .verify(&public_key, &payload)
+            .expect("checked query signature fixture verifies");
         let query_signature = QuerySignature(signature.clone());
 
         let encoded = norito::to_bytes(&query_signature).expect("encode query signature");
@@ -112,8 +115,10 @@ mod signature_tests {
 
     #[test]
     fn query_request_try_sign_matches_compatibility_sign() {
-        let key_pair =
-            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let key_pair = iroha_crypto::KeyPair::try_random_with_algorithm(
+            iroha_crypto::Algorithm::Ed25519,
+        )
+        .expect("generate checked query signing fixture keypair");
         let make_payload = || {
             let authority = AccountId::new(key_pair.public_key().clone());
             let cursor = ForwardCursor {

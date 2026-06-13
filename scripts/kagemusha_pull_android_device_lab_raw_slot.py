@@ -32,6 +32,7 @@ DEFAULT_DEVICE_LAB_DEVICE_ROOT = "files/kagemusha-device-lab"
 DEFAULT_OUT_ROOT = Path("target/kagemusha-android-raw")
 MAX_RAW_SLOT_TAR_BYTES = 128 * 1024 * 1024
 MAX_RAW_SLOT_FILE_BYTES = device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES
+MAX_RAW_SLOT_ENTRIES = 256
 MAX_RAW_SLOT_FILES = 128
 RAW_SLOT_REQUIRED_PATHS: tuple[str, ...] = (
     "attestation/challenge.hex",
@@ -206,6 +207,9 @@ def _validate_sha256_hex(value: object, label: str, errors: list[str]) -> str | 
         or any(char not in "0123456789abcdef" for char in value)
     ):
         errors.append(f"{label} must be a lowercase SHA-256 hex digest")
+        return None
+    if value == "0" * 64:
+        errors.append(f"{label} must be a non-zero lowercase SHA-256 hex digest")
         return None
     return value
 
@@ -744,12 +748,14 @@ def _write_regular_member(
         return 0
     destination = destination_root / relative
     try:
-        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        destination.parent.chmod(0o700)
     except OSError:
         errors.append(f"raw slot tar member {relative} parent directory could not be created")
         return 0
     try:
         with destination.open("xb") as output:
+            os.fchmod(output.fileno(), 0o600)
             output.write(data)
             output.flush()
             os.fsync(output.fileno())
@@ -778,7 +784,14 @@ def extract_raw_slot_tar(
     except tarfile.TarError:
         return ["raw slot tar stream could not be parsed"]
     with tar:
+        entry_count = 0
         for member in tar:
+            entry_count += 1
+            if entry_count > MAX_RAW_SLOT_ENTRIES:
+                errors.append(
+                    f"raw slot tar must not contain more than {MAX_RAW_SLOT_ENTRIES} entries"
+                )
+                break
             relative = _normalise_tar_member_name(
                 member.name,
                 errors,
@@ -795,7 +808,9 @@ def extract_raw_slot_tar(
             seen.add(relative)
             if member.isdir():
                 try:
-                    (destination_root / relative).mkdir(parents=True, exist_ok=True)
+                    directory = destination_root / relative
+                    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    directory.chmod(0o700)
                 except OSError:
                     errors.append(f"raw slot tar directory {relative} could not be created")
                 continue
@@ -1065,6 +1080,41 @@ def _validate_output_root(root: Path) -> list[str]:
             return errors
         if not root_exists:
             return ["raw output root must be an existing directory"]
+    permission_errors = _set_private_directory_permissions(
+        root,
+        "raw output root directory",
+    )
+    if permission_errors:
+        return permission_errors
+    return []
+
+
+def _set_private_directory_permissions(path: Path, label: str) -> list[str]:
+    try:
+        dir_fd = os.open(path, _directory_open_flags())
+    except OSError:
+        return [f"{label} permissions could not be set"]
+    try:
+        try:
+            directory_stat = os.fstat(dir_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        try:
+            os.fchmod(dir_fd, 0o700)
+        except OSError:
+            return [f"{label} permissions could not be set"]
+        try:
+            directory_stat = os.fstat(dir_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        if stat.S_IMODE(directory_stat.st_mode) != 0o700:
+            return [f"{label} permissions must be 0700"]
+    finally:
+        os.close(dir_fd)
     return []
 
 
@@ -1731,7 +1781,7 @@ def pull_raw_slot(
         (args.device_lab_root, "device lab root"),
     ):
         errors.extend(_validate_non_secret_adb_string(value, label))
-    if args.serial:
+    if args.serial is not None:
         errors.extend(_validate_non_secret_adb_string(args.serial, "ADB serial"))
     errors.extend(_path_shape_errors(args.out_root, "raw output root path"))
     if args.summary_out is not None:

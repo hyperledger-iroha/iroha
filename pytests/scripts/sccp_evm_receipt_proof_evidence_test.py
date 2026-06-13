@@ -75,32 +75,37 @@ def hex_bytes(byte, count):
 def test_receipt_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_module()
 
-    def fail_collect(*_args, **_kwargs):
-        raise RuntimeError("secret-token /tmp/operator/private-path")
+    for exception_type in (RuntimeError, TypeError):
 
-    monkeypatch.setattr(module, "collect_receipt_proof_evidence", fail_collect)
+        def fail_collect(*_args, exception_type=exception_type, **_kwargs):
+            raise exception_type("secret-token /tmp/operator/private-path")
 
-    try:
-        module.main(
-            [
-                "--rpc-url",
-                "https://evm.example.invalid",
-                "--domain",
-                "eth",
-                "--transaction-hash",
-                "0x" + "11" * 32,
-                "--allow-receipt-only-evidence",
-            ]
-        )
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("receipt proof CLI accepted top-level collection failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "collect_receipt_proof_evidence", fail_collect)
+            try:
+                module.main(
+                    [
+                        "--rpc-url",
+                        "https://evm.example.invalid",
+                        "--domain",
+                        "eth",
+                        "--transaction-hash",
+                        "0x" + "11" * 32,
+                        "--allow-receipt-only-evidence",
+                    ]
+                )
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError(
+                    "receipt proof CLI accepted top-level collection failure"
+                )
 
-    captured = capsys.readouterr()
-    assert "SCCP EVM receipt proof evidence collection failed" in captured.err
-    assert "secret-token" not in captured.err
-    assert "private-path" not in captured.err
+            captured = capsys.readouterr()
+            assert "SCCP EVM receipt proof evidence collection failed" in captured.err
+            assert "secret-token" not in captured.err
+            assert "private-path" not in captured.err
+            assert exception_type.__name__ not in captured.err
 
 
 def test_receipt_hex_parser_redacts_parser_causes():
@@ -123,6 +128,35 @@ def test_receipt_hex_parser_redacts_parser_causes():
         assert exc.__suppress_context__ is True
     else:
         raise AssertionError("invalid EVM receipt transaction hash hex was accepted")
+
+
+def test_receipt_hex_parser_redacts_typeerror_parser_causes(monkeypatch):
+    """Parser TypeErrors must collapse to the same fixed public hex category."""
+
+    module = load_module()
+
+    class SecretBytes:
+        @staticmethod
+        def fromhex(_text):
+            raise TypeError("secret-token EVM receipt hex TypeError detail")
+
+    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+
+    try:
+        module.parse_hex_bytes(
+            "0x" + "11" * 32,
+            label="transaction hash",
+            byte_length=32,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "transaction hash must be hex"
+        assert "secret-token" not in rendered
+        assert "TypeError" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("EVM receipt parser TypeError was accepted")
 
 
 def source_log(module, *, duplicate=False, **overrides):

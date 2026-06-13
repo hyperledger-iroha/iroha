@@ -131,6 +131,8 @@ def direct_android_signed_evidence_report(
         family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
     kagemusha: dict[str, object] = {
         "device_family": family,
+        "device_model": "Pixel 6",
+        "device_codename": "oriole",
         "device_fingerprint_sha256": "1" * 64,
         "attestation_challenge_sha256": "2" * 64,
         "signed_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
@@ -266,6 +268,20 @@ def write_lineage_staged_run_report(
         json.dumps(report, allow_nan=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    for profile in ("init", "append", "proof"):
+        report_path = root / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES[profile]
+        if report_path.exists():
+            continue
+        write_lineage_execution_report(
+            root,
+            profile,
+            command=(
+                command
+                if profile == "proof"
+                else lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS[profile]
+            ),
+            elapsed_seconds=elapsed_seconds if profile == "proof" else 1.0,
+        )
     return path
 
 
@@ -277,6 +293,7 @@ def write_lineage_execution_report(
     command: str | None = None,
     log_name: str | None = None,
     log_sha256: str | None = None,
+    elapsed_seconds: float = 1.0,
 ) -> Path:
     if profile == "proof":
         phase = "lineage proof command"
@@ -300,7 +317,7 @@ def write_lineage_execution_report(
         "phase": phase,
         "command": command,
         "exit_code": exit_code,
-        "elapsed_seconds": 1.0,
+        "elapsed_seconds": elapsed_seconds,
         "log_path": log_name,
         "log_sha256": log_sha256,
         "log_size_bytes": log_path.stat().st_size,
@@ -350,6 +367,13 @@ def write_compact_key_staged_run_report(
         json.dumps(report, allow_nan=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    execution_report = root / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
+    if not execution_report.exists():
+        write_compact_key_execution_report(
+            root,
+            command=command,
+            elapsed_seconds=elapsed_seconds,
+        )
     return path
 
 
@@ -360,6 +384,7 @@ def write_compact_key_execution_report(
     command: str | None = None,
     generator_log_size_bytes: int | None = None,
     generator_log_sha256: str | None = None,
+    elapsed_seconds: float = 1.0,
 ) -> Path:
     log_path = root / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
     if generator_log_size_bytes is None:
@@ -371,7 +396,7 @@ def write_compact_key_execution_report(
         "phase": "recursive compact keygen command",
         "command": command or compact_key_staged_runner.DEFAULT_COMPACT_KEY_COMMAND,
         "exit_code": exit_code,
-        "elapsed_seconds": 1.0,
+        "elapsed_seconds": elapsed_seconds,
         "generator_log_path": readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME,
         "generator_log_sha256": generator_log_sha256,
         "generator_log_size_bytes": generator_log_size_bytes,
@@ -1035,6 +1060,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 expected_android_signed_evidence[slot_id] = {
                     "artifact_sha256": metadata["signed_evidence_artifact_sha256"],
                     "signed_at_utc": evidence["signed_at_utc"],
+                    "device_family": metadata["device_family"],
+                    "device_model": metadata["device_model"],
+                    "device_codename": metadata["device_codename"],
                     "signer_public_key_sha256": evidence["signer_public_key_sha256"],
                     "offline_wallet_apk_path": metadata["offline_wallet_apk_path"],
                     "offline_wallet_apk_sha256": metadata["offline_wallet_apk_sha256"],
@@ -2905,6 +2933,50 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_identity_binding_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot = next(iter(manifest["android_device_lab"]["signed_evidence"]))
+            manifest["android_device_lab"]["signed_evidence"][slot][
+                "device_model"
+            ] = "Pixel 6a"
+            manifest["android_device_lab"]["signed_evidence"][slot][
+                "device_codename"
+            ] = "bluejay"
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_signed_evidence_identity_binding",
+            rendered,
+        )
+        self.assertNotIn(
+            "kagemusha_release_bundle_manifest_android_summary_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_android_slot_artifact_digest_binding_drift(
         self,
     ) -> None:
@@ -4328,6 +4400,82 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_android_duplicate_bindings_slots",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_repeated_android_duplicate_binding_value(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slots = sorted(manifest["android_device_lab"]["signed_evidence"])[:2]
+            manifest["android_device_lab"]["duplicate_bindings"][
+                "device_fingerprint_sha256"
+            ] = [
+                {"slots": slots, "value_sha256": "1" * 64},
+                {"slots": slots, "value_sha256": "1" * 64},
+            ]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_duplicate_bindings_value_inventory",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_noncanonical_android_duplicate_binding_values(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slots = sorted(manifest["android_device_lab"]["signed_evidence"])[:2]
+            manifest["android_device_lab"]["duplicate_bindings"][
+                "device_fingerprint_sha256"
+            ] = [
+                {"slots": slots, "value_sha256": "2" * 64},
+                {"slots": slots, "value_sha256": "1" * 64},
+            ]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_duplicate_bindings_value_inventory",
             stderr.getvalue(),
         )
 
@@ -7442,6 +7590,107 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("kagemusha_release_summary_android_slots_binding", rendered)
         self.assertNotIn("Traceback", rendered)
 
+    def test_kagemusha_release_bundle_rejects_android_summary_slot_device_identity(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["android_device_lab"]["slots"][0]["kagemusha"][
+                "device_model"
+            ] = " Pixel 6"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_device_identity",
+            rendered,
+        )
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_rejects_android_summary_slot_one_sided_identity(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["android_device_lab"]["slots"][0]["kagemusha"][
+                "device_model"
+            ] = "Pixel 6 Pro"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_device_identity",
+            rendered,
+        )
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_rejects_android_summary_slot_unknown_codename_identity(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["android_device_lab"]["slots"][0]["kagemusha"][
+                "device_codename"
+            ] = "oriole-pro"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_device_identity",
+            rendered,
+        )
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_rejects_blank_android_summary_slot_device_identity(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["android_device_lab"]["slots"][0]["kagemusha"][
+                "device_codename"
+            ] = ""
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_device_identity",
+            rendered,
+        )
+        self.assertIn("device_codename", rendered)
+        self.assertNotIn("Traceback", rendered)
+
     def test_kagemusha_release_bundle_rejects_android_summary_slot_device_family_inventory_drift(
         self,
     ) -> None:
@@ -7554,6 +7803,46 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_summary_android_slots_file_counts",
             rendered,
         )
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_rejects_android_summary_identity_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot_entry = summary["android_device_lab"]["slots"][0]
+            slot = slot_entry["slot"]
+            for entry in (
+                summary["android_device_lab"]["signed_evidence"][slot],
+                slot_entry["kagemusha"],
+            ):
+                entry["device_model"] = "Pixel 6a"
+                entry["device_codename"] = "bluejay"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_identity_drift",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_identity_drift",
+            rendered,
+        )
+        self.assertNotIn(
+            "kagemusha_release_summary_android_signed_evidence_drift",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_summary_android_slots_drift", rendered)
+        self.assertNotIn("kagemusha_release_summary_android_slots_binding", rendered)
         self.assertNotIn("Traceback", rendered)
 
     def test_kagemusha_release_bundle_rejects_android_summary_untrusted_signer(
@@ -7721,6 +8010,60 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn(
             "kagemusha_release_summary_android_duplicate_bindings_slots",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_repeated_android_duplicate_binding_value(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slots = sorted(summary["android_device_lab"]["signed_evidence"])[:2]
+            summary["android_device_lab"]["duplicate_bindings"][
+                "device_fingerprint_sha256"
+            ] = [
+                {"slots": slots, "value_sha256": "1" * 64},
+                {"slots": slots, "value_sha256": "1" * 64},
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_duplicate_bindings_value_inventory",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_noncanonical_android_duplicate_binding_values(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slots = sorted(summary["android_device_lab"]["signed_evidence"])[:2]
+            summary["android_device_lab"]["duplicate_bindings"][
+                "device_fingerprint_sha256"
+            ] = [
+                {"slots": slots, "value_sha256": "2" * 64},
+                {"slots": slots, "value_sha256": "1" * 64},
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_duplicate_bindings_value_inventory",
             stderr.getvalue(),
         )
 
@@ -7937,6 +8280,108 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_summary_android_signed_evidence_missing_field",
             stderr.getvalue(),
         )
+
+    def test_kagemusha_release_bundle_rejects_android_signed_evidence_identity_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(iter(summary["android_device_lab"]["signed_evidence"]))
+            summary["android_device_lab"]["signed_evidence"][slot][
+                "device_model"
+            ] = "Pixel 7"
+            summary["android_device_lab"]["signed_evidence"][slot][
+                "device_codename"
+            ] = "panther"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_identity",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_android_signed_evidence_one_sided_identity(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(iter(summary["android_device_lab"]["signed_evidence"]))
+            summary["android_device_lab"]["signed_evidence"][slot][
+                "device_model"
+            ] = "Pixel 6 Pro"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_identity",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_android_signed_evidence_unknown_codename_identity(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(iter(summary["android_device_lab"]["signed_evidence"]))
+            summary["android_device_lab"]["signed_evidence"][slot][
+                "device_codename"
+            ] = "oriole-pro"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_identity",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_blank_android_signed_evidence_identity(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(iter(summary["android_device_lab"]["signed_evidence"]))
+            summary["android_device_lab"]["signed_evidence"][slot][
+                "device_model"
+            ] = ""
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_value",
+            rendered,
+        )
+        self.assertIn("device_model", rendered)
+        self.assertNotIn("Traceback", rendered)
 
     def test_kagemusha_release_bundle_rejects_nonobject_android_signed_evidence_summary_entry(
         self,
@@ -9120,6 +9565,77 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(unsafe_key, rendered)
         self.assertNotIn("control\npublic.pem", rendered)
 
+    def test_release_bundle_build_redacts_zero_trusted_signer_digest_in_blocked_manifest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            trusted = {"0" * 64: root / "safe.pem"}
+
+            with mock.patch.object(
+                release_bundle,
+                "_validate_bundle_root",
+                side_effect=AssertionError("bundle-root metadata must not be read"),
+            ) as validate_bundle_root:
+                manifest, blockers = release_bundle.build_release_bundle(
+                    repo_root=REPO_ROOT,
+                    bundle_root=root / "bundle",
+                    readiness_summary_path=root / "summary.json",
+                    lineage_proof_evidence_path=root / "lineage-proof-evidence.json",
+                    compact_key_evidence_path=root / "recursive-compact-key-evidence.json",
+                    device_lab_root=root / "device-lab",
+                    trusted_signer_public_keys=trusted,
+                    min_signed_at=None,
+                    max_signed_at=None,
+                    min_lineage_proof_evidence_at=None,
+                    max_lineage_proof_evidence_at=None,
+                    min_compact_key_evidence_at=None,
+                    max_compact_key_evidence_at=None,
+                )
+
+        validate_bundle_root.assert_not_called()
+        self.assertFalse(manifest["ready"])
+        self.assertEqual(manifest["android_device_lab"]["trusted_signer_public_key_sha256"], [])
+        self.assertEqual(
+            {item["code"] for item in blockers},
+            {"android_trusted_signer_invalid"},
+        )
+
+    def test_release_bundle_build_rejects_non_mapping_trusted_signer_map_without_crash(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            with mock.patch.object(
+                release_bundle,
+                "_validate_bundle_root",
+                side_effect=AssertionError("bundle-root metadata must not be read"),
+            ) as validate_bundle_root:
+                manifest, blockers = release_bundle.build_release_bundle(
+                    repo_root=REPO_ROOT,
+                    bundle_root=root / "bundle",
+                    readiness_summary_path=root / "summary.json",
+                    lineage_proof_evidence_path=root / "lineage-proof-evidence.json",
+                    compact_key_evidence_path=root / "recursive-compact-key-evidence.json",
+                    device_lab_root=root / "device-lab",
+                    trusted_signer_public_keys=[("1" * 64, root / "safe.pem")],  # type: ignore[arg-type]
+                    min_signed_at=None,
+                    max_signed_at=None,
+                    min_lineage_proof_evidence_at=None,
+                    max_lineage_proof_evidence_at=None,
+                    min_compact_key_evidence_at=None,
+                    max_compact_key_evidence_at=None,
+                )
+
+        validate_bundle_root.assert_not_called()
+        self.assertFalse(manifest["ready"])
+        self.assertEqual(manifest["android_device_lab"]["trusted_signer_public_key_sha256"], [])
+        self.assertEqual(
+            [item["message"] for item in blockers],
+            ["trusted signer public key map must be a mapping"],
+        )
+
     def test_release_bundle_build_rejects_unsafe_repo_root_before_bundle_root_metadata(
         self,
     ) -> None:
@@ -9348,6 +9864,113 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn(unsafe_key, rendered)
         self.assertNotIn("control\npublic.pem", rendered)
+
+    def test_release_bundle_verify_redacts_zero_trusted_signer_digest_in_blocked_manifest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            trusted = {"0" * 64: root / "safe.pem"}
+
+            with (
+                mock.patch.object(
+                    release_bundle,
+                    "_validate_bundle_root",
+                    side_effect=AssertionError("bundle-root metadata must not be read"),
+                ) as validate_bundle_root,
+                mock.patch.object(
+                    release_bundle,
+                    "_load_local_json",
+                    side_effect=AssertionError("existing bundle must not be loaded"),
+                ) as load_json,
+            ):
+                manifest, blockers = release_bundle.verify_release_bundle(
+                    repo_root=REPO_ROOT,
+                    bundle_root=root / "bundle",
+                    readiness_summary_path=root / "summary.json",
+                    lineage_proof_evidence_path=root / "lineage-proof-evidence.json",
+                    compact_key_evidence_path=(
+                        root / "recursive-compact-key-evidence.json"
+                    ),
+                    device_lab_root=root / "device-lab",
+                    trusted_signer_public_keys=trusted,
+                    existing_bundle_path=root / "bundle.json",
+                    min_signed_at=None,
+                    max_signed_at=None,
+                    min_lineage_proof_evidence_at=None,
+                    max_lineage_proof_evidence_at=None,
+                    min_compact_key_evidence_at=None,
+                    max_compact_key_evidence_at=None,
+                )
+
+        validate_bundle_root.assert_not_called()
+        load_json.assert_not_called()
+        self.assertFalse(manifest["ready"])
+        self.assertEqual(
+            manifest["android_device_lab"]["trusted_signer_public_key_sha256"],
+            [],
+        )
+        self.assertEqual(
+            {item["code"] for item in blockers},
+            {"android_trusted_signer_invalid"},
+        )
+
+    def test_release_bundle_verify_rejects_unrepresentable_trusted_signer_digest_without_crash(
+        self,
+    ) -> None:
+        class UnrepresentableDigest:
+            def __repr__(self) -> str:
+                raise AssertionError("digest repr must not be used")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            trusted = {
+                UnrepresentableDigest(): root / "unrepresentable.pem",
+                "1" * 64: root / "safe.pem",
+            }
+
+            with (
+                mock.patch.object(
+                    release_bundle,
+                    "_validate_bundle_root",
+                    side_effect=AssertionError("bundle-root metadata must not be read"),
+                ) as validate_bundle_root,
+                mock.patch.object(
+                    release_bundle,
+                    "_load_local_json",
+                    side_effect=AssertionError("existing bundle must not be loaded"),
+                ) as load_json,
+            ):
+                manifest, blockers = release_bundle.verify_release_bundle(
+                    repo_root=REPO_ROOT,
+                    bundle_root=root / "bundle",
+                    readiness_summary_path=root / "summary.json",
+                    lineage_proof_evidence_path=root / "lineage-proof-evidence.json",
+                    compact_key_evidence_path=(
+                        root / "recursive-compact-key-evidence.json"
+                    ),
+                    device_lab_root=root / "device-lab",
+                    trusted_signer_public_keys=trusted,  # type: ignore[arg-type]
+                    existing_bundle_path=root / "bundle.json",
+                    min_signed_at=None,
+                    max_signed_at=None,
+                    min_lineage_proof_evidence_at=None,
+                    max_lineage_proof_evidence_at=None,
+                    min_compact_key_evidence_at=None,
+                    max_compact_key_evidence_at=None,
+                )
+
+        validate_bundle_root.assert_not_called()
+        load_json.assert_not_called()
+        self.assertFalse(manifest["ready"])
+        self.assertEqual(
+            manifest["android_device_lab"]["trusted_signer_public_key_sha256"],
+            ["1" * 64],
+        )
+        self.assertEqual(
+            {item["code"] for item in blockers},
+            {"android_trusted_signer_invalid"},
+        )
 
     def test_release_bundle_verify_rejects_unsafe_repo_root_before_manifest_load(
         self,
@@ -10668,6 +11291,210 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn("supersecret", rendered)
         self.assertNotIn("Unreviewed Device", summary["covered_device_families"])
 
+    def test_android_slot_summary_omits_incomplete_release_kagemusha_fields(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            incomplete_report = direct_android_signed_evidence_report()
+            kagemusha = incomplete_report["kagemusha"]
+            assert isinstance(kagemusha, dict)
+            del kagemusha["d2d_payment_transcript_sha256"]
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return ([incomplete_report], [])
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+        slot_kagemusha = summary["slots"][0]["kagemusha"]
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["signed_evidence"], {})
+        self.assertEqual(summary["covered_device_families"], [])
+        self.assertIn("android_signed_evidence_summary_missing", rendered)
+        self.assertIn("android_device_lab_standard_matrix_missing", rendered)
+        self.assertIsInstance(slot_kagemusha, dict)
+        for field in readiness.ANDROID_SLOT_RELEASE_KAGEMUSHA_FIELDS:
+            self.assertNotIn(field, slot_kagemusha)
+
+    def test_android_slot_summary_preserves_complete_release_kagemusha_fields(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            complete_report = direct_android_signed_evidence_report()
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return ([complete_report], [])
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        slot_kagemusha = summary["slots"][0]["kagemusha"]
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(list(summary["signed_evidence"]), ["slot-0"])
+        self.assertEqual(
+            summary["covered_device_families"],
+            [slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]],
+        )
+        self.assertIsInstance(slot_kagemusha, dict)
+        self.assertTrue(
+            {
+                source_key
+                for source_key, _target_key in readiness.ANDROID_SIGNED_EVIDENCE_SUMMARY_FIELDS
+            }.issubset(slot_kagemusha)
+        )
+
+    def test_android_slot_summary_requires_report_match_for_duplicate_slot_admission(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            first_family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+            second_family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1]
+            first_report = direct_android_signed_evidence_report(family=first_family)
+            second_report = direct_android_signed_evidence_report(
+                family=second_family,
+                device_model="Pixel 7",
+                device_codename="panther",
+                offline_wallet_apk_sha256="9" * 64,
+            )
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return ([first_report, second_report], [])
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+        second_slot_kagemusha = summary["slots"][1]["kagemusha"]
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["covered_device_families"], [first_family])
+        self.assertEqual(
+            summary["signed_evidence"]["slot-0"]["device_family"],
+            first_family,
+        )
+        self.assertIn("android_signed_evidence_summary_slot_collision", rendered)
+        self.assertIsInstance(second_slot_kagemusha, dict)
+        for field in readiness.ANDROID_SLOT_RELEASE_KAGEMUSHA_FIELDS:
+            self.assertNotIn(field, second_slot_kagemusha)
+
+    def test_android_duplicate_bindings_summary_omits_incomplete_release_slots(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            complete_report = direct_android_signed_evidence_report(
+                slot="slot-0",
+                device_fingerprint_sha256="1" * 64,
+            )
+            incomplete_report = direct_android_signed_evidence_report(
+                slot="slot-1",
+                device_fingerprint_sha256="1" * 64,
+                offline_wallet_apk_sha256="9" * 64,
+            )
+            kagemusha = incomplete_report["kagemusha"]
+            assert isinstance(kagemusha, dict)
+            del kagemusha["d2d_payment_transcript_sha256"]
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return ([complete_report, incomplete_report], [])
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        codes = [item["code"] for item in summary["blockers"]]
+
+        self.assertFalse(summary["ok"])
+        self.assertIn("android_device_lab_duplicate_device_fingerprint", codes)
+        self.assertIn("android_signed_evidence_summary_missing", codes)
+        self.assertEqual(summary["duplicate_bindings"], {})
+
+    def test_android_duplicate_bindings_summary_preserves_complete_release_slots(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            first_report = direct_android_signed_evidence_report(
+                slot="slot-0",
+                device_fingerprint_sha256="1" * 64,
+            )
+            second_report = direct_android_signed_evidence_report(
+                slot="slot-1",
+                family=slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1],
+                device_model="Pixel 7",
+                device_codename="panther",
+                device_fingerprint_sha256="1" * 64,
+                offline_wallet_apk_sha256="9" * 64,
+            )
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return ([first_report, second_report], [])
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        duplicate = summary["duplicate_bindings"]["device_fingerprint_sha256"][0]
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(duplicate["slots"], ["slot-0", "slot-1"])
+        self.assertEqual(duplicate["value_sha256"], "1" * 64)
+        self.assertEqual(set(summary["signed_evidence"]), {"slot-0", "slot-1"})
+
     def test_android_matrix_rejects_noncanonical_direct_binding_digest(
         self,
     ) -> None:
@@ -10698,6 +11525,36 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertIn("device_fingerprint_sha256", rendered)
         self.assertIn("attestation_challenge_sha256", rendered)
+
+    def test_android_matrix_rejects_zero_direct_binding_digest(
+        self,
+    ) -> None:
+        blockers = readiness._check_android_matrix_unique_bindings(
+            [
+                {
+                    "status": "ok",
+                    "slot": "slot-0",
+                    "kagemusha": {"device_fingerprint_sha256": "0" * 64},
+                },
+                {
+                    "status": "ok",
+                    "slot": "slot-1",
+                    "kagemusha": {"attestation_challenge_sha256": "0" * 64},
+                },
+            ]
+        )
+
+        self.assertEqual(
+            [item["code"] for item in blockers],
+            [
+                "android_device_lab_binding_digest_invalid",
+                "android_device_lab_binding_digest_invalid",
+            ],
+        )
+        self.assertEqual(
+            {item["field"] for item in blockers},
+            {"device_fingerprint_sha256", "attestation_challenge_sha256"},
+        )
 
     def test_android_matrix_redacts_secret_direct_binding_digest(
         self,
@@ -10813,10 +11670,109 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "android_signed_evidence_summary_invalid",
             ],
         )
-        self.assertNotIn("2026-06-06T00:00:00+00:00", summary["slot-0"].values())
+        self.assertNotIn("slot-0", summary)
         self.assertNotIn("A" * 64, rendered)
         self.assertNotIn("../escape.json", rendered)
         self.assertNotIn("0" * 64, rendered)
+
+    def test_android_signed_evidence_summary_includes_device_identity(self) -> None:
+        report = direct_android_signed_evidence_report()
+
+        blockers = readiness._check_android_signed_evidence_summary_values([report])
+        summary = readiness._android_signed_evidence_summary([report])
+
+        self.assertEqual(blockers, [])
+        self.assertEqual(
+            set(summary["slot-0"]),
+            readiness.ANDROID_SIGNED_EVIDENCE_SUMMARY_TARGET_FIELDS,
+        )
+        self.assertEqual(
+            summary["slot-0"]["device_family"],
+            slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+        )
+        self.assertEqual(summary["slot-0"]["device_model"], "Pixel 6")
+        self.assertEqual(summary["slot-0"]["device_codename"], "oriole")
+
+    def test_android_signed_evidence_summary_rejects_family_model_mismatch(
+        self,
+    ) -> None:
+        report = direct_android_signed_evidence_report(
+            device_model="Pixel 7",
+            device_codename="panther",
+        )
+
+        blockers = readiness._check_android_signed_evidence_summary_values([report])
+        summary = readiness._android_signed_evidence_summary([report])
+
+        self.assertEqual(
+            [item["code"] for item in blockers],
+            ["android_signed_evidence_summary_invalid"],
+        )
+        self.assertEqual(blockers[0]["field"], "device_family")
+        self.assertNotIn("slot-0", summary)
+
+    def test_android_signed_evidence_summary_rejects_one_sided_identity_match(
+        self,
+    ) -> None:
+        report = direct_android_signed_evidence_report(
+            device_model="Pixel 6 Pro",
+            device_codename="oriole",
+        )
+
+        blockers = readiness._check_android_signed_evidence_summary_values([report])
+        summary = readiness._android_signed_evidence_summary([report])
+
+        self.assertEqual(
+            [item["code"] for item in blockers],
+            ["android_signed_evidence_summary_invalid"],
+        )
+        self.assertEqual(blockers[0]["field"], "device_family")
+        self.assertNotIn("slot-0", summary)
+
+    def test_android_signed_evidence_summary_rejects_unknown_codename_identity_match(
+        self,
+    ) -> None:
+        report = direct_android_signed_evidence_report(
+            device_model="Pixel 6",
+            device_codename="oriole-pro",
+        )
+
+        blockers = readiness._check_android_signed_evidence_summary_values([report])
+        summary = readiness._android_signed_evidence_summary([report])
+
+        self.assertEqual(
+            [item["code"] for item in blockers],
+            ["android_signed_evidence_summary_invalid"],
+        )
+        self.assertEqual(blockers[0]["field"], "device_family")
+        self.assertNotIn("slot-0", summary)
+
+    def test_android_signed_evidence_summary_rejects_malformed_identity_values(
+        self,
+    ) -> None:
+        report = direct_android_signed_evidence_report(
+            device_model=" Pixel 6",
+            device_codename="token=supersecret-codename",
+        )
+
+        blockers = readiness._check_android_signed_evidence_summary_values([report])
+        summary = readiness._android_signed_evidence_summary([report])
+        rendered = json.dumps({"blockers": blockers, "summary": summary}, sort_keys=True)
+
+        self.assertEqual(
+            [item["code"] for item in blockers],
+            [
+                "android_signed_evidence_summary_invalid",
+                "android_signed_evidence_summary_invalid",
+            ],
+        )
+        self.assertEqual(
+            {item["field"] for item in blockers},
+            {"device_model", "device_codename"},
+        )
+        self.assertNotIn("slot-0", summary)
+        self.assertNotIn("supersecret", rendered)
+        self.assertNotIn('" Pixel 6"', rendered)
 
     def test_android_signed_evidence_summary_rejects_missing_direct_values(
         self,
@@ -10828,6 +11784,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         del kagemusha["signed_evidence_artifact_sha256"]
 
         blockers = readiness._check_android_signed_evidence_summary_values([report])
+        summary = readiness._android_signed_evidence_summary([report])
 
         self.assertEqual(
             [item["code"] for item in blockers],
@@ -10840,34 +11797,126 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["field"] for item in blockers},
             {"artifact_sha256", "offline_wallet_apk_path"},
         )
+        self.assertNotIn("slot-0", summary)
 
-    def test_android_signed_evidence_summary_redacts_unsafe_direct_slot_key(
+    def test_android_signed_evidence_summary_rejects_single_missing_core_binding_without_partial_reflection(
         self,
     ) -> None:
-        report = direct_android_signed_evidence_report(
-            slot="token=supersecret-slot",
-        )
+        report = direct_android_signed_evidence_report()
+        kagemusha = report["kagemusha"]
+        assert isinstance(kagemusha, dict)
+        del kagemusha["signed_evidence_signer_public_key_sha256"]
 
         blockers = readiness._check_android_signed_evidence_summary_values([report])
         summary = readiness._android_signed_evidence_summary([report])
-        rendered = json.dumps({"blockers": blockers, "summary": summary}, sort_keys=True)
 
-        self.assertEqual(blockers, [])
         self.assertEqual(
-            list(summary),
-            [slot_helpers.device_lab.SECRET_PATH_REDACTION],
+            [item["code"] for item in blockers],
+            ["android_signed_evidence_summary_missing"],
         )
-        self.assertNotIn("supersecret", rendered)
+        self.assertEqual(blockers[0]["field"], "signer_public_key_sha256")
+        self.assertNotIn("slot-0", summary)
 
-    def test_android_signed_evidence_summary_rejects_redacted_slot_collision_without_overwrite(
+    def test_android_signed_evidence_summary_rejects_single_missing_artifact_binding_without_partial_reflection(
+        self,
+    ) -> None:
+        report = direct_android_signed_evidence_report()
+        kagemusha = report["kagemusha"]
+        assert isinstance(kagemusha, dict)
+        del kagemusha["d2d_payment_transcript_sha256"]
+
+        blockers = readiness._check_android_signed_evidence_summary_values([report])
+        summary = readiness._android_signed_evidence_summary([report])
+
+        self.assertEqual(
+            [item["code"] for item in blockers],
+            ["android_signed_evidence_summary_missing"],
+        )
+        self.assertEqual(blockers[0]["field"], "d2d_payment_transcript_sha256")
+        self.assertNotIn("slot-0", summary)
+
+    def test_android_signed_evidence_summary_rejects_missing_identity_values(
+        self,
+    ) -> None:
+        report = direct_android_signed_evidence_report()
+        kagemusha = report["kagemusha"]
+        assert isinstance(kagemusha, dict)
+        del kagemusha["device_model"]
+        del kagemusha["device_codename"]
+
+        blockers = readiness._check_android_signed_evidence_summary_values([report])
+        summary = readiness._android_signed_evidence_summary([report])
+
+        self.assertEqual(
+            [item["code"] for item in blockers],
+            [
+                "android_signed_evidence_summary_missing",
+                "android_signed_evidence_summary_missing",
+            ],
+        )
+        self.assertEqual(
+            {item["field"] for item in blockers},
+            {"device_model", "device_codename"},
+        )
+        self.assertNotIn("slot-0", summary)
+
+    def test_android_signed_evidence_summary_rejects_single_missing_identity_without_partial_reflection(
+        self,
+    ) -> None:
+        report = direct_android_signed_evidence_report()
+        kagemusha = report["kagemusha"]
+        assert isinstance(kagemusha, dict)
+        del kagemusha["device_codename"]
+
+        blockers = readiness._check_android_signed_evidence_summary_values([report])
+        summary = readiness._android_signed_evidence_summary([report])
+
+        self.assertEqual(
+            [item["code"] for item in blockers],
+            ["android_signed_evidence_summary_missing"],
+        )
+        self.assertEqual(blockers[0]["field"], "device_codename")
+        self.assertNotIn("slot-0", summary)
+
+    def test_android_signed_evidence_summary_rejects_unsafe_direct_slot_keys(
+        self,
+    ) -> None:
+        cases = (
+            ("secret", "token=supersecret-slot", "supersecret"),
+            ("control", "slot-\x1b[31m", "\x1b"),
+            ("path", "../outside", None),
+        )
+
+        for _label, slot, forbidden in cases:
+            with self.subTest(slot=slot):
+                report = direct_android_signed_evidence_report(slot=slot)
+
+                blockers = readiness._check_android_signed_evidence_summary_values(
+                    [report]
+                )
+                summary = readiness._android_signed_evidence_summary([report])
+                rendered = json.dumps(
+                    {"blockers": blockers, "summary": summary},
+                    sort_keys=True,
+                )
+
+                self.assertEqual(
+                    [item["code"] for item in blockers],
+                    ["android_signed_evidence_summary_slot_invalid"],
+                )
+                self.assertEqual(summary, {})
+                if forbidden is not None:
+                    self.assertNotIn(forbidden, rendered)
+
+    def test_android_signed_evidence_summary_rejects_duplicate_safe_slot_without_overwrite(
         self,
     ) -> None:
         first = direct_android_signed_evidence_report(
-            slot="token=supersecret-slot-a",
+            slot="slot-0",
             offline_wallet_apk_sha256="5" * 64,
         )
         second = direct_android_signed_evidence_report(
-            slot="token=supersecret-slot-b",
+            slot="slot-0",
             offline_wallet_apk_sha256="9" * 64,
         )
 
@@ -10881,20 +11930,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             [item["code"] for item in blockers],
             ["android_signed_evidence_summary_slot_collision"],
         )
-        self.assertEqual(
-            blockers[0]["slot"],
-            slot_helpers.device_lab.SECRET_PATH_REDACTION,
-        )
-        self.assertEqual(
-            list(summary),
-            [slot_helpers.device_lab.SECRET_PATH_REDACTION],
-        )
-        self.assertEqual(
-            summary[slot_helpers.device_lab.SECRET_PATH_REDACTION][
-                "offline_wallet_apk_sha256"
-            ],
-            "5" * 64,
-        )
+        self.assertEqual(blockers[0]["slot"], "slot-0")
+        self.assertEqual(list(summary), ["slot-0"])
+        self.assertEqual(summary["slot-0"]["offline_wallet_apk_sha256"], "5" * 64)
         self.assertNotIn("supersecret", rendered)
 
     def test_android_signed_evidence_summary_redacts_secret_direct_values(
@@ -10917,8 +11955,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ],
         )
         self.assertNotIn("supersecret", rendered)
-        self.assertNotIn("offline_wallet_apk_path", summary["slot-0"])
-        self.assertNotIn("signer_public_key_sha256", summary["slot-0"])
+        self.assertNotIn("slot-0", summary)
 
     def test_android_rollup_rejects_unsafe_trusted_signer_map_before_root_classify(
         self,
@@ -10945,6 +11982,86 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("android_trusted_signer_invalid", rendered)
         self.assertNotIn(unsafe_key, rendered)
         self.assertNotIn("control\nsigner.pem", rendered)
+
+    def test_android_rollup_redacts_zero_trusted_signer_digest_before_root_classify(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            trusted = {"0" * 64: Path(temp) / "safe.pem"}
+
+            with mock.patch.object(
+                readiness.device_lab,
+                "classify_device_lab_root_path",
+                side_effect=AssertionError("root classification must not run"),
+            ) as classify_root:
+                summary = readiness.check_android_device_lab(
+                    Path(temp) / "slots",
+                    trusted,
+                )
+
+        classify_root.assert_not_called()
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["trusted_signer_public_key_sha256"], [])
+        self.assertEqual(
+            [item["code"] for item in summary["blockers"]],
+            ["android_trusted_signer_invalid"],
+        )
+
+    def test_android_rollup_rejects_non_mapping_trusted_signer_map_without_crash(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            with mock.patch.object(
+                readiness.device_lab,
+                "classify_device_lab_root_path",
+                side_effect=AssertionError("root classification must not run"),
+            ) as classify_root:
+                summary = readiness.check_android_device_lab(
+                    root / "slots",
+                    [("1" * 64, root / "safe.pem")],  # type: ignore[arg-type]
+                )
+
+        classify_root.assert_not_called()
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["trusted_signer_public_key_sha256"], [])
+        self.assertEqual(
+            [item["message"] for item in summary["blockers"]],
+            ["trusted signer public key map must be a mapping"],
+        )
+
+    def test_android_rollup_rejects_unrepresentable_trusted_signer_digest_without_crash(
+        self,
+    ) -> None:
+        class UnrepresentableDigest:
+            def __repr__(self) -> str:
+                raise AssertionError("digest repr must not be used")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            trusted = {
+                UnrepresentableDigest(): root / "unrepresentable.pem",
+                "1" * 64: root / "safe.pem",
+            }
+
+            with mock.patch.object(
+                readiness.device_lab,
+                "classify_device_lab_root_path",
+                side_effect=AssertionError("root classification must not run"),
+            ) as classify_root:
+                summary = readiness.check_android_device_lab(
+                    root / "slots",
+                    trusted,  # type: ignore[arg-type]
+                )
+
+        classify_root.assert_not_called()
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["trusted_signer_public_key_sha256"], ["1" * 64])
+        self.assertEqual(
+            [item["code"] for item in summary["blockers"]],
+            ["android_trusted_signer_invalid"],
+        )
 
     def test_untrusted_signed_evidence_blocks_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -13539,6 +14656,236 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertTrue(result["ok"], result["blockers"])
         self.assertEqual(result["state"], "compact_key_artifacts_validated")
 
+    def test_compact_key_staged_finalizer_rejects_missing_execution_report(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            (
+                staged_artifact_dir / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
+            ).unlink()
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged recursive compact key execution report is missing",
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_zero_execution_log_digest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            report_path = (
+                staged_artifact_dir / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
+            )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["generator_log_sha256"] = "0" * 64
+            write_json(report_path, report)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged recursive compact key execution report generator_log_sha256 "
+            "must be a non-zero SHA-256 hex digest",
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_execution_log_digest_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            report_path = (
+                staged_artifact_dir / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
+            )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["generator_log_sha256"] = "1" * 64
+            write_json(report_path, report)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged recursive compact key execution report generator_log_sha256 "
+            "must match staged generator log SHA-256",
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_execution_report_command_exactness(
+        self,
+    ) -> None:
+        cases = (
+            (
+                f" {compact_key_staged_runner.DEFAULT_COMPACT_KEY_COMMAND}",
+                "staged recursive compact key execution report command must not contain surrounding whitespace",
+                None,
+            ),
+            (
+                f"{compact_key_staged_runner.DEFAULT_COMPACT_KEY_COMMAND}\x1b",
+                "staged recursive compact key execution report command must not contain control characters",
+                "\x1b",
+            ),
+            (
+                f"{compact_key_staged_runner.DEFAULT_COMPACT_KEY_COMMAND} token=supersecret",
+                "staged recursive compact key execution report command must not contain secret-looking material",
+                "token=supersecret",
+            ),
+        )
+        for command, expected_error, forbidden in cases:
+            with self.subTest(expected_error=expected_error):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+                    create_compact_key_artifact_files(staged_artifact_dir)
+                    write_compact_key_staged_run_report(staged_artifact_dir)
+                    report_path = (
+                        staged_artifact_dir
+                        / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
+                    )
+                    report = json.loads(report_path.read_text(encoding="utf-8"))
+                    report["command"] = command
+                    write_json(report_path, report)
+                    exit_file = root / "staged.exit"
+                    exit_file.write_text("0\n", encoding="utf-8")
+                    artifact_dir = root / "published"
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = compact_key_finalizer.main(
+                            compact_key_finalizer_args(
+                                staged_artifact_dir=staged_artifact_dir,
+                                exit_file=exit_file,
+                                artifact_dir=artifact_dir,
+                            )
+                        )
+                    rendered = stderr.getvalue()
+
+                self.assertEqual(status, 1)
+                self.assertIn(expected_error, rendered)
+                if forbidden is not None:
+                    self.assertNotIn(forbidden, rendered)
+                self.assertFalse(
+                    (artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists()
+                )
+
+    def test_compact_key_staged_finalizer_rejects_run_report_zero_elapsed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(
+                staged_artifact_dir,
+                elapsed_seconds=0.0,
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged recursive compact key run report elapsed_seconds "
+            "must be a finite positive number",
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_execution_report_elapsed_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir, elapsed_seconds=2.0)
+            report_path = (
+                staged_artifact_dir / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
+            )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["elapsed_seconds"] = 3.0
+            write_json(report_path, report)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged recursive compact key execution report elapsed_seconds "
+            "must match staged run report 2.0, got 3.0",
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
     def test_compact_key_staged_finalizer_rejects_missing_exit_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -13582,6 +14929,105 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("staged keygen exit code must be 0, got 17", stderr.getvalue())
         self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_rejects_noncanonical_generated_at_before_stage(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+            args = compact_key_finalizer_args(
+                staged_artifact_dir=staged_artifact_dir,
+                exit_file=exit_file,
+                artifact_dir=artifact_dir,
+            )
+            generated_at_index = args.index("--generated-at-utc") + 1
+            args[generated_at_index] = readiness.DEFAULT_MIN_SIGNED_AT_UTC.replace(
+                "Z",
+                "+00:00",
+            )
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+            stderr.getvalue(),
+        )
+        self.assertFalse(artifact_dir.exists())
+
+    def test_compact_key_staged_finalizer_rejects_future_generated_at_before_stage(
+        self,
+    ) -> None:
+        future_generated_at = (
+            readiness.dt.datetime.now(readiness.dt.timezone.utc).replace(microsecond=0)
+            + readiness.dt.timedelta(days=1)
+        ).isoformat().replace("+00:00", "Z")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+            args = compact_key_finalizer_args(
+                staged_artifact_dir=staged_artifact_dir,
+                exit_file=exit_file,
+                artifact_dir=artifact_dir,
+            )
+            generated_at_index = args.index("--generated-at-utc") + 1
+            args[generated_at_index] = future_generated_at
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--generated-at-utc must not be ahead of the helper clock skew allowance",
+            stderr.getvalue(),
+        )
+        self.assertFalse(artifact_dir.exists())
+
+    def test_compact_key_staged_finalizer_rejects_negative_future_skew_limit(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+            args = [
+                *compact_key_finalizer_args(
+                    staged_artifact_dir=staged_artifact_dir,
+                    exit_file=exit_file,
+                    artifact_dir=artifact_dir,
+                ),
+                "--max-generated-at-future-skew-seconds",
+                "-1",
+            ]
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--max-generated-at-future-skew-seconds must be non-negative",
+            stderr.getvalue(),
+        )
+        self.assertFalse(artifact_dir.exists())
 
     def test_compact_key_staged_finalizer_rejects_padded_zero_exit_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -14390,6 +15836,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 mock.patch.object(
                     compact_key_finalizer,
                     "validate_staged_run_report",
+                    return_value=(1.0, []),
+                ),
+                mock.patch.object(
+                    compact_key_finalizer,
+                    "validate_staged_execution_report",
                     return_value=[],
                 ),
                 mock.patch.object(
@@ -15388,6 +16839,218 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertTrue(result["ok"], result["blockers"])
         self.assertEqual(result["state"], "production_width_proof_passed")
 
+    def test_lineage_proof_staged_finalizer_rejects_missing_execution_report(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(staged_artifact_dir)
+            (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES["append"]
+            ).unlink()
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged append lineage key artifact execution report is missing",
+            stderr.getvalue(),
+        )
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_rejects_zero_execution_log_digest(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "init",
+                "staged init lineage key artifact execution report log_sha256 "
+                "must be a non-zero SHA-256 hex digest",
+            ),
+            (
+                "append",
+                "staged append lineage key artifact execution report log_sha256 "
+                "must be a non-zero SHA-256 hex digest",
+            ),
+            (
+                "proof",
+                "staged lineage proof execution report log_sha256 "
+                "must be a non-zero SHA-256 hex digest",
+            ),
+        )
+        for profile, expected_error in cases:
+            with self.subTest(profile=profile):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+                    create_lineage_artifact_files(staged_artifact_dir)
+                    write_passing_lineage_proof_log(
+                        staged_artifact_dir
+                        / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                            "record_archive_proof"
+                        ]
+                    )
+                    write_lineage_staged_run_report(staged_artifact_dir)
+                    report_path = (
+                        staged_artifact_dir
+                        / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES[
+                            profile
+                        ]
+                    )
+                    report = json.loads(report_path.read_text(encoding="utf-8"))
+                    report["log_sha256"] = "0" * 64
+                    write_json(report_path, report)
+                    exit_file = root / "staged.exit"
+                    exit_file.write_text("0\n", encoding="utf-8")
+                    artifact_dir = root / "published"
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = lineage_finalizer.main(
+                            lineage_finalizer_args(
+                                staged_artifact_dir=staged_artifact_dir,
+                                exit_file=exit_file,
+                                artifact_dir=artifact_dir,
+                            )
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertIn(expected_error, stderr.getvalue())
+                self.assertFalse(
+                    (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+                )
+
+    def test_lineage_proof_staged_finalizer_rejects_execution_log_digest_drift(
+        self,
+    ) -> None:
+        cases = (
+            "init",
+            "append",
+            "proof",
+        )
+        for profile in cases:
+            with self.subTest(profile=profile):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+                    create_lineage_artifact_files(staged_artifact_dir)
+                    write_passing_lineage_proof_log(
+                        staged_artifact_dir
+                        / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                            "record_archive_proof"
+                        ]
+                    )
+                    write_lineage_staged_run_report(staged_artifact_dir)
+                    report_path = (
+                        staged_artifact_dir
+                        / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES[
+                            profile
+                        ]
+                    )
+                    report = json.loads(report_path.read_text(encoding="utf-8"))
+                    report["log_sha256"] = "1" * 64
+                    write_json(report_path, report)
+                    exit_file = root / "staged.exit"
+                    exit_file.write_text("0\n", encoding="utf-8")
+                    artifact_dir = root / "published"
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = lineage_finalizer.main(
+                            lineage_finalizer_args(
+                                staged_artifact_dir=staged_artifact_dir,
+                                exit_file=exit_file,
+                                artifact_dir=artifact_dir,
+                            )
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertIn("log_sha256 must match staged log SHA-256", stderr.getvalue())
+                self.assertFalse(
+                    (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+                )
+
+    def test_lineage_proof_staged_finalizer_rejects_execution_report_command_exactness(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "init",
+                f"{lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS['init']}\x1b",
+                "staged init lineage key artifact execution report command must not contain control characters",
+                "\x1b",
+            ),
+            (
+                "proof",
+                f"{lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND} token=supersecret",
+                "staged lineage proof execution report command must not contain secret-looking material",
+                "token=supersecret",
+            ),
+        )
+        for profile, command, expected_error, forbidden in cases:
+            with self.subTest(profile=profile):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+                    create_lineage_artifact_files(staged_artifact_dir)
+                    write_passing_lineage_proof_log(
+                        staged_artifact_dir
+                        / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                            "record_archive_proof"
+                        ]
+                    )
+                    write_lineage_staged_run_report(staged_artifact_dir)
+                    report_path = (
+                        staged_artifact_dir
+                        / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES[
+                            profile
+                        ]
+                    )
+                    report = json.loads(report_path.read_text(encoding="utf-8"))
+                    report["command"] = command
+                    write_json(report_path, report)
+                    exit_file = root / "staged.exit"
+                    exit_file.write_text("0\n", encoding="utf-8")
+                    artifact_dir = root / "published"
+
+                    stderr = io.StringIO()
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = lineage_finalizer.main(
+                            lineage_finalizer_args(
+                                staged_artifact_dir=staged_artifact_dir,
+                                exit_file=exit_file,
+                                artifact_dir=artifact_dir,
+                            )
+                        )
+                    rendered = stderr.getvalue()
+
+                self.assertEqual(status, 1)
+                self.assertIn(expected_error, rendered)
+                self.assertNotIn(forbidden, rendered)
+                self.assertFalse(
+                    (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+                )
+
     def test_lineage_proof_staged_finalizer_rejects_missing_exit_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -15632,6 +17295,117 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(
             (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
         )
+
+    def test_lineage_proof_staged_finalizer_rejects_noncanonical_generated_at_before_stage(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+            args = lineage_finalizer_args(
+                staged_artifact_dir=staged_artifact_dir,
+                exit_file=exit_file,
+                artifact_dir=artifact_dir,
+            )
+            generated_at_index = args.index("--generated-at-utc") + 1
+            args[generated_at_index] = readiness.DEFAULT_MIN_SIGNED_AT_UTC.replace(
+                "Z",
+                "+00:00",
+            )
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+            stderr.getvalue(),
+        )
+        self.assertFalse(artifact_dir.exists())
+
+    def test_lineage_proof_staged_finalizer_rejects_future_generated_at_before_stage(
+        self,
+    ) -> None:
+        future_generated_at = (
+            readiness.dt.datetime.now(readiness.dt.timezone.utc).replace(microsecond=0)
+            + readiness.dt.timedelta(days=1)
+        ).isoformat().replace("+00:00", "Z")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+            args = lineage_finalizer_args(
+                staged_artifact_dir=staged_artifact_dir,
+                exit_file=exit_file,
+                artifact_dir=artifact_dir,
+            )
+            generated_at_index = args.index("--generated-at-utc") + 1
+            args[generated_at_index] = future_generated_at
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--generated-at-utc must not be ahead of the helper clock skew allowance",
+            stderr.getvalue(),
+        )
+        self.assertFalse(artifact_dir.exists())
+
+    def test_lineage_proof_staged_finalizer_rejects_negative_future_skew_limit(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+            args = [
+                *lineage_finalizer_args(
+                    staged_artifact_dir=staged_artifact_dir,
+                    exit_file=exit_file,
+                    artifact_dir=artifact_dir,
+                ),
+                "--max-generated-at-future-skew-seconds",
+                "-1",
+            ]
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--max-generated-at-future-skew-seconds must be non-negative",
+            stderr.getvalue(),
+        )
+        self.assertFalse(artifact_dir.exists())
 
     def test_lineage_proof_staged_finalizer_requires_run_report_on_success_marker(
         self,
@@ -16474,6 +18248,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 mock.patch.object(
                     lineage_finalizer,
                     "validate_staged_run_report",
+                    return_value=[],
+                ),
+                mock.patch.object(
+                    lineage_finalizer,
+                    "validate_staged_execution_reports",
                     return_value=[],
                 ),
                 mock.patch.object(

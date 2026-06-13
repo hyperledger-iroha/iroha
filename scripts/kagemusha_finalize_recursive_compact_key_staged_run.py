@@ -39,7 +39,10 @@ STAGED_FINALIZER_SUMMARY_SCHEMA = (
 EXIT_MARKER_MAX_BYTES = 32
 RUN_REPORT_FILENAME = "recursive-compact-key-staged-run.json"
 STAGED_RUN_REPORT_SCHEMA = "iroha.kagemusha.recursive_compact_key_staged_run.v1"
+EXECUTION_REPORT_FILENAME = "recursive-compact-key-execution.json"
+EXECUTION_REPORT_SCHEMA = "iroha.kagemusha.recursive_compact_key_execution.v1"
 MAX_STAGED_RUN_REPORT_BYTES = 16 * 1024
+MAX_EXECUTION_REPORT_BYTES = 16 * 1024
 CONTROL_EXIT_MARKER_REDACTION = "<unsafe-exit-marker>"
 SECRET_EXIT_MARKER_REDACTION = "<redacted-secret-marker>"
 
@@ -395,20 +398,20 @@ def validate_staged_run_report(
     staged_artifact_dir: Path,
     expected_exit_code: int,
     expected_command: str,
-) -> list[str]:
+) -> tuple[float | None, list[str]]:
     """Validate the staged runner report before trusting a successful marker."""
 
     label = "staged recursive compact key run report"
     path = staged_artifact_dir / RUN_REPORT_FILENAME
     text, errors = _read_small_text_file(path, label, max_bytes=MAX_STAGED_RUN_REPORT_BYTES)
     if errors:
-        return errors
+        return None, errors
     assert text is not None
     document, errors = _strict_json_loads(text, label)
     if errors:
-        return errors
+        return None, errors
     if not isinstance(document, dict):
-        return [f"{label} must be a JSON object"]
+        return None, [f"{label} must be a JSON object"]
     allowed_keys = {
         "schema",
         "command",
@@ -419,14 +422,115 @@ def validate_staged_run_report(
     }
     extra_keys = sorted(set(document) - allowed_keys)
     if extra_keys:
+        return None, [
+            f"{label} contains unexpected field {device_lab._display_path(extra_keys[0])}"
+        ]
+    missing_keys = sorted(allowed_keys - set(document))
+    if missing_keys:
+        return None, [f"{label} is missing {missing_keys[0]}"]
+    if document["schema"] != STAGED_RUN_REPORT_SCHEMA:
+        return None, [f"{label} schema must be {STAGED_RUN_REPORT_SCHEMA}"]
+    command_errors = _validate_report_command(
+        document["command"],
+        label,
+        expected_command,
+        "ABI-7 compact key command",
+    )
+    if command_errors:
+        return None, command_errors
+    exit_code = document["exit_code"]
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        return None, [f"{label} exit_code must be an integer"]
+    if exit_code != expected_exit_code:
+        return None, [
+            f"{label} exit_code must match staged keygen exit marker "
+            f"{expected_exit_code}, got {exit_code}"
+        ]
+    elapsed_seconds = document["elapsed_seconds"]
+    if isinstance(elapsed_seconds, bool) or not isinstance(elapsed_seconds, (int, float)):
+        return None, [f"{label} elapsed_seconds must be a finite positive number"]
+    if not math.isfinite(float(elapsed_seconds)) or float(elapsed_seconds) <= 0:
+        return None, [f"{label} elapsed_seconds must be a finite positive number"]
+    elapsed_value = float(elapsed_seconds)
+    if document["generator_log_path"] != readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME:
+        return None, [
+            f"{label} generator_log_path must be "
+            f"{readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}"
+        ]
+    size = document["generator_log_size_bytes"]
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        return None, [f"{label} generator_log_size_bytes must be a non-negative integer"]
+    try:
+        actual_size = (
+            staged_artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+        ).stat().st_size
+    except OSError:
+        return None, [f"{label} generator log size could not be checked"]
+    if size != actual_size:
+        return None, [
+            f"{label} generator_log_size_bytes must match staged generator log "
+            f"size {actual_size}, got {size}"
+        ]
+    return elapsed_value, []
+
+
+def _validate_sha256_hex(value: object, label: str, field: str) -> list[str]:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value)
+        or value == "0" * 64
+    ):
+        return [f"{label} {field} must be a non-zero SHA-256 hex digest"]
+    return []
+
+
+def validate_staged_execution_report(
+    *,
+    staged_artifact_dir: Path,
+    expected_exit_code: int,
+    expected_command: str,
+    expected_elapsed_seconds: float,
+) -> list[str]:
+    """Validate the staged execution report before publishing key evidence."""
+
+    label = "staged recursive compact key execution report"
+    path = staged_artifact_dir / EXECUTION_REPORT_FILENAME
+    text, errors = _read_small_text_file(
+        path,
+        label,
+        max_bytes=MAX_EXECUTION_REPORT_BYTES,
+    )
+    if errors:
+        return errors
+    assert text is not None
+    document, errors = _strict_json_loads(text, label)
+    if errors:
+        return errors
+    if not isinstance(document, dict):
+        return [f"{label} must be a JSON object"]
+    allowed_keys = {
+        "schema",
+        "phase",
+        "command",
+        "exit_code",
+        "elapsed_seconds",
+        "generator_log_path",
+        "generator_log_sha256",
+        "generator_log_size_bytes",
+    }
+    extra_keys = sorted(set(document) - allowed_keys)
+    if extra_keys:
         return [
             f"{label} contains unexpected field {device_lab._display_path(extra_keys[0])}"
         ]
     missing_keys = sorted(allowed_keys - set(document))
     if missing_keys:
         return [f"{label} is missing {missing_keys[0]}"]
-    if document["schema"] != STAGED_RUN_REPORT_SCHEMA:
-        return [f"{label} schema must be {STAGED_RUN_REPORT_SCHEMA}"]
+    if document["schema"] != EXECUTION_REPORT_SCHEMA:
+        return [f"{label} schema must be {EXECUTION_REPORT_SCHEMA}"]
+    if document["phase"] != "recursive compact keygen command":
+        return [f"{label} phase must be recursive compact keygen command"]
     command_errors = _validate_report_command(
         document["command"],
         label,
@@ -444,28 +548,48 @@ def validate_staged_run_report(
             f"{expected_exit_code}, got {exit_code}"
         ]
     elapsed_seconds = document["elapsed_seconds"]
-    if isinstance(elapsed_seconds, bool) or not isinstance(elapsed_seconds, (int, float)):
-        return [f"{label} elapsed_seconds must be a finite non-negative number"]
-    if not math.isfinite(float(elapsed_seconds)) or float(elapsed_seconds) < 0:
-        return [f"{label} elapsed_seconds must be a finite non-negative number"]
+    if (
+        isinstance(elapsed_seconds, bool)
+        or not isinstance(elapsed_seconds, (int, float))
+        or not math.isfinite(float(elapsed_seconds))
+        or float(elapsed_seconds) <= 0
+    ):
+        return [f"{label} elapsed_seconds must be a finite positive number"]
+    if float(elapsed_seconds) != expected_elapsed_seconds:
+        return [
+            f"{label} elapsed_seconds must match staged run report "
+            f"{expected_elapsed_seconds}, got {float(elapsed_seconds)}"
+        ]
     if document["generator_log_path"] != readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME:
         return [
             f"{label} generator_log_path must be "
             f"{readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}"
         ]
-    size = document["generator_log_size_bytes"]
-    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-        return [f"{label} generator_log_size_bytes must be a non-negative integer"]
+    log_digest = document["generator_log_sha256"]
+    digest_errors = _validate_sha256_hex(log_digest, label, "generator_log_sha256")
+    if digest_errors:
+        return digest_errors
+    log_size = document["generator_log_size_bytes"]
+    if isinstance(log_size, bool) or not isinstance(log_size, int) or log_size <= 0:
+        return [f"{label} generator_log_size_bytes must be a positive integer"]
+    log_path = staged_artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+    actual_digest, actual_errors = compact_evidence._sha256_file(
+        log_path,
+        "staged recursive compact key execution report generator log",
+    )
+    if actual_errors:
+        return actual_errors
+    assert actual_digest is not None
+    if log_digest != actual_digest:
+        return [f"{label} generator_log_sha256 must match staged generator log SHA-256"]
     try:
-        actual_size = (
-            staged_artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
-        ).stat().st_size
+        actual_size = log_path.stat().st_size
     except OSError:
         return [f"{label} generator log size could not be checked"]
-    if size != actual_size:
+    if log_size != actual_size:
         return [
             f"{label} generator_log_size_bytes must match staged generator log "
-            f"size {actual_size}, got {size}"
+            f"size {actual_size}, got {log_size}"
         ]
     return []
 
@@ -545,6 +669,7 @@ def stage_compact_key_evidence(
     staged_artifact_dir: Path,
     stage_dir: Path,
     generated_at_utc: str,
+    max_generated_at_future_skew_seconds: int,
     command: str,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Copy staged keygen artifacts into ``stage_dir`` and build evidence."""
@@ -566,6 +691,7 @@ def stage_compact_key_evidence(
         artifact_dir=stage_dir,
         command=command,
         generated_at_utc=generated_at_utc,
+        max_generated_at_future_skew_seconds=max_generated_at_future_skew_seconds,
     )
     if evidence_errors:
         return None, evidence_errors
@@ -692,15 +818,36 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
         return 1, None, errors
     assert exit_code_text is not None
     errors.extend(compact_evidence._validate_generated_at_utc(args.generated_at_utc))
+    generated_at, timestamp_error = readiness.parse_utc_timestamp(
+        args.generated_at_utc,
+        "--generated-at-utc",
+    )
+    if timestamp_error is not None:
+        errors.append(timestamp_error["message"])
+    errors.extend(
+        compact_evidence._validate_generated_at_future_skew(
+            generated_at,
+            args.max_generated_at_future_skew_seconds,
+        )
+    )
     errors.extend(readiness.validate_compact_key_command(args.command))
     if exit_code_text == "0":
-        errors.extend(
-            validate_staged_run_report(
-                staged_artifact_dir=args.staged_artifact_dir,
-                expected_exit_code=0,
-                expected_command=args.command,
-            )
+        run_elapsed_seconds, report_errors = validate_staged_run_report(
+            staged_artifact_dir=args.staged_artifact_dir,
+            expected_exit_code=0,
+            expected_command=args.command,
         )
+        errors.extend(report_errors)
+        if not report_errors:
+            assert run_elapsed_seconds is not None
+            errors.extend(
+                validate_staged_execution_report(
+                    staged_artifact_dir=args.staged_artifact_dir,
+                    expected_exit_code=0,
+                    expected_command=args.command,
+                    expected_elapsed_seconds=run_elapsed_seconds,
+                )
+            )
     if errors:
         return 1, None, errors
 
@@ -725,6 +872,9 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
             staged_artifact_dir=args.staged_artifact_dir,
             stage_dir=stage_dir,
             generated_at_utc=args.generated_at_utc,
+            max_generated_at_future_skew_seconds=(
+                args.max_generated_at_future_skew_seconds
+            ),
             command=args.command,
         )
         if stage_errors:
@@ -767,6 +917,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--artifact-dir", type=Path, default=DEFAULT_ARTIFACT_DIR)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--generated-at-utc", default=_default_generated_at_utc())
+    parser.add_argument(
+        "--max-generated-at-future-skew-seconds",
+        type=int,
+        default=readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS,
+        help=(
+            "Maximum number of seconds generated_at_utc may be ahead of the "
+            "finalizer clock."
+        ),
+    )
     parser.add_argument("--command", default=compact_evidence.DEFAULT_COMPACT_KEY_COMMAND)
     parser.add_argument(
         "--replace",

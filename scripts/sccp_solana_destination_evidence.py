@@ -102,7 +102,7 @@ def parse_program_bytes_base64(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must not be empty")
     try:
         raw = base64.b64decode(text, validate=True)
-    except (ValueError, binascii.Error):
+    except (TypeError, ValueError, binascii.Error):
         raise argparse.ArgumentTypeError(f"{label} must be base64") from None
     if base64.b64encode(raw).decode("ascii") != text:
         raise argparse.ArgumentTypeError(f"{label} must be canonical base64")

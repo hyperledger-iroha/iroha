@@ -3420,6 +3420,37 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         ),
     ),
     (
+        "scripts/sccp_all_lanes_evidence.py",
+        (
+            "def _source_material_template_hashes(",
+            "def _reject_source_material_template_hashes(",
+            "def _reject_source_adapter_audit_template_hashes(",
+            "not built-in template material",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_all_lanes_evidence_test.py",
+        (
+            "test_all_lanes_evidence_rejects_source_material_template_hashes_for_all_lanes",
+            "test_all_lanes_evidence_rejects_source_adapter_audit_hash_template_replays",
+            "not built-in template material",
+        ),
+    ),
+    (
+        "scripts/sccp_release_bundle.py",
+        (
+            "def _source_adapter_gate_template_audit_errors(",
+            "not built-in template material",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_rejects_public_source_adapter_gate_template_audit_replays",
+            "not built-in template material",
+        ),
+    ),
+    (
         "scripts/sccp_release_readiness_report.py",
         (
             "def _sccp_source_material_template_rejection_gate_inventory_errors(",
@@ -3560,6 +3591,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TON accountStates account address must be a canonical raw address",
             "TON verifier account code_boc is invalid",
             "TON live code BoC base64 metadata is invalid",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (TypeError, binascii.Error, ValueError):",
             'raise RuntimeError(f"{label} must be 32-byte hex or base64") from None',
             'raise RuntimeError("TON verifier account code_boc is invalid") from None',
             'raise ValueError("TON live code BoC base64 metadata is invalid") from None',
@@ -3604,9 +3637,11 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_live_ton_evidence_redacts_account_address_parser_failures",
             "def test_live_ton_evidence_redacts_code_boc_parser_failures",
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
+            "for exception_type in (TypeError, ValueError):",
             "secret-token-ton-error",
             "secret-token invalid TON accountStates payload",
             "secret-token hash base64",
+            "secret-token {label} parser detail",
             "duplicate JSON keys",
             "secret-token",
             'assert "secret-token" not in rendered',
@@ -3662,6 +3697,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "generated offline full TOML arguments are invalid",
             'f"/wallet/getcontract returned malformed {label} bytecode"',
             'f"/wallet/getcontract returned malformed {label} contract_address"',
+            "except (argparse.ArgumentTypeError, TypeError, RuntimeError):",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
             'f"TRON constant call {function_selector} returned non-hex data"',
             "except (RuntimeError, TypeError, ValueError):",
             "def _unsupported_tron_field_detail(",
@@ -3693,8 +3730,10 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_live_evidence_redacts_witness_schedule_transition_encoder_failures",
             "def test_live_evidence_redacts_witness_seal_encoder_failures",
             "def test_live_evidence_redacts_transaction_source_proof_encoder_failures",
+            "def test_live_evidence_redacts_source_event_topic_parser_typeerror",
+            "def test_live_evidence_redacts_route_canary_topic_parser_typeerror",
             "def test_live_evidence_redacts_unsupported_transaction_result_fields",
-            "for exception_type in (ValueError, RuntimeError):",
+            "for exception_type in (TypeError, ValueError, RuntimeError):",
             "secret-token-tron-error",
             "secret-token-result-field",
             "secret-token-detail-field",
@@ -3714,6 +3753,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "secret-token witness seal message parser detail",
             "secret-token witness seal proof parser detail",
             "secret-token transaction source proof parser detail",
+            "secret-token source-event log topic0 parser detail",
+            "secret-token route-canary log topic0 parser detail",
             "solid block header proof is invalid",
             "witness schedule payload is invalid",
             "witness schedule transition 0 message is invalid",
@@ -3737,6 +3778,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TRON DPoS source gate cannot be recomputed",
             "TRON source bridge config hash cannot be recomputed",
             "ETH source bridge config hash cannot be recomputed",
+            "except (SystemExit, TypeError, ValueError, RuntimeError):",
             "source evidence rejected by canonical validator",
             "TRON source bridge address metadata is invalid",
             "TRON source bridge runtime bytecode metadata is invalid",
@@ -3746,12 +3788,15 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "raise ValueError(f\"{label}: invalid TOML\") from None",
             "raise ValueError(f\"{label}:{line_number}: invalid string\") from None",
             "raise ValueError(f\"{label}:{line_number}: invalid array\") from None",
+            "except (TypeError, ValueError, binascii.Error):",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
             "def _minimal_toml_duplicate_key_detail(",
             "duplicate key with sensitive name",
             "duplicate key with malformed name",
             "def _toml_unsupported_section_detail(",
             "unsupported zk section with sensitive name",
             "unsupported zk section with malformed name",
+            "except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):",
             "raise ValueError(f\"{label}:{line_number}: invalid metadata comment\") from None",
             "source record hash metadata cannot be recomputed",
             "source record hashes cannot be recomputed",
@@ -3761,7 +3806,11 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
         (
             "def test_all_lanes_evidence_redacts_source_gate_recompute_failures",
+            "for exception_type in (TypeError, ValueError, RuntimeError):",
+            "for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):",
             "def test_all_lanes_evidence_redacts_source_validator_failures",
+            "def test_all_lanes_evidence_redacts_destination_binding_recompute_failures",
+            "def test_all_lanes_evidence_redacts_destination_identity_failures",
             "def test_all_lanes_loader_redacts_toml_parser_failures",
             "def test_all_lanes_minimal_toml_parser_redacts_json_exception_causes",
             "def test_all_lanes_minimal_toml_parser_redacts_sensitive_duplicate_keys",
@@ -3779,9 +3828,14 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "route|operator-zk-section",
             "secret-token comment",
             "secret-token all-lanes base64",
+            "secret-token destination binding material",
+            "secret-token {label} parser detail",
+            "for exception_type in (TypeError, ValueError):",
             "def test_all_lanes_redacts_tron_live_metadata_parser_failures",
             "def test_all_lanes_evidence_redacts_source_record_hash_comment_failures",
             "def test_all_lanes_evidence_redacts_source_record_hash_summary_failures",
+            "source_record_exception_types = (",
+            "source_validator_exception_types = (",
         ),
     ),
     (
@@ -3883,6 +3937,7 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "test_evm_source_json_rpc_redacts_transport_and_error_response_details",
             "secret-token-evm-source-error",
             "secret-token {target_method} parser detail",
+            "for exception_type in (TypeError, RuntimeError):",
             "secret-token invalid EVM source JSON-RPC payload",
             "secret-token-source-bridge-runtime",
             'assert "secret-token" not in captured.err',
@@ -4681,6 +4736,7 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
             "canary_evidence_source = canary.get(\"evidence_source\")",
             "live route canary evidence source must be a non-empty canonical string",
             "route_allowlist_hash cannot be recomputed",
+            "except (SystemExit, TypeError, ValueError, RuntimeError):",
         ),
     ),
     (
@@ -4688,6 +4744,8 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
         (
             "def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars",
             "def test_all_lanes_evidence_redacts_route_allowlist_recompute_failures",
+            "secret-token operator route material",
+            "for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):",
             "\"status\",",
             "123,",
             "\" passed \"",
@@ -4761,6 +4819,8 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def _integer_list_field_errors(",
             "must not contain duplicate integers",
             "contains {field_kind} field name with sensitive name",
+            "def _source_adapter_gate_hash_role_fields(",
+            "source_adapter_gate.audit_hashes",
         ),
     ),
     (
@@ -4805,6 +4865,8 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "blockers must be empty when ready",
             "blockers must be empty ",
             "when gate is required",
+            "def _source_adapter_gate_hash_role_fields(",
+            "source_adapter_gate.audit_hashes",
             "def _route_canary_common_semantic_errors(",
             "status must be passed",
             "evidence_source must be {expected_source}",
@@ -4877,6 +4939,8 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def test_release_bundle_rejects_copied_evidence_source_gate_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_route_canary_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_route_canary_evidence_hash_replay_before_render",
+            "def test_release_bundle_rejects_copied_route_canary_source_gate_replay_before_render",
+            "def test_release_bundle_verifier_rejects_route_canary_source_gate_hash_replay",
             "def test_release_bundle_rejects_copied_evidence_evm_route_canary_transcript_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_tron_route_canary_transcript_drift_before_render",
             "def test_release_bundle_rejects_copied_evidence_solana_ton_route_canary_drift_before_render",
@@ -6334,6 +6398,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "native_sdk_artifacts[",
             "native_sdk_artifacts contains duplicate sdk",
             "native_sdk_artifacts contains unknown sdk",
+            "native_sdk_artifacts must match expected SDK order",
             "def _native_evm_prover_sdk_artifact_key_blocker(",
             ".sdk contains control character",
             ".sdk must be printable ASCII",
@@ -6468,6 +6533,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash",
             "def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifacts",
+            "def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_order",
             "def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifacts",
             "def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "secret_token_native_sdk_field",
@@ -6655,6 +6721,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash",
             "def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash",
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifacts",
+            "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_order",
             "def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifacts",
             "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "secret_token_native_sdk_field",
@@ -7253,6 +7320,8 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "readiness report native_evm_prover_bundle",
             "cross_sdk_fixture_parity_artifact sha256 must match",
             "native_prover_self_test_artifact sha256 must match",
+            "native_sdk_artifacts must match expected SDK order",
+            "sdk_artifacts must match expected SDK order",
             "def _native_evm_prover_sdk_artifact_key_blocker(",
             "def _native_evm_prover_summary_sdk_artifact_key_blocker(",
             ".sdk must be printable ASCII",
@@ -7295,6 +7364,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "def _native_evm_validation_blockers(",
             'return f"{item_label} contains sensitive name"',
             "def _native_evm_validation_blockers_cell(",
+            "native_sdk_artifacts must match expected SDK order",
         ),
     ),
     (
@@ -7315,6 +7385,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "sha256 must match implementation_hash",
             "audit_hashes missing field",
             "sdk_artifacts missing sdk",
+            "sdk_artifacts must match expected SDK order",
             "validation_status must be passed",
             "validation_blockers must be empty",
             "validation_blockers must be empty when validation_status is passed",
@@ -7332,6 +7403,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_bundle_rejects_malformed_copied_native_evm_summary_before_render",
             "test_release_bundle_rejects_blocked_copied_native_evm_summary_before_render",
             "test_release_bundle_rejects_malformed_copied_native_evm_artifacts_before_render",
+            "test_release_bundle_rejects_copied_native_evm_sdk_artifact_order_before_render",
             "test_release_bundle_rejects_copied_native_evm_summary_binding_before_render",
             "test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields",
             "test_release_bundle_verifier_rejects_duplicate_native_evm_prover_nested_json_keys",
@@ -7344,6 +7416,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "secret-token-native-blocker",
             "validation_blockers[0] contains sensitive name",
             "validation_blockers contains blocker with sensitive name",
+            "test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_order",
             "test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_drift",
             "test_release_bundle_verifier_rejects_native_evm_prover_sdk_implementation_artifact_drift",
             "test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture",
@@ -7356,6 +7429,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifact_ids",
             "test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_sdk_artifact_ids",
+            "test_release_bundle_verifier_rejects_native_evm_prover_report_sdk_artifact_order",
             "test_release_bundle_verifier_rejects_native_evm_prover_malformed_unknown_field_names",
             "secret-token-sdk",
             "test_release_bundle_verifier_blocks_malformed_native_prover_blockers",
@@ -7389,6 +7463,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_readiness_report_redacts_malformed_native_evm_prover_fixture_json",
             "test_release_readiness_report_redacts_native_evm_manifest_artifact_path_failure",
             "test_release_readiness_report_redacts_native_evm_payload_artifact_path_failures",
+            "test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_order",
             "test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_drift",
             "secret-token-sdk",
@@ -7841,6 +7916,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "source_adapter_gate_audit_hashes must be empty when gate is not required",
             "source_adapter_gate_required must be a boolean",
             "source_adapter_gate_audit_hashes must be an object",
+            "source_adapter_gate hash role",
             "def _cryptographic_evidence_lane_binding_errors(",
             "readiness report cryptographic_evidence does not cover every lane",
             "_expected_cryptographic_evidence(report_evidence)",
@@ -7885,6 +7961,8 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "route_canary_block_number must be null or a positive u64 integer",
             "route_canary_block_timestamp must be null or a non-negative u64 integer",
             "def _cryptographic_evidence_source_adapter_gate_bundle_errors(",
+            "def _cryptographic_evidence_source_adapter_gate_hash_role_errors(",
+            "source_adapter_gate hash role",
             "source_adapter_gate_required must be false for this domain",
             "source_adapter_gate_required must be true for this domain",
             "source_adapter_gate_hash must be empty when gate is not required",
@@ -7910,6 +7988,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_rejects_oversized_copied_crypto_evidence_receipt_before_render",
             "test_release_bundle_rejects_oversized_copied_tron_crypto_evidence_before_render",
             "test_release_bundle_rejects_copied_crypto_source_adapter_gate_drift_before_render",
+            "test_release_bundle_rejects_copied_crypto_source_adapter_gate_hash_role_replay",
             "evm_message_proof_accepted_transaction for finalized ",
             "test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render",
             "test_release_bundle_verifier_rejects_unbound_crypto_evidence",
@@ -7921,6 +8000,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_crypto_evidence_lane_binding_drift",
             "test_release_bundle_verifier_rejects_crypto_evidence_inventory_drift",
             "test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift",
+            "test_release_bundle_verifier_rejects_crypto_source_gate_hash_role_replay",
             "test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift",
             "test_release_bundle_verifier_rejects_crypto_evidence_malformed_source_adapter_gate_audit_keys",
             "test_release_bundle_verifier_suppresses_crypto_evidence_malformed_markdown_leaks",
@@ -7965,6 +8045,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "USER_PROVER_REQUIRED_LANE_BACKENDS",
             "USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK",
             "def _submission_surface_inventory_errors(",
+            "must match expected helpers",
             "readiness report user_prover_submission_surfaces is missing",
             "_submission_surface_inventory_errors(surfaces)",
             "_expected_submission_surfaces(report)",
@@ -8039,6 +8120,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "must match copied corridor phases",
             "contains duplicate ",
             "required helper:",
+            "must match expected helpers",
             "contains SDK key with",
             "contains SDK key with sensitive name",
             "contains phase with",
@@ -8067,6 +8149,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "test_release_bundle_rejects_malformed_copied_submission_surface_before_render",
             "test_release_bundle_rejects_blocked_copied_submission_surface_before_render",
             "test_release_bundle_rejects_copied_submission_surface_binding_before_render",
+            "test_release_bundle_rejects_copied_submission_surface_extra_helpers_before_render",
             "test_release_bundle_verifier_required_helper_inventory_matches_report",
             "test_release_bundle_verifier_expected_submission_surfaces_are_independent",
             "test_release_bundle_verifier_helper_inventory_is_independent",
@@ -8092,6 +8175,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "validation_blockers contains blocker with sensitive name",
             "test_release_bundle_verifier_rejects_submission_surface_backend_mismatch",
             "test_release_bundle_verifier_rejects_missing_required_submission_surface_helper",
+            "test_release_bundle_verifier_rejects_submission_surface_extra_helpers",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper_map_keys",
             "secret-token-sdk",
             "sdk_helper_symbols_by_sdk contains SDK key with sensitive name",
@@ -8421,6 +8505,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         (
             "destination binding cannot be recomputed",
             "verifier_identity is not canonical for",
+            "except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
             'errors.append(f"{label} is invalid")',
             "Solana ProgramData account is not canonical",
             "Solana Program account data base64 metadata",
@@ -8436,6 +8522,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TON route canary verifier identity is invalid",
             "TRON route canary verifier address metadata is invalid",
             "def _cli_error_detail(",
+            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
             "SCCP all-lanes evidence validation failed",
         ),
     ),
@@ -8450,6 +8537,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "JSON-RPC {method} returned error response",
             'raise RuntimeError(f"{label} account data is invalid base64") from None',
             'raise ValueError(f"{label} must be base64") from None',
+            "except (TypeError, ValueError, binascii.Error):",
+            "except (argparse.ArgumentTypeError, TypeError):",
             "Solana live verifier program id metadata is invalid",
             "Solana live ProgramData address metadata is invalid",
             "Solana live verifier code hash metadata is invalid",
@@ -8469,6 +8558,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TON live last_transaction_lt metadata is invalid",
             'raise ValueError("--api-key-file cannot be read") from None',
             "TON accountStates account address must be a canonical raw address",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+            "except (TypeError, binascii.Error, ValueError):",
             'raise RuntimeError(f"{label} must be 32-byte hex or base64") from None',
             'raise RuntimeError("TON verifier account code_boc is invalid") from None',
             'raise ValueError("TON live code BoC base64 metadata is invalid") from None',
@@ -8490,6 +8581,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "generated offline full TOML arguments are invalid",
             'f"/wallet/getcontract returned malformed {label} bytecode"',
             'f"/wallet/getcontract returned malformed {label} contract_address"',
+            "except (argparse.ArgumentTypeError, TypeError, RuntimeError):",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
             'f"TRON constant call {function_selector} returned non-hex data"',
             "except (RuntimeError, TypeError, ValueError):",
             "def _unsupported_tron_field_detail(",
@@ -8515,6 +8608,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_eth_source_bridge_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
+            "except (TypeError, ValueError):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _cli_error_detail(",
             "SCCP Ethereum source bridge evidence rendering failed",
@@ -8524,6 +8618,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_bsc_source_bridge_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
+            "except (TypeError, ValueError):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "BSC network must be mainnet or testnet",
             "def _cli_error_detail(",
@@ -8534,6 +8629,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_evm_destination_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
+            "except (TypeError, ValueError):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             'raise argparse.ArgumentTypeError("domain must be eth or bsc") from None',
             "BSC network must be mainnet or testnet",
@@ -8541,6 +8637,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise ValueError("target_domain must be ETH or BSC") from None',
             'raise ValueError("target_domain must be ETH or BSC for EVM route canaries") from None',
             "def _cli_error_detail(",
+            "except (OSError, TypeError, ValueError) as exc:",
             "SCCP EVM destination evidence rendering failed",
         ),
     ),
@@ -8548,6 +8645,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "scripts/sccp_evm_receipt_proof_evidence.py",
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
+            "except (TypeError, ValueError):",
+            "except (OSError, RuntimeError, TypeError, ValueError, argparse.ArgumentTypeError) as exc:",
             "JSON-RPC {method} returned duplicate JSON keys",
             "JSON-RPC {method} failed with HTTP {exc.code}",
             "JSON-RPC {method} request failed",
@@ -8589,6 +8688,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         (
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
             'raise argparse.ArgumentTypeError(f"{label} must be base64") from None',
+            "except (TypeError, ValueError, binascii.Error):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             'raise ValueError(f"{label} metadata is invalid") from None',
             "def _cli_error_detail(",
@@ -8716,6 +8816,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token {label} program bytes",
             "metadata is invalid:",
             "def test_all_lanes_cli_redacts_top_level_exception_details",
+            "for exception_type in (RuntimeError, TypeError):",
         ),
     ),
     (
@@ -8731,10 +8832,16 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "JSON-RPC getAccountInfo returned duplicate JSON keys",
             "Solana live verifier program id metadata is invalid",
             "Solana ProgramData executable base64 metadata is invalid",
+            "Solana Program account ProgramData address metadata is invalid",
+            "parser_exception_types = (module.argparse.ArgumentTypeError, TypeError)",
             "secret-token-solana-error",
             "secret-token invalid Solana JSON-RPC payload",
+            "secret-token verifier_code_hash parser detail",
             "secret-token live account base64",
+            "account_exception_types = (TypeError, ValueError)",
+            "secret-token account-data decoder detail",
             "secret-token live metadata base64",
+            "secret-token {label} decode detail",
             "duplicate JSON keys",
             'assert "secret-token" not in message',
             "assert exc.__suppress_context__ is True",
@@ -8747,7 +8854,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_live_ton_evidence_redacts_imported_parser_failures",
             "def test_live_ton_account_states_redacts_invalid_json_parser_details",
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
+            "def test_live_ton_evidence_redacts_code_boc_parser_failures",
             "def test_ton_live_cli_redacts_top_level_exception_details",
+            "for exception_type in (TypeError, ValueError):",
             "SCCP TON live evidence collection failed",
             "TON accountStates returned duplicate JSON keys",
             "TON live account address metadata is invalid",
@@ -8771,7 +8880,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_tron_api_http_error_detail_is_bounded",
             "def test_tron_api_rejects_duplicate_json_keys",
             "def test_tron_api_redacts_transport_and_error_response_details",
-            "for exception_type in (ValueError, RuntimeError):",
+            "for exception_type in (TypeError, ValueError, RuntimeError):",
+            "for exception_type in (TypeError, ValueError):",
             "def test_tron_live_cli_redacts_top_level_exception_details",
             "SCCP TRON live evidence collection failed",
             "TRON API /wallet/getnowblock failed with HTTP 500",
@@ -8784,6 +8894,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_live_evidence_redacts_constant_result_word_parser_cause",
             "def test_live_evidence_redacts_generated_full_toml_parser_exception_cause",
             "def test_live_evidence_redacts_metadata_parser_exception_causes",
+            "def test_live_evidence_redacts_source_event_topic_parser_typeerror",
+            "def test_live_evidence_redacts_route_canary_topic_parser_typeerror",
             "def test_live_evidence_redacts_unsupported_transaction_result_fields",
             "secret-token-tron-error",
             "secret-token-result",
@@ -8806,6 +8918,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token witness seal message parser detail",
             "secret-token witness seal proof parser detail",
             "secret-token transaction source proof parser detail",
+            "secret-token source-event log topic0 parser detail",
+            "secret-token route-canary log topic0 parser detail",
             'assert "secret-token" not in captured.err',
         ),
     ),
@@ -8815,6 +8929,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_eth_source_bridge_direct_parsers_redact_parser_causes",
             "secret-token-eth-source-hex",
             "secret-token-eth-source-runtime0",
+            "secret-token ETH source hex TypeError detail",
             "secret-token-eth-source-file-path.hex",
             "def test_eth_cli_redacts_top_level_exception_details",
             "SCCP Ethereum source bridge evidence rendering failed",
@@ -8828,6 +8943,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_bsc_source_bridge_direct_parsers_redact_parser_causes",
             "secret-token-bsc-source-hex",
             "secret-token-bsc-source-runtime0",
+            "secret-token BSC source hex TypeError detail",
             "secret-token-bsc-source-file-path.hex",
             "secret-token-bsc-source-network",
             "def test_bsc_cli_redacts_top_level_exception_details",
@@ -8845,9 +8961,11 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_evm_destination_direct_parsers_redact_parser_causes",
             "secret-token-evm-destination-hex",
             "secret-token-evm-destination-runtime",
+            "secret-token EVM destination hex TypeError detail",
             "secret-token-evm-destination-file-path.hex",
             "def test_evm_destination_domain_wrappers_redact_nested_causes",
             "def test_evm_destination_cli_redacts_top_level_exception_details",
+            "for exception_type in (TypeError, ValueError):",
             "SCCP EVM destination evidence rendering failed",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
@@ -8858,7 +8976,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         (
             "def test_receipt_hex_parser_redacts_parser_causes",
             "secret-token-evm-receipt-hex",
+            "secret-token EVM receipt hex TypeError detail",
             "def test_receipt_cli_redacts_top_level_exception_details",
+            "for exception_type in (RuntimeError, TypeError):",
             "SCCP EVM receipt proof evidence collection failed",
             "JSON-RPC eth_chainId returned duplicate JSON keys",
             "JSON-RPC eth_getTransactionReceipt returned duplicate JSON keys",
@@ -8884,6 +9004,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "0xsecret-token-source-bridge-runtime",
             "secret-token source bridge address parser detail",
             "secret-token {target_method} parser detail",
+            "for exception_type in (TypeError, RuntimeError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -8916,6 +9037,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-solana-program-hex",
             "def test_solana_destination_base64_parser_redacts_parser_causes",
             "secret-token-solana-destination-base64",
+            "secret-token Solana destination base64 decoder detail",
             "def test_solana_destination_file_parser_redacts_file_read_causes",
             "secret-token-private-verifier.so",
             "def test_solana_destination_redacts_verifier_program_parser_failures",
@@ -13275,6 +13397,7 @@ def _native_evm_prover_bundle_artifact_summary(
 
     rows: list[dict[str, Any]] = []
     by_sdk: dict[str, dict[str, Any]] = {}
+    semantic_sdk_order: list[str] = []
     for index, artifact in enumerate(artifacts):
         label = f"native_sdk_artifacts[{index}]"
         if not isinstance(artifact, dict):
@@ -13292,6 +13415,7 @@ def _native_evm_prover_bundle_artifact_summary(
         if sdk_key_blocker is not None:
             blockers.append(sdk_key_blocker)
             continue
+        semantic_sdk_order.append(sdk)
         if sdk in by_sdk:
             blockers.append(
                 _native_evm_sdk_name_blocker("native_sdk_artifacts", sdk, "duplicate")
@@ -13338,6 +13462,8 @@ def _native_evm_prover_bundle_artifact_summary(
 
     for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - set(by_sdk)):
         blockers.append(f"native_sdk_artifacts missing sdk: {sdk}")
+    if semantic_sdk_order != sorted(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
+        blockers.append("native_sdk_artifacts must match expected SDK order")
 
     return sorted(rows, key=lambda row: row["sdk"]), blockers
 
@@ -14856,6 +14982,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
         errors.append(f"{label} sdk_artifacts must be a non-empty list")
     else:
         seen_sdks: set[str] = set()
+        semantic_sdk_order: list[str] = []
         for index, row in enumerate(sdk_artifacts):
             row_label = f"{label} sdk_artifacts[{index}]"
             if not isinstance(row, dict):
@@ -14875,6 +15002,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
             if sdk_key_blocker is not None:
                 errors.append(sdk_key_blocker)
                 continue
+            semantic_sdk_order.append(sdk)
             if sdk in seen_sdks:
                 errors.append(
                     _native_evm_sdk_name_blocker(
@@ -14930,6 +15058,8 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                     )
         for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - seen_sdks):
             errors.append(f"{label} sdk_artifacts missing sdk: {sdk}")
+        if semantic_sdk_order != sorted(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS):
+            errors.append(f"{label} sdk_artifacts must match expected SDK order")
     errors.extend(_native_evm_prover_summary_path_role_errors(label, status))
     if status.get("validation_status") != "passed":
         errors.append(f"{label} validation_status must be passed")
@@ -15597,7 +15727,7 @@ def _render_readiness_markdown(
             "- SCCP Ethereum sync-committee roster source inventory must pin exact 512-authority mainnet rosters, unit validator weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee payload vectors across public SDKs before local finality evidence can be accepted.",
             "- SCCP Ethereum source-bridge config source inventory must pin bridge-address/network/code-hash config hashing and negative config-drift tests.",
             "- SCCP Ethereum EVM source-adapter deployment source inventory must pin the active deployment gate, source-bridge network/config binding, and negative drift tests.",
-            "- SCCP source-material template rejection source inventory must pin ETH, BSC, Solana, TON, and TRON evidence-script guards and negative tests that reject built-in template verifier hashes before source material can satisfy production readiness.",
+            "- SCCP source-material template rejection source inventory must pin ETH, BSC, Solana, TON, and TRON evidence-script guards, aggregate all-lanes copied-evidence guards, strict release-bundle public JSON guards, and negative tests that reject built-in template verifier hashes before source material can satisfy production readiness.",
             "- SCCP source-material role validation source inventory must pin ETH, BSC, Solana, TON, and TRON zero-hash, role-reuse, canonical adapter-verifier, full-light-client audit role-separation guards, and redacted all-lanes-TOML/source validator/source-record/source-gate/TON-live-accountStates/address/code-BoC/TON-destination-code-BoC/TRON-live-API/metadata/full-TOML/TRON-witness-JSON blockers before source material can satisfy production readiness.",
             "- SCCP EVM contract smoke Ethereum mainnet network-id source inventory must pin ETH chain-id vectors, BSC rejection vectors, and accepted-event network-id assertions.",
             "- SCCP EVM contract smoke production-surface source inventory must pin verifier-code/key, destination-binding, domain-overflow, proof-shape, cross-deployment, and replay rejection smoke coverage.",
@@ -16776,24 +16906,6 @@ def _true_field_errors(
     return []
 
 
-def _cryptographic_evidence_source_gate_material_present(
-    row: dict[str, Any],
-    audit_hashes: Any,
-) -> bool:
-    material_fields = (
-        "source_verifier_material_hash",
-        "source_adapter_engine_deployment_hash",
-        "destination_binding_hash",
-        "route_allowlist_hash",
-        "route_canary_evidence_hash",
-    )
-    return (
-        any(row.get(field) for field in material_fields)
-        or row.get("source_adapter_gate_hash") not in (None, "")
-        or bool(audit_hashes)
-    )
-
-
 def _cryptographic_evidence_source_adapter_gate_schema_errors(
     row: dict[str, Any],
     audit_hashes: Any,
@@ -16828,10 +16940,6 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
             )
     if row.get("source_adapter_gate_required") is True:
         gate_hash = row.get("source_adapter_gate_hash")
-        require_gate_material = _cryptographic_evidence_source_gate_material_present(
-            row,
-            audit_hashes,
-        )
         expected_audit_keys = _source_adapter_gate_audit_keys_for_domain_chain(
             row.get("domain"),
             row.get("chain"),
@@ -16841,7 +16949,7 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
                 "readiness report cryptographic evidence row "
                 "source_adapter_gate_required must be false for this domain"
             )
-        elif require_gate_material and isinstance(audit_hashes, dict):
+        elif isinstance(audit_hashes, dict):
             for key in sorted(set(semantic_audit_hashes) - expected_audit_keys):
                 errors.append(
                     _unexpected_source_adapter_gate_audit_field_blocker(
@@ -16855,12 +16963,12 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
                     "readiness report cryptographic evidence row "
                     f"source_adapter_gate_audit_hashes missing field: {key}"
                 )
-        if require_gate_material and not gate_hash:
+        if not gate_hash:
             errors.append(
                 "readiness report cryptographic evidence row "
                 "source_adapter_gate_hash must not be empty when required"
             )
-        if require_gate_material and not semantic_audit_hashes:
+        if not semantic_audit_hashes:
             errors.append(
                 "readiness report cryptographic evidence row "
                 "source_adapter_gate_audit_hashes must not be empty when required"
@@ -16918,6 +17026,28 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
                 "readiness report cryptographic evidence row "
                 "source_adapter_gate_audit_hashes must be empty when gate is not required"
             )
+    role_fields: list[tuple[str, Any]] = [
+        ("source_verifier_material_hash", row.get("source_verifier_material_hash")),
+        (
+            "source_adapter_engine_deployment_hash",
+            row.get("source_adapter_engine_deployment_hash"),
+        ),
+        ("destination_binding_hash", row.get("destination_binding_hash")),
+        ("route_allowlist_hash", row.get("route_allowlist_hash")),
+        ("route_canary_evidence_hash", row.get("route_canary_evidence_hash")),
+    ]
+    role_fields.extend(
+        (f"source_adapter_gate_audit_hashes.{field}", value)
+        for field, value in sorted(semantic_audit_hashes.items())
+    )
+    errors.extend(
+        _distinct_nonzero_hex_field_errors(
+            "readiness report cryptographic evidence row "
+            "source_adapter_gate hash role",
+            tuple(role_fields),
+            byte_length=32,
+        )
+    )
     return errors
 
 
@@ -17720,6 +17850,12 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
                     "readiness report user prover submission surface row "
                     f"sdk_helper_symbols_by_sdk[{sdk}] contains duplicate symbols"
                 )
+            expected_helpers = expected_helpers_by_sdk.get(sdk)
+            if expected_helpers is not None and helpers != list(expected_helpers):
+                errors.append(
+                    "readiness report user prover submission surface row "
+                    f"sdk_helper_symbols_by_sdk[{sdk}] must match expected helpers"
+                )
             for marker in USER_PROVER_SDK_HOOK_MARKERS.get(sdk, ()):
                 if not any(
                     _helper_matches_hook_marker(sdk, helper, marker)
@@ -17739,6 +17875,18 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
             errors.append(
                 "readiness report user prover submission surface row "
                 "sdk_helper_symbols_by_sdk[js-sdk] must match sdk_helper_symbols"
+            )
+        expected_js_helpers = (
+            expected_helpers_by_sdk.get("js-sdk")
+            if isinstance(expected_helpers_by_sdk, dict)
+            else None
+        )
+        if expected_js_helpers is not None and helper_symbols != list(
+            expected_js_helpers
+        ):
+            errors.append(
+                "readiness report user prover submission surface row "
+                "sdk_helper_symbols must match expected helpers"
             )
     errors.extend(
         _string_list_field_errors(label, row, "required_phases", allow_empty=False)
@@ -17889,6 +18037,13 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
                             f"sdk_helper_symbols_by_sdk[{sdk}] missing "
                             f"required helper: {helper}"
                         )
+                if all(isinstance(helper, str) for helper in helpers) and helpers != list(
+                    expected_helpers
+                ):
+                    errors.append(
+                        f"{label} lanes {lanes} "
+                        f"sdk_helper_symbols_by_sdk[{sdk}] must match expected helpers"
+                    )
             helper_symbols = row.get("sdk_helper_symbols")
             expected_js_helpers = expected_helpers_by_sdk.get("js-sdk", ())
             if isinstance(helper_symbols, list):
@@ -17898,6 +18053,13 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
                             f"{label} lanes {lanes} sdk_helper_symbols "
                             f"missing required helper: {helper}"
                         )
+                if all(isinstance(helper, str) for helper in helper_symbols) and (
+                    helper_symbols != list(expected_js_helpers)
+                ):
+                    errors.append(
+                        f"{label} lanes {lanes} "
+                        "sdk_helper_symbols must match expected helpers"
+                    )
         required_phases = row.get("required_phases")
         if isinstance(lanes, str) and isinstance(expected_backend, str):
             expected_required_phases = _expected_submission_surface_required_phases(
@@ -18305,6 +18467,45 @@ def _canonical_nonzero_fixed_hex_value(value: Any, *, byte_length: int) -> str |
     return value
 
 
+def _source_adapter_gate_hash_role_fields(
+    label: str,
+    lane: dict[str, Any],
+) -> tuple[tuple[str, Any], ...]:
+    source_gate = lane.get("source_adapter_gate")
+    if not isinstance(source_gate, dict):
+        return ()
+
+    fields: list[tuple[str, Any]] = []
+    seen_hashes: set[str] = set()
+
+    gate_hash = _canonical_nonzero_fixed_hex_value(
+        source_gate.get("gate_hash"),
+        byte_length=32,
+    )
+    if gate_hash is not None:
+        fields.append(("source_adapter_gate_hash", gate_hash))
+        seen_hashes.add(gate_hash)
+
+    audit_hashes = source_gate.get("audit_hashes")
+    if not isinstance(audit_hashes, dict):
+        return tuple(fields)
+
+    for audit_key, audit_hash in sorted(audit_hashes.items(), key=lambda item: str(item[0])):
+        if _all_lanes_audit_hash_key_blocker(label, audit_key) is not None:
+            continue
+        audit_hash_value = _canonical_nonzero_fixed_hex_value(
+            audit_hash,
+            byte_length=32,
+        )
+        if audit_hash_value is None or audit_hash_value in seen_hashes:
+            continue
+        fields.append(
+            (f"source_adapter_gate.audit_hashes.{audit_key}", audit_hash_value)
+        )
+        seen_hashes.add(audit_hash_value)
+    return tuple(fields)
+
+
 def _route_canary_common_hash_role_errors(
     label: str,
     lane: dict[str, Any],
@@ -18324,6 +18525,7 @@ def _route_canary_common_hash_role_errors(
                 )
             )
         )
+    fields.extend(_source_adapter_gate_hash_role_fields(label, lane))
     if isinstance(route_allowlist, dict):
         fields.append(
             ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
@@ -18465,6 +18667,13 @@ def _all_lanes_route_canary_cross_lane_errors(
             )
             if value is not None:
                 governed_hashes.setdefault(value, (lane_label, "route_allowlist_hash"))
+        for field, value in _source_adapter_gate_hash_role_fields(lane_label, lane):
+            governed_hash = _canonical_nonzero_fixed_hex_value(
+                value,
+                byte_length=32,
+            )
+            if governed_hash is not None:
+                governed_hashes.setdefault(governed_hash, (lane_label, field))
 
     seen_canaries: dict[str, str] = {}
     for index, lane in enumerate(lanes):

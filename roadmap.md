@@ -13,6 +13,38 @@ and completed history lives in [`status.md`](./status.md).
 
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- Privacy production readiness now requires a 4-peer localnet
+  shield-to-redeem lifecycle evidence set: shield tx, hop proof, recursive
+  init/verify, recursive append/verify, unshield proof, redeem tx, replay
+  rejection, restart replay rejection, and state recovery must each have
+  distinct production artifact hashes in the ready-gate audit references.
+  Generic smoke-only localnet evidence is not sufficient for release signoff,
+  and the same contract must remain mirrored across `connect_norito_bridge`,
+  `iroha_js_host`, and `iroha_python_rs`.
+- ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
+  endpoint for current confidential-v2 commitment inclusion paths, and the
+  Kotlin/JVM plus Android Java Torii Merkle providers call it directly.
+  Torii-backed providers verify returned sibling paths against requested
+  commitments and roots, and SDK path models enforce leaf-index direction
+  consistency before wallet or prover code receives paths. The SDK Torii
+  clients also reject quoted or fractional numeric fields in zk roots/path
+  responses so wallet code sees the same integer shapes the node emits. SDK
+  response parsers must also keep node-supplied Merkle paths structurally
+  exact: duplicate keys, overflowing counters, depth/array mismatches, root
+  mismatches, direction-bit mismatches, and `leaf_index >= frontier_len` fail
+  before wallet code can consume proof material. Keep local providers limited
+  to audited caller-supplied frontier material.
+- Confidential-v2 SDK note derivation and encrypted note payload handling now
+  exist for Kotlin/JVM and Android Java, with Rust-vector parity for owner tags,
+  note commitments, nullifiers, asset tags, and chain tags, Rust-fixture parity
+  for the `ConfidentialEncryptedPayload` wire envelope, low-order X25519
+  public-key rejection parity, canonical ciphertext-length rejection parity,
+  a 64 KiB encrypted-note ciphertext cap, and a shared deterministic
+  X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Default decryption
+  binds the plaintext owner tag to the supplied spend key, while diversified
+  notes must use the explicit expected-owner-tag overload. Keep the
+  higher-level wallet flows pinned to this contract when wiring shield-note
+  recovery into production clients.
 - Kagemusha SDK parity must keep ABI-7 compact projection verifier surfaces
   aligned across package roots and native hosts. Python now exposes both the
   optional-height verifier and the explicit
@@ -21,38 +53,65 @@ and completed history lives in [`status.md`](./status.md).
   before native probing or dispatch, accepting safe non-negative numbers and
   bounded `u64` bigints only, and the SDK parity guard must continue pinning
   those surfaces.
-- Kagemusha C# SDK validation still needs a Windows-machine confirmation even
-  though a temporary macOS .NET 8 SDK validated the standalone runner. On
-  Windows, install or select a .NET 8 SDK, run the standalone C# Kagemusha guard
-  `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` or its direct
-  `dotnet test` equivalent, and preserve the selected `dotnet --version`
-  evidence in the output. The focused pass should cover
+- Kagemusha recursive-spend JVM/Android request objects now reject wrong-schema
+  bundles, record bundles, proof attachments, verifier records, and lineage
+  witnesses at construction time; keep this fail-fast contract for wallet
+  request assembly instead of relying on later encode or native dispatch errors.
+  Init and lineage-append requests must also keep lineage verifier/proving-key
+  artifacts bound to the expected one-hop or append circuit and verifier-key
+  commitment before serialization; wallet-facing constructors should prefer
+  validated `LineageKeyArtifacts` packages over manually split raw key bytes,
+  including through the high-level recursive-spend request helper overloads.
+  The Python typed recursive-spend request API now enforces the same package
+  binding before encoding, including rejection of wrong-profile artifacts,
+  mismatched raw verifier/proving-key pairs, mixed typed/raw key material, and
+  unnecessary lineage artifacts on semantic append output.
+  The JVM recursive-spend guard must continue exercising both Gradle and direct
+  `javac` Android harness compilation for these typed request surfaces.
+  The explicit hop-evidence builders must also keep confidential-transfer-v2
+  public-instance shape exact: exactly nine single-row ZK1 columns, no extra
+  public columns, nonzero root transitions, continuous multi-hop roots, and
+  stable chain/asset binding across every folded hop. Native bridge ZK1 `I10P`
+  parsing must stay exact too: zero dimensions, over-cap dimensions, truncated
+  payloads, and trailing bytes reject before public-input projection.
+- Kagemusha Offline/Offline V2 readiness parsers must treat the legacy
+  `offline_kagemusha_abi7*` key family and the
+  `offline_kagemusha_recursive_compact_*` key family as aliases for the same
+  derived node signal. Legacy-only and recursive-compact-only bodies remain
+  supported, but when both families are present their enablement, mode, bridge
+  ABI, circuit-id, and artifact values must match or parsing fails closed.
+  Present alias values must also keep their expected exact types: booleans as
+  JSON booleans, strings as non-empty unpadded strings, and bridge ABI values as
+  exact integers or exact integer strings.
+- Confidential-v2 JVM/Android proof assembly now has typed transfer and
+  unshield witness/request codecs for the production native bridge. Keep wallet
+  integrations on these builders instead of raw witness bytes so canonical
+  u128 values, fixed 32-byte fields, bounded commitment trees, duplicate
+  input rejection, transfer/unshield shape separation, exact verifier
+  references, public-input schema constants, and the native Norito witness
+  alignment padding remain pinned by SDK and Rust golden-vector tests.
+- Kagemusha C# SDK validation now passes on this macOS host with .NET SDK
+  8.0.128 through `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, including
+  a freshly built `connect_norito_bridge` native library and 103 focused SDK
+  tests across recursive spend, privacy native, transaction builder, canonical
+  request, and Torii identifier receipt surfaces. The focused pass covers
   `csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs`,
-  `PrivacyNativeTests.cs`, `TransactionBuilderTests.cs`,
-  `CanonicalRequestTests.cs`, `ToriiClientTests.cs`,
-  `SignedQueryBuilderTests.cs`, `SignedIterableQueryBuilderTests.cs`, and
-  `VerifyingKeyBackendTagTests.cs`, with native bridge loading and P/Invoke
-  symbol probing enabled for the ABI-6
-  recursive spend, ABI-7 compact-token, recursive aggregation, recursive
-  compact verifier/projection, instruction transaction-builder surfaces, C#
-  canonical request auth exactness, C# signed query exactness, and C#
-  production verifier-backend label exactness. The
-  standalone runner now builds `connect_norito_bridge`, resolves the
+  `PrivacyNativeTests.cs`, and `TransactionBuilderTests.cs`, with native bridge
+  loading and P/Invoke symbol probing enabled for the ABI-6 recursive spend and
+  ABI-7 compact-token, recursive aggregation, recursive compact
+  verifier/projection, and instruction transaction-builder surfaces. The
+  standalone runner builds `connect_norito_bridge`, resolves the
   platform-specific native library name, fails if the freshly built artifact is
   missing, prints the selected native bridge path, and prepends that directory
   to the macOS, Linux, and Windows loader paths before invoking `dotnet test`.
-  The cross-SDK parity guard also requires refreshed local NoritoBridge
-  XCFramework slices to export the recursive compact prove/verify symbols; if a
-  generated `dist/NoritoBridge.xcframework` is stale, rebuild it with
-  `scripts/build_norito_xcframework.sh` before accepting parity evidence.
-  The
-  Windows pass must also pin the C# negative controls for malformed Norito
-  input/output headers, caller archive-copy immutability, verifier-unavailable
-  status mapping, transaction-builder schema and wire-name drift,
-  verifier-backend test-filter drift, and package/evidence parity. After the
-  Windows run passes, update `status.md`
-  with the C# SDK evidence and rerun the Kagemusha SDK parity or production
-  readiness guards needed to clear the C# row.
+  Windows remains a separate host-certification follow-up so the same C# lane
+  is proven against `connect_norito_bridge.dll`, Windows loader paths, RID, and
+  architecture. The Windows pass must also pin the C# negative controls for
+  malformed Norito input/output headers, caller archive-copy immutability,
+  verifier-unavailable status mapping, transaction-builder schema and wire-name
+  drift, and package/evidence parity. After the Windows run passes, update
+  `status.md` with the Windows C# SDK evidence and rerun the Kagemusha SDK
+  parity or production readiness guards needed to clear the Windows-only row.
   Windows-machine TODOs:
   - Select a .NET 8 SDK and capture `dotnet --version` in the run log.
   - Capture the Windows `dotnet --info` output, including RID/architecture, so
@@ -173,7 +232,18 @@ and completed history lives in [`status.md`](./status.md).
   and privacy native bridge tests, while the Android Java harness runs
   recursive spend, canonical request auth, Offline Cash lifecycle, Offline Note
   V2, Offline Note, privacy native bridge, and transaction-builder archive
-  tests. The focused runner now also executes the Kotlin/JVM and Android Java
+  tests. Kotlin/JVM and Android Java privacy capability APIs must continue
+  deriving bridge readiness from the native Norito capability archive when the
+  bridge is loaded, while malformed, duplicate, incomplete, or absent evidence
+  keeps the SDK capability surface fail-closed. Privacy proof dispatch must keep
+  the `privacy-production-enabled` feature opt-in, preserve default
+  production-disabled serialized results, and retain focused coverage for real
+  confidential-transfer-v2/unshield proving, verification, and checked unshield
+  input-sum overflow rejection. The production-enabled bridge must also reject
+  algorithm-mismatched witness fields, invalid input/output counts, duplicate
+  input leaf/rho material, and out-of-range leaf indices before verifier-key
+  lookup or prover setup. The focused runner now also executes the
+  Kotlin/JVM and Android Java
   account-literal, canonical request auth, and Offline Cash issuer-key
   exactness tests, plus Torii event-stream verifier-filter, signing-algorithm,
   Nexus wallet signature-algorithm, verifier-key backend/instruction, and
@@ -182,6 +252,25 @@ and completed history lives in [`status.md`](./status.md).
   event verifier filters, padded signing algorithm labels, padded Nexus wallet
   signature labels, padded verifier record fields, and padded verifier
   backend/status labels stay covered by the same mobile SDK gate.
+  Kotlin/JVM and Android Java recursive-spend request codecs must keep
+  init/append/verify/redeem archive schemas, compact request payload layouts,
+  raw embedded archive payloads, Norito `Option` child-length framing, Rust
+  `[u8; N]` fixed-array byte layout, bundle/result decoders, lineage gap checks,
+  hop `pallasOpenEnvelopes` archives whose exact native
+  `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>` count matches the record-bundle
+  fold-step count, previous-proof open-envelope archives with the same exact
+  native schema and exactly one Pallas envelope with nonzero verifier metadata,
+  malformed/trailing archive rejection, and nonnegative block-height guards
+  pinned in the focused JVM SDK runner and parity inventory. Kotlin/JVM and
+  Android Java now also expose typed
+  `RegisterZkAsset`, `Shield`, and `Unshield` builders plus native
+  signed-transaction wrappers that preserve private change outputs and return
+  canonical versioned transaction bytes with native hashes. The JVM roots/Merkle
+  slice now exposes typed `/v1/zk/roots` clients and local zk_assets path
+  providers for audited frontier material; remaining SDK gaps are
+  confidential-v2 note derivation/decryption after canonical derivation
+  confirmation, Torii-backed path acquisition when the node endpoint exists,
+  and audited end-to-end localnet coverage.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,
@@ -1095,47 +1184,88 @@ and completed history lives in [`status.md`](./status.md).
   before public TOML blockers are emitted: source bridge, destination bridge,
   and destination verifier runtime bytecode metadata must not propagate raw
   parser details or operator-provided bytes from copied live evidence.
+  Source-live deployment receipt field parsing must also classify `TypeError`
+  failures as fixed receipt-field categories before CLI or release output can
+  expose parser exception details.
 - SCCP helper CLI diagnostics must stay bounded before operator logs enter
   release artifacts: source, destination, receipt-proof, EVM live, Solana/TON/TRON
   live, and TRON source bridge helpers must redact sensitive top-level failures
   to fixed evidence categories, with adversarial `secret-token` regressions pinned
   in the release public scalar-text source inventory. That inventory must pin
-  the actual adversarial token inputs for EVM live/source-live, TON live, and
-  TRON live parser/transport failures, not only generic `secret-token` absence
-  assertions.
+	  the actual adversarial token inputs for EVM receipt-proof, EVM live/source-live,
+	  TON live, and TRON live parser/transport failures, not only generic
+	  `secret-token` absence assertions. EVM receipt-proof, direct EVM
+	  destination, and EVM-family source-bridge hex parser TypeErrors, plus TRON
+	  live metadata bytecode, contract-address, transaction-address, and
+	  trigger-request address parser boundaries, must also classify `TypeError`
+	  helper drift into fixed categories before public evidence output is
+	  rendered. EVM receipt-proof collection
+	  helper `TypeError`s must also use the fixed top-level CLI fallback before
+	  stderr is emitted, and all-lanes evidence load/validation helper
+	  `TypeError`s must follow the same fallback rule. Direct EVM destination
+	  evidence helper `TypeError`s must also use the fixed top-level CLI fallback
+	  before stderr is emitted.
+  TRON source-event and route-canary log topic parser TypeErrors must be
+  treated as non-matching logs or fixed public blockers, never as leaked parser
+  details.
 - SCCP duplicate-JSON diagnostics must stay fixed and traceback-safe before
   public operator output is emitted: EVM receipt, EVM live/source-live, Solana
   live, and TON live helpers must report method or endpoint categories while
   suppressing duplicate-key exception chains.
 - SCCP imported live metadata reparsing must stay category-only before TOML or
   release summaries are produced: EVM live/source-live hex fields, Solana live
-  verifier identity/executable fields, and TON live address/transaction-LT
-  fields must suppress lower-level parser exception chains.
+  verifier program id, ProgramData address, verifier code hash, executable
+  ProgramData, embedded Program account ProgramData address, and TON live
+  address/transaction-LT plus code-BoC fields must suppress lower-level parser
+  exception chains. TON live code-BoC collection and copied-summary reparsing
+  must convert parser `TypeError`s into the same fixed code-BoC blockers as
+  malformed parser values. Solana live RPC account-data and copied-metadata
+  base64 decoding must likewise convert decoder `TypeError`s into the fixed
+  invalid-base64 categories before public evidence output is rendered.
 - SCCP direct Solana/TON destination verifier identity reparsing must stay
   category-only before TOML or JSON summary rendering, with parser exception
   chains suppressed and adversarial `secret-token` regressions pinned. Release
   public scalar-text source inventory must pin the direct destination
-  parser-detail payloads themselves for both Solana and TON.
+  parser-detail payloads themselves for both Solana and TON. Direct Solana
+  verifier program base64 decoding must also convert decoder `TypeError`s into
+  the fixed invalid-base64 parser category before output rendering.
 - SCCP all-lanes Solana live ProgramData and route-canary base64 comment
   diagnostics must stay category-only before aggregate blockers are emitted; raw
   canonical-base64 parser details must not be copied into release readiness
   output. Release public scalar-text source inventory must pin the Solana
   all-lanes adversarial base64 and ProgramData parser payloads themselves, not
-  only generic absence assertions.
+  only generic absence assertions. Aggregate all-lanes EVM, TRON, TON, and
+  Solana copied live-metadata parser boundaries must also convert `TypeError`
+  helper drift into the same fixed blockers before public readiness output is
+  rendered.
 - SCCP TRON solid-block header proof canonicalization failures must stay
   category-only before live-evidence summaries or full-TOML blockers are
-  emitted; lower-level proof encoder exception text must not be copied into
-  public readiness output.
+  emitted; lower-level proof encoder exception text, including `TypeError`
+  parser/canonicalizer details, must not be copied into public readiness output.
 - SCCP source-material evidence must reject built-in template verifier hashes as
   a release gate, not only as local script behavior. The
   `source_material_template_rejection_gate` source inventory pins ETH, BSC,
   Solana, TON, and TRON evidence-script guards plus negative tests so
   template-derived source verifier material cannot satisfy production readiness
-  silently.
+  silently. The aggregate all-lanes evidence validator also rejects copied
+  source-material records that replay those built-in template component hashes
+  before release readiness can pass. Copied Solana and TON source-adapter audit
+  verifier hashes are rejected at the same boundary if they replay built-in
+  source-material template component hashes, and strict release-bundle public
+  JSON validation rejects the same replay in copied cryptographic-evidence rows
+  and all-lanes source-adapter gate summaries.
   The companion `source_material_role_validation_gate` pins zero-hash,
   role-reuse, canonical source-adapter verifier, and full-light-client audit
   role-separation guards across the same source families before source material
-  can satisfy release readiness. It also pins the Rust source-state and
+  can satisfy release readiness. All-lanes source-gate recompute wrappers must
+  also convert `TypeError` helper/signature drift into category-only blockers
+  instead of leaking parser details or tracebacks. Copied all-lanes canonical
+  base64 metadata helpers must likewise convert `TypeError` decoder failures
+  into fixed base64 blockers before public readiness output is rendered.
+  Destination binding recompute, route-allowlist recompute, and destination
+  verifier identity checks must apply the same category-only handling for
+  helper `SystemExit`, `TypeError`, `ValueError`, and `RuntimeError` failures
+  before public blockers are emitted. It also pins the Rust source-state and
   source-adapter verifier preflights that reject opaque or compressed nested
   FastPQ backend bytes inside OpenVerify envelopes, plus deployment-matcher
   rejection of replayed source-adapter verifier-key hashes before the wider
@@ -1259,10 +1389,13 @@ and completed history lives in [`status.md`](./status.md).
   route/destination hashes matching the sibling lane records before Markdown or
   public JSON output is written. Copied route-canary evidence hashes must also
   stay distinct from same-lane governed hashes, same-lane canary roles, other
-  lane canary evidence hashes, and other lane governed hashes before public
-  output is written. The bundle builder's pre-render regression now exercises
-  cross-lane replay against another lane's canary evidence hash, source-material
-  hash, destination-binding hash, and route-allowlist hash. EVM-family copied route canaries must also
+  lane canary evidence hashes, and other lane governed hashes, including
+  source-adapter gate hashes and audit hashes, before public output is written.
+  The bundle builder's pre-render regression now exercises cross-lane replay
+  against another lane's canary evidence hash, source-material hash,
+  source-adapter gate audit hash, destination-binding hash, and route-allowlist
+  hash, and the strict verifier now rejects the same published-artifact drift.
+  EVM-family copied route canaries must also
   preserve non-zero and distinct transcript hash roles, positive/u32 receipt
   metadata, lane-bound target domain, `proof_version = 1`, SORA proof source,
   and finalized message-proof booleans before bundle output is written.
@@ -1299,6 +1432,10 @@ and completed history lives in [`status.md`](./status.md).
   boolean/null fields, optional bytes32 text, optional block-number fields,
   source-adapter audit-hash maps, or audit-hash keys before
   `--allow-not-ready` diagnostics can render or write public artifacts.
+  Source-adapter audit hashes in copied cryptographic-evidence rows must also
+  stay role-separated from source material, source deployment, destination,
+  route-allowlist, and route-canary evidence hashes before public output is
+  written.
   Release-readiness and strict bundle source inventory must pin the direct
   public-row schema regressions as well, including zero governed hashes,
   route-canary/source-gate domain-policy drift, exact JSON type drift, and BSC
@@ -1522,9 +1659,13 @@ and completed history lives in [`status.md`](./status.md).
   Default and per-SDK helper symbols must be schema-classified before helper
   string derivation, helper inventory, UI-hook matching, or Markdown-presence
   checks, so table-breaking or confusable helper names become category-only
-  blockers. If a copied report corrupts the per-SDK helper map or any helper
-  entry, readiness Markdown must render an invalid-marker cell instead of
-  falling back to raw `sdk_helpers` text or rendering the raw helper.
+  blockers. Copied top-level JS helper lists and per-SDK helper maps must also
+  match the verifier-owned expected helper inventories exactly, not merely
+  contain the required helpers, so safe-looking extra helper claims cannot
+  over-advertise portal/mobile submission coverage before public output is
+  rendered or verified. If a copied report corrupts the per-SDK helper map or
+  any helper entry, readiness Markdown must render an invalid-marker cell
+  instead of falling back to raw `sdk_helpers` text or rendering the raw helper.
   Public `sdk_helper_symbols_by_sdk` map keys must be schema-classified before
   unknown-SDK, helper-list, or Markdown-presence diagnostics, so malformed
   padded, control-character, whitespace, Markdown-unsafe, and
@@ -1900,19 +2041,20 @@ and completed history lives in [`status.md`](./status.md).
   prover manifest, cross-SDK parity fixture, and native self-test fixture JSON
   load/parse diagnostics must also stay category-only and avoid parser
   exception payloads.
-  All-lanes source-record hash, source-gate/config hash, destination-binding
-  hash, and route-allowlist recomputation failures must stay category-only in
-  public all-lanes/release-readiness blockers and must not append helper
-  exception text. Canonical source-validator and destination verifier identity
-  parser failures must follow the same category-only rule, including TRON
+	  All-lanes source-record hash, source-gate/config hash, destination-binding
+	  hash, and route-allowlist recomputation failures must stay category-only in
+	  public all-lanes/release-readiness blockers and must not append helper
+	  exception text, including parser `ArgumentTypeError` and helper `TypeError`
+	  failures. Canonical source-validator and destination verifier identity
+	  parser failures must follow the same category-only rule, including TRON
   source-bridge, TRON destination-verifier, and EVM source/destination runtime
   bytecode metadata parser failures, plus Solana ProgramData account,
   executable, route-canary live ProgramData, TON code BoC, and TON
   route-canary verifier identity parser failures, plus TRON route-canary
-  verifier-address parser failures. The TON live evidence helper must apply
-  the same category-only rule to live accountStates address, live `code_boc`,
-  and imported `code_boc_base64` parser failures before rendering governed
-  TOML.
+	  verifier-address parser failures. The TON live evidence helper must apply
+	  the same category-only rule to live accountStates address, hash-text base64
+	  decoding, live `code_boc`, and imported `code_boc_base64` parser failures
+	  before rendering governed TOML.
 - SCCP release-bundle manifest readiness flags must preserve exact report
   booleans: bundle generation must not truthy-coerce malformed
   `production_ready`, `release_checklist.ready`, or corridor readiness values
@@ -2110,12 +2252,15 @@ and completed history lives in [`status.md`](./status.md).
 - SCCP native EVM prover manifests must carry exactly one artifact row for each
   required public SDK; duplicate SDK rows and missing SDK rows remain readiness
   and published-bundle blockers even if the native manifest is rehashed.
-  Manifest SDK artifact rows must also remain canonical objects with all
-  required fields, no unknown fields, approved SDK/implementation bindings, and
-  artifact hashes matching their committed roles. SDK implementation artifact
-  paths and hashes are checked with the same local-artifact and hash-binding
-  rules as the primary prover payloads. Duplicate JSON keys inside SDK artifact
-  rows must fail before implementation hashes are trusted.
+  Manifest and public readiness-report SDK artifact rows must also stay in the
+  verifier-owned sorted SDK order before Markdown rendering or bundle
+  verification can pass. Manifest SDK artifact rows must also remain canonical
+  objects with all required fields, no unknown fields, approved
+  SDK/implementation bindings, and artifact hashes matching their committed
+  roles. SDK implementation artifact paths and hashes are checked with the same
+  local-artifact and hash-binding rules as the primary prover payloads.
+  Duplicate JSON keys inside SDK artifact rows must fail before implementation
+  hashes are trusted.
 - SCCP native EVM prover manifests must also keep their root object and
   `audit_hashes` map schemas exact. Rehashed manifests that add unknown root
   fields, add unexpected audit-hash roles, or omit required audit-hash roles are
@@ -3635,6 +3780,13 @@ and completed history lives in [`status.md`](./status.md).
   SoraDNS ISI directory-record fixtures now sign through `Signature::try_new`,
   with submit-draft and publish-directory instruction regressions covering the
   checked builder signature;
+  SoraFS gateway conformance attestations now sign reports through
+  `Signature::try_new`, with regression coverage that verifies the emitted
+  envelope signature and rejects a wrong key;
+  irohad Soracloud runtime provider advert/admission fixtures and recording
+  mutation-sink heartbeat/Inrou provenance fixtures now use checked signing,
+  with remote provider hydration and local heartbeat/Inrou regressions covering
+  the paths;
   VPN usage vouchers now expose `VpnUsageVoucherV1::try_sign`, verify checked
   voucher signatures, and reject tampered or wrong-key voucher signatures in
   focused regressions;
@@ -3645,6 +3797,14 @@ and completed history lives in [`status.md`](./status.md).
   `VpnUsageVoucherV1::try_sign`, with the filtered receipt suite covering
   WSV-grace success and wrong-key, tampered, malformed, replayed, and
   substituted receipt/voucher cases;
+  Torii operator replay and content auth signed-header fixtures now use checked
+  Ed25519 key generation plus `Signature::try_new`, with replay, role-gate, and
+  sponsor regressions covering the verified canonical request signatures;
+  Sumeragi vote-verifier checked BLS batch fixtures now use non-zero
+  deterministic seed material accepted by `KeyPair::try_from_seed`, with
+  wrong-validator, non-BLS public-key, pending-block, block-sync/QC,
+  payload-availability, and P2P topology helper regressions rerun on checked
+  Sumeragi fixture signatures;
   `sora-vpn-helper` usage voucher control-cell envelopes now sign through
   `Signature::try_new`, propagate controller signing errors, and exercise the
   fallible envelope builder in the cumulative voucher signer regression;
@@ -3725,7 +3885,10 @@ and completed history lives in [`status.md`](./status.md).
   SoraFS node gateway, data-model endorsement/manifest/ISI fixture signatures,
   data-model block fixture signatures, signed-block transparent API fixtures,
   and data-model transaction payload/multisig fixtures now use
-  `Signature::try_new`/`SignatureOf::try_from_hash`; SoraFS
+  `Signature::try_new`/`SignatureOf::try_from_hash`; Soracloud
+  canonical-request witness fixtures now use checked Ed25519 key generation and
+  `Signature::try_new`, verifying the witness signature before Norito
+  roundtrip; SoraFS
   CLI fallback manifest `/transaction`
   submissions now use a checked `TransactionBuilder::try_sign` helper and
   return contextual command errors before HTTP dispatch on backend signing
@@ -3745,7 +3908,38 @@ and completed history lives in [`status.md`](./status.md).
   and reject a wrong block-signature key in focused coverage; `iroha_crypto`
   packed signature alignment fixtures now use checked Ed25519 key generation,
   `Signature::try_new`, and `SignatureOf::try_from_hash`, with raw and typed
-  signature wrong-key rejection coverage;
+  signature wrong-key rejection coverage; Ed25519 aggregate and deterministic
+  batch verification fixtures now use checked Ed25519 key generation plus
+  `Signature::try_new`, preserving tampered-signature, empty-input,
+  invalid-member, order-binding, and wrong-key rejection coverage; ML-DSA
+  keypair fixture signing now uses checked seeded key generation plus
+  `Signature::try_new`, preserving modified-message, wrong-key,
+  invalid-signature-length, mismatched-key, malformed-key, and inconsistent
+  private-key-import negative coverage; internal `Signature`/`SignatureOf`
+  fixtures now use checked random key generation plus `Signature::try_new` and
+  `SignatureOf::try_from_hash`, with Ed25519, secp256k1, BLS normal/small,
+  verify-cache, and typed roundtrip regressions rejecting wrong-key verification
+  where applicable; top-level `iroha_crypto` private-key export, random keypair,
+  ML-DSA parsed-key, keypair serialization, BLS aggregate/PoP, and public-key
+  payload fixtures now use checked seed/random key generation plus
+  `Signature::try_new`, with wrong-key Ed25519, secp256k1, and ML-DSA
+  random-signature rejection plus existing BLS bad-signature, duplicate-key,
+  canceling-key, malformed-PoP, unhashed-PoP, and malformed-public-key
+  regressions on checked fixtures;
+  Torii offline issuer attestation, body-auth, multisig witness, and signed
+  lineage fixtures now use checked seeded Ed25519 key generation plus
+  `Signature::try_new`, with wrong-verifier receipt,
+  stale/replay/tampered body proof, multisig, certificate usage-limit,
+  signed-balance tamper, and refill lineage coverage on checked fixtures;
+  native AMX BLS vote fixtures now use checked seeded/random key generation
+  plus `Signature::try_new`, verifying each vote preimage signature before
+  aggregate-QC ordering and rejection regressions consume it; JDG SDN seals and
+  committee attestation fixtures now use checked random key generation,
+  `SignatureOf::try_from_hash`, and `Signature::try_new`, verifying fixture
+  signatures before SDN, simple-threshold, and BLS aggregate guard regressions
+  consume them; data-model JDG SDN commitment fixtures now also use checked
+  random key generation plus `SignatureOf::try_from_hash`, verifying sample
+  seals before registry and attestation validation regressions consume them;
   transaction builders, multisig signature bundles, and sealed transaction
   commitments now route through fallible `SignatureOf::try_new` APIs while
   retaining compatibility wrappers for existing callers;
@@ -7361,7 +7555,18 @@ and completed history lives in [`status.md`](./status.md).
   Python, Swift, Kotlin/JVM, and Java Android now expose record-backed compact-token
   prover wrappers over that ABI, so mobile wallets can pass
   `KagemushaVerifiedFoldRecordBundle` Norito bytes through the native bridge
-  instead of constructing preverified folded public inputs themselves. The same
+  while Kotlin/JVM and Java Android recursive-spend evidence helpers keep
+  `VerifiedFoldHopEvidence` explicit for `chain_id`, asset, and `root_after`,
+  validate privacy build results, nested `OpenVerifyEnvelope`s, active
+  Kagemusha verifier records, schema hashes, verifier-key commitments, strict
+  ZK1 public-instance columns, and root continuity before emitting checked
+  fold-record bundles or redeem proof attachments. Proof-output-only helpers
+  must remain fail-closed because privacy proof outputs do not carry Pallas IPA
+  opening envelopes or enough chain context to derive a production-safe record
+  bundle; init/append request helpers must likewise require explicit checked
+  hop evidence plus caller-supplied Pallas open-envelopes archives before
+  serializing recursive-spend request archives instead of constructing
+  preverified folded public inputs themselves. The same
   SDK surfaces now expose the ABI-6 recursive aggregation proof-bundle prover,
   which accepts record-backed bundle bytes plus proof-derived Pallas
   open-envelope archive bytes and returns an admission-neutral

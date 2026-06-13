@@ -1570,6 +1570,26 @@ def test_release_bundle_verifier_guards_all_lanes_route_canary_scalar_inventory(
         for error in errors
     )
 
+    route_redaction_marker = "secret-token operator route material"
+    sparse_test.write_text(
+        "\n".join(
+            marker
+            for marker in verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS[1][1]
+            if marker != route_redaction_marker
+        ),
+        encoding="utf-8",
+    )
+    errors = verifier._all_lanes_route_canary_scalar_inventory_errors(
+        ((sparse_test, verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS[1][1]),)
+    )
+
+    assert any(
+        "SCCP all-lanes route-canary scalar source inventory" in error
+        and str(sparse_test) in error
+        and f"missing marker: {route_redaction_marker}" in error
+        for error in errors
+    )
+
 
 def test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory(
     tmp_path: Path,
@@ -2950,6 +2970,8 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         "generated offline full TOML arguments are invalid",
         'f"/wallet/getcontract returned malformed {label} bytecode"',
         'f"/wallet/getcontract returned malformed {label} contract_address"',
+        "except (argparse.ArgumentTypeError, TypeError, RuntimeError):",
+        "except (argparse.ArgumentTypeError, TypeError, ValueError):",
         'f"TRON constant call {function_selector} returned non-hex data"',
         "except (RuntimeError, TypeError, ValueError):",
         "def _unsupported_tron_field_detail(",
@@ -3041,15 +3063,49 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         for error in errors
     )
 
+    all_lanes_script_markers = next(
+        markers
+        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
+        if path == "scripts/sccp_all_lanes_evidence.py"
+    )
+    for all_lanes_removed_marker in (
+        "except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):",
+        "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
+    ):
+        sparse_all_lanes_script = tmp_path / "sccp_all_lanes_evidence.py"
+        sparse_all_lanes_script.write_text(
+            "\n".join(
+                marker
+                for marker in all_lanes_script_markers
+                if marker != all_lanes_removed_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
+            ((sparse_all_lanes_script, all_lanes_script_markers),)
+        )
+
+        assert any(
+            "SCCP release public scalar-text schema source inventory" in error
+            and str(sparse_all_lanes_script) in error
+            and f"missing marker: {all_lanes_removed_marker}" in error
+            for error in errors
+        )
+
     solana_test_markers = (
         "def test_solana_json_rpc_redacts_transport_and_error_response_details",
         "def test_solana_json_rpc_redacts_invalid_json_parser_details",
         "def test_live_solana_account_data_redacts_base64_parser_causes",
         "def test_live_solana_metadata_base64_redacts_parser_causes",
+        "parser_exception_types = (module.argparse.ArgumentTypeError, TypeError)",
         "secret-token-solana-error",
         "secret-token invalid Solana JSON-RPC payload",
+        "secret-token verifier_code_hash parser detail",
         "secret-token live account base64",
+        "account_exception_types = (TypeError, ValueError)",
+        "secret-token account-data decoder detail",
         "secret-token live metadata base64",
+        "secret-token {label} decode detail",
         "duplicate JSON keys",
         'assert "secret-token" not in message',
     )
@@ -3102,6 +3158,8 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
     for solana_script_removed_marker in (
         'raise RuntimeError(f"{label} account data is invalid base64") from None',
         'raise ValueError(f"{label} must be base64") from None',
+        "except (TypeError, ValueError, binascii.Error):",
+        "except (argparse.ArgumentTypeError, TypeError):",
     ):
         sparse_solana_script = (
             tmp_path / f"sccp_solana_live_base64_{len(solana_script_removed_marker)}.py"
@@ -3146,6 +3204,35 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         for error in errors
     )
 
+    for solana_test_removed_marker in (
+        "parser_exception_types = (module.argparse.ArgumentTypeError, TypeError)",
+        "secret-token verifier_code_hash parser detail",
+        "secret-token {label} decode detail",
+        "account_exception_types = (TypeError, ValueError)",
+        "secret-token account-data decoder detail",
+    ):
+        sparse_solana_test = (
+            tmp_path / f"sccp_solana_live_parser_{len(solana_test_removed_marker)}.py"
+        )
+        sparse_solana_test.write_text(
+            "\n".join(
+                marker
+                for marker in solana_test_markers
+                if marker != solana_test_removed_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
+            ((sparse_solana_test, solana_test_markers),)
+        )
+
+        assert any(
+            "SCCP release public scalar-text schema source inventory" in error
+            and str(sparse_solana_test) in error
+            and f"missing marker: {solana_test_removed_marker}" in error
+            for error in errors
+        )
+
     adversarial_marker_cases = (
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
@@ -3158,6 +3245,18 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
             "secret-token hash base64",
+        ),
+        (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "for exception_type in (TypeError, ValueError):",
+        ),
+        (
+            "scripts/sccp_ton_live_evidence.py",
+            "except (TypeError, binascii.Error, ValueError):",
+        ),
+        (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "secret-token {label} parser detail",
         ),
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
@@ -3176,6 +3275,22 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
             "secret-token-evm-receipt-hex",
         ),
         (
+            "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+            "secret-token EVM receipt hex TypeError detail",
+        ),
+        (
+            "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+            "for exception_type in (RuntimeError, TypeError):",
+        ),
+        (
+            "scripts/sccp_evm_receipt_proof_evidence.py",
+            "except (TypeError, ValueError):",
+        ),
+        (
+            "scripts/sccp_evm_receipt_proof_evidence.py",
+            "except (OSError, RuntimeError, TypeError, ValueError, argparse.ArgumentTypeError) as exc:",
+        ),
+        (
             "pytests/scripts/sccp_release_bundle_test.py",
             "secret-token-native-duplicate",
         ),
@@ -3188,6 +3303,26 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
             "secret-token live metadata base64",
         ),
         (
+            "pytests/scripts/sccp_solana_live_evidence_test.py",
+            "parser_exception_types = (module.argparse.ArgumentTypeError, TypeError)",
+        ),
+        (
+            "pytests/scripts/sccp_solana_live_evidence_test.py",
+            "secret-token verifier_code_hash parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_solana_live_evidence_test.py",
+            "account_exception_types = (TypeError, ValueError)",
+        ),
+        (
+            "pytests/scripts/sccp_solana_live_evidence_test.py",
+            "secret-token account-data decoder detail",
+        ),
+        (
+            "pytests/scripts/sccp_solana_live_evidence_test.py",
+            "secret-token {label} decode detail",
+        ),
+        (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
             "secret-token solid block proof parser detail",
         ),
@@ -3197,11 +3332,31 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "for exception_type in (ValueError, RuntimeError):",
+            "for exception_type in (TypeError, ValueError, RuntimeError):",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "for exception_type in (TypeError, ValueError):",
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
             "secret-token transaction source proof parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "def test_live_evidence_redacts_source_event_topic_parser_typeerror",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token source-event log topic0 parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "def test_live_evidence_redacts_route_canary_topic_parser_typeerror",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token route-canary log topic0 parser detail",
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
@@ -3312,12 +3467,24 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
             "secret-token {target_method} parser detail",
         ),
         (
+            "pytests/scripts/sccp_evm_source_live_evidence_test.py",
+            "for exception_type in (TypeError, RuntimeError):",
+        ),
+        (
             "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
             "secret-token-eth-source-hex",
         ),
         (
             "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
             "secret-token-eth-source-runtime0",
+        ),
+        (
+            "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
+            "secret-token ETH source hex TypeError detail",
+        ),
+        (
+            "scripts/sccp_eth_source_bridge_evidence.py",
+            "except (TypeError, ValueError):",
         ),
         (
             "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
@@ -3330,6 +3497,14 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         (
             "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
             "secret-token-bsc-source-runtime0",
+        ),
+        (
+            "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
+            "secret-token BSC source hex TypeError detail",
+        ),
+        (
+            "scripts/sccp_bsc_source_bridge_evidence.py",
+            "except (TypeError, ValueError):",
         ),
         (
             "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
@@ -3377,6 +3552,22 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         ),
         (
             "pytests/scripts/sccp_evm_destination_evidence_test.py",
+            "secret-token EVM destination hex TypeError detail",
+        ),
+        (
+            "scripts/sccp_evm_destination_evidence.py",
+            "except (TypeError, ValueError):",
+        ),
+        (
+            "scripts/sccp_evm_destination_evidence.py",
+            "except (OSError, TypeError, ValueError) as exc:",
+        ),
+        (
+            "pytests/scripts/sccp_evm_destination_evidence_test.py",
+            "for exception_type in (TypeError, ValueError):",
+        ),
+        (
+            "pytests/scripts/sccp_evm_destination_evidence_test.py",
             "secret-token-evm-destination-file-path.hex",
         ),
         (
@@ -3394,6 +3585,14 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         (
             "pytests/scripts/sccp_solana_destination_evidence_test.py",
             "secret-token-solana-destination-base64",
+        ),
+        (
+            "scripts/sccp_solana_destination_evidence.py",
+            "except (TypeError, ValueError, binascii.Error):",
+        ),
+        (
+            "pytests/scripts/sccp_solana_destination_evidence_test.py",
+            "secret-token Solana destination base64 decoder detail",
         ),
         (
             "pytests/scripts/sccp_solana_destination_evidence_test.py",
@@ -7546,6 +7745,155 @@ def test_release_bundle_rejects_copied_crypto_source_adapter_gate_drift_before_r
     ) in required_errors
 
 
+def test_release_bundle_rejects_copied_crypto_source_adapter_gate_hash_role_replay() -> None:
+    """Copied crypto rows must keep source-gate audit hashes role-separated."""
+
+    bundle = load_bundle_module()
+    label = "bundled report.cryptographic_evidence[0]"
+    source_hash = fixed_hex32(0x91)
+    deployment_hash = fixed_hex32(0x92)
+    route_canary_hash = fixed_hex32(0x93)
+    gate_hash = fixed_hex32(0x94)
+    row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    row.update(
+        {
+            "domain": 3,
+            "chain": "sol",
+            "evm_source_rpc_chain_id": "",
+            "evm_source_block_tag": "",
+            "evm_destination_rpc_chain_id": "",
+            "evm_destination_block_tag": "",
+            "source_verifier_material_hash": source_hash,
+            "source_adapter_engine_deployment_hash": deployment_hash,
+            "destination_binding_hash": fixed_hex32(0x95),
+            "route_allowlist_hash": fixed_hex32(0x96),
+            "route_canary_evidence_hash": route_canary_hash,
+            "route_canary_evidence_bound": True,
+            "route_canary_receipt_block_finalized": None,
+            "source_adapter_gate_required": True,
+            "source_adapter_gate_hash": gate_hash,
+            "source_adapter_gate_audit_hashes": {
+                "solana_tower_replay_verifier_hash": source_hash,
+                "solana_full_accountsdb_lattice_verifier_hash": deployment_hash,
+                "solana_bank_fork_choice_verifier_hash": route_canary_hash,
+                "solana_full_light_client_gate_hash": gate_hash,
+            },
+        }
+    )
+
+    errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+    assert (
+        f"{label} source_adapter_gate hash role "
+        "source_adapter_gate_audit_hashes.solana_tower_replay_verifier_hash "
+        "must not reuse source_verifier_material_hash"
+    ) in errors
+    assert (
+        f"{label} source_adapter_gate hash role "
+        "source_adapter_gate_audit_hashes."
+        "solana_full_accountsdb_lattice_verifier_hash must not reuse "
+        "source_adapter_engine_deployment_hash"
+    ) in errors
+    assert (
+        f"{label} source_adapter_gate hash role "
+        "source_adapter_gate_audit_hashes.solana_bank_fork_choice_verifier_hash "
+        "must not reuse route_canary_evidence_hash"
+    ) in errors
+
+
+def test_release_bundle_rejects_public_source_adapter_gate_template_audit_replays() -> None:
+    """Public source-gate audit hashes must not replay built-in templates."""
+
+    bundle = load_bundle_module()
+    all_lanes = bundle._all_lanes_module()
+    cases = (
+        (
+            all_lanes.SCCP_DOMAIN_SOL,
+            "solana",
+            all_lanes.SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS,
+            all_lanes._source_material_template_hashes(
+                all_lanes.LANE_PROFILES[all_lanes.SCCP_DOMAIN_SOL]
+            ),
+        ),
+        (
+            all_lanes.SCCP_DOMAIN_TON,
+            "ton",
+            all_lanes.TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS,
+            all_lanes._source_material_template_hashes(
+                all_lanes.LANE_PROFILES[all_lanes.SCCP_DOMAIN_TON]
+            ),
+        ),
+    )
+
+    for domain, row_chain, audit_fields, template_hashes in cases:
+        expected_keys = sorted(
+            bundle._source_adapter_gate_audit_keys_for_domain_chain(
+                domain,
+                row_chain,
+            )
+        )
+        expected_gate_key = bundle._source_adapter_gate_hash_key_for_domain_chain(
+            domain,
+            row_chain,
+        )
+        lane_chain = all_lanes.LANE_PROFILES[domain].chain
+        for audit_field in audit_fields:
+            for template_field, template_hash in template_hashes.items():
+                audit_hashes = {
+                    key: fixed_hex32(0x40 + index)
+                    for index, key in enumerate(expected_keys)
+                }
+                audit_hashes[audit_field] = "0x" + template_hash.hex()
+                gate_hash = audit_hashes[expected_gate_key]
+                label = "bundled report.cryptographic_evidence[0]"
+                row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+                row.update(
+                    {
+                        "domain": domain,
+                        "chain": row_chain,
+                        "evm_source_rpc_chain_id": "",
+                        "evm_source_block_tag": "",
+                        "evm_destination_rpc_chain_id": "",
+                        "evm_destination_block_tag": "",
+                        "route_canary_evidence_bound": False,
+                        "route_canary_receipt_block_finalized": None,
+                        "source_adapter_gate_required": True,
+                        "source_adapter_gate_hash": gate_hash,
+                        "source_adapter_gate_audit_hashes": audit_hashes,
+                    }
+                )
+
+                crypto_errors = bundle._cryptographic_evidence_row_bundle_errors(
+                    row,
+                    label,
+                )
+
+                assert (
+                    f"{label} source_adapter_gate_audit_hashes {audit_field} "
+                    "must be deployed audit evidence, not built-in template material"
+                ) in crypto_errors, (domain, audit_field, template_field)
+
+                lane_label = "bundled report.evidence.lanes[0]"
+                lane = {"domain": domain, "chain": lane_chain}
+                source_gate = {
+                    "required": True,
+                    "ready": True,
+                    "gate_hash": gate_hash,
+                    "audit_hashes": audit_hashes,
+                    "blockers": [],
+                }
+                gate_errors = bundle._source_adapter_gate_semantic_errors(
+                    lane_label,
+                    lane,
+                    source_gate,
+                )
+
+                assert (
+                    f"{lane_label}.source_adapter_gate audit_hashes {audit_field} "
+                    "must be deployed audit evidence, not built-in template material"
+                ) in gate_errors, (domain, audit_field, template_field)
+
+
 def test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before_render() -> None:
     """Copied source-gate audit diagnostics must not leak secret-like keys."""
 
@@ -7718,6 +8066,46 @@ def test_release_bundle_bsc_source_gate_policy_matches_verifier_before_render() 
     assert any(
         "source_adapter_gate_required must be true for this domain" in error
         for error in bundle_gate_errors(mainnet_no_gate)
+    )
+
+    mainnet_required_without_evidence = bsc_row(
+        chain="bsc",
+        required=True,
+        gate_hash="",
+        audit_hashes={},
+    )
+    verifier_required_without_evidence_errors = verifier_gate_errors(
+        mainnet_required_without_evidence
+    )
+    bundle_required_without_evidence_errors = bundle_gate_errors(
+        mainnet_required_without_evidence
+    )
+    assert any(
+        "source_adapter_gate_hash must not be empty when required" in error
+        for error in verifier_required_without_evidence_errors
+    )
+    assert any(
+        "source_adapter_gate_hash must be a non-zero canonical bytes32 hex string "
+        "when required" in error
+        for error in bundle_required_without_evidence_errors
+    )
+    assert any(
+        "source_adapter_gate_audit_hashes missing field: evm_source_gate_hash"
+        in error
+        for error in verifier_required_without_evidence_errors
+    )
+    assert any(
+        "source_adapter_gate_audit_hashes missing field: evm_source_gate_hash"
+        in error
+        for error in bundle_required_without_evidence_errors
+    )
+    assert any(
+        "source_adapter_gate_audit_hashes must not be empty when required" in error
+        for error in verifier_required_without_evidence_errors
+    )
+    assert any(
+        "source_adapter_gate_audit_hashes must not be empty when required" in error
+        for error in bundle_required_without_evidence_errors
     )
 
     testnet_with_gate = bsc_row(
@@ -8970,6 +9358,77 @@ def test_release_bundle_rejects_malformed_copied_native_evm_artifacts_before_ren
     assert (
         f"{label} sdk_artifacts[2].implementation_artifact path must not reuse "
         "proving_key"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_native_evm_sdk_artifact_order_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied native prover summaries must keep SDK rows in canonical order."""
+
+    bundle = load_bundle_module()
+    real_report_module = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return real_report_module._corridor_phases()
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = real_report_module._build_report(*args, **kwargs)
+            if self.calls == 2:
+                native_summary = dict(report["native_evm_prover_bundle"])
+                native_summary["sdk_artifacts"] = list(
+                    reversed(native_summary["sdk_artifacts"])
+                )
+                report["native_evm_prover_bundle"] = native_summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("native EVM SDK artifact reorder was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("native EVM SDK artifact reorder reached rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle.sdk_artifacts must match "
+        "expected SDK order"
+    ) in captured.err
+    assert (
+        "bundled report.native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
     ) in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
@@ -10368,6 +10827,108 @@ def test_release_bundle_rejects_copied_evidence_route_canary_evidence_hash_repla
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
 
+def test_release_bundle_rejects_copied_route_canary_source_gate_replay_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied route-canary evidence hashes must not replay source-gate hashes."""
+
+    bundle = load_bundle_module()
+    real_report_module = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    def mutate_report(report: dict[str, object]) -> None:
+        evidence_summary = report["evidence"]
+        assert isinstance(evidence_summary, dict)
+        lanes = evidence_summary["lanes"]
+        assert isinstance(lanes, list)
+        by_domain = {lane["domain"]: lane for lane in lanes}
+
+        sol_gate = by_domain[3]["source_adapter_gate"]
+        assert isinstance(sol_gate, dict)
+        sol_audit_hashes = sol_gate["audit_hashes"]
+        assert isinstance(sol_audit_hashes, dict)
+        sol_replayed_audit_hash = sol_audit_hashes[
+            "solana_tower_replay_verifier_hash"
+        ]
+        by_domain[1]["route_allowlist"]["route_canary"][
+            "evidence_hash"
+        ] = sol_replayed_audit_hash
+
+        tron_gate = by_domain[5]["source_adapter_gate"]
+        assert isinstance(tron_gate, dict)
+        by_domain[5]["route_allowlist"]["route_canary"]["evidence_hash"] = tron_gate[
+            "gate_hash"
+        ]
+
+        evidence_by_domain = {lane["domain"]: lane for lane in lanes}
+        crypto_rows = report["cryptographic_evidence"]
+        assert isinstance(crypto_rows, list)
+        for row in crypto_rows:
+            row["route_canary_evidence_hash"] = evidence_by_domain[row["domain"]][
+                "route_allowlist"
+            ]["route_canary"]["evidence_hash"]
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return real_report_module._corridor_phases()
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = real_report_module._build_report(*args, **kwargs)
+            if self.calls == 2:
+                mutate_report(report)
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("source-gate hash replay was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("source-gate replay reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    eth_canary = "bundled report.evidence.lanes[0].route_allowlist.route_canary"
+    tron_canary = "bundled report.evidence.lanes[4].route_allowlist.route_canary"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{eth_canary} evidence_hash must not reuse "
+        "source_adapter_gate.audit_hashes.solana_tower_replay_verifier_hash "
+        "from bundled report.evidence.lanes[2]"
+    ) in captured.err
+    assert (
+        f"{tron_canary} hash role evidence_hash must not reuse "
+        "source_adapter_gate_hash"
+    ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
 def test_release_bundle_rejects_copied_evidence_evm_route_canary_transcript_drift_before_render(
     tmp_path: Path,
     monkeypatch,
@@ -11037,6 +11598,104 @@ def test_release_bundle_rejects_copied_submission_surface_binding_before_render(
         in captured.err
     )
     assert f"{label} must match copied corridor phases" in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_submission_surface_extra_helpers_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied submission rows must not over-advertise SDK helper coverage."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+    phase_status = {phase: "passed" for phase in PHASES}
+    forged_js_helper = "forgedUiProver"
+    forged_python_helper = "forgedPythonProver"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["corridor"] = {
+                    "production_ready": True,
+                    "phases": dict(phase_status),
+                    "evidence_artifacts": {},
+                    "require_phase_evidence": False,
+                    "blockers": [],
+                }
+                surfaces = verifier._expected_submission_surfaces(report)
+                sol_surface = next(
+                    surface for surface in surfaces if surface["lanes"] == "sol"
+                )
+                sol_surface["sdk_helper_symbols"] = [
+                    *sol_surface["sdk_helper_symbols"],
+                    forged_js_helper,
+                ]
+                sol_surface["sdk_helpers"] = ", ".join(
+                    sol_surface["sdk_helper_symbols"]
+                )
+                sol_surface["sdk_helper_symbols_by_sdk"]["js-sdk"] = list(
+                    sol_surface["sdk_helper_symbols"]
+                )
+                sol_surface["sdk_helper_symbols_by_sdk"]["python-sdk"] = [
+                    *sol_surface["sdk_helper_symbols_by_sdk"]["python-sdk"],
+                    forged_python_helper,
+                ]
+                report["user_prover_submission_surfaces"] = surfaces
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("submission surface helper overclaim was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("submission surface helper overclaim reached rendering")
+
+    captured = capsys.readouterr()
+    label = "bundled report.user_prover_submission_surfaces"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{label} lanes sol sdk_helper_symbols_by_sdk[js-sdk] "
+        "must match expected helpers"
+    ) in captured.err
+    assert (
+        f"{label} lanes sol sdk_helper_symbols_by_sdk[python-sdk] "
+        "must match expected helpers"
+    ) in captured.err
+    assert (
+        f"{label} lanes sol sdk_helper_symbols must match expected helpers"
+        in captured.err
+    )
+    assert f"{label} must match copied corridor phases" in captured.err
+    assert forged_js_helper not in captured.err
+    assert forged_python_helper not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -16112,6 +16771,47 @@ def test_release_bundle_verifier_rejects_padded_native_evm_prover_sdk_artifacts(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_order(
+    tmp_path: Path,
+) -> None:
+    """Published native prover manifests must keep SDK rows in canonical order."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["native_sdk_artifacts"] = list(reversed(payload["native_sdk_artifacts"]))
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts "
+        "must match expected SDK order"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifact_ids(
     tmp_path: Path,
 ) -> None:
@@ -16264,6 +16964,47 @@ def test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_sdk_
     assert confusable_sdk not in verified.stdout
     assert secret_unknown_sdk not in verified.stdout
     assert secret_unknown_sdk not in verified.stderr
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_prover_report_sdk_artifact_order(
+    tmp_path: Path,
+) -> None:
+    """Published native prover readiness summaries must keep SDK row order."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["native_evm_prover_bundle"]["sdk_artifacts"] = list(
+        reversed(report["native_evm_prover_bundle"]["sdk_artifacts"])
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts must match "
+        "expected SDK order"
+    ) in verified.stdout
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
@@ -27445,6 +28186,79 @@ def test_release_bundle_verifier_rejects_cross_lane_route_canary_evidence_replay
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_route_canary_source_gate_hash_replay(
+    tmp_path: Path,
+) -> None:
+    """Route-canary evidence hashes must not replay source-gate material."""
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        sol_audit_hashes = by_domain[3]["source_adapter_gate"]["audit_hashes"]
+        by_domain[1]["route_allowlist"]["route_canary"][
+            "evidence_hash"
+        ] = sol_audit_hashes["solana_tower_replay_verifier_hash"]
+        by_domain[5]["route_allowlist"]["route_canary"]["evidence_hash"] = by_domain[
+            5
+        ]["source_adapter_gate"]["gate_hash"]
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    evidence_by_domain = {lane["domain"]: lane for lane in report["evidence"]["lanes"]}
+    for row in report["cryptographic_evidence"]:
+        row["route_canary_evidence_hash"] = evidence_by_domain[row["domain"]][
+            "route_allowlist"
+        ]["route_canary"]["evidence_hash"]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report embedded evidence lane domain 1 route_allowlist "
+        "route_canary evidence_hash must not reuse "
+        "source_adapter_gate.audit_hashes.solana_tower_replay_verifier_hash "
+        "from readiness report embedded evidence lane domain 3"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 1 route_allowlist route_canary "
+        "evidence_hash must not reuse "
+        "source_adapter_gate.audit_hashes.solana_tower_replay_verifier_hash "
+        "from all-lanes summary lane domain 3"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain 5 route_allowlist "
+        "route_canary hash role evidence_hash must not reuse "
+        "source_adapter_gate_hash"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 5 route_allowlist route_canary hash "
+        "role evidence_hash must not reuse source_adapter_gate_hash"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_all_lanes_expected_hash_drift(
     tmp_path: Path,
 ) -> None:
@@ -28339,6 +29153,53 @@ def test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift(
     assert (
         "readiness report cryptographic evidence row "
         "source_adapter_gate_required must be true for this domain"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic_evidence does not match embedded lane evidence"
+        in verified.stdout
+    )
+
+
+def test_release_bundle_verifier_rejects_crypto_source_gate_hash_role_replay(
+    tmp_path: Path,
+) -> None:
+    """Public crypto source-gate audit hashes must stay role-separated."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 3)
+    row["source_adapter_gate_audit_hashes"][
+        "solana_tower_replay_verifier_hash"
+    ] = row["source_verifier_material_hash"]
+    row["source_adapter_gate_audit_hashes"][
+        "solana_bank_fork_choice_verifier_hash"
+    ] = row["route_canary_evidence_hash"]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report cryptographic evidence row source_adapter_gate hash role "
+        "source_adapter_gate_audit_hashes.solana_tower_replay_verifier_hash "
+        "must not reuse source_verifier_material_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row source_adapter_gate hash role "
+        "source_adapter_gate_audit_hashes.solana_bank_fork_choice_verifier_hash "
+        "must not reuse route_canary_evidence_hash"
     ) in verified.stdout
     assert (
         "readiness report cryptographic_evidence does not match embedded lane evidence"
@@ -29405,6 +30266,79 @@ def test_release_bundle_verifier_rejects_per_sdk_helper_symbol_drift(
         "readiness report user_prover_submission_surfaces does not match "
         "corridor phases"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_submission_surface_extra_helpers(
+    tmp_path: Path,
+) -> None:
+    """Published helper inventories must be exact, not only supersets."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = next(
+        row
+        for row in report["user_prover_submission_surfaces"]
+        if row["lanes"] == "sol"
+    )
+    forged_js_helper = "forgedUiProver"
+    forged_python_helper = "forgedPythonProver"
+    row["sdk_helper_symbols"] = [
+        *row["sdk_helper_symbols"],
+        forged_js_helper,
+    ]
+    row["sdk_helpers"] = ", ".join(row["sdk_helper_symbols"])
+    row["sdk_helper_symbols_by_sdk"]["js-sdk"] = list(row["sdk_helper_symbols"])
+    row["sdk_helper_symbols_by_sdk"]["python-sdk"] = [
+        *row["sdk_helper_symbols_by_sdk"]["python-sdk"],
+        forged_python_helper,
+    ]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols must match expected helpers"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk[js-sdk] must match expected helpers"
+    ) in verified.stdout
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk[python-sdk] must match expected helpers"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces lanes sol "
+        "sdk_helper_symbols must match expected helpers"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces lanes sol "
+        "sdk_helper_symbols_by_sdk[js-sdk] must match expected helpers"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces lanes sol "
+        "sdk_helper_symbols_by_sdk[python-sdk] must match expected helpers"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces does not match "
+        "corridor phases"
+    ) in verified.stdout
+    assert forged_js_helper not in verified.stdout
+    assert forged_python_helper not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper_map_keys(
@@ -31981,6 +32915,7 @@ def test_release_bundle_verifier_guards_evm_source_live_production(
                 "test_evm_source_live_cli_redacts_top_level_exception_details",
                 "secret-token invalid EVM source JSON-RPC payload",
                 "secret-token {target_method} parser detail",
+                "for exception_type in (TypeError, RuntimeError):",
                 "secret-token-evm-source-error",
             ),
         ),
@@ -32058,6 +32993,16 @@ def test_release_bundle_verifier_guards_evm_source_live_production(
         "Ethereum mainnet live EVM source production SDK test inventory"
         in error
         and "missing marker: secret-token {target_method} parser detail" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet live EVM source production SDK test inventory"
+        in error
+        and (
+            "missing marker: for exception_type in "
+            "(TypeError, RuntimeError):"
+        )
+        in error
         for error in verified["errors"]
     )
     assert any(
@@ -37848,6 +38793,14 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
+            "except (TypeError, ValueError, binascii.Error):",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
             "def _minimal_toml_duplicate_key_detail(",
         ),
         (
@@ -37864,6 +38817,14 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
+            "except (SystemExit, TypeError, ValueError, RuntimeError):",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
             "unsupported zk section with sensitive name",
         ),
         (
@@ -37873,6 +38834,22 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "def test_all_lanes_minimal_toml_parser_redacts_json_exception_causes",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "for exception_type in (TypeError, ValueError, RuntimeError):",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_evidence_redacts_destination_binding_recompute_failures",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_evidence_redacts_destination_identity_failures",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -37893,6 +38870,14 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "def test_all_lanes_base64_helper_redacts_parser_causes",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "source_record_exception_types = (",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "source_validator_exception_types = (",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -37931,6 +38916,18 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
             "secret-token all-lanes base64",
         ),
         (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "secret-token destination binding material",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "secret-token {label} parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "for exception_type in (TypeError, ValueError):",
+        ),
+        (
             "scripts/sccp_ton_live_evidence.py",
             'raise RuntimeError(f"{label} must be 32-byte hex or base64") from None',
         ),
@@ -37943,12 +38940,28 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
             'raise ValueError("TON live code BoC base64 metadata is invalid") from None',
         ),
         (
+            "scripts/sccp_ton_live_evidence.py",
+            "except (TypeError, binascii.Error, ValueError):",
+        ),
+        (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
         ),
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
             "secret-token hash base64",
+        ),
+        (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "for exception_type in (TypeError, ValueError):",
+        ),
+        (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "secret-token {label} parser detail",
+        ),
+        (
+            "scripts/sccp_ton_live_evidence.py",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
         ),
     ):
         required_markers = next(

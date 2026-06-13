@@ -649,7 +649,7 @@ fn signed_remote_rbc_ready_signatures_for_roster(
                 signature: Vec::new(),
             };
             let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-            let signature = Signature::new(signer_kp.private_key(), &preimage);
+            let signature = checked_signature(signer_kp.private_key(), &preimage);
             ready.signature = signature.payload().to_vec();
             crate::sumeragi::consensus::RbcReadySignature {
                 sender: ready.sender,
@@ -696,6 +696,27 @@ fn isolate_commit_history_state() -> super::status::TestLockGuard {
 fn deterministic_keypair(seed: impl AsRef<[u8]>, algorithm: Algorithm) -> KeyPair {
     let seed_hash = Hash::new(seed.as_ref());
     KeyPair::from_seed(seed_hash.as_ref().to_vec(), algorithm)
+}
+
+fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
+    Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+}
+
+fn checked_signature_of_hash<T>(
+    private_key: &iroha_crypto::PrivateKey,
+    hash: HashOf<T>,
+) -> SignatureOf<T> {
+    SignatureOf::try_from_hash(private_key, hash).expect("test fixture hash signing should succeed")
+}
+
+fn forged_leader_signature_for_block(
+    valid_leader_signature: &BlockSignature,
+    block: &SignedBlock,
+    algorithm: Algorithm,
+) -> BlockSignature {
+    let wrong_key = KeyPair::random_with_algorithm(algorithm);
+    let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
+    BlockSignature::new(valid_leader_signature.index(), wrong_signature)
 }
 
 fn insert_validated_pending(actor: &mut Actor, block: SignedBlock) -> HashOf<BlockHeader> {
@@ -1948,7 +1969,7 @@ fn aggregate_signature_for_signers_with_highest_and_chain_order(
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("matching keypair for signer");
-        let sig = Signature::new(kp.private_key(), &preimage);
+        let sig = checked_signature(kp.private_key(), &preimage);
         signatures.push(sig.payload().to_vec());
     }
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -2097,7 +2118,7 @@ fn aggregate_vote_signature_for_signers(
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("matching keypair for signer");
-        let sig = Signature::new(kp.private_key(), &preimage);
+        let sig = checked_signature(kp.private_key(), &preimage);
         signatures.push(sig.payload().to_vec());
     }
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -2166,7 +2187,7 @@ fn aggregate_vote_signature_for_bitmap_with_chain_order(
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("matching keypair for signer");
-        let sig = Signature::new(kp.private_key(), &preimage);
+        let sig = checked_signature(kp.private_key(), &preimage);
         signatures.push(sig.payload().to_vec());
     }
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
@@ -5505,10 +5526,7 @@ async fn actor_next_tick_deadline_rejects_bad_leader_signature_for_ready_rbc() {
                 valid_leader_signature.signature().clone(),
             )
         } else {
-            let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let wrong_signature =
-                SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
-            BlockSignature::new(valid_leader_signature.index(), wrong_signature)
+            forged_leader_signature_for_block(&valid_leader_signature, &block, Algorithm::BlsNormal)
         });
 
         actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
@@ -5576,10 +5594,7 @@ async fn actor_next_tick_deadline_rejects_bad_leader_signature_for_unsent_ready(
                 valid_leader_signature.signature().clone(),
             )
         } else {
-            let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let wrong_signature =
-                SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
-            BlockSignature::new(valid_leader_signature.index(), wrong_signature)
+            forged_leader_signature_for_block(&valid_leader_signature, &block, Algorithm::BlsNormal)
         });
 
         actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
@@ -10562,11 +10577,10 @@ async fn rbc_roster_for_session_rejects_active_topology_for_forged_leader_signat
         .leader_signature
         .clone()
         .expect("test session must be leader-bound");
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
-    session.leader_signature = Some(BlockSignature::new(
-        valid_leader_signature.index(),
-        wrong_signature,
+    session.leader_signature = Some(forged_leader_signature_for_block(
+        &valid_leader_signature,
+        &block,
+        Algorithm::BlsNormal,
     ));
 
     assert_eq!(
@@ -33438,8 +33452,8 @@ async fn rbc_payload_bundle_rejects_invalid_or_malformed_chunk_shape() {
         "sessions with a wrong leader-signature index must not emit RBC payload bundles"
     );
 
-    let wrong_key = KeyPair::random();
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
+    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     let mut wrong_leader_signature = valid.clone();
     wrong_leader_signature.leader_signature = Some(BlockSignature::new(
         leader_signature.index(),
@@ -33596,8 +33610,8 @@ async fn rebuild_rbc_init_rejects_invalid_or_malformed_chunk_shape() {
         "sessions with a wrong leader-signature index must not rebuild RBC INIT"
     );
 
-    let wrong_key = KeyPair::random();
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
+    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     let mut wrong_leader_signature = valid.clone();
     wrong_leader_signature.leader_signature = Some(BlockSignature::new(
         leader_signature.index(),
@@ -33871,7 +33885,7 @@ async fn handle_rbc_chunk_request_rejects_malformed_requests_and_session_metadat
     assert_no_chunk_response(actor, wrong_leader_index, "wrong-leader-index");
 
     let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
+    let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     let mut wrong_leader_signature = valid.clone();
     wrong_leader_signature.leader_signature = Some(BlockSignature::new(
         leader_signature.index(),
@@ -34165,8 +34179,8 @@ async fn rbc_ready_and_deliver_helpers_reject_invalid_or_malformed_chunk_shape()
     ));
     assert_no_local_rbc_builders(actor, &wrong_leader_index, "wrong-leader-index");
 
-    let wrong_key = KeyPair::random();
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
+    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     let mut wrong_leader_signature = valid.clone();
     wrong_leader_signature.leader_signature = Some(BlockSignature::new(
         leader_signature.index(),
@@ -52354,7 +52368,7 @@ async fn complete_rbc_session_with_forged_leader_signature_stays_non_authoritati
         .clone()
         .expect("test session must have a leader signature");
     let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
+    let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     session.leader_signature = Some(BlockSignature::new(
         valid_leader_signature.index(),
         wrong_signature,
@@ -52737,8 +52751,8 @@ async fn insert_seed_rbc_session_does_not_cache_unverified_leader_signature() {
     let leader_index = u64::try_from(leader_index).expect("leader index fits u64");
     actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
-    let wrong_key = KeyPair::random();
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
+    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     let mut wrong_signed_block = block.clone();
     wrong_signed_block
         .replace_signatures(BTreeSet::from([BlockSignature::new(
@@ -53312,11 +53326,10 @@ async fn rebroadcast_stalled_rbc_payloads_rejects_complete_payload_with_forged_l
         .leader_signature
         .clone()
         .expect("test session must have a leader signature");
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
-    session.leader_signature = Some(BlockSignature::new(
-        valid_leader_signature.index(),
-        wrong_signature,
+    session.leader_signature = Some(forged_leader_signature_for_block(
+        &valid_leader_signature,
+        &block,
+        Algorithm::BlsNormal,
     ));
     assert!(
         actor.rbc_session_has_authoritative_payload_for_progress(key, &session),
@@ -58464,8 +58477,8 @@ async fn handle_rbc_init_rejects_invalid_leader_signature_without_caching_roster
         rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
     let block_hash = block_header.hash();
     let key = (block_hash, height, view);
-    let wrong_key = KeyPair::random();
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block_hash);
+    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block_hash);
     let leader_signature = BlockSignature::new(leader_signature.index(), wrong_signature);
     let chunk_digests = vec![[0x39; 32]];
     let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone())
@@ -59407,11 +59420,10 @@ async fn handle_rbc_chunk_rejects_forged_leader_signature_metadata() {
         .leader_signature
         .clone()
         .expect("test session must have a leader signature");
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
-    session.leader_signature = Some(BlockSignature::new(
-        valid_leader_signature.index(),
-        wrong_signature,
+    session.leader_signature = Some(forged_leader_signature_for_block(
+        &valid_leader_signature,
+        &block,
+        Algorithm::BlsNormal,
     ));
     assert!(
         !actor.rbc_session_accepts_peer_evidence_for_progress(key, &session, roster.as_slice()),
@@ -60058,11 +60070,10 @@ async fn handle_rbc_ready_rejects_forged_leader_signature_metadata() {
         .leader_signature
         .clone()
         .expect("test session must have a leader signature");
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
-    session.leader_signature = Some(BlockSignature::new(
-        valid_leader_signature.index(),
-        wrong_signature,
+    session.leader_signature = Some(forged_leader_signature_for_block(
+        &valid_leader_signature,
+        &block,
+        Algorithm::BlsNormal,
     ));
     assert!(
         actor.rbc_session_has_authoritative_payload_for_progress(key, &session),
@@ -60778,11 +60789,10 @@ async fn handle_rbc_deliver_rejects_forged_leader_signature_metadata() {
         .leader_signature
         .clone()
         .expect("test session must have a leader signature");
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
-    session.leader_signature = Some(BlockSignature::new(
-        valid_leader_signature.index(),
-        wrong_signature,
+    session.leader_signature = Some(forged_leader_signature_for_block(
+        &valid_leader_signature,
+        &block,
+        Algorithm::BlsNormal,
     ));
     assert!(
         actor.rbc_session_has_authoritative_payload_for_progress(key, &session),
@@ -158794,8 +158804,8 @@ async fn frontier_block_created_from_proposal_rejects_noncanonical_payload_hint_
         "frontier metadata should carry a signature verified by the roster-derived leader"
     );
 
-    let wrong_key = KeyPair::random();
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
+    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     let mut forged_leader_signature_block = block.clone();
     forged_leader_signature_block
         .replace_signatures(BTreeSet::from([BlockSignature::new(
@@ -190377,7 +190387,7 @@ fn leader_signature_for_header(
         .iter()
         .find(|kp| kp.public_key() == leader_peer.public_key())
         .expect("leader key available in harness");
-    let signature = SignatureOf::from_hash(leader_key.private_key(), header.hash());
+    let signature = checked_signature_of_hash(leader_key.private_key(), header.hash());
     let index = u64::try_from(leader_index).unwrap_or(u64::MAX);
     BlockSignature::new(index, signature)
 }
@@ -190425,7 +190435,7 @@ fn rbc_header_and_signature(
         .iter()
         .find(|kp| kp.public_key() == leader_peer.public_key())
         .expect("leader key available in harness");
-    let signature = SignatureOf::from_hash(leader_key.private_key(), header.hash());
+    let signature = checked_signature_of_hash(leader_key.private_key(), header.hash());
     let index = u64::try_from(leader_index).unwrap_or(u64::MAX);
     (header, BlockSignature::new(index, signature))
 }
@@ -199212,11 +199222,10 @@ async fn payload_available_for_da_rejects_rbc_payload_with_forged_leader_signatu
         .leader_signature
         .clone()
         .expect("test session must have a leader signature");
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let wrong_signature = SignatureOf::from_hash(wrong_key.private_key(), block.header().hash());
-    session.leader_signature = Some(BlockSignature::new(
-        valid_leader_signature.index(),
-        wrong_signature,
+    session.leader_signature = Some(forged_leader_signature_for_block(
+        &valid_leader_signature,
+        &block,
+        Algorithm::BlsNormal,
     ));
     actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);

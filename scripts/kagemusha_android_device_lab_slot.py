@@ -41,16 +41,35 @@ WALLET_ROLLBACK_REQUIRED = (
     "wallet integrity transcript rollback_rejection_passed must be true"
 )
 
-DEVICE_FAMILY_MODEL_PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Google Pixel 6 / 6a", ("pixel 6", "pixel 6a", "oriole", "bluejay")),
-    ("Google Pixel 7 / 7 Pro", ("pixel 7", "pixel 7 pro", "panther", "cheetah")),
+DEVICE_FAMILY_MODEL_RULES: tuple[
+    tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]], ...
+] = (
+    ("Google Pixel 6 / 6a", ("pixel 6", "pixel 6a"), ("oriole", "bluejay"), ()),
+    ("Google Pixel 7 / 7 Pro", ("pixel 7", "pixel 7 pro"), ("panther", "cheetah"), ()),
     (
         "Google Pixel 8 / 8a / 8 Pro",
-        ("pixel 8", "pixel 8a", "pixel 8 pro", "shiba", "akita", "husky"),
+        ("pixel 8", "pixel 8a", "pixel 8 pro"),
+        ("shiba", "akita", "husky"),
+        (),
     ),
-    ("Google Pixel Fold / Tablet", ("pixel fold", "pixel tablet", "felix", "tangorpro")),
-    ("Samsung Galaxy S23", ("galaxy s23", "sm-s911", "sm-s916", "sm-s918")),
-    ("Samsung Galaxy S24", ("galaxy s24", "sm-s921", "sm-s926", "sm-s928")),
+    (
+        "Google Pixel Fold / Tablet",
+        ("pixel fold", "pixel tablet"),
+        ("felix", "tangorpro"),
+        (),
+    ),
+    (
+        "Samsung Galaxy S23",
+        ("galaxy s23", "galaxy s23+", "galaxy s23 ultra"),
+        ("dm1q", "dm2q", "dm3q"),
+        ("sm-s911", "sm-s916", "sm-s918"),
+    ),
+    (
+        "Samsung Galaxy S24",
+        ("galaxy s24", "galaxy s24+", "galaxy s24 ultra"),
+        ("e1q", "e2q", "e3q"),
+        ("sm-s921", "sm-s926", "sm-s928"),
+    ),
 )
 
 
@@ -539,6 +558,17 @@ def _require_source_sha256(
     if not device_lab.SHA256_HEX_RE.fullmatch(value):
         errors.append(f"{label} {key} must be lowercase sha256 hex")
         return None
+    if value == "0" * 64:
+        errors.append(f"{label} {key} must be non-zero lowercase sha256 hex")
+        return None
+    return value
+
+
+def _require_metadata_sha256(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not device_lab.SHA256_HEX_RE.fullmatch(value):
+        raise ValueError(f"{label} must be lowercase sha256 hex")
+    if value == "0" * 64:
+        raise ValueError(f"{label} must be non-zero lowercase sha256 hex")
     return value
 
 
@@ -575,7 +605,10 @@ def _device_identity_override(
     key: str,
     errors: list[str],
 ) -> str | None:
-    if override is None or override == "":
+    if override is None:
+        return None
+    if override == "":
+        errors.append(f"{key} must be a non-empty string")
         return None
     if override != override.strip():
         errors.append(f"{key} must not contain surrounding whitespace")
@@ -589,6 +622,57 @@ def _device_identity_override(
     return override
 
 
+def _source_identity_hint(
+    payload: dict[str, Any],
+    key: str,
+    label: str,
+    errors: list[str],
+) -> str | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        errors.append(f"{label} {key} must be a string")
+        return None
+    if value == "":
+        errors.append(f"{label} {key} must be a non-empty string")
+        return None
+    return _device_identity_override(value, f"{label} {key}", errors)
+
+
+def build_device_identity_hints(
+    *,
+    attestation_result: dict[str, Any],
+    attestation_report: dict[str, Any],
+    telemetry: dict[str, Any],
+    errors: list[str],
+) -> dict[str, str]:
+    """Return validated device identity hints from captured source artifacts."""
+
+    hints: dict[str, str] = {}
+    hint_sources: dict[str, str] = {}
+    sources = (
+        ("device_fingerprint", attestation_result, "attestation/result.json"),
+        ("device_fingerprint", attestation_report, "attestation/report.json"),
+        ("os_build_id", attestation_result, "attestation/result.json"),
+        ("os_build_id", attestation_report, "attestation/report.json"),
+        ("device_model", telemetry, "telemetry/telemetry.json"),
+        ("device_codename", telemetry, "telemetry/telemetry.json"),
+    )
+    for key, payload, label in sources:
+        value = _source_identity_hint(payload, key, label, errors)
+        if value is not None:
+            if key in hints:
+                if hints[key] != value:
+                    errors.append(
+                        f"{label} {key} must match {hint_sources[key]} {key}"
+                    )
+                continue
+            hints[key] = value
+            hint_sources[key] = label
+    return hints
+
+
 def read_device_identity(
     *,
     adb: str,
@@ -597,11 +681,13 @@ def read_device_identity(
     os_build_id: str | None,
     device_model: str | None,
     device_codename: str | None,
+    identity_hints: dict[str, str] | None = None,
     errors: list[str],
 ) -> dict[str, str]:
-    """Return device identity from overrides or the attached Android device."""
+    """Return device identity from overrides, captured artifacts, or ADB."""
 
     facts: dict[str, str] = {}
+    identity_hints = identity_hints or {}
     queries = {
         "device_fingerprint": ("ro.build.fingerprint", device_fingerprint),
         "os_build_id": ("ro.build.id", os_build_id),
@@ -613,6 +699,14 @@ def read_device_identity(
         value = _device_identity_override(override, key, errors)
         if len(errors) != error_count:
             continue
+        hint_value = _device_identity_override(identity_hints.get(key), key, errors)
+        if len(errors) != error_count:
+            continue
+        if value is not None and hint_value is not None and value != hint_value:
+            errors.append(f"{key} override must match captured source identity")
+            continue
+        if value is None:
+            value = hint_value
         if value is None:
             try:
                 value = _run_adb_getprop(adb, serial, prop)
@@ -638,9 +732,29 @@ def read_device_identity(
 def infer_device_family(model: str | None, codename: str | None) -> str | None:
     """Infer a standard Kagemusha device family from ADB model/codename."""
 
-    haystack = " ".join(value.lower() for value in (model, codename) if value)
-    for family, markers in DEVICE_FAMILY_MODEL_PREFIXES:
-        if any(marker in haystack for marker in markers):
+    model_text = model.lower() if isinstance(model, str) else ""
+    codename_text = codename.lower() if isinstance(codename, str) else ""
+    model_family = _match_device_model_family(model_text)
+    codename_family = _match_device_codename_family(codename_text)
+    if model_family is None or codename_family is None:
+        return None
+    if model_family != codename_family:
+        return None
+    return model_family
+
+
+def _match_device_model_family(model_text: str) -> str | None:
+    for family, exact_models, _codenames, model_prefixes in DEVICE_FAMILY_MODEL_RULES:
+        if model_text in exact_models:
+            return family
+        if any(model_text.startswith(prefix) for prefix in model_prefixes):
+            return family
+    return None
+
+
+def _match_device_codename_family(codename_text: str) -> str | None:
+    for family, _exact_models, codenames, _model_prefixes in DEVICE_FAMILY_MODEL_RULES:
+        if codename_text in codenames:
             return family
     return None
 
@@ -650,6 +764,8 @@ def resolve_device_family(
     facts: dict[str, str],
     errors: list[str],
 ) -> str | None:
+    inferred = infer_device_family(facts.get("device_model"), facts.get("device_codename"))
+    has_device_identity = bool(facts.get("device_model") or facts.get("device_codename"))
     family: str | None = None
     if isinstance(requested, str) and requested != "":
         if requested != requested.strip():
@@ -662,8 +778,14 @@ def resolve_device_family(
             errors.append("device family must not contain secret-looking material")
             return None
         family = requested
+        if family not in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES:
+            errors.append("device family must be one of the standard Kagemusha families")
+            return None
+        if has_device_identity and inferred != family:
+            errors.append("device family must match attached device model/codename")
+            return None
     if family is None:
-        family = infer_device_family(facts.get("device_model"), facts.get("device_codename"))
+        family = inferred
     if family is None:
         errors.append("device family could not be inferred; pass --device-family")
         return None
@@ -827,14 +949,34 @@ def build_slot_metadata(
         "attestation_challenge_sha256",
         "offline_wallet_policy_sha256",
     ):
-        value = attestation_result.get(key)
-        if not isinstance(value, str) or not device_lab.SHA256_HEX_RE.fullmatch(value):
-            raise ValueError(f"attestation_result {key} must be lowercase sha256 hex")
-        source_digests[key] = value
+        source_digests[key] = _require_metadata_sha256(
+            attestation_result.get(key),
+            f"attestation_result {key}",
+        )
+    artifact_digests = {
+        "attestation_certificate_chain_sha256": _require_metadata_sha256(
+            attestation_chain_sha256,
+            "attestation_certificate_chain_sha256",
+        ),
+        "offline_wallet_apk_sha256": _require_metadata_sha256(
+            offline_wallet_apk_sha256,
+            "offline_wallet_apk_sha256",
+        ),
+        "d2d_payment_transcript_sha256": _require_metadata_sha256(
+            d2d_payment_transcript_sha256,
+            "d2d_payment_transcript_sha256",
+        ),
+        "wallet_integrity_transcript_sha256": _require_metadata_sha256(
+            wallet_integrity_transcript_sha256,
+            "wallet_integrity_transcript_sha256",
+        ),
+    }
     return {
         "schema": "iroha.android.device_lab.kagemusha.v1",
         "slot_id": slot_id,
         "device_family": family,
+        "device_model": facts["device_model"],
+        "device_codename": facts["device_codename"],
         "device_fingerprint": facts["device_fingerprint"],
         "os_build_id": facts["os_build_id"],
         "minimum_os": device_lab.KAGEMUSHA_STANDARD_DEVICE_MINIMUM_OS[family],
@@ -849,13 +991,19 @@ def build_slot_metadata(
         "attestation_challenge_sha256": source_digests[
             "attestation_challenge_sha256"
         ],
-        "attestation_certificate_chain_sha256": attestation_chain_sha256,
+        "attestation_certificate_chain_sha256": artifact_digests[
+            "attestation_certificate_chain_sha256"
+        ],
         "offline_wallet_policy_sha256": source_digests[
             "offline_wallet_policy_sha256"
         ],
-        "offline_wallet_apk_sha256": offline_wallet_apk_sha256,
-        "d2d_payment_transcript_sha256": d2d_payment_transcript_sha256,
-        "wallet_integrity_transcript_sha256": wallet_integrity_transcript_sha256,
+        "offline_wallet_apk_sha256": artifact_digests["offline_wallet_apk_sha256"],
+        "d2d_payment_transcript_sha256": artifact_digests[
+            "d2d_payment_transcript_sha256"
+        ],
+        "wallet_integrity_transcript_sha256": artifact_digests[
+            "wallet_integrity_transcript_sha256"
+        ],
         "native_bridge_abi_version": device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION,
         "strongbox_attestation": attestation_result.get("strongbox_attestation"),
         "physical_device_attestation": attestation_result.get("physical_device_attestation"),
@@ -1129,6 +1277,21 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
     if sign_requested and not all(value is not None for value in sign_args):
         return 1, None, ["--private-key, --public-key, and --signer-key-id must be supplied together"]
 
+    result = _load_source_json(args.attestation_result, "attestation result", errors)
+    report = _load_source_json(args.attestation_report, "attestation verifier report", errors)
+    telemetry = _load_source_json(args.telemetry_json, "telemetry identity source", errors)
+    if result is None or report is None or telemetry is None:
+        return 1, None, errors
+
+    identity_hints = build_device_identity_hints(
+        attestation_result=result,
+        attestation_report=report,
+        telemetry=telemetry,
+        errors=errors,
+    )
+    if errors:
+        return 1, None, errors
+
     facts = read_device_identity(
         adb=args.adb,
         serial=args.serial,
@@ -1136,21 +1299,20 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         os_build_id=args.os_build_id,
         device_model=args.device_model,
         device_codename=args.device_codename,
+        identity_hints=identity_hints,
         errors=errors,
     )
     family = resolve_device_family(args.device_family, facts, errors)
     if errors or family is None:
         return 1, None, errors
 
-    result = _load_source_json(args.attestation_result, "attestation result", errors)
-    report = _load_source_json(args.attestation_report, "attestation verifier report", errors)
     d2d = _load_source_json(args.d2d_payment_transcript, "D2D payment transcript", errors)
     wallet = _load_source_json(
         args.wallet_integrity_transcript,
         "wallet integrity transcript",
         errors,
     )
-    if result is None or report is None or d2d is None or wallet is None:
+    if d2d is None or wallet is None:
         return 1, None, errors
 
     validate_slot_source_claims(
@@ -1301,6 +1463,8 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
                 else None
             ),
             expected_app_package_label="attestation/result.json app_package_name",
+            expected_device_model=facts["device_model"],
+            expected_device_codename=facts["device_codename"],
         )
         if errors:
             return 1, None, errors

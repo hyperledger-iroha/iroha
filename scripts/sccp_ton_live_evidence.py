@@ -61,7 +61,7 @@ def _decode_hash_text(value: Any, *, label: str) -> bytes:
         padded = text + "=" * ((4 - len(text) % 4) % 4)
         try:
             raw = base64.b64decode(padded, altchars=b"-_", validate=True)
-        except (binascii.Error, ValueError):
+        except (TypeError, binascii.Error, ValueError):
             raise RuntimeError(f"{label} must be 32-byte hex or base64") from None
         canonical_base64 = base64.b64encode(raw).decode("ascii")
         canonical_base64url = base64.urlsafe_b64encode(raw).decode("ascii")
@@ -276,7 +276,7 @@ def collect_live_evidence(
     try:
         code_boc_bytes = evidence.parse_code_boc_base64(code_boc, label="code_boc")
         code_boc_hash = evidence.ton_boc_single_root_hash(code_boc_bytes)
-    except (argparse.ArgumentTypeError, ValueError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise RuntimeError("TON verifier account code_boc is invalid") from None
     if code_boc_hash != code_hash:
         raise RuntimeError(
@@ -362,7 +362,7 @@ def _validate_live_evidence(
             label="code_boc_base64",
         )
         derived_code_boc_root_hash = evidence.ton_boc_single_root_hash(code_boc_bytes)
-    except (argparse.ArgumentTypeError, ValueError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError("TON live code BoC base64 metadata is invalid") from None
     if derived_code_boc_root_hash != code_boc_root_hash:
         raise ValueError("TON live code BoC bytes must match code_boc_root_hash")

@@ -18,6 +18,7 @@ cd "${ROOT_DIR}"
   IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift \
   IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift \
   IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift \
+  IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift \
   IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift \
   IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift \
   IrohaSwift/Sources/IrohaSwift/TxBuilder.swift \
@@ -48,11 +49,13 @@ cd "${ROOT_DIR}"
   IrohaSwift/Sources/IrohaSwift/OfflineQrStreamScan.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineTransferDiagnostics.swift \
+  IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift \
   IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift \
@@ -75,4 +78,5 @@ cd "${ROOT_DIR}"
   IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineRevocationBundleTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift \
-  IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift
+  IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift \
+  IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift

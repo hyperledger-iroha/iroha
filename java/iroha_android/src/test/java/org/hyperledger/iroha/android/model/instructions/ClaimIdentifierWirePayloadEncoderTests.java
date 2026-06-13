@@ -30,6 +30,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
   public static void main(String[] args) throws Exception {
     claimIdentifierEncodesExpectedWirePayload();
     claimIdentifierMatchesRustCanonicalFixture();
+    claimIdentifierRejectsAccountMismatchBeforeEncoding();
     claimIdentifierDecoderRejectsTrailingPayloadBytes();
     claimIdentifierDecoderRejectsEmptyAccountPayload();
     printClaimIdentifierWirePayloadHex();
@@ -187,6 +188,30 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             + rustFramedHex
             + "\nactual="
             + actualFramedHex;
+  }
+
+  private static void claimIdentifierRejectsAccountMismatchBeforeEncoding() {
+    final IdentifierResolutionReceipt receipt = sampleReceipt(ACCOUNT_ID, "A1B2C3D4");
+
+    boolean threw = false;
+    try {
+      ClaimIdentifierWirePayloadEncoder.encode(ACCOUNT_ID + "x", receipt);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage() != null
+              && ex.getMessage().contains("ClaimIdentifier accountId must match receipt.accountId");
+    }
+    assert threw : "mismatched ClaimIdentifier account must fail before encoding";
+
+    threw = false;
+    try {
+      ClaimIdentifierWirePayloadEncoder.encode(" " + ACCOUNT_ID + " ", receipt);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage() != null
+              && ex.getMessage().contains("accountId must not contain surrounding whitespace");
+    }
+    assert threw : "padded ClaimIdentifier account must fail before encoding";
   }
 
   private static void claimIdentifierDecoderRejectsTrailingPayloadBytes() {

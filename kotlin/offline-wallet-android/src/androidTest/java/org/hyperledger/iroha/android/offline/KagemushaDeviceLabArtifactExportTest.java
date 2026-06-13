@@ -21,6 +21,7 @@ import java.security.spec.ECGenParameterSpec;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveCompactPaymentTokenProver;
 import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProver;
@@ -277,31 +278,95 @@ public final class KagemushaDeviceLabArtifactExportTest {
   }
 
   private static String safeSlotId() {
-    final String family = inferDeviceFamily().toLowerCase().replaceAll("[^a-z0-9]+", "-");
+    final String family = inferDeviceFamily().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-");
     return trimHyphens(family) + "-physical-" + Long.toString(System.currentTimeMillis());
   }
 
   private static String inferDeviceFamily() {
-    final String text = (Build.MODEL + " " + Build.DEVICE).toLowerCase();
-    if (text.contains("pixel 6") || text.contains("oriole") || text.contains("bluejay")) {
+    final String model = Build.MODEL.toLowerCase(Locale.ROOT);
+    final String device = Build.DEVICE.toLowerCase(Locale.ROOT);
+    if (matchesFamily(
+        model,
+        device,
+        new String[] {"pixel 6", "pixel 6a"},
+        new String[] {"oriole", "bluejay"},
+        new String[0])) {
       return "Google Pixel 6 / 6a";
     }
-    if (text.contains("pixel 7") || text.contains("panther") || text.contains("cheetah")) {
+    if (matchesFamily(
+        model,
+        device,
+        new String[] {"pixel 7", "pixel 7 pro"},
+        new String[] {"panther", "cheetah"},
+        new String[0])) {
       return "Google Pixel 7 / 7 Pro";
     }
-    if (text.contains("pixel 8") || text.contains("shiba") || text.contains("akita") || text.contains("husky")) {
+    if (matchesFamily(
+        model,
+        device,
+        new String[] {"pixel 8", "pixel 8a", "pixel 8 pro"},
+        new String[] {"shiba", "akita", "husky"},
+        new String[0])) {
       return "Google Pixel 8 / 8a / 8 Pro";
     }
-    if (text.contains("pixel fold") || text.contains("pixel tablet") || text.contains("felix") || text.contains("tangorpro")) {
+    if (matchesFamily(
+        model,
+        device,
+        new String[] {"pixel fold", "pixel tablet"},
+        new String[] {"felix", "tangorpro"},
+        new String[0])) {
       return "Google Pixel Fold / Tablet";
     }
-    if (text.contains("galaxy s23") || text.contains("sm-s91")) {
+    if (matchesFamily(
+        model,
+        device,
+        new String[] {"galaxy s23", "galaxy s23+", "galaxy s23 ultra"},
+        new String[] {"dm1q", "dm2q", "dm3q"},
+        new String[] {"sm-s911", "sm-s916", "sm-s918"})) {
       return "Samsung Galaxy S23";
     }
-    if (text.contains("galaxy s24") || text.contains("sm-s92")) {
+    if (matchesFamily(
+        model,
+        device,
+        new String[] {"galaxy s24", "galaxy s24+", "galaxy s24 ultra"},
+        new String[] {"e1q", "e2q", "e3q"},
+        new String[] {"sm-s921", "sm-s926", "sm-s928"})) {
       return "Samsung Galaxy S24";
     }
-    return "Google Pixel 6 / 6a";
+    fail(
+        "attached device is not in the standard Kagemusha production matrix: model="
+            + Build.MODEL
+            + " device="
+            + Build.DEVICE);
+    return "";
+  }
+
+  private static boolean matchesFamily(
+      final String model,
+      final String device,
+      final String[] exactModels,
+      final String[] exactDevices,
+      final String[] modelPrefixes) {
+    return (isExactDevice(model, exactModels) || hasModelPrefix(model, modelPrefixes))
+        && isExactDevice(device, exactDevices);
+  }
+
+  private static boolean isExactDevice(final String value, final String... accepted) {
+    for (final String candidate : accepted) {
+      if (value.equals(candidate)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean hasModelPrefix(final String value, final String... acceptedPrefixes) {
+    for (final String prefix : acceptedPrefixes) {
+      if (value.startsWith(prefix)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static String trimHyphens(final String value) {

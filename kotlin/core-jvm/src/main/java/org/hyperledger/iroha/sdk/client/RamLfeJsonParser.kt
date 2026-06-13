@@ -14,14 +14,14 @@ object RamLfeJsonParser {
             val item = expectObject(itemValues[i], "ram-lfe program policy list.items[$i]")
             items.add(
                 RamLfeProgramPolicySummary(
-                    requiredString(item["program_id"], "ram-lfe program policy list.items[$i].program_id"),
-                    requiredString(item["owner"], "ram-lfe program policy list.items[$i].owner"),
+                    requiredExactString(item["program_id"], "ram-lfe program policy list.items[$i].program_id"),
+                    requiredExactString(item["owner"], "ram-lfe program policy list.items[$i].owner"),
                     item["active"] == true,
-                    requiredString(item["resolver_public_key"], "ram-lfe program policy list.items[$i].resolver_public_key"),
-                    requiredString(item["backend"], "ram-lfe program policy list.items[$i].backend"),
-                    normalizedMode(requiredString(item["verification_mode"], "ram-lfe program policy list.items[$i].verification_mode")),
-                    optionalString(item["input_encryption"]),
-                    optionalString(item["input_encryption_public_parameters"]),
+                    requiredExactString(item["resolver_public_key"], "ram-lfe program policy list.items[$i].resolver_public_key"),
+                    requiredExactLowercaseString(item["backend"], "ram-lfe program policy list.items[$i].backend"),
+                    requiredExactLowercaseString(item["verification_mode"], "ram-lfe program policy list.items[$i].verification_mode"),
+                    optionalExactString(item["input_encryption"], "ram-lfe program policy list.items[$i].input_encryption"),
+                    optionalExactHex(item["input_encryption_public_parameters"], "ram-lfe program policy list.items[$i].input_encryption_public_parameters"),
                     if (item["input_encryption_public_parameters_decoded"] == null) null
                     else parseBfvPublicParameters(
                         expectObject(item["input_encryption_public_parameters_decoded"],
@@ -47,15 +47,15 @@ object RamLfeJsonParser {
     fun parseExecuteResponse(payload: ByteArray): RamLfeExecuteResponse {
         val root = expectObject(parse(payload, "ram-lfe execute response"), "ram-lfe execute response")
         return RamLfeExecuteResponse(
-            requiredString(root["program_id"], "ram-lfe execute response.program_id"),
-            requiredString(root["opaque_hash"], "ram-lfe execute response.opaque_hash"),
-            requiredString(root["receipt_hash"], "ram-lfe execute response.receipt_hash"),
-            requiredString(root["output_hash"], "ram-lfe execute response.output_hash"),
-            requiredString(root["associated_data_hash"], "ram-lfe execute response.associated_data_hash"),
+            requiredExactString(root["program_id"], "ram-lfe execute response.program_id"),
+            canonicalizeExactHash32(root["opaque_hash"], "ram-lfe execute response.opaque_hash"),
+            canonicalizeExactHash32(root["receipt_hash"], "ram-lfe execute response.receipt_hash"),
+            canonicalizeExactHash32(root["output_hash"], "ram-lfe execute response.output_hash"),
+            canonicalizeExactHash32(root["associated_data_hash"], "ram-lfe execute response.associated_data_hash"),
             asLong(root["executed_at_ms"], "ram-lfe execute response.executed_at_ms"),
             if (root.containsKey("expires_at_ms")) asOptionalLong(root["expires_at_ms"], "ram-lfe execute response.expires_at_ms") else null,
-            requiredString(root["backend"], "ram-lfe execute response.backend"),
-            normalizedMode(requiredString(root["verification_mode"], "ram-lfe execute response.verification_mode")),
+            requiredExactLowercaseString(root["backend"], "ram-lfe execute response.backend"),
+            requiredExactLowercaseString(root["verification_mode"], "ram-lfe execute response.verification_mode"),
             expectObject(root["receipt"], "ram-lfe execute response.receipt")
         )
     }
@@ -65,11 +65,11 @@ object RamLfeJsonParser {
         val root = expectObject(parse(payload, "ram-lfe receipt verify response"), "ram-lfe receipt verify response")
         return RamLfeReceiptVerifyResponse(
             root["valid"] == true,
-            requiredString(root["program_id"], "ram-lfe receipt verify response.program_id"),
-            requiredString(root["backend"], "ram-lfe receipt verify response.backend"),
-            normalizedMode(requiredString(root["verification_mode"], "ram-lfe receipt verify response.verification_mode")),
-            requiredString(root["output_hash"], "ram-lfe receipt verify response.output_hash"),
-            requiredString(root["associated_data_hash"], "ram-lfe receipt verify response.associated_data_hash"),
+            requiredExactString(root["program_id"], "ram-lfe receipt verify response.program_id"),
+            requiredExactLowercaseString(root["backend"], "ram-lfe receipt verify response.backend"),
+            requiredExactLowercaseString(root["verification_mode"], "ram-lfe receipt verify response.verification_mode"),
+            canonicalizeExactHash32(root["output_hash"], "ram-lfe receipt verify response.output_hash"),
+            canonicalizeExactHash32(root["associated_data_hash"], "ram-lfe receipt verify response.associated_data_hash"),
             if (root.containsKey("output_hash_matches"))
                 asOptionalBoolean(root["output_hash_matches"], "ram-lfe receipt verify response.output_hash_matches")
             else null,
@@ -101,6 +101,29 @@ object RamLfeJsonParser {
         val string = optionalString(value)
         check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
         return string.trim()
+    }
+
+    private fun requiredExactString(value: Any?, path: String): String {
+        val string = optionalString(value)
+        check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
+        check(string.trim() == string) { "$path must not contain surrounding whitespace" }
+        return string
+    }
+
+    private fun requiredExactLowercaseString(value: Any?, path: String): String {
+        val string = requiredExactString(value, path)
+        check(string.lowercase() == string) { "$path must be an exact lowercase string" }
+        return string
+    }
+
+    private fun optionalExactString(value: Any?, path: String): String? {
+        if (value == null) return null
+        return requiredExactString(value, path)
+    }
+
+    private fun optionalExactHex(value: Any?, path: String): String? {
+        if (value == null) return null
+        return canonicalizeExactHex(value, path)
     }
 
     private fun optionalString(value: Any?): String? {
@@ -135,10 +158,39 @@ object RamLfeJsonParser {
         return trimmed.lowercase()
     }
 
+    private fun canonicalizeExactHex(value: Any?, context: String): String {
+        var hex = requiredExactString(value, context)
+        if (hex.startsWith("0x") || hex.startsWith("0X")) {
+            hex = hex.substring(2)
+        }
+        require(hex.isNotEmpty() && hex.length % 2 == 0 && hex.matches(Regex("(?i)[0-9a-f]+"))) {
+            "$context must contain an even number of hex characters"
+        }
+        return hex.lowercase()
+    }
+
     private fun canonicalizeHex32(value: String, context: String): String {
         val normalized = canonicalizeHex(value, context)
         require(normalized.length == 64) { "$context must contain 32 bytes" }
         return normalized
+    }
+
+    private fun canonicalizeExactHash32(value: Any?, context: String): String {
+        var body = requiredExactString(value, context)
+        if (body.lowercase().startsWith("hash:")) {
+            body = body.substring("hash:".length)
+        }
+        val suffixIndex = body.indexOf('#')
+        if (suffixIndex >= 0) {
+            body = body.substring(0, suffixIndex)
+        }
+        if (body.startsWith("0x") || body.startsWith("0X")) {
+            body = body.substring(2)
+        }
+        require(body.length == 64 && body.matches(Regex("(?i)[0-9a-f]{64}"))) {
+            "$context must contain 32 bytes"
+        }
+        return body.lowercase()
     }
 
     private fun normalizedMode(value: String): String = value.trim().lowercase()
@@ -164,10 +216,10 @@ object RamLfeJsonParser {
 
     private fun parseProofVerifier(root: Map<String, Any?>, context: String): RamLfeProofVerifierMetadata =
         RamLfeProofVerifierMetadata(
-            requiredString(root["proof_backend"], "$context.proof_backend"),
-            requiredString(root["circuit_id"], "$context.circuit_id"),
-            canonicalizeHex32(requiredString(root["public_inputs_schema_hash"], "$context.public_inputs_schema_hash"), "$context.public_inputs_schema_hash"),
-            requiredString(root["verifying_key_bytes_b64"], "$context.verifying_key_bytes_b64")
+            requiredExactString(root["proof_backend"], "$context.proof_backend"),
+            requiredExactString(root["circuit_id"], "$context.circuit_id"),
+            canonicalizeExactHash32(root["public_inputs_schema_hash"], "$context.public_inputs_schema_hash"),
+            requiredExactString(root["verifying_key_bytes_b64"], "$context.verifying_key_bytes_b64")
         )
 
     private fun asLongList(value: Any?, path: String): List<Long> {

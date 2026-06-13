@@ -23,30 +23,35 @@ public final class RamLfeJsonParser {
           expectObject(itemValues.get(i), "ram-lfe program policy list.items[" + i + "]");
       items.add(
           new RamLfeProgramPolicySummary(
-              requiredString(
+              requiredExactString(
                   item.get("program_id"),
                   "ram-lfe program policy list.items[" + i + "].program_id"),
-              requiredString(
+              requiredExactString(
                   item.get("owner"), "ram-lfe program policy list.items[" + i + "].owner"),
               Boolean.TRUE.equals(item.get("active")),
-              requiredString(
+              requiredExactString(
                   item.get("resolver_public_key"),
                   "ram-lfe program policy list.items[" + i + "].resolver_public_key"),
               optionalString(item.get("output_opening_public_key")) == null
-                  ? requiredString(
+                  ? requiredExactString(
                       item.get("resolver_public_key"),
                       "ram-lfe program policy list.items[" + i + "].resolver_public_key")
-                  : requiredString(
+                  : requiredExactString(
                       item.get("output_opening_public_key"),
                       "ram-lfe program policy list.items[" + i + "].output_opening_public_key"),
-              requiredString(
+              requiredExactLowercaseString(
                   item.get("backend"), "ram-lfe program policy list.items[" + i + "].backend"),
-              normalizedMode(
-                  requiredString(
-                      item.get("verification_mode"),
-                      "ram-lfe program policy list.items[" + i + "].verification_mode")),
-              optionalString(item.get("input_encryption")),
-              optionalString(item.get("input_encryption_public_parameters")),
+              requiredExactLowercaseString(
+                  item.get("verification_mode"),
+                  "ram-lfe program policy list.items[" + i + "].verification_mode"),
+              optionalExactString(
+                  item.get("input_encryption"),
+                  "ram-lfe program policy list.items[" + i + "].input_encryption"),
+              optionalExactHex(
+                  item.get("input_encryption_public_parameters"),
+                  "ram-lfe program policy list.items["
+                      + i
+                      + "].input_encryption_public_parameters"),
               item.get("input_encryption_public_parameters_decoded") == null
                   ? null
                   : parseBfvPublicParameters(
@@ -78,24 +83,22 @@ public final class RamLfeJsonParser {
     final Map<String, Object> root =
         expectObject(parse(payload, "ram-lfe execute response"), "ram-lfe execute response");
     return new RamLfeExecuteResponse(
-        requiredString(root.get("program_id"), "ram-lfe execute response.program_id"),
-        requiredString(root.get("opaque_hash"), "ram-lfe execute response.opaque_hash"),
-        requiredString(root.get("receipt_hash"), "ram-lfe execute response.receipt_hash"),
-        canonicalizeHex(
-            requiredString(
-                root.get("output_ciphertext"), "ram-lfe execute response.output_ciphertext"),
+        requiredExactString(root.get("program_id"), "ram-lfe execute response.program_id"),
+        canonicalizeExactHash32(root.get("opaque_hash"), "ram-lfe execute response.opaque_hash"),
+        canonicalizeExactHash32(root.get("receipt_hash"), "ram-lfe execute response.receipt_hash"),
+        canonicalizeExactHex(
+            root.get("output_ciphertext"),
             "ram-lfe execute response.output_ciphertext"),
-        requiredString(root.get("output_hash"), "ram-lfe execute response.output_hash"),
-        requiredString(
+        canonicalizeExactHash32(root.get("output_hash"), "ram-lfe execute response.output_hash"),
+        canonicalizeExactHash32(
             root.get("associated_data_hash"), "ram-lfe execute response.associated_data_hash"),
         asLong(root.get("executed_at_ms"), "ram-lfe execute response.executed_at_ms"),
         root.containsKey("expires_at_ms")
             ? asOptionalLong(root.get("expires_at_ms"), "ram-lfe execute response.expires_at_ms")
             : null,
-        requiredString(root.get("backend"), "ram-lfe execute response.backend"),
-        normalizedMode(
-            requiredString(
-                root.get("verification_mode"), "ram-lfe execute response.verification_mode")),
+        requiredExactLowercaseString(root.get("backend"), "ram-lfe execute response.backend"),
+        requiredExactLowercaseString(
+            root.get("verification_mode"), "ram-lfe execute response.verification_mode"),
         expectObject(root.get("receipt"), "ram-lfe execute response.receipt"),
         IdentifierJsonParser.parseOutputOpening(
             expectObject(root.get("output_opening"), "ram-lfe execute response.output_opening"),
@@ -108,14 +111,15 @@ public final class RamLfeJsonParser {
             parse(payload, "ram-lfe receipt verify response"), "ram-lfe receipt verify response");
     return new RamLfeReceiptVerifyResponse(
         Boolean.TRUE.equals(root.get("valid")),
-        requiredString(root.get("program_id"), "ram-lfe receipt verify response.program_id"),
-        requiredString(root.get("backend"), "ram-lfe receipt verify response.backend"),
-        normalizedMode(
-            requiredString(
-                root.get("verification_mode"),
-                "ram-lfe receipt verify response.verification_mode")),
-        requiredString(root.get("output_hash"), "ram-lfe receipt verify response.output_hash"),
-        requiredString(
+        requiredExactString(
+            root.get("program_id"), "ram-lfe receipt verify response.program_id"),
+        requiredExactLowercaseString(
+            root.get("backend"), "ram-lfe receipt verify response.backend"),
+        requiredExactLowercaseString(
+            root.get("verification_mode"), "ram-lfe receipt verify response.verification_mode"),
+        canonicalizeExactHash32(
+            root.get("output_hash"), "ram-lfe receipt verify response.output_hash"),
+        canonicalizeExactHash32(
             root.get("associated_data_hash"),
             "ram-lfe receipt verify response.associated_data_hash"),
         root.containsKey("output_hash_matches")
@@ -162,6 +166,39 @@ public final class RamLfeJsonParser {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
     return string.trim();
+  }
+
+  private static String requiredExactString(final Object value, final String path) {
+    final String string = optionalString(value);
+    if (string == null || string.isBlank()) {
+      throw new IllegalStateException(path + " must be a non-empty string");
+    }
+    if (!string.trim().equals(string)) {
+      throw new IllegalStateException(path + " must not contain surrounding whitespace");
+    }
+    return string;
+  }
+
+  private static String requiredExactLowercaseString(final Object value, final String path) {
+    final String string = requiredExactString(value, path);
+    if (!string.toLowerCase(Locale.ROOT).equals(string)) {
+      throw new IllegalStateException(path + " must be an exact lowercase string");
+    }
+    return string;
+  }
+
+  private static String optionalExactString(final Object value, final String path) {
+    if (value == null) {
+      return null;
+    }
+    return requiredExactString(value, path);
+  }
+
+  private static String optionalExactHex(final Object value, final String path) {
+    if (value == null) {
+      return null;
+    }
+    return canonicalizeExactHex(value, path);
   }
 
   private static String optionalString(final Object value) {
@@ -212,6 +249,35 @@ public final class RamLfeJsonParser {
     return trimmed.toLowerCase(Locale.ROOT);
   }
 
+  private static String canonicalizeExactHex(final Object value, final String context) {
+    String hex = requiredExactString(value, context);
+    if (hex.startsWith("0x") || hex.startsWith("0X")) {
+      hex = hex.substring(2);
+    }
+    if (hex.isEmpty() || (hex.length() & 1) == 1 || !hex.matches("(?i)[0-9a-f]+")) {
+      throw new IllegalArgumentException(context + " must contain an even number of hex characters");
+    }
+    return hex.toLowerCase(Locale.ROOT);
+  }
+
+  private static String canonicalizeExactHash32(final Object value, final String context) {
+    String body = requiredExactString(value, context);
+    if (body.toLowerCase(Locale.ROOT).startsWith("hash:")) {
+      body = body.substring("hash:".length());
+    }
+    final int suffixIndex = body.indexOf('#');
+    if (suffixIndex >= 0) {
+      body = body.substring(0, suffixIndex);
+    }
+    if (body.startsWith("0x") || body.startsWith("0X")) {
+      body = body.substring(2);
+    }
+    if (body.length() != 64 || !body.matches("(?i)[0-9a-f]{64}")) {
+      throw new IllegalArgumentException(context + " must contain 32 bytes");
+    }
+    return body.toLowerCase(Locale.ROOT);
+  }
+
   private static String canonicalizeHex32(final String value, final String context) {
     final String normalized = canonicalizeHex(value, context);
     if (normalized.length() != 64) {
@@ -253,13 +319,12 @@ public final class RamLfeJsonParser {
   private static RamLfeProofVerifierMetadata parseProofVerifier(
       final Map<String, Object> root, final String context) {
     return new RamLfeProofVerifierMetadata(
-        requiredString(root.get("proof_backend"), context + ".proof_backend"),
-        requiredString(root.get("circuit_id"), context + ".circuit_id"),
-        canonicalizeHex32(
-            requiredString(
-                root.get("public_inputs_schema_hash"), context + ".public_inputs_schema_hash"),
-            context + ".public_inputs_schema_hash"),
-        requiredString(root.get("verifying_key_bytes_b64"), context + ".verifying_key_bytes_b64"));
+        requiredExactString(root.get("proof_backend"), context + ".proof_backend"),
+        requiredExactString(root.get("circuit_id"), context + ".circuit_id"),
+        canonicalizeExactHash32(
+            root.get("public_inputs_schema_hash"), context + ".public_inputs_schema_hash"),
+        requiredExactString(
+            root.get("verifying_key_bytes_b64"), context + ".verifying_key_bytes_b64"));
   }
 
   private static List<Long> asLongList(final Object value, final String path) {
