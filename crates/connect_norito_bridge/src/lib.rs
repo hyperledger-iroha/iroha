@@ -7769,12 +7769,12 @@ fn zk1_read_instance_columns(payload: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
     }
     let cols = u32::from_le_bytes(payload[..4].try_into().ok()?) as usize;
     let rows = u32::from_le_bytes(payload[4..8].try_into().ok()?) as usize;
-    if cols > ZK1_MAX_INST_COLS || rows > ZK1_MAX_INST_ROWS {
+    if cols == 0 || rows == 0 || cols > ZK1_MAX_INST_COLS || rows > ZK1_MAX_INST_ROWS {
         return None;
     }
     let values = &payload[8..];
     let expected_len = cols.checked_mul(rows)?.checked_mul(32)?;
-    if values.len() < expected_len {
+    if values.len() != expected_len {
         return None;
     }
     let mut columns = vec![Vec::with_capacity(rows); cols];
@@ -9260,6 +9260,56 @@ mod offline_note_prover_tests {
             }
         }
         append_zk1_tlv(buf, *b"I10P", &payload);
+    }
+
+    #[test]
+    fn zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads() {
+        let column = [0x31_u8; Hash::LENGTH];
+        let mut valid = Vec::with_capacity(8 + Hash::LENGTH);
+        valid.extend_from_slice(&1_u32.to_le_bytes());
+        valid.extend_from_slice(&1_u32.to_le_bytes());
+        valid.extend_from_slice(&column);
+
+        assert_eq!(
+            zk1_read_instance_columns(&valid).expect("valid one-column I10P"),
+            vec![vec![column]]
+        );
+
+        let mut trailing = valid.clone();
+        trailing.push(0xA5);
+        assert!(
+            zk1_read_instance_columns(&trailing).is_none(),
+            "I10P payloads with trailing bytes must not be partially decoded"
+        );
+
+        let truncated = &valid[..valid.len() - 1];
+        assert!(
+            zk1_read_instance_columns(truncated).is_none(),
+            "I10P payloads with missing scalar bytes must reject"
+        );
+
+        for (cols, rows, label) in [
+            (0_u32, 1_u32, "zero columns"),
+            (1_u32, 0_u32, "zero rows"),
+            (
+                u32::try_from(ZK1_MAX_INST_COLS + 1).expect("test cap fits"),
+                1_u32,
+                "too many columns",
+            ),
+            (
+                1_u32,
+                u32::try_from(ZK1_MAX_INST_ROWS + 1).expect("test cap fits"),
+                "too many rows",
+            ),
+        ] {
+            let mut payload = Vec::with_capacity(8);
+            payload.extend_from_slice(&cols.to_le_bytes());
+            payload.extend_from_slice(&rows.to_le_bytes());
+            assert!(
+                zk1_read_instance_columns(&payload).is_none(),
+                "{label} must reject before public-input projection"
+            );
+        }
     }
 
     fn sample_kagemusha_recursive_spend_bundle() -> KagemushaRecursiveSpendBundleV1 {

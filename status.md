@@ -173946,3 +173946,15 @@ Last updated: 2026-06-13
 - Focused validation passed:
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Native ZK1 I10P Parser Exactness
+
+- Hardened the native `connect_norito_bridge` ZK1 public-instance parser so
+  `I10P` payloads reject zero column/row counts, oversized matrix dimensions,
+  truncated scalar payloads, and trailing bytes instead of partially projecting
+  public inputs.
+- Added a focused bridge regression proving valid one-column payloads still
+  decode while empty, truncated, trailing, and over-cap payloads fail closed.
+- Focused validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p connect_norito_bridge zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads --lib`
