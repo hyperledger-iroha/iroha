@@ -43,6 +43,13 @@ class ZkAssetMerklePathTest {
         assertFailsWith<CompletionException> {
             provider.getMerklePathForCommitment("usd#bank", scalarBytes(1)).join()
         }
+
+        assertFailsWith<IllegalArgumentException> {
+            ZkAssetMerklePath(1, listOf(ByteArray(32)), byteArrayOf(0), ByteArray(32), 1)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ZkAssetMerklePath(2, listOf(ByteArray(32)), byteArrayOf(0), ByteArray(32), 1)
+        }
     }
 
     @Test
@@ -92,6 +99,32 @@ class ZkAssetMerklePathTest {
     }
 
     @Test
+    fun toriiProviderRejectsNonVerifyingNodePath() {
+        val commitments = listOf(scalarBytes(1), scalarBytes(2))
+        val root = computeRoot(commitments)
+        val localPath = LocalZkAssetMerklePathProvider(listOf(root), commitments)
+            .getMerklePathForCommitment("usd#bank", commitments[1])
+            .join()
+        val badSiblings = localPath.siblings.toMutableList()
+        badSiblings[0] = scalarBytes(9)
+        val executor = CapturingExecutor(
+            merklePathResponse(root, commitments[1], localPath, siblingsOverride = badSiblings),
+        )
+        val client = ConfidentialAssetToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build()
+        val provider = ToriiZkAssetMerklePathProvider(client)
+
+        val error = assertFailsWith<CompletionException> {
+            provider.getMerklePathForCommitment("usd#bank", commitments[1]).join()
+        }.cause
+
+        require(error is IllegalArgumentException)
+        require(error.message?.contains("does not verify") == true)
+    }
+
+    @Test
     fun pathAccessorsReturnDefensiveCopies() {
         val commitment = scalarBytes(1)
         val provider = LocalZkAssetMerklePathProvider(emptyList(), listOf(commitment))
@@ -110,8 +143,13 @@ class ZkAssetMerklePathTest {
 
     private fun hex(bytes: ByteArray): String = ZkRootsResponse.encodeHex(bytes)
 
-    private fun merklePathResponse(root: ByteArray, commitment: ByteArray, path: ZkAssetMerklePath): String {
-        val siblings = path.siblings.joinToString(",") { """"${hex(it)}"""" }
+    private fun merklePathResponse(
+        root: ByteArray,
+        commitment: ByteArray,
+        path: ZkAssetMerklePath,
+        siblingsOverride: List<ByteArray> = path.siblings,
+    ): String {
+        val siblings = siblingsOverride.joinToString(",") { """"${hex(it)}"""" }
         val directions = path.directions.joinToString(",") { (it.toInt() and 0xff).toString() }
         val witnessNodes = path.siblings.joinToString(",") { """"${hex(it)}"""" }
         return """

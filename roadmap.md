@@ -15,8 +15,11 @@ and completed history lives in [`status.md`](./status.md).
   release with clear release notes, SDK parity, and operator documentation.
 - ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
   endpoint for current confidential-v2 commitment inclusion paths, and the
-  Kotlin/JVM plus Android Java Torii Merkle providers call it directly. Keep
-  local providers limited to audited caller-supplied frontier material.
+  Kotlin/JVM plus Android Java Torii Merkle providers call it directly.
+  Torii-backed providers verify returned sibling paths against requested
+  commitments and roots, and SDK path models enforce leaf-index direction
+  consistency before wallet or prover code receives paths. Keep local providers
+  limited to audited caller-supplied frontier material.
 - Confidential-v2 SDK note derivation and encrypted note payload handling now
   exist for Kotlin/JVM and Android Java, with Rust-vector parity for owner tags,
   note commitments, nullifiers, asset tags, and chain tags, Rust-fixture parity

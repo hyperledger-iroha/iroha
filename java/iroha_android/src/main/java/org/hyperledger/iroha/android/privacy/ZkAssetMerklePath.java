@@ -42,9 +42,19 @@ public final class ZkAssetMerklePath {
     if (dirs.length != copied.size()) {
       throw new IllegalArgumentException("directions size must match siblings size");
     }
+    if (dirs.length >= Long.SIZE) {
+      throw new IllegalArgumentException("path depth must fit in leafIndex bits");
+    }
+    if ((leafIndex >>> dirs.length) != 0L) {
+      throw new IllegalArgumentException("leafIndex must fit within path depth");
+    }
     for (int i = 0; i < dirs.length; i++) {
       if (dirs[i] != 0 && dirs[i] != 1) {
         throw new IllegalArgumentException("directions[" + i + "] must be 0 or 1");
+      }
+      final int expectedDirection = (int) ((leafIndex >>> i) & 1L);
+      if (dirs[i] != expectedDirection) {
+        throw new IllegalArgumentException("directions[" + i + "] must match leafIndex bit " + i);
       }
     }
     this.leafIndex = leafIndex;

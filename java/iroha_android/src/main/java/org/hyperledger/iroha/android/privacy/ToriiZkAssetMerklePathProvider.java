@@ -13,13 +13,20 @@ import org.hyperledger.iroha.android.client.ZkMerklePathResponse;
 /** Fetches current confidential-v2 commitment inclusion paths from Torii. */
 public final class ToriiZkAssetMerklePathProvider implements ZkAssetMerklePathProvider {
   private final ConfidentialAssetToriiClient client;
+  private final ZkAssetMerkleHasher hasher;
 
   public ToriiZkAssetMerklePathProvider() {
     this(ConfidentialAssetToriiClient.builder().build());
   }
 
   public ToriiZkAssetMerklePathProvider(final ConfidentialAssetToriiClient client) {
+    this(client, PastaPoseidonNodeHasher.instance());
+  }
+
+  public ToriiZkAssetMerklePathProvider(
+      final ConfidentialAssetToriiClient client, final ZkAssetMerkleHasher hasher) {
     this.client = Objects.requireNonNull(client, "client");
+    this.hasher = Objects.requireNonNull(hasher, "hasher");
   }
 
   @Override
@@ -51,14 +58,16 @@ public final class ToriiZkAssetMerklePathProvider implements ZkAssetMerklePathPr
       }
       return client
           .getZkAssetMerklePaths(new ZkMerklePathRequest(asset, copied))
-          .thenApply(response -> toPaths(response, copied));
+          .thenApply(response -> toPaths(response, copied, hasher));
     } catch (final RuntimeException ex) {
       return failedFuture(ex);
     }
   }
 
   private static List<ZkAssetMerklePath> toPaths(
-      final ZkMerklePathResponse response, final List<byte[]> requestedCommitments) {
+      final ZkMerklePathResponse response,
+      final List<byte[]> requestedCommitments,
+      final ZkAssetMerkleHasher hasher) {
     if (response.paths().size() != requestedCommitments.size()) {
       throw new IllegalArgumentException(
           "Torii returned "
@@ -67,6 +76,7 @@ public final class ToriiZkAssetMerklePathProvider implements ZkAssetMerklePathPr
               + requestedCommitments.size()
               + " commitments");
     }
+    final byte[] root = response.rootBytes();
     final ArrayList<ZkAssetMerklePath> out = new ArrayList<>(response.paths().size());
     for (int i = 0; i < response.paths().size(); i++) {
       final ZkMerklePathResponse.Entry entry = response.paths().get(i);
@@ -76,13 +86,17 @@ public final class ToriiZkAssetMerklePathProvider implements ZkAssetMerklePathPr
       if (entry.siblings().size() != response.treeDepth()) {
         throw new IllegalArgumentException("Torii Merkle path sibling depth mismatch at index " + i);
       }
-      out.add(
+      final ZkAssetMerklePath path =
           new ZkAssetMerklePath(
               entry.leafIndex(),
               entry.siblingBytes(),
               entry.directions(),
-              response.rootBytes(),
-              response.frontierLen()));
+              root,
+              response.frontierLen());
+      if (!path.verify(requestedCommitments.get(i), root, hasher)) {
+        throw new IllegalArgumentException("Torii Merkle path does not verify at index " + i);
+      }
+      out.add(path);
     }
     return Collections.unmodifiableList(out);
   }

@@ -70,9 +70,15 @@ class ZkAssetMerklePath(
         require(heightOrIndex >= 0) { "heightOrIndex must be non-negative" }
         require(_directions.size == _siblings.size) { "directions size must match siblings size" }
         require(_rootAtHeight.size == 32) { "rootAtHeight must be 32 bytes" }
+        require(_directions.size < Long.SIZE_BITS) { "path depth must fit in leafIndex bits" }
+        require((leafIndex ushr _directions.size) == 0L) { "leafIndex must fit within path depth" }
         for (i in _directions.indices) {
             require(_directions[i].toInt() == 0 || _directions[i].toInt() == 1) {
                 "directions[$i] must be 0 or 1"
+            }
+            val expectedDirection = ((leafIndex ushr i) and 1L).toInt()
+            require(_directions[i].toInt() == expectedDirection) {
+                "directions[$i] must match leafIndex bit $i"
             }
         }
     }
@@ -104,6 +110,7 @@ interface ZkAssetMerklePathProvider {
 /** Fetches current confidential-v2 commitment inclusion paths from Torii. */
 class ToriiZkAssetMerklePathProvider(
     private val client: ConfidentialAssetToriiClient = ConfidentialAssetToriiClient.builder().build(),
+    private val hasher: ZkAssetMerkleHasher = PastaPoseidonNodeHasher,
 ) : ZkAssetMerklePathProvider {
     override fun getMerklePathForCommitment(asset: String, commitment: ByteArray): CompletableFuture<ZkAssetMerklePath> {
         return getMerklePaths(asset, listOf(commitment)).thenApply { paths -> paths.single() }
@@ -120,6 +127,7 @@ class ToriiZkAssetMerklePathProvider(
                 CompletableFuture.completedFuture(emptyList())
             } else {
                 client.getZkAssetMerklePaths(ZkMerklePathRequest(asset, copied)).thenApply { response ->
+                    val rootBytes = response.rootBytes()
                     require(response.paths.size == copied.size) {
                         "Torii returned ${response.paths.size} Merkle paths for ${copied.size} commitments"
                     }
@@ -130,13 +138,17 @@ class ToriiZkAssetMerklePathProvider(
                         require(entry.siblings.size == response.treeDepth) {
                             "Torii Merkle path sibling depth mismatch at index $index"
                         }
-                        ZkAssetMerklePath(
+                        val path = ZkAssetMerklePath(
                             entry.leafIndex.toLong(),
                             entry.siblingBytes(),
                             entry.directions,
-                            response.rootBytes(),
+                            rootBytes,
                             response.frontierLen.toLong(),
                         )
+                        require(path.verify(copied[index], rootBytes, hasher)) {
+                            "Torii Merkle path does not verify at index $index"
+                        }
+                        path
                     }
                 }
             }

@@ -2,6 +2,18 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 ZK Asset Merkle Path Provider Verification
+
+- Hardened Kotlin/JVM and Android Java Merkle path models so direction bytes
+  must match leaf-index bits and leaf indexes fit the returned path depth.
+- Torii-backed providers now verify returned sibling paths hash the requested
+  commitment to the returned root before returning them.
+- Added adversarial provider tests for mismatched commitments, non-verifying
+  siblings, leaf-index/direction mismatches, and defensive copies.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
 
 ## 2026-06-13 Confidential note X25519 key-material hardening
 

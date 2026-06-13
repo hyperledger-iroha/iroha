@@ -21,6 +21,7 @@ public final class ZkAssetMerklePathTests {
     localProviderRejectsAmbiguousOrMismatchedFrontiers();
     toriiProviderFetchesAndValidatesNodeEndpointPaths();
     toriiProviderRejectsMismatchedNodeCommitment();
+    toriiProviderRejectsNonVerifyingNodePath();
     pathAccessorsReturnDefensiveCopies();
     System.out.println("[IrohaAndroid] ZkAssetMerklePathTests passed.");
   }
@@ -65,6 +66,11 @@ public final class ZkAssetMerklePathTests {
     } catch (final CompletionException expected) {
       assert expected.getCause() instanceof IllegalArgumentException : "wrong error type";
     }
+
+    assertThrows(
+        () -> new ZkAssetMerklePath(1, List.of(new byte[32]), new byte[] {0}, new byte[32], 1));
+    assertThrows(
+        () -> new ZkAssetMerklePath(2, List.of(new byte[32]), new byte[] {0}, new byte[32], 1));
   }
 
   private static void toriiProviderFetchesAndValidatesNodeEndpointPaths() {
@@ -122,6 +128,33 @@ public final class ZkAssetMerklePathTests {
     }
   }
 
+  private static void toriiProviderRejectsNonVerifyingNodePath() {
+    final List<byte[]> commitments = List.of(scalarBytes(1), scalarBytes(2));
+    final byte[] root = computeRoot(commitments);
+    final ZkAssetMerklePath localPath =
+        new LocalZkAssetMerklePathProvider(List.of(root), commitments)
+            .getMerklePathForCommitment("usd#bank", commitments.get(1))
+            .join();
+    final List<byte[]> badSiblings = localPath.siblings();
+    badSiblings.set(0, scalarBytes(9));
+    final CapturingExecutor executor =
+        new CapturingExecutor(merklePathResponse(root, commitments.get(1), localPath, badSiblings));
+    final ConfidentialAssetToriiClient client =
+        ConfidentialAssetToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final ToriiZkAssetMerklePathProvider provider = new ToriiZkAssetMerklePathProvider(client);
+    try {
+      provider.getMerklePathForCommitment("usd#bank", commitments.get(1)).join();
+      throw new AssertionError("expected non-verifying path rejection");
+    } catch (final CompletionException expected) {
+      assert expected.getCause() instanceof IllegalArgumentException : "wrong error type";
+      assert expected.getCause().getMessage().contains("does not verify")
+          : "wrong message";
+    }
+  }
+
   private static void pathAccessorsReturnDefensiveCopies() {
     final byte[] commitment = scalarBytes(1);
     final LocalZkAssetMerklePathProvider provider =
@@ -150,7 +183,15 @@ public final class ZkAssetMerklePathTests {
 
   private static String merklePathResponse(
       final byte[] root, final byte[] commitment, final ZkAssetMerklePath path) {
-    final String siblings = quotedHexList(path.siblings());
+    return merklePathResponse(root, commitment, path, path.siblings());
+  }
+
+  private static String merklePathResponse(
+      final byte[] root,
+      final byte[] commitment,
+      final ZkAssetMerklePath path,
+      final List<byte[]> siblingsOverride) {
+    final String siblings = quotedHexList(siblingsOverride);
     final String directions = directionList(path.directions());
     final String witnessNodes = quotedHexList(path.siblings());
     return """
@@ -193,6 +234,15 @@ public final class ZkAssetMerklePathTests {
       out.add(Integer.toString(direction & 0xff));
     }
     return String.join(",", out);
+  }
+
+  private static void assertThrows(final Runnable runnable) {
+    try {
+      runnable.run();
+      throw new AssertionError("expected IllegalArgumentException");
+    } catch (final IllegalArgumentException expected) {
+      // Expected path.
+    }
   }
 
   private static final class CapturingExecutor implements HttpTransportExecutor {
