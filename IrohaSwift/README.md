@@ -787,7 +787,7 @@ missing or empty request values preserve semantic compatibility append. The
 `KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive:)`
 and `buildPreviousProofOpenEnvelopesArchive(previousBundleArchive:)` helpers ask
 the native bridge to generate the opaque Pallas opening archives for the current
-record bundle and the previous recursive proof. The
+hop record bundle and the previous recursive proof. The
 `previous_recursive_proof_open_envelopes_archive` field remains opaque native
 prover material: Swift wallet code must pass it through Norito unchanged and
 must not construct, rewrite, or mutate it. The native bridge validates

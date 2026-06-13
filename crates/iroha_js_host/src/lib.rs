@@ -2397,10 +2397,143 @@ fn is_kagemusha_recursive_compact_unavailable_error(err: &str) -> bool {
     )
 }
 
+fn kagemusha_sample_pallas_coeffs(n: usize) -> Vec<iroha_zkp_halo2::pallas::Scalar> {
+    (0..n)
+        .map(|index| iroha_zkp_halo2::pallas::Scalar::from((index + 1) as u64))
+        .collect()
+}
+
+fn kagemusha_build_pallas_open_envelope_with_metadata(
+    n: usize,
+    label: &str,
+    metadata: iroha_zkp_halo2::PolyOpenTranscriptMetadata,
+) -> napi::Result<iroha_zkp_halo2::OpenVerifyEnvelope> {
+    let params = iroha_zkp_halo2::pallas::Params::new(n).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to build Pallas opening parameters: {err}"),
+        )
+    })?;
+    let poly = iroha_zkp_halo2::pallas::Polynomial::from_coeffs(kagemusha_sample_pallas_coeffs(n));
+    let commitment = poly.commit(&params).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to commit Pallas opening polynomial: {err}"),
+        )
+    })?;
+    let z = iroha_zkp_halo2::pallas::Scalar::from(5_u64);
+    let mut transcript = iroha_zkp_halo2::Transcript::new(label);
+    let (proof, t) = poly
+        .open_with_metadata(&params, &mut transcript, z, commitment, metadata)
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                format!("failed to build Pallas opening proof: {err}"),
+            )
+        })?;
+    Ok(iroha_zkp_halo2::OpenVerifyEnvelope {
+        params: iroha_zkp_halo2::norito_helpers::params_to_wire(&params),
+        public: iroha_zkp_halo2::norito_helpers::poly_open_public::<
+            iroha_zkp_halo2::pallas::PallasBackend,
+        >(params.n(), z, t, commitment),
+        proof: iroha_zkp_halo2::norito_helpers::proof_to_wire(&proof),
+        transcript_label: label.to_owned(),
+        vk_commitment: metadata.vk_commitment,
+        public_inputs_schema_hash: metadata.public_inputs_schema_hash,
+        domain_tag: metadata.domain_tag,
+    })
+}
+
+fn kagemusha_pallas_open_envelopes_from_record_bundle(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+) -> napi::Result<Vec<iroha_zkp_halo2::OpenVerifyEnvelope>> {
+    let n = usize::try_from(iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN)
+        .map_err(|_| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                "unsupported Kagemusha recursive compact opening length",
+            )
+        })?;
+    let mut envelopes = Vec::with_capacity(record_bundle.bundle.steps.len());
+    for (hop_index, step) in record_bundle.bundle.steps.iter().enumerate() {
+        let metadata = iroha_core::zk::kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+            &record_bundle.bundle.chain_id,
+            &record_bundle.bundle.asset,
+            hop_index,
+            step,
+        )
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid Kagemusha record bundle for Pallas open envelopes: {err}"),
+            )
+        })?;
+        let label = format!("kagemusha-recursive-spend-hop-open-v1-{hop_index}");
+        envelopes.push(kagemusha_build_pallas_open_envelope_with_metadata(
+            n, &label, metadata,
+        )?);
+    }
+    Ok(envelopes)
+}
+
 /// Native ABI level required by the recursive Kagemusha spend helpers.
 #[napi(js_name = "connectNoritoBridgeAbiVersion")]
 pub fn connect_norito_bridge_abi_version() -> u32 {
     7
+}
+
+/// Build metadata-bound Pallas open envelopes for a Kagemusha verified record bundle.
+#[napi(js_name = "kagemushaBuildPallasOpenEnvelopesArchive")]
+pub fn kagemusha_build_pallas_open_envelopes_archive(
+    record_bundle_archive: Uint8Array,
+) -> napi::Result<Buffer> {
+    let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
+        decode_kagemusha_recursive_archive(&record_bundle_archive, "Kagemusha record bundle")?;
+    let envelopes = kagemusha_pallas_open_envelopes_from_record_bundle(&record_bundle)?;
+    encode_kagemusha_recursive_archive(
+        &envelopes,
+        "serialize Kagemusha Pallas open-envelope archive",
+    )
+}
+
+/// Build the one-envelope archive required for reserved-lineage append over a previous bundle.
+#[napi(js_name = "kagemushaBuildPreviousProofOpenEnvelopesArchive")]
+pub fn kagemusha_build_previous_proof_open_envelopes_archive(
+    previous_bundle_archive: Uint8Array,
+) -> napi::Result<Buffer> {
+    let previous_bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 =
+        decode_kagemusha_recursive_archive(
+            &previous_bundle_archive,
+            "Kagemusha recursive spend previous bundle",
+        )?;
+    let metadata =
+        iroha_data_model::offline::kagemusha_recursive_previous_proof_open_envelope_metadata(
+            &previous_bundle,
+        )
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!(
+                    "invalid Kagemusha recursive spend previous bundle for Pallas open envelopes: {err}"
+                ),
+            )
+        })?;
+    let n = usize::try_from(iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN)
+        .map_err(|_| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                "unsupported Kagemusha recursive compact opening length",
+            )
+        })?;
+    let envelope = kagemusha_build_pallas_open_envelope_with_metadata(
+        n,
+        "kagemusha-recursive-spend-previous-open-v1",
+        metadata,
+    )?;
+    encode_kagemusha_recursive_archive(
+        &vec![envelope],
+        "serialize Kagemusha previous proof open-envelope archive",
+    )
 }
 
 /// Prove a record-backed Kagemusha compact payment token.

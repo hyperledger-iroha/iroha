@@ -181,6 +181,13 @@ previousHopCount)` identifies whether the selected append output circuit
 requires the request to carry the previous recursive proof opening archive.
 `outputCircuitId` is the Norito append request's `output_proof_circuit_id`;
 missing or empty request values preserve semantic compatibility append.
+`KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive)`
+and `buildPreviousProofOpenEnvelopesArchive(previousBundleArchive)` ask the
+native bridge to generate the opaque Pallas opening archives for the current-hop
+record bundle and the previous recursive proof. Typed-codec callers can use
+`KagemushaRecursiveSpendRequestCodecs.buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)`
+and `buildPreviousProofOpenEnvelopesArchive(previousBundle)` to route through
+the same native validators.
 `previous_recursive_proof_open_envelopes_archive` is opaque native prover
 material: Kotlin wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,

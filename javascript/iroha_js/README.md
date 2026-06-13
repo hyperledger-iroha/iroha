@@ -107,6 +107,12 @@ material: JavaScript wallet code must pass it through Norito unchanged and must
 not construct, rewrite, or mutate it. The native NAPI host validates
 `vk_commitment`, `public_inputs_schema_hash`, and `domain_tag` against the exact
 previous bundle before proving or returning output bytes.
+`kagemushaBuildPallasOpenEnvelopesArchive(recordBundleArchive)` and
+`kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundleArchive)` ask the
+native NAPI host to generate the opaque Pallas opening archives for the
+current-hop record bundle and the previous recursive proof. Gate both with
+`isKagemushaPallasOpenEnvelopeBuilderNativeAvailable()`; browser builds expose
+native-only stubs that fail closed.
 Native append streams the previous recursive proof bytes and per-hop accumulator
 material into native-owned accumulator digests (`recursive_proof_chain_digest`,
 lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,

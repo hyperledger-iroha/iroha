@@ -18114,6 +18114,7 @@ export function requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppe
 export function isKagemushaRecursiveSpendNativeAvailable(): boolean;
 export function isKagemushaCompactPaymentTokenNativeAvailable(): boolean;
 export function isKagemushaRecursiveAggregationProofBundleNativeAvailable(): boolean;
+export function isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(): boolean;
 export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable(): boolean;
 export function isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(): boolean;
 export function isKagemushaRecursiveCompactUnavailable(error: unknown): boolean;
@@ -18130,6 +18131,12 @@ export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAnd
   recordBundleArchive: BinaryLike,
   pallasOpenEnvelopesArchive: BinaryLike,
   recursiveCompactKeyArtifactsArchive: BinaryLike,
+): Buffer;
+export function kagemushaBuildPallasOpenEnvelopesArchive(
+  recordBundleArchive: BinaryLike,
+): Buffer;
+export function kagemushaBuildPreviousProofOpenEnvelopesArchive(
+  previousBundleArchive: BinaryLike,
 ): Buffer;
 export function kagemushaVerifyRecursiveCompactPaymentToken(
   compactTokenArchive: BinaryLike,

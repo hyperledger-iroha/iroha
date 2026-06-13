@@ -90,6 +90,35 @@ def _directory_open_flags() -> int:
     return flags
 
 
+def _set_private_directory_permissions(path: Path, label: str) -> list[str]:
+    try:
+        dir_fd = os.open(path, _directory_open_flags())
+    except OSError:
+        return [f"{label} permissions could not be set"]
+    try:
+        try:
+            directory_stat = os.fstat(dir_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        try:
+            os.fchmod(dir_fd, 0o700)
+        except OSError:
+            return [f"{label} permissions could not be set"]
+        try:
+            directory_stat = os.fstat(dir_fd)
+        except OSError:
+            return [f"{label} permissions could not be verified"]
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be verified"]
+        if stat.S_IMODE(directory_stat.st_mode) != 0o700:
+            return [f"{label} permissions must be 0700"]
+    finally:
+        os.close(dir_fd)
+    return []
+
+
 def _sync_directory(
     path: Path,
     label: str,
@@ -121,6 +150,8 @@ def _verify_written_bytes(path: Path, expected_bytes: bytes, label: str) -> list
         return [f"{label} metadata could not be read after write"]
     if stat.S_ISLNK(expected_stat.st_mode) or not stat.S_ISREG(expected_stat.st_mode):
         return [f"{label} changed after write"]
+    if stat.S_IMODE(expected_stat.st_mode) != 0o600:
+        return [f"{label} permissions must be 0600"]
     expected_identity = _file_identity(expected_stat)
     try:
         with path.open("rb") as handle:
@@ -154,6 +185,8 @@ def _verify_copied_file(
         return [f"{label} metadata could not be read after write"]
     if stat.S_ISLNK(expected_stat.st_mode) or not stat.S_ISREG(expected_stat.st_mode):
         return [f"{label} changed after write"]
+    if stat.S_IMODE(expected_stat.st_mode) != 0o600:
+        return [f"{label} permissions must be 0600"]
     if expected_stat.st_nlink > 1:
         return [f"{label} must not be hardlinked"]
     expected_identity = _file_identity(expected_stat)
@@ -229,9 +262,15 @@ def _write_json(path: Path, payload: dict[str, Any], label: str) -> list[str]:
     except (TypeError, ValueError):
         return [f"{label} is not strict JSON"]
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError:
         return [f"{label} parent directory could not be created"]
+    permission_errors = _set_private_directory_permissions(
+        path.parent,
+        f"{label} parent directory",
+    )
+    if permission_errors:
+        return permission_errors
     try:
         json_parent_stat = path.parent.lstat()
     except OSError:
@@ -246,6 +285,7 @@ def _write_json(path: Path, payload: dict[str, Any], label: str) -> list[str]:
             return [f"{label} temporary output already exists"]
         with tmp_path.open("xb") as handle:
             tmp_identity = _file_identity(os.fstat(handle.fileno()))
+            os.fchmod(handle.fileno(), 0o600)
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
@@ -280,6 +320,8 @@ def _publish_stage_slot(
         root_stat = os.fstat(root_fd)
         if not stat.S_ISDIR(root_stat.st_mode):
             return ["slot root directory could not be synced"]
+        if stat.S_IMODE(root_stat.st_mode) != 0o700:
+            return ["slot root directory permissions must be 0700"]
         if _file_identity(root_stat) != expected_root_identity:
             return ["slot root directory changed before publish"]
         try:
@@ -299,6 +341,8 @@ def _publish_stage_slot(
             temp_parent_stat = os.fstat(temp_parent_fd)
             if not stat.S_ISDIR(temp_parent_stat.st_mode):
                 return ["staged slot parent directory could not be opened"]
+            if stat.S_IMODE(temp_parent_stat.st_mode) != 0o700:
+                return ["staged slot parent directory permissions must be 0700"]
             if _file_identity(temp_parent_stat) != expected_temp_parent_identity:
                 return ["staged slot parent directory changed before publish"]
             stage_stat = os.stat(
@@ -308,6 +352,8 @@ def _publish_stage_slot(
             )
             if not stat.S_ISDIR(stage_stat.st_mode):
                 return ["staged slot must be a directory"]
+            if stat.S_IMODE(stage_stat.st_mode) != 0o700:
+                return ["staged slot directory permissions must be 0700"]
             if _file_identity(stage_stat) != expected_stage_identity:
                 return ["staged slot directory changed before publish"]
             os.rename(
@@ -463,7 +509,14 @@ def _copy_source_file(
             if open_stat.st_nlink > 1:
                 errors.append(f"{label} must not be hardlinked")
                 return None
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            permission_errors = _set_private_directory_permissions(
+                destination.parent,
+                f"{label} destination parent directory",
+            )
+            if permission_errors:
+                errors.extend(permission_errors)
+                return None
             try:
                 destination_parent_stat = destination.parent.lstat()
             except OSError:
@@ -476,6 +529,7 @@ def _copy_source_file(
                 return None
             destination_parent_identity = _file_identity(destination_parent_stat)
             with destination.open("xb") as out:
+                os.fchmod(out.fileno(), 0o600)
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                     size += len(chunk)
                     if size > max_bytes:
@@ -1250,8 +1304,14 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
     if root_errors:
         return 1, None, root_errors
     if not root_exists:
-        root.parent.mkdir(parents=True, exist_ok=True)
-        root.mkdir()
+        root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root.mkdir(mode=0o700)
+    root_permission_errors = _set_private_directory_permissions(
+        root,
+        "device-lab root directory",
+    )
+    if root_permission_errors:
+        return 1, None, root_permission_errors
     try:
         root_stat = root.lstat()
     except OSError:
@@ -1330,7 +1390,35 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         temp_parent_identity = _file_identity(temp_parent.lstat())
     except OSError:
         return 1, None, ["staged slot parent metadata could not be read"]
+    temp_permission_errors = _set_private_directory_permissions(
+        temp_parent,
+        "staged slot parent directory",
+    )
+    if temp_permission_errors:
+        cleanup_errors = _cleanup_temp_parent(
+            temp_parent,
+            expected_identity=temp_parent_identity,
+        )
+        return 1, None, [*temp_permission_errors, *cleanup_errors]
     stage_slot = temp_parent / slot_id
+    try:
+        stage_slot.mkdir(mode=0o700)
+    except OSError:
+        cleanup_errors = _cleanup_temp_parent(
+            temp_parent,
+            expected_identity=temp_parent_identity,
+        )
+        return 1, None, ["staged slot directory could not be created", *cleanup_errors]
+    stage_permission_errors = _set_private_directory_permissions(
+        stage_slot,
+        "staged slot directory",
+    )
+    if stage_permission_errors:
+        cleanup_errors = _cleanup_temp_parent(
+            temp_parent,
+            expected_identity=temp_parent_identity,
+        )
+        return 1, None, [*stage_permission_errors, *cleanup_errors]
 
     def _stage_and_publish() -> tuple[int, Path | None, list[str]]:
         nonlocal result, report
@@ -1534,6 +1622,10 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
             stage_slot_stat.st_mode
         ):
             return 1, None, ["staged slot must be a directory"]
+        if stat.S_IMODE(temp_parent_stat.st_mode) != 0o700:
+            return 1, None, ["staged slot parent directory permissions must be 0700"]
+        if stat.S_IMODE(stage_slot_stat.st_mode) != 0o700:
+            return 1, None, ["staged slot directory permissions must be 0700"]
         publish_errors = _publish_stage_slot(
             stage_slot=stage_slot,
             root=root,

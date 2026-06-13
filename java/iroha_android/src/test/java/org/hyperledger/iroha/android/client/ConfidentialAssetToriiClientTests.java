@@ -21,6 +21,7 @@ public final class ConfidentialAssetToriiClientTests {
     rootsRejectNonCanonicalHexAndNullLatest();
     rootsAndMerklePathsRejectNumericStrings();
     rootsAndMerklePathsRejectOverflowDuplicateKeysAndInconsistentShape();
+    merklePathParserRejectsDuplicateKeysBeforeLastValueWins();
     nonSuccessResponsesSurfaceOfflineToriiException();
     System.out.println("[IrohaAndroid] ConfidentialAssetToriiClientTests passed.");
   }
@@ -232,6 +233,48 @@ public final class ConfidentialAssetToriiClientTests {
         () ->
             ZkMerklePathResponse.parse(
                 merklePathPayload(root, commitment, 0, List.of(sibling), List.of(0), List.of(), root, 3, 1)));
+  }
+
+  private static void merklePathParserRejectsDuplicateKeysBeforeLastValueWins() {
+    final String commitment = "02".repeat(32);
+    final String sibling = "00".repeat(32);
+    final String root = "03".repeat(32);
+    final String otherRoot = "04".repeat(32);
+    expectIllegalState(
+        () ->
+            ZkMerklePathResponse.parse(
+                """
+                {
+                  "root": "%s",
+                  "frontier_len": 3,
+                  "frontier_len": 1,
+                  "tree_depth": 1,
+                  "paths": []
+                }
+                """
+                    .formatted(root)
+                    .getBytes(StandardCharsets.UTF_8)));
+    expectIllegalState(
+        () ->
+            ZkMerklePathResponse.parse(
+                """
+                {
+                  "root": "%s",
+                  "frontier_len": 3,
+                  "tree_depth": 1,
+                  "paths": [{
+                    "commitment": "%s",
+                    "commitment": "%s",
+                    "leaf_index": 0,
+                    "siblings": ["%s"],
+                    "directions": [0],
+                    "witness_nodes": ["%s"],
+                    "root": "%s"
+                  }]
+                }
+                """
+                    .formatted(root, commitment, otherRoot, sibling, root, root)
+                    .getBytes(StandardCharsets.UTF_8)));
   }
 
   private static void nonSuccessResponsesSurfaceOfflineToriiException() {

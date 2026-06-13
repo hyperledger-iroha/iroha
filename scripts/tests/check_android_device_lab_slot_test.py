@@ -94,6 +94,7 @@ def restore_path_type_method_shadows() -> None:
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+    path.chmod(0o600)
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -1581,6 +1582,49 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "attestation/harness-result.json",
             signed_artifact_digests,
         )
+
+    def test_kagemusha_slot_assembler_installs_private_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                source_signer = create_test_signer(Path(temp) / "source-keys")
+                signer = create_test_signer(Path(temp) / "slot-keys")
+                source_slot = create_slot(
+                    Path(temp) / "source",
+                    "pixel6",
+                    device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                    source_signer,
+                )
+                slot_root = Path(temp) / "device-lab"
+                slot_root.mkdir(mode=0o777)
+
+                with redirect_stdout(io.StringIO()):
+                    status = slot_assembler.main(
+                        slot_assembler_args(
+                            slot_root=slot_root,
+                            source_slot=source_slot,
+                            signer=signer,
+                        )
+                    )
+            finally:
+                os.umask(old_umask)
+
+            final_slot = slot_root / "pixel6"
+            directories = [
+                slot_root,
+                final_slot,
+                *(path for path in final_slot.rglob("*") if path.is_dir()),
+            ]
+            files = [path for path in final_slot.rglob("*") if path.is_file()]
+
+            self.assertEqual(status, 0)
+            self.assertGreater(len(files), 0)
+            for directory in directories:
+                with self.subTest(directory=directory.relative_to(Path(temp))):
+                    self.assertEqual(directory.lstat().st_mode & 0o777, 0o700)
+            for file_path in files:
+                with self.subTest(file=file_path.relative_to(Path(temp))):
+                    self.assertEqual(file_path.lstat().st_mode & 0o777, 0o600)
 
     def test_kagemusha_slot_assembler_requires_signing_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -3209,11 +3253,12 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             wrapper = Path(temp)
             slot_root = wrapper / "device-lab"
-            slot_root.mkdir()
+            slot_root.mkdir(mode=0o700)
             root_identity = slot_assembler._file_identity(slot_root.lstat())
             temp_parent = slot_root / ".pixel6.stage"
             stage_slot = temp_parent / "pixel6"
-            stage_slot.mkdir(parents=True)
+            stage_slot.mkdir(mode=0o700, parents=True)
+            temp_parent.chmod(0o700)
             swapped_root = wrapper / "device-lab-swapped"
             swapped = False
 
@@ -3221,7 +3266,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 nonlocal swapped
                 if Path(path) == slot_root and not swapped:
                     slot_root.rename(swapped_root)
-                    slot_root.mkdir()
+                    slot_root.mkdir(mode=0o700)
                     swapped = True
                 return original_open(path, flags, *args, **kwargs)
 
@@ -3254,15 +3299,16 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             wrapper = Path(temp)
             slot_root = wrapper / "device-lab"
-            slot_root.mkdir()
+            slot_root.mkdir(mode=0o700)
             temp_parent = slot_root / ".pixel6.stage"
             stage_slot = temp_parent / "pixel6"
-            stage_slot.mkdir(parents=True)
+            stage_slot.mkdir(mode=0o700, parents=True)
+            temp_parent.chmod(0o700)
             root_identity = slot_assembler._file_identity(slot_root.lstat())
             temp_parent_identity = slot_assembler._file_identity(temp_parent.lstat())
             stage_identity = slot_assembler._file_identity(stage_slot.lstat())
             shutil.rmtree(stage_slot)
-            stage_slot.mkdir()
+            stage_slot.mkdir(mode=0o700)
 
             errors = slot_assembler._publish_stage_slot(
                 stage_slot=stage_slot,
@@ -3391,10 +3437,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             output = slot_dir / "slot.json"
             swapped_slot_dir = wrapper / "slot-swapped"
             swapped = False
+            parent_open_count = 0
 
             def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal swapped
-                if Path(path) == output.parent and not swapped:
+                nonlocal parent_open_count, swapped
+                if Path(path) == output.parent:
+                    parent_open_count += 1
+                if Path(path) == output.parent and parent_open_count > 1 and not swapped:
                     output.parent.rename(swapped_slot_dir)
                     output.parent.mkdir()
                     swapped = True
@@ -3516,10 +3565,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             swapped_parent = wrapper / "evidence-swapped"
             errors: list[str] = []
             swapped = False
+            parent_open_count = 0
 
             def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal swapped
-                if Path(path) == destination.parent and not swapped:
+                nonlocal parent_open_count, swapped
+                if Path(path) == destination.parent:
+                    parent_open_count += 1
+                if Path(path) == destination.parent and parent_open_count > 1 and not swapped:
                     destination.parent.rename(swapped_parent)
                     destination.parent.mkdir(parents=True)
                     swapped = True
@@ -3967,6 +4019,36 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             },
         )
 
+    def test_kagemusha_attestation_report_writer_installs_private_permissions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                temp_path = Path(temp)
+                result_path = temp_path / "result.json"
+                chain_path = temp_path / "keymint-certificate-chain.pem"
+                output_parent = temp_path / "reports"
+                out_path = output_parent / "report.json"
+                write_attestation_harness_result(result_path)
+                write_attestation_chain(chain_path)
+                output_parent.mkdir(mode=0o777)
+
+                with redirect_stdout(io.StringIO()):
+                    status = attestation_report.main(
+                        attestation_report_args(
+                            harness_result=result_path,
+                            chain=chain_path,
+                            out=out_path,
+                        )
+                    )
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(status, 0)
+            self.assertEqual(output_parent.lstat().st_mode & 0o777, 0o700)
+            self.assertEqual(out_path.lstat().st_mode & 0o777, 0o600)
+
     def test_kagemusha_attestation_report_writer_rejects_parent_directory_identity_swap_before_sync(
         self,
     ) -> None:
@@ -3979,10 +4061,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             out_path = root / "report.json"
             swapped_root = wrapper / "attestation-report-root-swapped"
             swapped = False
+            parent_open_count = 0
 
             def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal swapped
-                if Path(path) == out_path.parent and not swapped:
+                nonlocal parent_open_count, swapped
+                if Path(path) == out_path.parent:
+                    parent_open_count += 1
+                if Path(path) == out_path.parent and parent_open_count > 1 and not swapped:
                     out_path.parent.rename(swapped_root)
                     out_path.parent.mkdir()
                     swapped = True
@@ -5864,6 +5949,33 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertIsNotNone(sync_calls[0][2])
 
+    def test_kagemusha_android_raw_puller_latest_writer_installs_private_permissions(
+        self,
+    ) -> None:
+        original_mkstemp = raw_puller.tempfile.mkstemp
+        temp_counter = 0
+
+        def permissive_mkstemp(*, prefix: str, suffix: str, dir: Path):
+            nonlocal temp_counter
+            temp_counter += 1
+            temp_path = Path(dir) / f"{prefix}permissive-{temp_counter}{suffix}"
+            fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            return fd, str(temp_path)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            old_umask = os.umask(0)
+            raw_puller.tempfile.mkstemp = permissive_mkstemp
+            try:
+                errors = raw_puller._write_latest_slot(root, "pixel6")
+            finally:
+                raw_puller.tempfile.mkstemp = original_mkstemp
+                os.umask(old_umask)
+            output_mode = (root / "latest-slot.txt").lstat().st_mode & 0o777
+
+        self.assertEqual(errors, [])
+        self.assertEqual(output_mode, 0o600)
+
     def test_kagemusha_android_raw_puller_latest_writer_rejects_symlink_after_replace(
         self,
     ) -> None:
@@ -5914,6 +6026,33 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(
             errors,
             ["raw latest-slot output must not be hardlinked after writing"],
+        )
+
+    def test_kagemusha_android_raw_puller_latest_writer_rejects_permissive_mode_after_replace(
+        self,
+    ) -> None:
+        original_replace = raw_puller.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            latest_path = root / "latest-slot.txt"
+
+            def chmod_after_replace(src, dst):  # type: ignore[no-untyped-def]
+                original_replace(src, dst)
+                if Path(dst) == latest_path:
+                    latest_path.chmod(0o644)
+
+            raw_puller.os.replace = chmod_after_replace
+            try:
+                errors = raw_puller._write_latest_slot(root, "pixel6")
+            finally:
+                raw_puller.os.replace = original_replace
+            output_mode = latest_path.lstat().st_mode & 0o777
+
+        self.assertEqual(output_mode, 0o644)
+        self.assertEqual(
+            errors,
+            ["raw latest-slot output permissions must be 0600"],
         )
 
     def test_kagemusha_android_raw_puller_latest_writer_rejects_readback_path_swap(
@@ -6068,6 +6207,36 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertFalse(mkstemp_called)
         self.assertFalse(summary_out.exists())
 
+    def test_kagemusha_android_raw_puller_summary_installs_private_permissions(
+        self,
+    ) -> None:
+        original_mkstemp = raw_puller.tempfile.mkstemp
+        temp_counter = 0
+
+        def permissive_mkstemp(*, prefix: str, suffix: str, dir: Path):
+            nonlocal temp_counter
+            temp_counter += 1
+            temp_path = Path(dir) / f"{prefix}permissive-{temp_counter}{suffix}"
+            fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            return fd, str(temp_path)
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary_out = Path(temp) / "pull-summary.json"
+            old_umask = os.umask(0)
+            raw_puller.tempfile.mkstemp = permissive_mkstemp
+            try:
+                errors = raw_puller._write_summary(
+                    summary_out,
+                    {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
+                )
+            finally:
+                raw_puller.tempfile.mkstemp = original_mkstemp
+                os.umask(old_umask)
+            output_mode = summary_out.lstat().st_mode & 0o777
+
+        self.assertEqual(errors, [])
+        self.assertEqual(output_mode, 0o600)
+
     def test_kagemusha_android_raw_puller_summary_rejects_symlink_after_replace(
         self,
     ) -> None:
@@ -6126,6 +6295,36 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(
             errors,
             ["raw pull summary output must not be hardlinked after writing"],
+        )
+
+    def test_kagemusha_android_raw_puller_summary_rejects_permissive_mode_after_replace(
+        self,
+    ) -> None:
+        original_replace = raw_puller.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            summary_out = temp_path / "pull-summary.json"
+
+            def chmod_after_replace(src, dst):  # type: ignore[no-untyped-def]
+                original_replace(src, dst)
+                if Path(dst) == summary_out:
+                    summary_out.chmod(0o644)
+
+            raw_puller.os.replace = chmod_after_replace
+            try:
+                errors = raw_puller._write_summary(
+                    summary_out,
+                    {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
+                )
+            finally:
+                raw_puller.os.replace = original_replace
+            output_mode = summary_out.lstat().st_mode & 0o777
+
+        self.assertEqual(output_mode, 0o644)
+        self.assertEqual(
+            errors,
+            ["raw pull summary output permissions must be 0600"],
         )
 
     def test_kagemusha_android_raw_puller_summary_rejects_readback_path_swap(
@@ -19140,10 +19339,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             root.mkdir()
             swapped_root = wrapper / "signed-evidence-root-swapped"
             swapped = False
+            parent_open_count = 0
 
             def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal swapped
-                if Path(path) == output.parent and not swapped:
+                nonlocal parent_open_count, swapped
+                if Path(path) == output.parent:
+                    parent_open_count += 1
+                if Path(path) == output.parent and parent_open_count > 2 and not swapped:
                     output.parent.rename(swapped_root)
                     output.parent.mkdir()
                     swapped = True
@@ -19612,6 +19814,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             with output.open("wb") as handle:
                 handle.seek(device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES)
                 handle.write(b"x")
+            output.chmod(0o600)
 
             digest, errors = evidence_signer._output_file_sha256(
                 output,

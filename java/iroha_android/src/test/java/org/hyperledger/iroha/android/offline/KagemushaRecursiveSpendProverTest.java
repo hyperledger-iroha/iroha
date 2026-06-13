@@ -2122,6 +2122,32 @@ public final class KagemushaRecursiveSpendProverTest {
     assertThrows(
         "profileArchive must not exceed 67108864 bytes",
         () -> KagemushaRecursiveSpendProver.lineageAppendBoundary(oversizedArchive));
+
+    assertThrows(
+        "recordBundleArchive must be a valid Norito archive",
+        () -> KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(malformedArchive));
+    assertThrows(
+        "recordBundleArchive must contain a non-empty Norito payload",
+        () -> KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(emptyPayloadArchive));
+    assertThrows(
+        "recordBundleArchive must not exceed 67108864 bytes",
+        () -> KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(oversizedArchive));
+    assertThrows(
+        "previousBundleArchive must be a valid Norito archive",
+        () ->
+            KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(
+                malformedArchive));
+    assertThrows(
+        "previousBundleArchive must contain a non-empty Norito payload",
+        () ->
+            KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(
+                emptyPayloadArchive));
+    assertThrows(
+        "previousBundleArchive must not exceed 67108864 bytes",
+        () ->
+            KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(
+                oversizedArchive));
+
     assertThrows(
         "requestArchive must be a valid Norito archive",
         () -> KagemushaRecursiveSpendProver.verifySpend(malformedArchive));
@@ -2300,6 +2326,11 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
                 new byte[] {1, 2}, "redeem"),
         "native redeem returned invalid Norito archive");
+    assertIllegalState(
+        () ->
+            KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
+                new byte[] {1, 2}, "build Pallas open envelopes"),
+        "native build Pallas open envelopes returned invalid Norito archive");
 
     final byte[] compressed = kagemushaNoritoFrameWithPayload(0x4b);
     compressed[22] = 1;
@@ -2323,6 +2354,11 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
                 kagemushaNoritoFrame(0x4b), "redeem"),
         "native redeem returned empty Norito payload");
+    assertIllegalState(
+        () ->
+            KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
+                kagemushaNoritoFrame(0x4c), "build previous proof open envelopes"),
+        "native build previous proof open envelopes returned empty Norito payload");
 
     final byte[] output = kagemushaNoritoFrameWithPayload(0x4b);
     assert KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(output, "redeem") == output;

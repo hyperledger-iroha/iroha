@@ -66,9 +66,23 @@ java -version
 cd "${ROOT_DIR}/kotlin"
 ./gradlew --no-daemon -q :core-jvm:test \
   --tests org.hyperledger.iroha.sdk.address.AccountIdLiteralTest \
+  --tests org.hyperledger.iroha.sdk.address.AccountAddressTest \
+  --tests org.hyperledger.iroha.sdk.address.I105CanonicalTest \
   --tests org.hyperledger.iroha.sdk.client.CanonicalRequestSignerTest \
+  --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest \
+  --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest \
+  --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest \
   --tests org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClientTest \
+  --tests org.hyperledger.iroha.sdk.client.transport.UrlConnectionTransportExecutorTest \
+  --tests org.hyperledger.iroha.sdk.connect.ConnectCryptoTest \
+  --tests org.hyperledger.iroha.sdk.connect.ConnectEnvelopeCodecTest \
+  --tests org.hyperledger.iroha.sdk.connect.ConnectSequenceTest \
+  --tests org.hyperledger.iroha.sdk.connect.ConnectWalletRequestTest \
+  --tests org.hyperledger.iroha.sdk.core.model.TransactionPayloadTest \
   --tests org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.RegisterAccountWirePayloadEncoderParityTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoderParityTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest \
   --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \
@@ -78,10 +92,18 @@ cd "${ROOT_DIR}/kotlin"
   --tests org.hyperledger.iroha.sdk.nexus.NexusAppClientTest \
   --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest \
   --tests org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest \
+  --tests org.hyperledger.iroha.sdk.offline.OfflineCashCodecTest \
   --tests org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest \
+  --tests org.hyperledger.iroha.sdk.offline.OfflineSettlementProofsParityTest \
   --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest \
   --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test \
-  --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest
+  --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest \
+  --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest \
+  --tests org.hyperledger.iroha.sdk.norito.NoritoHeaderTest \
+  --tests org.hyperledger.iroha.sdk.norito.NoritoColumnarTest \
+  --tests org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapterParityTest \
+  --tests org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest
 
 cd "${ROOT_DIR}"
 javac \
@@ -92,8 +114,14 @@ java -ea -cp "${JAVA_OUT}" \
   org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest
 
 cd "${ROOT_DIR}/java/iroha_android"
-ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest,org.hyperledger.iroha.android.offline.OfflineNoteV2Test,org.hyperledger.iroha.android.offline.OfflineNoteTest,org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,org.hyperledger.iroha.android.tx.TransactionBuilderTests,org.hyperledger.iroha.android.address.AccountIdLiteralTests,org.hyperledger.iroha.android.client.CanonicalRequestSignerTests,org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests,org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests,org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests,org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests \
+ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest,org.hyperledger.iroha.android.offline.OfflineNoteV2Test,org.hyperledger.iroha.android.offline.OfflineNoteTest,org.hyperledger.iroha.android.offline.OfflineJsonParserTest,org.hyperledger.iroha.android.offline.OfflineAuditLoggerTest,org.hyperledger.iroha.android.offline.OfflineJournalTest,org.hyperledger.iroha.android.offline.OfflineQrStreamTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests,org.hyperledger.iroha.android.tx.TransactionBuilderTests,org.hyperledger.iroha.android.tx.TransactionBuilderOfflineEnvelopeTests,org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests,org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests,org.hyperledger.iroha.android.tx.SignedTransactionHasherTests,org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelopeCodecTests,org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests,org.hyperledger.iroha.android.connect.ConnectEnvelopeCodecTest,org.hyperledger.iroha.android.connect.ConnectRetryPolicyTests,org.hyperledger.iroha.android.connect.ConnectQueueJournalTests,org.hyperledger.iroha.android.connect.ConnectErrorTests,org.hyperledger.iroha.android.tools.PendingQueueInspectorTests,org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifierTests,org.hyperledger.iroha.android.address.AccountIdLiteralTests,org.hyperledger.iroha.android.address.AccountAddressTests,org.hyperledger.iroha.android.client.CanonicalRequestSignerTests,org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.client.OfflineToriiClientTests,org.hyperledger.iroha.android.client.ClientConfigOfflineQueueTests,org.hyperledger.iroha.android.client.HttpClientTransportOfflineQueueTests,org.hyperledger.iroha.android.client.HttpClientTransportPendingQueueTests,org.hyperledger.iroha.android.client.queue.DirectoryPendingTransactionQueueTests,org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueueTests,org.hyperledger.iroha.android.client.queue.OfflineJournalPendingTransactionQueueTest,org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests,org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests,org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests,org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoderTests,org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest,org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests,org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests \
   ./gradlew --no-daemon -q :core:test \
   --tests org.hyperledger.iroha.android.GradleHarnessTests \
   --tests org.hyperledger.iroha.android.crypto.SigningAlgorithmTests \
+  --tests org.hyperledger.iroha.android.model.instructions.SetPrimaryAccountAliasWirePayloadEncoderTests \
+  --tests org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests \
+  --tests org.hyperledger.iroha.android.tx.TransactionPayloadFixturesTests \
+  --tests org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests \
+  --tests org.hyperledger.iroha.android.client.transport.UrlConnectionTransportExecutorTests \
+  --tests org.hyperledger.iroha.android.connect.ConnectWalletRequestTests \
   --tests org.hyperledger.iroha.android.nexus.NexusAppClientTest

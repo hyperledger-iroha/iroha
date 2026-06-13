@@ -196,6 +196,33 @@ def _directory_open_flags() -> int:
     return flags
 
 
+def _set_private_directory_permissions(
+    path: Path,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None = None,
+) -> list[str]:
+    try:
+        dir_fd = os.open(path, _directory_open_flags())
+    except OSError:
+        return [f"{label} permissions could not be tightened"]
+    try:
+        directory_stat = os.fstat(dir_fd)
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            return [f"{label} permissions could not be tightened"]
+        if expected_identity is not None and _file_identity(directory_stat) != expected_identity:
+            return [f"{label} changed before permissions were tightened"]
+        os.fchmod(dir_fd, 0o700)
+        directory_stat = os.fstat(dir_fd)
+        if stat.S_IMODE(directory_stat.st_mode) != 0o700:
+            return [f"{label} permissions must be 0700"]
+    except OSError:
+        return [f"{label} permissions could not be tightened"]
+    finally:
+        os.close(dir_fd)
+    return []
+
+
 def _sync_artifact_dir(
     artifact_dir: Path,
     *,
@@ -784,12 +811,19 @@ def _copy_validated_file(
     if errors:
         return errors, None
     assert digest is not None and size is not None
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    parent_errors = _set_private_directory_permissions(
+        destination.parent,
+        f"{label} destination parent",
+    )
+    if parent_errors:
+        return parent_errors, None
     expected_stat = source.lstat()
     expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
     destination_identity: tuple[int, int] | None = None
     try:
         with source.open("rb") as src, destination.open("xb") as dst:
+            os.fchmod(dst.fileno(), 0o600)
             destination_identity = _file_identity(os.fstat(dst.fileno()))
             open_stat = os.fstat(src.fileno())
             path_stat = source.lstat()
@@ -808,6 +842,12 @@ def _copy_validated_file(
         return [f"published {destination.name} already exists"], destination_identity
     except OSError:
         return [f"{label} could not be copied"], destination_identity
+    try:
+        copied_stat = destination.lstat()
+    except OSError:
+        return [f"published {destination.name} metadata could not be read"], destination_identity
+    if stat.S_IMODE(copied_stat.st_mode) != 0o600:
+        return [f"{label} copied file permissions must be 0600"], destination_identity
     copied_digest, copied_size, _copied_prefix, copied_errors = (
         lineage_evidence._sha256_file_with_size(destination, f"published {destination.name}")
     )
@@ -897,7 +937,7 @@ def publish_stage(*, stage_dir: Path, artifact_dir: Path, replace: bool) -> list
     """Publish staged files to the final artifact directory."""
 
     errors: list[str] = []
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     errors.extend(validate_directory_path(artifact_dir, "artifact directory", must_exist=True))
     if errors:
         return errors
@@ -906,6 +946,15 @@ def publish_stage(*, stage_dir: Path, artifact_dir: Path, replace: bool) -> list
     except OSError:
         return ["artifact directory metadata could not be read"]
     artifact_dir_identity = _file_identity(artifact_dir_stat)
+    errors.extend(
+        _set_private_directory_permissions(
+            artifact_dir,
+            "artifact directory",
+            expected_identity=artifact_dir_identity,
+        )
+    )
+    if errors:
+        return errors
     for name in _required_publish_filenames():
         errors.extend(
             _validate_output_file_path(
@@ -1038,14 +1087,23 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
     assert elapsed_seconds is not None
 
     try:
-        args.artifact_dir.mkdir(parents=True, exist_ok=True)
+        args.artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError:
         return 1, None, ["--artifact-dir could not be created"]
     errors = validate_directory_path(args.artifact_dir, "--artifact-dir", must_exist=True)
     if errors:
         return 1, None, errors
+    errors = _set_private_directory_permissions(args.artifact_dir, "--artifact-dir")
+    if errors:
+        return 1, None, errors
 
     temp_parent = Path(tempfile.mkdtemp(prefix=".lineage-proof-finalize.", dir=args.artifact_dir))
+    temp_parent_errors = _set_private_directory_permissions(
+        temp_parent,
+        "staged finalizer temporary directory",
+    )
+    if temp_parent_errors:
+        return 1, None, temp_parent_errors
     try:
         temp_parent_identity = _file_identity(temp_parent.lstat())
     except OSError:
@@ -1053,27 +1111,32 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
     stage_dir = temp_parent / "stage"
     finalizer_errors: list[str] = []
     try:
-        stage_dir.mkdir()
-        _evidence, stage_errors = stage_lineage_proof_evidence(
-            staged_artifact_dir=args.staged_artifact_dir,
-            stage_dir=stage_dir,
-            generated_at_utc=args.generated_at_utc,
-            max_generated_at_future_skew_seconds=(
-                args.max_generated_at_future_skew_seconds
-            ),
-            command=args.command,
-            elapsed_seconds=elapsed_seconds,
+        stage_dir.mkdir(mode=0o700)
+        finalizer_errors = _set_private_directory_permissions(
+            stage_dir,
+            "staged finalizer stage directory",
         )
-        if stage_errors:
-            finalizer_errors = stage_errors
-        else:
-            publish_errors = publish_stage(
+        if not finalizer_errors:
+            _evidence, stage_errors = stage_lineage_proof_evidence(
+                staged_artifact_dir=args.staged_artifact_dir,
                 stage_dir=stage_dir,
-                artifact_dir=args.artifact_dir,
-                replace=args.replace,
+                generated_at_utc=args.generated_at_utc,
+                max_generated_at_future_skew_seconds=(
+                    args.max_generated_at_future_skew_seconds
+                ),
+                command=args.command,
+                elapsed_seconds=elapsed_seconds,
             )
-            if publish_errors:
-                finalizer_errors = publish_errors
+            if stage_errors:
+                finalizer_errors = stage_errors
+            else:
+                publish_errors = publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=args.artifact_dir,
+                    replace=args.replace,
+                )
+                if publish_errors:
+                    finalizer_errors = publish_errors
     except OSError:
         finalizer_errors = ["staged finalizer temporary stage could not be created"]
     finally:

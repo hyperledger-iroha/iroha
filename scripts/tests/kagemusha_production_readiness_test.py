@@ -12,6 +12,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import tempfile
 import unittest
+from typing import Any
 from unittest import mock
 
 
@@ -5935,6 +5936,80 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertEqual(final_text, "stale manifest\n")
         self.assertEqual(temp_outputs, [])
+
+    def test_write_release_bundle_installs_private_file_permissions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+            bundle = {
+                "schema": release_bundle.RELEASE_BUNDLE_SCHEMA,
+                "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                "ready": True,
+                "evidence": {},
+                "blockers": [],
+            }
+            temp_counter = 0
+
+            class PermissiveTempFile:
+                def __init__(self, path: Path, handle: Any) -> None:
+                    self.name = str(path)
+                    self._handle = handle
+
+                def fileno(self) -> int:
+                    return self._handle.fileno()
+
+                def write(self, text: str) -> int:
+                    return self._handle.write(text)
+
+                def flush(self) -> None:
+                    self._handle.flush()
+
+                def __enter__(self) -> "PermissiveTempFile":
+                    return self
+
+                def __exit__(
+                    self,
+                    exc_type: type[BaseException] | None,
+                    exc: BaseException | None,
+                    traceback: Any,
+                ) -> None:
+                    self._handle.close()
+
+            def permissive_named_temporary_file(
+                mode: str,
+                *,
+                dir: Path,
+                encoding: str,
+                prefix: str,
+                suffix: str,
+                delete: bool,
+            ):
+                nonlocal temp_counter
+                self.assertFalse(delete)
+                temp_counter += 1
+                temp_path = Path(dir) / f"{prefix}permissive-{temp_counter}{suffix}"
+                fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+                return PermissiveTempFile(temp_path, os.fdopen(fd, mode, encoding=encoding))
+
+            old_umask = os.umask(0)
+            try:
+                with mock.patch.object(
+                    release_bundle.tempfile,
+                    "NamedTemporaryFile",
+                    side_effect=permissive_named_temporary_file,
+                ):
+                    errors = release_bundle.write_release_bundle(
+                        out,
+                        bundle,
+                        bundle_root,
+                    )
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(out.lstat().st_mode & 0o777, 0o600)
 
     def test_write_release_bundle_rejects_nonfinite_manifest_before_write(
         self,
@@ -15739,6 +15814,48 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertEqual(remaining, [])
 
+    def test_compact_key_staged_finalizer_publish_outputs_private_permissions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage_dir = root / "stage"
+            artifact_dir = root / "published"
+            stage_dir.mkdir()
+            artifact_dir.mkdir()
+            artifact_dir.chmod(0o777)
+            create_compact_key_artifact_files(stage_dir)
+            evidence, evidence_errors = compact_key_helper.build_evidence(
+                artifact_dir=stage_dir,
+                command=readiness.expected_compact_key_command(),
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+            self.assertEqual(evidence_errors, [])
+            assert evidence is not None
+            write_errors = compact_key_helper.write_evidence(
+                stage_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME,
+                evidence,
+            )
+            self.assertEqual(write_errors, [])
+
+            old_umask = os.umask(0)
+            try:
+                errors = compact_key_finalizer.publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=artifact_dir,
+                    replace=False,
+                )
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(artifact_dir.lstat().st_mode & 0o777, 0o700)
+            for name in compact_key_finalizer._required_publish_filenames():
+                self.assertEqual(
+                    (artifact_dir / name).lstat().st_mode & 0o777,
+                    0o600,
+                )
+
     def test_compact_key_staged_finalizer_rejects_publish_directory_identity_swap(
         self,
     ) -> None:
@@ -15765,10 +15882,18 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             )
             self.assertEqual(write_errors, [])
             swapped = False
+            artifact_open_count = 0
 
             def swapping_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal swapped
-                if Path(path) == artifact_dir and not swapped:
+                nonlocal artifact_open_count, swapped
+                if Path(path) == artifact_dir:
+                    artifact_open_count += 1
+                if (
+                    Path(path) == artifact_dir
+                    and artifact_open_count
+                    == len(compact_key_finalizer._required_publish_filenames()) + 2
+                    and not swapped
+                ):
                     artifact_dir.rename(swapped_dir)
                     artifact_dir.mkdir()
                     swapped = True
@@ -15785,6 +15910,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ).is_file()
 
         self.assertTrue(swapped)
+        self.assertGreaterEqual(
+            artifact_open_count,
+            len(compact_key_finalizer._required_publish_filenames()) + 2,
+        )
         self.assertEqual(errors, ["artifact directory changed before sync"])
         self.assertTrue(published_evidence_exists)
 
@@ -16528,6 +16657,25 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertEqual(errors, ["staged keygen exit marker changed after write"])
 
+    def test_compact_key_staged_runner_atomic_write_installs_private_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                marker = Path(temp) / "staged.exit"
+                errors = compact_key_staged_runner._write_text_atomic(
+                    marker,
+                    "0\n",
+                    "staged keygen exit marker",
+                    replace=True,
+                )
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(marker.lstat().st_mode & 0o777, 0o600)
+
     def test_compact_key_staged_runner_atomic_write_rejects_parent_identity_swap(
         self,
     ) -> None:
@@ -16679,6 +16827,83 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ],
         )
         self.assertEqual(installed_text, "log\n")
+
+    def test_compact_key_staged_runner_log_install_installs_private_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                artifact_dir = Path(temp) / "staged" / "artifacts" / "kagemusha"
+                artifact_dir.mkdir(parents=True)
+                final_log = artifact_dir / compact_key_staged_runner.GENERATOR_LOG_FILENAME
+                temp_log = artifact_dir / f".{final_log.name}.staged-runner.tmp"
+                temp_log.write_text("log\n", encoding="utf-8")
+
+                errors = compact_key_staged_runner._install_log_temp(
+                    temp_log,
+                    final_log,
+                    replace=True,
+                )
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(final_log.lstat().st_mode & 0o777, 0o600)
+
+    def test_compact_key_staged_runner_creates_private_staging_outputs(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                root = Path(temp)
+                staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+                exit_file = root / "staged.exit"
+                args = compact_key_staged_runner.parse_args(
+                    [
+                        "--staged-artifact-dir",
+                        str(staged_artifact_dir),
+                        "--exit-file",
+                        str(exit_file),
+                        "--replace",
+                    ]
+                )
+
+                def fake_runner(
+                    _command: list[str],
+                    _cwd: Path,
+                    log_path: Path,
+                ) -> int:
+                    log_path.write_text("synthetic compact log\n", encoding="utf-8")
+                    return 17
+
+                status, errors = compact_key_staged_runner.run_staged_keygen(
+                    args,
+                    runner=fake_runner,
+                )
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(status, 17)
+            self.assertEqual(errors, [])
+            for directory in (
+                root / "staged",
+                root / "staged" / "artifacts",
+                staged_artifact_dir,
+            ):
+                with self.subTest(directory=directory.relative_to(root)):
+                    self.assertEqual(directory.lstat().st_mode & 0o777, 0o700)
+            for file_path in (
+                staged_artifact_dir
+                / compact_key_staged_runner.GENERATOR_LOG_FILENAME,
+                staged_artifact_dir
+                / compact_key_staged_runner.EXECUTION_REPORT_FILENAME,
+                staged_artifact_dir / compact_key_staged_runner.RUN_REPORT_FILENAME,
+                exit_file,
+            ):
+                with self.subTest(file=file_path.relative_to(root)):
+                    self.assertEqual(file_path.lstat().st_mode & 0o777, 0o600)
 
     def test_compact_key_staged_runner_rejects_symlinked_exit_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -18142,6 +18367,57 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertEqual(remaining, [])
 
+    def test_lineage_proof_staged_finalizer_publish_outputs_private_permissions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage_dir = root / "stage"
+            artifact_dir = root / "published"
+            stage_dir.mkdir()
+            artifact_dir.mkdir()
+            artifact_dir.chmod(0o777)
+            create_lineage_artifact_files(stage_dir)
+            proof_log = (
+                stage_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_passing_lineage_proof_log(proof_log)
+            evidence, evidence_errors = evidence_helper.build_evidence(
+                artifact_dir=stage_dir,
+                proof_log=proof_log,
+                command=readiness.expected_lineage_proof_command(
+                    readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
+                ),
+                elapsed_seconds=14400.0,
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+            self.assertEqual(evidence_errors, [])
+            assert evidence is not None
+            write_errors = evidence_helper.write_evidence(
+                stage_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                evidence,
+            )
+            self.assertEqual(write_errors, [])
+
+            old_umask = os.umask(0)
+            try:
+                errors = lineage_finalizer.publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=artifact_dir,
+                    replace=False,
+                )
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(artifact_dir.lstat().st_mode & 0o777, 0o700)
+            for name in lineage_finalizer._required_publish_filenames():
+                self.assertEqual(
+                    (artifact_dir / name).lstat().st_mode & 0o777,
+                    0o600,
+                )
+
     def test_lineage_proof_staged_finalizer_rejects_publish_directory_identity_swap(
         self,
     ) -> None:
@@ -18177,10 +18453,18 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             )
             self.assertEqual(write_errors, [])
             swapped = False
+            artifact_open_count = 0
 
             def swapping_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal swapped
-                if Path(path) == artifact_dir and not swapped:
+                nonlocal artifact_open_count, swapped
+                if Path(path) == artifact_dir:
+                    artifact_open_count += 1
+                if (
+                    Path(path) == artifact_dir
+                    and artifact_open_count
+                    == len(lineage_finalizer._required_publish_filenames()) + 2
+                    and not swapped
+                ):
                     artifact_dir.rename(swapped_dir)
                     artifact_dir.mkdir()
                     swapped = True
@@ -18197,6 +18481,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ).is_file()
 
         self.assertTrue(swapped)
+        self.assertGreaterEqual(
+            artifact_open_count,
+            len(lineage_finalizer._required_publish_filenames()) + 2,
+        )
         self.assertEqual(errors, ["artifact directory changed before sync"])
         self.assertTrue(published_evidence_exists)
 
@@ -19639,6 +19927,25 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertEqual(errors, ["staged lineage proof exit marker changed after write"])
 
+    def test_lineage_proof_staged_runner_atomic_write_installs_private_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                marker = Path(temp) / "staged.exit"
+                errors = lineage_staged_runner._write_text_atomic(
+                    marker,
+                    "0\n",
+                    "staged lineage proof exit marker",
+                    replace=True,
+                )
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(marker.lstat().st_mode & 0o777, 0o600)
+
     def test_lineage_proof_staged_runner_atomic_write_rejects_parent_identity_swap(
         self,
     ) -> None:
@@ -19784,6 +20091,86 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ["staged proof log parent directory changed before sync"],
         )
         self.assertEqual(installed_text, "proof log\n")
+
+    def test_lineage_proof_staged_runner_log_install_installs_private_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                artifact_dir = Path(temp) / "staged" / "artifacts" / "kagemusha"
+                artifact_dir.mkdir(parents=True)
+                final_log = artifact_dir / lineage_staged_runner.PROOF_LOG_FILENAME
+                temp_log = artifact_dir / f".{final_log.name}.staged-runner.tmp"
+                temp_log.write_text("proof log\n", encoding="utf-8")
+
+                errors = lineage_staged_runner._install_log_temp(
+                    temp_log,
+                    final_log,
+                    "staged proof log",
+                    replace=True,
+                )
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(final_log.lstat().st_mode & 0o777, 0o600)
+
+    def test_lineage_proof_staged_runner_creates_private_staging_outputs(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                root = Path(temp)
+                staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+                exit_file = root / "staged.exit"
+                elapsed_file = root / "staged.elapsed"
+                args = lineage_staged_runner.parse_args(
+                    [
+                        "--repo-root",
+                        str(REPO_ROOT),
+                        "--staged-artifact-dir",
+                        str(staged_artifact_dir),
+                        "--exit-file",
+                        str(exit_file),
+                        "--elapsed-seconds-file",
+                        str(elapsed_file),
+                        "--replace",
+                    ]
+                )
+
+                def fake_runner(
+                    _command: list[str],
+                    _cwd: Path,
+                    log_path: Path,
+                ) -> int:
+                    log_path.write_text("synthetic lineage log\n", encoding="utf-8")
+                    return 17
+
+                status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                    args,
+                    runner=fake_runner,
+                )
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(status, 17)
+            self.assertEqual(errors, [])
+            for directory in (
+                root / "staged",
+                root / "staged" / "artifacts",
+                staged_artifact_dir,
+            ):
+                with self.subTest(directory=directory.relative_to(root)):
+                    self.assertEqual(directory.lstat().st_mode & 0o777, 0o700)
+            for file_path in (
+                staged_artifact_dir / "lineage-init-key-artifacts.log",
+                staged_artifact_dir / "lineage-init-key-artifacts-execution.json",
+                exit_file,
+            ):
+                with self.subTest(file=file_path.relative_to(root)):
+                    self.assertEqual(file_path.lstat().st_mode & 0o777, 0o600)
 
     def test_lineage_proof_staged_runner_rejects_symlinked_exit_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -21095,6 +21482,54 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(out.exists())
         self.assertEqual(temp_outputs, [])
 
+    def test_compact_key_write_evidence_installs_private_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                artifact_dir = Path(temp) / "artifacts" / "kagemusha"
+                artifact_dir.mkdir(parents=True)
+                artifact_dir.chmod(0o777)
+                out = artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+
+                errors = compact_key_helper.write_evidence(out, {"schema": "test"})
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(artifact_dir.lstat().st_mode & 0o777, 0o700)
+            self.assertEqual(out.lstat().st_mode & 0o777, 0o600)
+
+    def test_compact_key_validate_evidence_document_installs_private_scratch_permissions(
+        self,
+    ) -> None:
+        captured_modes: dict[str, int] = {}
+
+        def fake_check(path: Path, *, require_canonical_filename: bool = True):
+            captured_modes["artifact_dir"] = path.parent.lstat().st_mode & 0o777
+            captured_modes["scratch"] = path.lstat().st_mode & 0o777
+            return {"blockers": []}
+
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                artifact_dir = Path(temp) / "artifacts" / "kagemusha"
+                artifact_dir.mkdir(parents=True)
+                artifact_dir.chmod(0o777)
+                with mock.patch.object(
+                    compact_key_helper.readiness,
+                    "check_compact_key_evidence",
+                    side_effect=fake_check,
+                ):
+                    errors = compact_key_helper.validate_evidence_document(
+                        {"schema": "test"},
+                        artifact_dir,
+                    )
+            finally:
+                os.umask(old_umask)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(captured_modes, {"artifact_dir": 0o700, "scratch": 0o600})
+
     def test_compact_key_write_evidence_preserves_existing_output_on_replace_failure(
         self,
     ) -> None:
@@ -21253,10 +21688,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             out = root / readiness.COMPACT_KEY_EVIDENCE_FILENAME
             swapped_root = wrapper / "compact-output-root-swapped"
             swapped = False
+            parent_open_count = 0
 
             def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal swapped
-                if Path(path) == out.parent and not swapped:
+                nonlocal parent_open_count, swapped
+                if Path(path) == out.parent:
+                    parent_open_count += 1
+                if Path(path) == out.parent and parent_open_count == 3 and not swapped:
                     out.parent.rename(swapped_root)
                     out.parent.mkdir()
                     swapped = True
@@ -25204,6 +25642,54 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(str(secret_out), rendered)
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_lineage_proof_write_evidence_installs_private_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                artifact_dir = Path(temp) / "artifacts" / "kagemusha"
+                artifact_dir.mkdir(parents=True)
+                artifact_dir.chmod(0o777)
+                out = artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+
+                errors = evidence_helper.write_evidence(out, {"schema": "test"})
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(artifact_dir.lstat().st_mode & 0o777, 0o700)
+            self.assertEqual(out.lstat().st_mode & 0o777, 0o600)
+
+    def test_lineage_proof_validate_evidence_document_installs_private_scratch_permissions(
+        self,
+    ) -> None:
+        captured_modes: dict[str, int] = {}
+
+        def fake_check(path: Path, *, require_canonical_filename: bool = True):
+            captured_modes["artifact_dir"] = path.parent.lstat().st_mode & 0o777
+            captured_modes["scratch"] = path.lstat().st_mode & 0o777
+            return {"blockers": []}
+
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                artifact_dir = Path(temp) / "artifacts" / "kagemusha"
+                artifact_dir.mkdir(parents=True)
+                artifact_dir.chmod(0o777)
+                with mock.patch.object(
+                    evidence_helper.readiness,
+                    "check_lineage_proof_evidence",
+                    side_effect=fake_check,
+                ):
+                    errors = evidence_helper.validate_evidence_document(
+                        {"schema": "test"},
+                        artifact_dir,
+                    )
+            finally:
+                os.umask(old_umask)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(captured_modes, {"artifact_dir": 0o700, "scratch": 0o600})
+
     def test_lineage_proof_write_evidence_rejects_write_failure_after_preflight(
         self,
     ) -> None:
@@ -25418,10 +25904,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             out = root / "lineage-proof-evidence.json"
             swapped_root = wrapper / "lineage-output-root-swapped"
             swapped = False
+            parent_open_count = 0
 
             def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal swapped
-                if Path(path) == out.parent and not swapped:
+                nonlocal parent_open_count, swapped
+                if Path(path) == out.parent:
+                    parent_open_count += 1
+                if Path(path) == out.parent and parent_open_count == 3 and not swapped:
                     out.parent.rename(swapped_root)
                     out.parent.mkdir()
                     swapped = True
@@ -26937,6 +27426,70 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ],
         )
 
+    def test_write_summary_installs_private_file_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            summary = {"schema": readiness.SUMMARY_SCHEMA, "ready": False}
+            temp_counter = 0
+
+            class PermissiveSummaryTempFile:
+                def __init__(self, path: Path, handle: Any) -> None:
+                    self.name = str(path)
+                    self._handle = handle
+
+                def fileno(self) -> int:
+                    return self._handle.fileno()
+
+                def write(self, text: str) -> int:
+                    return self._handle.write(text)
+
+                def flush(self) -> None:
+                    self._handle.flush()
+
+                def __enter__(self) -> "PermissiveSummaryTempFile":
+                    return self
+
+                def __exit__(
+                    self,
+                    exc_type: type[BaseException] | None,
+                    exc: BaseException | None,
+                    traceback: Any,
+                ) -> None:
+                    self._handle.close()
+
+            def permissive_named_temporary_file(
+                mode: str,
+                *,
+                dir: Path,
+                encoding: str,
+                prefix: str,
+                suffix: str,
+                delete: bool,
+            ):
+                nonlocal temp_counter
+                self.assertFalse(delete)
+                temp_counter += 1
+                temp_path = Path(dir) / f"{prefix}permissive-{temp_counter}{suffix}"
+                fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+                return PermissiveSummaryTempFile(
+                    temp_path,
+                    os.fdopen(fd, mode, encoding=encoding),
+                )
+
+            old_umask = os.umask(0)
+            try:
+                with mock.patch.object(
+                    readiness.tempfile,
+                    "NamedTemporaryFile",
+                    side_effect=permissive_named_temporary_file,
+                ):
+                    errors = readiness.write_summary(summary_path, summary)
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(summary_path.lstat().st_mode & 0o777, 0o600)
+
     def test_write_summary_rejects_oversized_json_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             summary_path = Path(temp) / "summary.json"
@@ -27325,6 +27878,36 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 {
                     "code": "kagemusha_summary_out_path_invalid",
                     "message": "--summary-out write verification failed",
+                }
+            ],
+        )
+
+    def test_write_summary_rejects_permissive_mode_after_replace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            summary = {"schema": readiness.SUMMARY_SCHEMA, "ready": False}
+            summary_text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+            original_replace = readiness.os.replace
+
+            def chmod_after_replace(src: Path, dst: Path) -> None:
+                original_replace(src, dst)
+                if dst == summary_path:
+                    dst.chmod(0o644)
+
+            with mock.patch.object(readiness.os, "replace", chmod_after_replace):
+                errors = readiness.write_summary(summary_path, summary)
+
+            written = summary_path.read_text(encoding="utf-8")
+            output_mode = summary_path.lstat().st_mode & 0o777
+
+        self.assertEqual(written, summary_text)
+        self.assertEqual(output_mode, 0o644)
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out permissions must be 0600",
                 }
             ],
         )

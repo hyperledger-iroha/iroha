@@ -1174,6 +1174,7 @@ def _write_latest_slot(root: Path, slot_id: str) -> list[str]:
     encoded = (slot_id + "\n").encode("utf-8")
     try:
         with os.fdopen(fd, "wb") as output:
+            os.fchmod(output.fileno(), 0o600)
             temp_identity = _file_identity(os.fstat(output.fileno()))
             output.write(encoded)
             output.flush()
@@ -1189,6 +1190,8 @@ def _write_latest_slot(root: Path, slot_id: str) -> list[str]:
             return ["raw latest-slot output must be a regular file after writing"]
         if expected_stat.st_nlink > 1:
             return ["raw latest-slot output must not be hardlinked after writing"]
+        if stat.S_IMODE(expected_stat.st_mode) != 0o600:
+            return ["raw latest-slot output permissions must be 0600"]
         if expected_stat.st_size > len(encoded):
             return ["raw latest-slot output readback mismatch"]
         expected_identity = _file_identity(expected_stat)
@@ -1201,6 +1204,8 @@ def _write_latest_slot(root: Path, slot_id: str) -> list[str]:
                     return ["raw latest-slot output must be a regular file after writing"]
                 if open_stat.st_nlink > 1:
                     return ["raw latest-slot output must not be hardlinked after writing"]
+                if stat.S_IMODE(open_stat.st_mode) != 0o600:
+                    return ["raw latest-slot output permissions must be 0600"]
                 if open_stat.st_size > len(encoded):
                     return ["raw latest-slot output readback mismatch"]
                 readback = readback_handle.read(len(encoded) + 1)
@@ -1256,6 +1261,7 @@ def _write_summary(path: Path, payload: dict[str, Any]) -> list[str]:
     temp_identity: tuple[int, int] | None = None
     try:
         with os.fdopen(fd, "wb") as output:
+            os.fchmod(output.fileno(), 0o600)
             temp_identity = _file_identity(os.fstat(output.fileno()))
             output.write(encoded)
             output.flush()
@@ -1271,6 +1277,8 @@ def _write_summary(path: Path, payload: dict[str, Any]) -> list[str]:
             return ["raw pull summary output must be a regular file after writing"]
         if expected_stat.st_nlink > 1:
             return ["raw pull summary output must not be hardlinked after writing"]
+        if stat.S_IMODE(expected_stat.st_mode) != 0o600:
+            return ["raw pull summary output permissions must be 0600"]
         if expected_stat.st_size > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
             return [
                 "raw pull summary output must be no more than "
@@ -1286,6 +1294,8 @@ def _write_summary(path: Path, payload: dict[str, Any]) -> list[str]:
                     return ["raw pull summary output must be a regular file after writing"]
                 if open_stat.st_nlink > 1:
                     return ["raw pull summary output must not be hardlinked after writing"]
+                if stat.S_IMODE(open_stat.st_mode) != 0o600:
+                    return ["raw pull summary output permissions must be 0600"]
                 if open_stat.st_size > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
                     return [
                         "raw pull summary output must be no more than "

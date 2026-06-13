@@ -1108,6 +1108,10 @@ export function isKagemushaRecursiveAggregationProofBundleNativeAvailable() {
   return false;
 }
 
+export function isKagemushaPallasOpenEnvelopeBuilderNativeAvailable() {
+  return false;
+}
+
 export function kagemushaProveVerifiedCompactPaymentTokenWithRecords() {
   return unsupported("kagemushaProveVerifiedCompactPaymentTokenWithRecords");
 }
@@ -1122,6 +1126,14 @@ export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAnd
   return unsupported(
     "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
   );
+}
+
+export function kagemushaBuildPallasOpenEnvelopesArchive() {
+  return unsupported("kagemushaBuildPallasOpenEnvelopesArchive");
+}
+
+export function kagemushaBuildPreviousProofOpenEnvelopesArchive() {
+  return unsupported("kagemushaBuildPreviousProofOpenEnvelopesArchive");
 }
 
 export function kagemushaVerifyRecursiveCompactPaymentToken() {

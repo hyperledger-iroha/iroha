@@ -135,6 +135,10 @@ _RECURSIVE_COMPACT_TOKEN_METHOD = (
     "kagemusha_prove_verified_recursive_compact_payment_token"
     "_with_records_and_pallas_open_envelopes"
 )
+_PALLAS_OPEN_ENVELOPE_BUILDER_METHOD = "kagemusha_build_pallas_open_envelopes_archive"
+_PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD = (
+    "kagemusha_build_previous_proof_open_envelopes_archive"
+)
 _RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD = (
     "kagemusha_verify_recursive_compact_payment_token"
 )
@@ -226,6 +230,7 @@ __all__ = [
     "requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append",
     "is_kagemusha_compact_payment_token_prover_available",
     "is_kagemusha_recursive_aggregation_proof_bundle_prover_available",
+    "is_kagemusha_pallas_open_envelope_builder_available",
     "is_kagemusha_recursive_compact_payment_token_prover_available",
     "is_kagemusha_recursive_compact_payment_token_verifier_available",
     "is_kagemusha_recursive_spend_compact_payment_token_projection_available",
@@ -235,6 +240,8 @@ __all__ = [
     "preferred_kagemusha_offline_spend_mode_for_capabilities",
     "preferred_kagemusha_offline_spend_mode",
     "kagemusha_prove_verified_compact_payment_token_with_records",
+    _PALLAS_OPEN_ENVELOPE_BUILDER_METHOD,
+    _PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD,
     _RECURSIVE_AGGREGATION_METHOD,
     _RECURSIVE_COMPACT_TOKEN_METHOD,
     _RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD,
@@ -781,6 +788,26 @@ def is_kagemusha_recursive_aggregation_proof_bundle_prover_available() -> bool:
         _RECURSIVE_AGGREGATION_METHOD,
         _MALFORMED_NATIVE_PROBE_ARCHIVE,
         _MALFORMED_NATIVE_PROBE_ARCHIVE,
+    )
+
+
+def is_kagemusha_pallas_open_envelope_builder_available() -> bool:
+    try:
+        module = load_crypto_extension()
+    except RuntimeError:
+        return False
+    return (
+        _has_recursive_compact_abi(module)
+        and _probe_native_archive_method(
+            module,
+            _PALLAS_OPEN_ENVELOPE_BUILDER_METHOD,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
+        )
+        and _probe_native_archive_method(
+            module,
+            _PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
+        )
     )
 
 
@@ -2359,6 +2386,42 @@ def kagemusha_prove_verified_compact_payment_token_with_records(
     )
 
 
+def _kagemusha_build_pallas_open_envelopes_archive(
+    record_bundle_archive: BytesLike,
+) -> bytes:
+    record_bundle = _norito_archive_bytes_named(
+        record_bundle_archive,
+        "record_bundle_archive",
+    )
+    if not is_kagemusha_pallas_open_envelope_builder_available():
+        raise RuntimeError(
+            "Kagemusha Pallas open-envelope builders require native bridge ABI 7 "
+            "with Pallas builder symbols"
+        )
+    return _call_native_archive_method(
+        _PALLAS_OPEN_ENVELOPE_BUILDER_METHOD,
+        record_bundle,
+    )
+
+
+def _kagemusha_build_previous_proof_open_envelopes_archive(
+    previous_bundle_archive: BytesLike,
+) -> bytes:
+    previous_bundle = _norito_archive_bytes_named(
+        previous_bundle_archive,
+        "previous_bundle_archive",
+    )
+    if not is_kagemusha_pallas_open_envelope_builder_available():
+        raise RuntimeError(
+            "Kagemusha Pallas open-envelope builders require native bridge ABI 7 "
+            "with Pallas builder symbols"
+        )
+    return _call_native_archive_method(
+        _PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD,
+        previous_bundle,
+    )
+
+
 def _prove_verified_recursive_aggregation_proof_bundle(
     record_bundle_archive: BytesLike,
     pallas_open_envelopes_archive: BytesLike,
@@ -2532,6 +2595,12 @@ def _require_kagemusha_native_output(name: str, result: object) -> bytes:
 
 
 globals()[_RECURSIVE_AGGREGATION_METHOD] = _prove_verified_recursive_aggregation_proof_bundle
+globals()[_PALLAS_OPEN_ENVELOPE_BUILDER_METHOD] = (
+    _kagemusha_build_pallas_open_envelopes_archive
+)
+globals()[_PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD] = (
+    _kagemusha_build_previous_proof_open_envelopes_archive
+)
 globals()[_RECURSIVE_COMPACT_TOKEN_METHOD] = _prove_verified_recursive_compact_payment_token
 globals()[_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD] = _verify_recursive_compact_payment_token
 globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_FROM_BUNDLE_METHOD] = (

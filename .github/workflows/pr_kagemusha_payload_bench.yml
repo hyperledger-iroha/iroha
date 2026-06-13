@@ -117,7 +117,24 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift"
+      - "fixtures/account/address_vectors.json"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountIdLiteral.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/PublicKeyCodec.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectCrypto.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectDirection.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectEnvelopeCodec.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectFrameCodec.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectJournalException.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectJournalRecord.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectProtocolException.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectQueueJournal.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectRetryPolicy.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/ConnectWalletRequest.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectError.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectErrorCategory.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectErrors.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectQueueError.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/CanonicalRequestSigner.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/AccountAliasJsonParser.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractJsonParser.java"
@@ -125,13 +142,49 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/RamLfeJsonParser.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoder.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptVerifier.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ConfidentialAssetToriiClient.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/HttpClientTransport.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/StreamingTransportExecutor.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportExecutor.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportRequest.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportResponse.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportStreamResponse.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/UrlConnectionTransportExecutor.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/DirectoryPendingTransactionQueue.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueue.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/OfflineJournalPendingTransactionQueue.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/queue/PendingTransactionQueue.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkMerklePathJson.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkMerklePathRequest.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkMerklePathResponse.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkRootsJson.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkRootsRequest.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkRootsResponse.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClient.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeyAttestation.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationResult.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerificationException.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifier.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/SigningAlgorithm.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/Executable.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/InstructionBox.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/JsonValue.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/TransactionPayload.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoder.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ConfidentialEncryptedPayload.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/SetPrimaryAccountAliasWirePayloadEncoder.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/TransferWirePayloadEncoder.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtils.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyRecordDescription.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyStatus.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/NoritoCodecAdapter.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/NoritoException.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/NoritoJavaCodecAdapter.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/SignedTransactionEncoder.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycle.java"
@@ -143,40 +196,150 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineAuditEntry.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineAuditLogger.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournal.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournalEntry.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournalException.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournalKey.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineQrStream.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteCommitment.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteCrypto.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteDecryption.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteEncryption.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteNullifier.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteOpening.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteScalars.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteTags.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialOwnerTag.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReadiness.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineToriiException.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineV2Readiness.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tools/PendingQueueInspector.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/CanonicalRequestSignerTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ConfidentialAssetToriiClientTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoderTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClientTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/transport/UrlConnectionTransportExecutorTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectEnvelopeCodecTest.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectErrorTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectQueueJournalTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectRetryPolicyTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectWalletRequestTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifierTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/crypto/SigningAlgorithmTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoderTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ZkAssetInstructionsTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/LocalZkAssetMerklePathProvider.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PastaPoseidonNodeHasher.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ToriiZkAssetMerklePathProvider.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ZkAssetMerkleHasher.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ZkAssetMerklePath.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ZkAssetMerklePathProvider.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/SignedTransaction.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/SignedTransactionHasher.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/TransactionBuilder.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelope.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeAdapter.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeCodec.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/ZkAssetMerklePathTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountIdLiteralTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycleTest.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJsonParserTest.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineAuditLoggerTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJournalTest.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineQrStreamTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ClientConfigOfflineQueueTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportOfflineQueueTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportPendingQueueTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/DirectoryPendingTransactionQueueTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueueTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/OfflineJournalPendingTransactionQueueTest.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/AccountLiteralHardCutTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/SetPrimaryAccountAliasWirePayloadEncoderTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/TransferWirePayloadEncoderTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/norito/NoritoCodecAdapterTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/SignedTransactionHasherTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderOfflineEnvelopeTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionFixtureManifestTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtureTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtures.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixturesTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeCodecTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tools/PendingQueueInspectorTests.java"
+      - "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json"
+      - "java/iroha_android/src/test/resources/transaction_payloads.json"
       - "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java"
       - "kotlin/offline-wallet-lab-app/**"
       - "kotlin/settings.gradle.kts"
       - "kotlin/gradle/libs.versions.toml"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountIdLiteral.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddress.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddressErrorCode.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddressException.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddressFormat.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/CurveSupportConfig.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/PublicKeyCodec.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/CanonicalRequestSigner.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AccountAliasJsonParser.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ContractJsonParser.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierJsonParser.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/RamLfeJsonParser.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ConfidentialAssetToriiClient.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptCanonicalEncoder.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptVerifier.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ZkMerklePath.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ZkRoots.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamClient.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/StreamingTransportExecutor.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportExecutor.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportRequest.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportResponse.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportStreamResponse.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/UrlConnectionTransportExecutor.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectCiphertext.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectCrypto.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectDirection.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectEnvelopeCodec.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectFrameCodec.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectJournalException.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectJournalRecord.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectProtocolException.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectQueueJournal.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectRetryPolicy.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectRole.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectWalletRequest.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/Executable.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/InstructionBox.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/JsonValue.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/TransactionPayload.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoder.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterAccountWirePayloadEncoder.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/TransferWirePayloadEncoder.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructions.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/VerifyingKeyInstructionUtils.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyRecordDescription.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyStatus.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/SigningAlgorithm.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/CRC64.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoAoS.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoColumnar.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoHeader.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/Varint.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycle.kt"
@@ -188,24 +351,67 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePath.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/SignedTransaction.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/SignedTransactionHasher.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/TransactionBuilder.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/NoritoCodecAdapter.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/NoritoException.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/NoritoJavaCodecAdapter.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/SignedTransactionEncoder.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/offline/OfflineSigningEnvelope.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/offline/OfflineSigningEnvelopeAdapter.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/offline/OfflineSigningEnvelopeCodec.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineReadiness.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineSettlementProofs.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineToriiException.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineV2Readiness.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountIdLiteralTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountAddressTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/I105CanonicalTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/CanonicalRequestSignerTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/ConfidentialAssetToriiClientTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientV2ReadinessTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamClientTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/transport/UrlConnectionTransportExecutorTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectCryptoTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectEnvelopeCodecTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectSequenceTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectWalletRequestTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/TransactionPayloadTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoderParityTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterAccountWirePayloadEncoderParityTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/TransferWirePayloadEncoderParityTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructionsTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/VerifyingKeyInstructionBuildersTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTagTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyRecordDescriptionTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyStatusTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/crypto/SigningAlgorithmTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashCodecTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineSettlementProofsParityTest.kt"
+      - "kotlin/core-jvm/src/test/resources/offline/redeem_proof_fixtures.json"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoColumnarTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoHeaderTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ConfidentialNoteTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePathTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/AndroidFixtureSupport.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/NoritoJavaCodecAdapterParityTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/TransactionFixtureParityTest.kt"
       - "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj"
       - "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestCredentials.cs"
@@ -443,13 +649,18 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-lineage-witness-append-availability-probe
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-lineage-witness-availability-probe
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-lineage-witness-append-availability-probe
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-pallas-builder-input-guards
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-input-guards
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-native-output-guards
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-lineage-readonly-declarations
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-archive-input-copy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-proving-key-copy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-helper-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-boundary
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-proof-chain-accumulator
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-pallas-builder-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-native-owned-accumulator-boundary
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-pallas-builder-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-instruction-transaction-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-proof-chain-accumulator-input
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-digest-inputs
@@ -567,6 +778,17 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-recursive-compact-shape-classifier
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-recursive-spend-native-output-headers
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-merkle-provider-adversarial-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-torii-parser-shape-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-confidential-note-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-settlement-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-offline-transfer-persistence-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-transaction-norito-runner-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-norito-framing-runner-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-account-address-canonical-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-connect-runner-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-transport-inspector-attestation-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-decoder-placeholder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-instruction-wrapper
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-instruction-decoder
@@ -677,6 +899,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-symlink
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-hardlink
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-identity
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-open-path
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-inventory
@@ -949,6 +1172,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-physical-device
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-parent-sync-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-overwrite
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-no-overwrite
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-top-level
@@ -990,10 +1214,12 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-symlink
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-hardlink
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-identity
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-directory-collision
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-entry-cap
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-private-permissions
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-slot-required
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-chain-digest-required
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-challenge-digest-required
@@ -1083,6 +1309,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-open-path-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-sync-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-write-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure
@@ -1143,6 +1370,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-open-path-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-parent-sync-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-post-write-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-control-path-preflight
@@ -1185,6 +1413,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-post-write-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-artifact-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-prefix-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-parent-create-failure
@@ -1200,6 +1429,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-parent-sync-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-post-write-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-artifact-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-prefix-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-dir-create-failure
@@ -1224,6 +1454,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-log-install-parent-sync-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-cleanup-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-cleanup-identity
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-private-permissions
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-child-log-file
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-child-log-file
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe
@@ -1241,6 +1473,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-future-skew
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-future-skew
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-private-permissions
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-readback
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-readback
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-rollback-identity

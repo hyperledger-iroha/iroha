@@ -61,6 +61,7 @@ import {
   canRedeemKagemushaRecursiveSpendWitnessless,
   canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId,
   isKagemushaCompactPaymentTokenNativeAvailable,
+  isKagemushaPallasOpenEnvelopeBuilderNativeAvailable,
   isKagemushaRecursiveAggregationProofBundleNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable,
@@ -202,6 +203,8 @@ import {
   kagemushaProveVerifiedCompactPaymentTokenWithRecords,
   kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes,
   kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes,
+  kagemushaBuildPallasOpenEnvelopesArchive,
+  kagemushaBuildPreviousProofOpenEnvelopesArchive,
   kagemushaVerifyRecursiveCompactPaymentToken,
   kagemushaRecursiveSpendCompactPaymentTokenFromBundle,
   kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection,
@@ -1166,6 +1169,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend",
     "isKagemushaCompactPaymentTokenNativeAvailable",
     "isKagemushaRecursiveAggregationProofBundleNativeAvailable",
+    "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable",
     "isKagemushaRecursiveCompactPaymentTokenNativeAvailable",
     "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable",
     "isKagemushaRecursiveCompactUnavailable",
@@ -1175,6 +1179,8 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
     "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
     "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
+    "kagemushaBuildPallasOpenEnvelopesArchive",
+    "kagemushaBuildPreviousProofOpenEnvelopesArchive",
     "kagemushaVerifyRecursiveCompactPaymentToken",
     "kagemushaRecursiveSpendCompactPaymentTokenFromBundle",
     "kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection",
@@ -1976,6 +1982,10 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     typeof isKagemushaRecursiveAggregationProofBundleNativeAvailable(),
     "boolean",
   );
+  assert.equal(
+    typeof isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(),
+    "boolean",
+  );
   assert.equal(typeof isKagemushaRecursiveSpendNativeAvailable(), "boolean");
   assert.equal(
     typeof isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(),
@@ -1990,6 +2000,8 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "boolean",
   );
   assert.equal(typeof kagemushaVerifyRecursiveCompactPaymentToken, "function");
+  assert.equal(typeof kagemushaBuildPallasOpenEnvelopesArchive, "function");
+  assert.equal(typeof kagemushaBuildPreviousProofOpenEnvelopesArchive, "function");
   assert.equal(typeof kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection, "function");
   assert.throws(
     () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(
@@ -2013,6 +2025,17 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
         privacyNoritoFrameWithPayload(0x4d),
       ),
     /recursive compact Kagemusha payment-token prover|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha record bundle archive/,
+  );
+  assert.throws(
+    () => kagemushaBuildPallasOpenEnvelopesArchive(privacyNoritoFrameWithPayload(0x4e)),
+    /Kagemusha Pallas open-envelope builders|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha record bundle archive/,
+  );
+  assert.throws(
+    () =>
+      kagemushaBuildPreviousProofOpenEnvelopesArchive(
+        privacyNoritoFrameWithPayload(0x4f),
+      ),
+    /Kagemusha Pallas open-envelope builders|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha recursive spend previous bundle archive/,
   );
   assert.throws(
     () =>

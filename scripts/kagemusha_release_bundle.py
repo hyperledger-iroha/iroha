@@ -5203,6 +5203,8 @@ def _read_output_text(
                 return None, [_release_bundle_out_blocker("--out changed while being read")]
             if open_stat.st_nlink > 1:
                 return None, [_release_bundle_out_blocker("--out must not be hardlinked")]
+            if stat.S_IMODE(open_stat.st_mode) != 0o600:
+                return None, [_release_bundle_out_blocker("--out permissions must be 0600")]
             if open_stat.st_size > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:
                 return None, [
                     _release_bundle_out_blocker(
@@ -5293,6 +5295,7 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
+            os.fchmod(handle.fileno(), 0o600)
             tmp_identity = _file_identity(os.fstat(handle.fileno()))
             handle.write(manifest_text)
             handle.flush()
