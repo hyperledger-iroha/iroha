@@ -19,12 +19,12 @@ object OfflineJsonParser {
             asOptionalBoolean(obj["offline_sync_optional"], false),
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
             kagemushaRecursiveCompactAvailable(obj),
-            firstOptionalString(
+            matchingOptionalStringAlias(
                 obj,
                 "offline_kagemusha_abi7_mode",
                 "offline_kagemusha_recursive_compact_mode",
             ),
-            firstOptionalInt(
+            matchingOptionalIntAlias(
                 obj,
                 "offline_kagemusha_abi7_bridge_abi_version",
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
@@ -41,12 +41,12 @@ object OfflineJsonParser {
         return OfflineV2Readiness(
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
             kagemushaRecursiveCompactAvailable(obj),
-            firstOptionalString(
+            matchingOptionalStringAlias(
                 obj,
                 "offline_kagemusha_abi7_mode",
                 "offline_kagemusha_recursive_compact_mode",
             ),
-            firstOptionalInt(
+            matchingOptionalIntAlias(
                 obj,
                 "offline_kagemusha_abi7_bridge_abi_version",
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
@@ -57,24 +57,29 @@ object OfflineJsonParser {
     }
 
     private fun kagemushaRecursiveCompactAvailable(obj: Map<String, Any>): Boolean {
-        if (obj.containsKey("offline_kagemusha_abi7")) {
-            return asOptionalBoolean(obj["offline_kagemusha_abi7"], false)
-        }
-        return asOptionalBoolean(obj["offline_kagemusha_recursive_compact_available"], false)
+        return matchingOptionalBooleanAlias(
+            obj,
+            "offline_kagemusha_abi7",
+            "offline_kagemusha_recursive_compact_available",
+            false,
+        )
     }
 
     private fun kagemushaRecursiveCompactCircuitId(obj: Map<String, Any>): String? {
-        if (obj.containsKey("offline_kagemusha_abi7_circuit_id")) {
-            return asOptionalString(obj["offline_kagemusha_abi7_circuit_id"])
-        }
-        return asOptionalString(obj["offline_kagemusha_recursive_compact_circuit_id"])
+        return matchingOptionalStringAlias(
+            obj,
+            "offline_kagemusha_abi7_circuit_id",
+            "offline_kagemusha_recursive_compact_circuit_id",
+        )
     }
 
     private fun kagemushaRecursiveCompactArtifactsAvailable(obj: Map<String, Any>): Boolean {
-        if (obj.containsKey("offline_kagemusha_abi7_artifacts")) {
-            return asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false)
-        }
-        return asOptionalBoolean(obj["offline_kagemusha_recursive_compact_artifacts_available"], false)
+        return matchingOptionalBooleanAlias(
+            obj,
+            "offline_kagemusha_abi7_artifacts",
+            "offline_kagemusha_recursive_compact_artifacts_available",
+            false,
+        )
     }
 
     /** Returns a canonical JSON string for the provided payload (keys sorted). */
@@ -426,18 +431,42 @@ object OfflineJsonParser {
         return if (value is String) value else value.toString()
     }
 
-    private fun firstOptionalString(obj: Map<String, Any>, vararg keys: String): String? {
-        for (key in keys) {
-            if (obj.containsKey(key)) return asOptionalString(obj[key])
+    private fun matchingOptionalStringAlias(obj: Map<String, Any>, legacyKey: String, compactKey: String): String? {
+        val hasLegacy = obj.containsKey(legacyKey)
+        val hasCompact = obj.containsKey(compactKey)
+        val legacy = if (hasLegacy) asOptionalString(obj[legacyKey]) else null
+        val compact = if (hasCompact) asOptionalString(obj[compactKey]) else null
+        if (hasLegacy && hasCompact) {
+            check(legacy == compact) { "$legacyKey and $compactKey must match" }
         }
-        return null
+        return legacy ?: compact
     }
 
-    private fun firstOptionalInt(obj: Map<String, Any>, vararg keys: String): Int? {
-        for (key in keys) {
-            if (obj.containsKey(key)) return asOptionalInt(obj[key], key)
+    private fun matchingOptionalIntAlias(obj: Map<String, Any>, legacyKey: String, compactKey: String): Int? {
+        val hasLegacy = obj.containsKey(legacyKey)
+        val hasCompact = obj.containsKey(compactKey)
+        val legacy = if (hasLegacy) asOptionalInt(obj[legacyKey], legacyKey) else null
+        val compact = if (hasCompact) asOptionalInt(obj[compactKey], compactKey) else null
+        if (hasLegacy && hasCompact) {
+            check(legacy == compact) { "$legacyKey and $compactKey must match" }
         }
-        return null
+        return legacy ?: compact
+    }
+
+    private fun matchingOptionalBooleanAlias(
+        obj: Map<String, Any>,
+        legacyKey: String,
+        compactKey: String,
+        default: Boolean,
+    ): Boolean {
+        val hasLegacy = obj.containsKey(legacyKey)
+        val hasCompact = obj.containsKey(compactKey)
+        val legacy = if (hasLegacy) asBoolean(obj[legacyKey], legacyKey) else null
+        val compact = if (hasCompact) asBoolean(obj[compactKey], compactKey) else null
+        if (hasLegacy && hasCompact) {
+            check(legacy == compact) { "$legacyKey and $compactKey must match" }
+        }
+        return legacy ?: compact ?: default
     }
 
     private fun asLong(value: Any?, path: String): Long {

@@ -51,6 +51,12 @@ and completed history lives in [`status.md`](./status.md).
   stable chain/asset binding across every folded hop. Native bridge ZK1 `I10P`
   parsing must stay exact too: zero dimensions, over-cap dimensions, truncated
   payloads, and trailing bytes reject before public-input projection.
+- Kagemusha Offline/Offline V2 readiness parsers must treat the legacy
+  `offline_kagemusha_abi7*` key family and the
+  `offline_kagemusha_recursive_compact_*` key family as aliases for the same
+  derived node signal. Legacy-only and recursive-compact-only bodies remain
+  supported, but when both families are present their enablement, mode, bridge
+  ABI, circuit-id, and artifact values must match or parsing fails closed.
 - Confidential-v2 JVM/Android proof assembly now has typed transfer and
   unshield witness/request codecs for the production native bridge. Keep wallet
   integrations on these builders instead of raw witness bytes so canonical

@@ -24,11 +24,11 @@ public final class OfflineJsonParser {
         asOptionalBoolean(object.get("offline_sync_optional"), false),
         asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
         kagemushaRecursiveCompactAvailable(object),
-        firstNullableString(
+        matchingNullableStringAlias(
             object,
             "offline_kagemusha_abi7_mode",
             "offline_kagemusha_recursive_compact_mode"),
-        firstOptionalInteger(
+        matchingOptionalIntegerAlias(
             object,
             "offline_kagemusha_abi7_bridge_abi_version",
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"),
@@ -42,11 +42,11 @@ public final class OfflineJsonParser {
     return new OfflineV2Readiness(
         asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
         kagemushaRecursiveCompactAvailable(object),
-        firstNullableString(
+        matchingNullableStringAlias(
             object,
             "offline_kagemusha_abi7_mode",
             "offline_kagemusha_recursive_compact_mode"),
-        firstOptionalInteger(
+        matchingOptionalIntegerAlias(
             object,
             "offline_kagemusha_abi7_bridge_abi_version",
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"),
@@ -55,24 +55,26 @@ public final class OfflineJsonParser {
   }
 
   private static boolean kagemushaRecursiveCompactAvailable(final Map<String, Object> object) {
-    if (object.containsKey("offline_kagemusha_abi7")) {
-      return asOptionalBoolean(object.get("offline_kagemusha_abi7"), false);
-    }
-    return asOptionalBoolean(object.get("offline_kagemusha_recursive_compact_available"), false);
+    return matchingOptionalBooleanAlias(
+        object,
+        "offline_kagemusha_abi7",
+        "offline_kagemusha_recursive_compact_available",
+        false);
   }
 
   private static String kagemushaRecursiveCompactCircuitId(final Map<String, Object> object) {
-    if (object.containsKey("offline_kagemusha_abi7_circuit_id")) {
-      return asNullableString(object.get("offline_kagemusha_abi7_circuit_id"));
-    }
-    return asNullableString(object.get("offline_kagemusha_recursive_compact_circuit_id"));
+    return matchingNullableStringAlias(
+        object,
+        "offline_kagemusha_abi7_circuit_id",
+        "offline_kagemusha_recursive_compact_circuit_id");
   }
 
   private static boolean kagemushaRecursiveCompactArtifactsAvailable(final Map<String, Object> object) {
-    if (object.containsKey("offline_kagemusha_abi7_artifacts")) {
-      return asOptionalBoolean(object.get("offline_kagemusha_abi7_artifacts"), false);
-    }
-    return asOptionalBoolean(object.get("offline_kagemusha_recursive_compact_artifacts_available"), false);
+    return matchingOptionalBooleanAlias(
+        object,
+        "offline_kagemusha_abi7_artifacts",
+        "offline_kagemusha_recursive_compact_artifacts_available",
+        false);
   }
 
   public static String canonicalJson(final byte[] payload) {
@@ -145,22 +147,50 @@ public final class OfflineJsonParser {
     return null;
   }
 
-  private static String firstNullableString(final Map<String, Object> object, final String... keys) {
-    for (final String key : keys) {
-      if (object.containsKey(key)) {
-        return asNullableString(object.get(key));
-      }
+  private static String matchingNullableStringAlias(
+      final Map<String, Object> object, final String legacyKey, final String compactKey) {
+    final boolean hasLegacy = object.containsKey(legacyKey);
+    final boolean hasCompact = object.containsKey(compactKey);
+    final String legacy = hasLegacy ? asNullableString(object.get(legacyKey)) : null;
+    final String compact = hasCompact ? asNullableString(object.get(compactKey)) : null;
+    if (hasLegacy && hasCompact && !valuesEqual(legacy, compact)) {
+      throw new IllegalStateException(legacyKey + " and " + compactKey + " must match");
     }
-    return null;
+    return legacy != null ? legacy : compact;
   }
 
-  private static Integer firstOptionalInteger(final Map<String, Object> object, final String... keys) {
-    for (final String key : keys) {
-      if (object.containsKey(key)) {
-        return asOptionalInteger(object.get(key));
-      }
+  private static Integer matchingOptionalIntegerAlias(
+      final Map<String, Object> object, final String legacyKey, final String compactKey) {
+    final boolean hasLegacy = object.containsKey(legacyKey);
+    final boolean hasCompact = object.containsKey(compactKey);
+    final Integer legacy = hasLegacy ? asOptionalInteger(object.get(legacyKey)) : null;
+    final Integer compact = hasCompact ? asOptionalInteger(object.get(compactKey)) : null;
+    if (hasLegacy && hasCompact && !valuesEqual(legacy, compact)) {
+      throw new IllegalStateException(legacyKey + " and " + compactKey + " must match");
     }
-    return null;
+    return legacy != null ? legacy : compact;
+  }
+
+  private static boolean matchingOptionalBooleanAlias(
+      final Map<String, Object> object,
+      final String legacyKey,
+      final String compactKey,
+      final boolean defaultValue) {
+    final boolean hasLegacy = object.containsKey(legacyKey);
+    final boolean hasCompact = object.containsKey(compactKey);
+    final Boolean legacy = hasLegacy ? Boolean.valueOf(asBoolean(object.get(legacyKey), legacyKey)) : null;
+    final Boolean compact = hasCompact ? Boolean.valueOf(asBoolean(object.get(compactKey), compactKey)) : null;
+    if (hasLegacy && hasCompact && !valuesEqual(legacy, compact)) {
+      throw new IllegalStateException(legacyKey + " and " + compactKey + " must match");
+    }
+    if (legacy != null) {
+      return legacy.booleanValue();
+    }
+    return compact != null ? compact.booleanValue() : defaultValue;
+  }
+
+  private static boolean valuesEqual(final Object left, final Object right) {
+    return left == null ? right == null : left.equals(right);
   }
 
   private static OfflineTransferList.OfflineTransferItem parseTransferItem(

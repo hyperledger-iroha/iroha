@@ -173958,3 +173958,17 @@ Last updated: 2026-06-13
 - Focused validation passed:
   - `cargo fmt --all --check`
   - `cargo test -p connect_norito_bridge zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads --lib`
+
+## 2026-06-13 - Kagemusha Readiness Alias Exactness
+
+- Hardened Kotlin/JVM and Java Android Offline/Offline V2 readiness parsers so
+  the legacy `offline_kagemusha_abi7*` keys and the
+  `offline_kagemusha_recursive_compact_*` keys must agree when Torii emits both
+  families. Conflicting derived enablement, mode, bridge ABI, circuit-id, or
+  artifact flags now fail parsing instead of silently preferring one alias.
+- Kept legacy-only and recursive-compact-only readiness bodies supported for
+  compatibility with existing test fixtures, while adding matching-alias and
+  conflicting-alias regression coverage.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineJsonParserTest,org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :jvm:test --rerun-tasks --console=plain`
