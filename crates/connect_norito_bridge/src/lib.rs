@@ -19353,7 +19353,8 @@ mod accel_tests {
                     Some([0x33_u8; 32]),
                 );
                 Executable::from([InstructionBox::from(instruction)])
-            });
+            })
+            .expect("encode unshield signed transaction");
         let signed = decode_signed_transaction(&signed_bytes).expect("decode signed transaction");
         assert_eq!(hash_bytes, *signed.hash().as_ref());
         match signed.instructions() {

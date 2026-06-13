@@ -92,7 +92,7 @@ and completed history lives in [`status.md`](./status.md).
   alignment padding remain pinned by SDK and Rust golden-vector tests.
 - Kagemusha C# SDK validation now passes on this macOS host with .NET SDK
   8.0.128 through `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, including
-  a freshly built `connect_norito_bridge` native library and 103 focused SDK
+  a freshly built `connect_norito_bridge` native library and 683 focused SDK
   tests across recursive spend, privacy native, transaction builder, canonical
   request, and Torii identifier receipt surfaces. The focused pass covers
   `csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs`,
@@ -104,6 +104,11 @@ and completed history lives in [`status.md`](./status.md).
   platform-specific native library name, fails if the freshly built artifact is
   missing, prints the selected native bridge path, and prepends that directory
   to the macOS, Linux, and Windows loader paths before invoking `dotnet test`.
+  C# Torii identifier resolve parsing now also accepts the nested
+  `payload`/`attestation` receipt envelope while rejecting mixed legacy/nested
+  envelopes, missing nested objects, malformed signed/proof attestation
+  combinations, invalid proof base64, and non-exact receipt execution fields
+  before callers consume receipt data.
   Windows remains a separate host-certification follow-up so the same C# lane
   is proven against `connect_norito_bridge.dll`, Windows loader paths, RID, and
   architecture. The Windows pass must also pin the C# negative controls for

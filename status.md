@@ -2,6 +2,40 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 C# nested identifier receipt hardening
+
+- Added C# Torii support for the nested identifier resolve receipt envelope
+  shape with top-level `payload` and `attestation` objects while preserving the
+  legacy flat receipt response. Nested signed receipts expose the signed
+  attestation signature, nested proof receipts expose an empty legacy
+  signature, and both keep the original nested payload/attestation JSON for
+  downstream verification.
+- Hardened the C# parser to reject mixed nested/legacy receipt shapes, missing
+  payload or attestation objects, invalid signed/proof attestation combinations,
+  malformed proof base64, non-exact policy/backend/signature fields, and
+  negative or non-integer execution timestamps before callers consume receipt
+  data.
+- Fixed the default native bridge unshield encoder unit test to unwrap the
+  checked `encode_asset_transaction` result, keeping the production
+  transaction-signing error path compile-checked in test builds.
+- Validation passed:
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests|FullyQualifiedName~ToriiIdentifierReceiptTests" --logger "console;verbosity=minimal"`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test -Dandroid.test.mains=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests,org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-identifier-receipt-exactness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-proof-base64-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-kind-exactness-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-proof-base64-exactness-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-signature-exactness-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-policy-id-exactness-guard`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled privacy_production -- --nocapture`
+  - `cargo test -p connect_norito_bridge unshield_encoder_path_preserves_private_change_outputs -- --nocapture`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
 ## 2026-06-13 Recursive spend JVM guard validation
 
 - Fixed the Android Java recursive-spend standalone harness source so the
