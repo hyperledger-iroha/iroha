@@ -58,7 +58,7 @@ class ConfidentialAssetToriiClientTest {
               "tree_depth": 1,
               "paths": [{
                 "commitment": "$commitment",
-                "leaf_index": 2,
+                "leaf_index": 0,
                 "siblings": ["$sibling"],
                 "directions": [0],
                 "witness_nodes": ["$root"],
@@ -85,7 +85,7 @@ class ConfidentialAssetToriiClientTest {
         assertEquals(3, response.frontierLen)
         assertEquals(1, response.treeDepth)
         assertEquals(1, response.paths.size)
-        assertEquals(2, response.paths[0].leafIndex)
+        assertEquals(0, response.paths[0].leafIndex)
         assertEquals(listOf(sibling), response.paths[0].siblings)
         assertContentEquals(byteArrayOf(0), response.paths[0].directions)
     }
@@ -157,6 +157,62 @@ class ConfidentialAssetToriiClientTest {
     }
 
     @Test
+    fun rootsAndMerklePathsRejectOverflowDuplicateKeysAndInconsistentShape() {
+        val commitment = "02".repeat(32)
+        val sibling = "00".repeat(32)
+        val root = "03".repeat(32)
+        val otherRoot = "04".repeat(32)
+
+        assertFailsWith<IllegalArgumentException> {
+            ZkRootsResponse.parse(
+                """{"latest":"","roots":[],"height":2147483648}""".toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            ZkRootsResponse.parse(
+                """{"latest":"","latest":"$root","roots":[],"height":0}""".toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ZkMerklePathResponse.parse(
+                """
+                {
+                  "root": "$root",
+                  "frontier_len": 2147483648,
+                  "tree_depth": 1,
+                  "paths": []
+                }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ZkMerklePathResponse.parse(
+                merklePathPayload(root, commitment, 0, listOf(sibling), listOf(0), listOf(root), otherRoot),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ZkMerklePathResponse.parse(
+                merklePathPayload(root, commitment, 1, listOf(sibling), listOf(0), listOf(root), root),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ZkMerklePathResponse.parse(
+                merklePathPayload(root, commitment, 1, listOf(sibling), listOf(1), listOf(root), root, frontierLen = 1),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ZkMerklePathResponse.parse(
+                merklePathPayload(root, commitment, 0, listOf(sibling), listOf(0), listOf(root), root, treeDepth = 2),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ZkMerklePathResponse.parse(
+                merklePathPayload(root, commitment, 0, listOf(sibling), listOf(0), emptyList(), root),
+            )
+        }
+    }
+
+    @Test
     fun nonSuccessResponsesSurfaceOfflineToriiException() {
         val client = ConfidentialAssetToriiClient.builder()
             .executor(CapturingExecutor("""{"error":"not ready"}""", status = 503, message = "Unavailable"))
@@ -198,4 +254,35 @@ class ConfidentialAssetToriiClientTest {
         .firstOrNull { it.key.equals(name, ignoreCase = true) }
         ?.value
         ?.firstOrNull()
+
+    private fun merklePathPayload(
+        root: String,
+        commitment: String,
+        leafIndex: Int,
+        siblings: List<String>,
+        directions: List<Int>,
+        witnessNodes: List<String>,
+        pathRoot: String,
+        frontierLen: Int = 3,
+        treeDepth: Int = siblings.size,
+    ): ByteArray {
+        val siblingJson = siblings.joinToString(",") { """"$it"""" }
+        val directionJson = directions.joinToString(",")
+        val witnessJson = witnessNodes.joinToString(",") { """"$it"""" }
+        return """
+            {
+              "root": "$root",
+              "frontier_len": $frontierLen,
+              "tree_depth": $treeDepth,
+              "paths": [{
+                "commitment": "$commitment",
+                "leaf_index": $leafIndex,
+                "siblings": [$siblingJson],
+                "directions": [$directionJson],
+                "witness_nodes": [$witnessJson],
+                "root": "$pathRoot"
+              }]
+            }
+        """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+    }
 }

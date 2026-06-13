@@ -20,6 +20,7 @@ public final class ConfidentialAssetToriiClientTests {
     emptyLatestRootIsNotNullableOnWireButNullInByteHelper();
     rootsRejectNonCanonicalHexAndNullLatest();
     rootsAndMerklePathsRejectNumericStrings();
+    rootsAndMerklePathsRejectOverflowDuplicateKeysAndInconsistentShape();
     nonSuccessResponsesSurfaceOfflineToriiException();
     System.out.println("[IrohaAndroid] ConfidentialAssetToriiClientTests passed.");
   }
@@ -77,7 +78,7 @@ public final class ConfidentialAssetToriiClientTests {
               "tree_depth": 1,
               "paths": [{
                 "commitment": "%s",
-                "leaf_index": 2,
+                "leaf_index": 0,
                 "siblings": ["%s"],
                 "directions": [0],
                 "witness_nodes": ["%s"],
@@ -110,7 +111,7 @@ public final class ConfidentialAssetToriiClientTests {
     assert response.frontierLen() == 3 : "frontier length mismatch";
     assert response.treeDepth() == 1 : "tree depth mismatch";
     assert response.paths().size() == 1 : "path count mismatch";
-    assert response.paths().get(0).leafIndex() == 2 : "leaf index mismatch";
+    assert response.paths().get(0).leafIndex() == 0 : "leaf index mismatch";
     assert response.paths().get(0).siblings().equals(List.of(sibling)) : "siblings mismatch";
     assert java.util.Arrays.equals(new byte[] {0}, response.paths().get(0).directions())
         : "directions mismatch";
@@ -183,6 +184,56 @@ public final class ConfidentialAssetToriiClientTests {
                     .getBytes(StandardCharsets.UTF_8)));
   }
 
+  private static void rootsAndMerklePathsRejectOverflowDuplicateKeysAndInconsistentShape() {
+    final String commitment = "02".repeat(32);
+    final String sibling = "00".repeat(32);
+    final String root = "03".repeat(32);
+    final String otherRoot = "04".repeat(32);
+    expectIllegalArgument(
+        () ->
+            ZkRootsResponse.parse(
+                "{\"latest\":\"\",\"roots\":[],\"height\":2147483648}"
+                    .getBytes(StandardCharsets.UTF_8)));
+    expectIllegalState(
+        () ->
+            ZkRootsResponse.parse(
+                ("{\"latest\":\"\",\"latest\":\"" + root + "\",\"roots\":[],\"height\":0}")
+                    .getBytes(StandardCharsets.UTF_8)));
+    expectIllegalArgument(
+        () ->
+            ZkMerklePathResponse.parse(
+                """
+                {
+                  "root": "%s",
+                  "frontier_len": 2147483648,
+                  "tree_depth": 1,
+                  "paths": []
+                }
+                """
+                    .formatted(root)
+                    .getBytes(StandardCharsets.UTF_8)));
+    expectIllegalArgument(
+        () ->
+            ZkMerklePathResponse.parse(
+                merklePathPayload(root, commitment, 0, List.of(sibling), List.of(0), List.of(root), otherRoot, 3, 1)));
+    expectIllegalArgument(
+        () ->
+            ZkMerklePathResponse.parse(
+                merklePathPayload(root, commitment, 1, List.of(sibling), List.of(0), List.of(root), root, 3, 1)));
+    expectIllegalArgument(
+        () ->
+            ZkMerklePathResponse.parse(
+                merklePathPayload(root, commitment, 1, List.of(sibling), List.of(1), List.of(root), root, 1, 1)));
+    expectIllegalArgument(
+        () ->
+            ZkMerklePathResponse.parse(
+                merklePathPayload(root, commitment, 0, List.of(sibling), List.of(0), List.of(root), root, 3, 2)));
+    expectIllegalArgument(
+        () ->
+            ZkMerklePathResponse.parse(
+                merklePathPayload(root, commitment, 0, List.of(sibling), List.of(0), List.of(), root, 3, 1)));
+  }
+
   private static void nonSuccessResponsesSurfaceOfflineToriiException() {
     final ConfidentialAssetToriiClient client =
         ConfidentialAssetToriiClient.builder()
@@ -224,6 +275,72 @@ public final class ConfidentialAssetToriiClientTests {
     } catch (final IllegalArgumentException expected) {
       // Expected path.
     }
+  }
+
+  private static void expectIllegalState(final Runnable runnable) {
+    try {
+      runnable.run();
+      throw new AssertionError("expected IllegalStateException");
+    } catch (final IllegalStateException expected) {
+      // Expected path.
+    }
+  }
+
+  private static byte[] merklePathPayload(
+      final String root,
+      final String commitment,
+      final int leafIndex,
+      final List<String> siblings,
+      final List<Integer> directions,
+      final List<String> witnessNodes,
+      final String pathRoot,
+      final int frontierLen,
+      final int treeDepth) {
+    final String siblingJson = quotedStrings(siblings);
+    final String directionJson = joinInts(directions);
+    final String witnessJson = quotedStrings(witnessNodes);
+    return """
+            {
+              "root": "%s",
+              "frontier_len": %d,
+              "tree_depth": %d,
+              "paths": [{
+                "commitment": "%s",
+                "leaf_index": %d,
+                "siblings": [%s],
+                "directions": [%s],
+                "witness_nodes": [%s],
+                "root": "%s"
+              }]
+            }
+        """
+        .formatted(
+            root,
+            frontierLen,
+            treeDepth,
+            commitment,
+            leafIndex,
+            siblingJson,
+            directionJson,
+            witnessJson,
+            pathRoot)
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static String quotedStrings(final List<String> values) {
+    final java.util.ArrayList<String> out = new java.util.ArrayList<>(values.size());
+    for (final String value : values) {
+      out.add("\"" + value + "\"");
+    }
+    return String.join(",", out);
+  }
+
+  private static String joinInts(final List<Integer> values) {
+    final java.util.ArrayList<String> out = new java.util.ArrayList<>(values.size());
+    for (final Integer value : values) {
+      out.add(value.toString());
+    }
+    return String.join(",", out);
   }
 
   private static final class StubExecutor implements HttpTransportExecutor {

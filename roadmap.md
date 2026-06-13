@@ -20,8 +20,12 @@ and completed history lives in [`status.md`](./status.md).
   commitments and roots, and SDK path models enforce leaf-index direction
   consistency before wallet or prover code receives paths. The SDK Torii
   clients also reject quoted or fractional numeric fields in zk roots/path
-  responses so wallet code sees the same integer shapes the node emits. Keep
-  local providers limited to audited caller-supplied frontier material.
+  responses so wallet code sees the same integer shapes the node emits. SDK
+  response parsers must also keep node-supplied Merkle paths structurally
+  exact: duplicate keys, overflowing counters, depth/array mismatches, root
+  mismatches, direction-bit mismatches, and `leaf_index >= frontier_len` fail
+  before wallet code can consume proof material. Keep local providers limited
+  to audited caller-supplied frontier material.
 - Confidential-v2 SDK note derivation and encrypted note payload handling now
   exist for Kotlin/JVM and Android Java, with Rust-vector parity for owner tags,
   note commitments, nullifiers, asset tags, and chain tags, Rust-fixture parity

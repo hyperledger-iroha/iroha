@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /** Direction bytes and sibling hashes for one zk_assets inclusion path. */
 public final class ZkAssetMerklePath {
@@ -28,17 +29,16 @@ public final class ZkAssetMerklePath {
     if (rootAtHeight == null || rootAtHeight.length != 32) {
       throw new IllegalArgumentException("rootAtHeight must be 32 bytes");
     }
-    final List<byte[]> copied = new ArrayList<>(siblings == null ? 0 : siblings.size());
-    if (siblings != null) {
-      for (int i = 0; i < siblings.size(); i++) {
-        final byte[] sibling = siblings.get(i);
-        if (sibling == null || sibling.length != 32) {
-          throw new IllegalArgumentException("siblings[" + i + "] must be 32 bytes");
-        }
-        copied.add(sibling.clone());
+    final List<byte[]> checkedSiblings = Objects.requireNonNull(siblings, "siblings");
+    final List<byte[]> copied = new ArrayList<>(checkedSiblings.size());
+    for (int i = 0; i < checkedSiblings.size(); i++) {
+      final byte[] sibling = checkedSiblings.get(i);
+      if (sibling == null || sibling.length != 32) {
+        throw new IllegalArgumentException("siblings[" + i + "] must be 32 bytes");
       }
+      copied.add(sibling.clone());
     }
-    final byte[] dirs = directions == null ? new byte[0] : directions.clone();
+    final byte[] dirs = Objects.requireNonNull(directions, "directions").clone();
     if (dirs.length != copied.size()) {
       throw new IllegalArgumentException("directions size must match siblings size");
     }

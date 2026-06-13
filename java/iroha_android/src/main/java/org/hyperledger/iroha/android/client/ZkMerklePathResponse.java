@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.client;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /** Response body emitted by {@code POST /v1/zk/merkle-path}. */
 public final class ZkMerklePathResponse {
@@ -20,15 +21,20 @@ public final class ZkMerklePathResponse {
     if (treeDepth < 0) {
       throw new IllegalArgumentException("tree_depth must be non-negative");
     }
-    final ArrayList<Entry> copied = new ArrayList<>(paths == null ? 0 : paths.size());
-    if (paths != null) {
-      for (int i = 0; i < paths.size(); i++) {
-        final Entry entry = java.util.Objects.requireNonNull(paths.get(i), "paths[" + i + "]");
-        if (!entry.root().equals(this.root)) {
-          throw new IllegalArgumentException("paths[" + i + "].root must match response root");
-        }
-        copied.add(entry);
+    final List<Entry> checkedPaths = Objects.requireNonNull(paths, "paths");
+    final ArrayList<Entry> copied = new ArrayList<>(checkedPaths.size());
+    for (int i = 0; i < checkedPaths.size(); i++) {
+      final Entry entry = Objects.requireNonNull(checkedPaths.get(i), "paths[" + i + "]");
+      if (!entry.root().equals(this.root)) {
+        throw new IllegalArgumentException("paths[" + i + "].root must match response root");
       }
+      if (entry.leafIndex() >= frontierLen) {
+        throw new IllegalArgumentException("paths[" + i + "].leaf_index must be below frontier_len");
+      }
+      if (entry.siblings().size() != treeDepth) {
+        throw new IllegalArgumentException("paths[" + i + "].siblings size must match tree_depth");
+      }
+      copied.add(entry);
     }
     this.frontierLen = frontierLen;
     this.treeDepth = treeDepth;
@@ -81,7 +87,7 @@ public final class ZkMerklePathResponse {
       }
       this.leafIndex = leafIndex;
       this.siblings = normalizeHexList(siblings, "siblings");
-      this.directions = directions == null ? new byte[0] : directions.clone();
+      this.directions = Objects.requireNonNull(directions, "directions").clone();
       this.witnessNodes = normalizeHexList(witnessNodes, "witness_nodes");
       this.root = ZkRootsResponse.normalizeRootHex(root, "root");
       if (this.directions.length != this.siblings.size()) {
@@ -90,9 +96,19 @@ public final class ZkMerklePathResponse {
       if (this.witnessNodes.size() != this.siblings.size()) {
         throw new IllegalArgumentException("witness_nodes size must match siblings size");
       }
+      if (this.directions.length >= Integer.SIZE) {
+        throw new IllegalArgumentException("path depth must fit in leaf_index bits");
+      }
+      if ((leafIndex >>> this.directions.length) != 0) {
+        throw new IllegalArgumentException("leaf_index must fit within path depth");
+      }
       for (int i = 0; i < this.directions.length; i++) {
         if (this.directions[i] != 0 && this.directions[i] != 1) {
           throw new IllegalArgumentException("directions[" + i + "] must be 0 or 1");
+        }
+        final int expectedDirection = (leafIndex >>> i) & 1;
+        if (this.directions[i] != expectedDirection) {
+          throw new IllegalArgumentException("directions[" + i + "] must match leaf_index bit " + i);
         }
       }
     }
@@ -138,11 +154,10 @@ public final class ZkMerklePathResponse {
     }
 
     private static List<String> normalizeHexList(final List<String> values, final String field) {
-      final ArrayList<String> out = new ArrayList<>(values == null ? 0 : values.size());
-      if (values != null) {
-        for (int i = 0; i < values.size(); i++) {
-          out.add(ZkRootsResponse.normalizeRootHex(values.get(i), field + "[" + i + "]"));
-        }
+      final List<String> checkedValues = Objects.requireNonNull(values, field);
+      final ArrayList<String> out = new ArrayList<>(checkedValues.size());
+      for (int i = 0; i < checkedValues.size(); i++) {
+        out.add(ZkRootsResponse.normalizeRootHex(checkedValues.get(i), field + "[" + i + "]"));
       }
       return Collections.unmodifiableList(out);
     }

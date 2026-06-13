@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.privacy;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 /** Computes inclusion paths from a caller-supplied zk_assets commitment frontier. */
@@ -61,12 +62,12 @@ public final class LocalZkAssetMerklePathProvider implements ZkAssetMerklePathPr
       if (asset == null || asset.trim().isEmpty()) {
         throw new IllegalArgumentException("asset must not be blank");
       }
+      final List<byte[]> checkedCommitments =
+          Objects.requireNonNull(requestedCommitments, "requestedCommitments");
       final ArrayList<ZkAssetMerklePath> out =
-          new ArrayList<>(requestedCommitments == null ? 0 : requestedCommitments.size());
-      if (requestedCommitments != null) {
-        for (final byte[] commitment : requestedCommitments) {
-          out.add(getMerklePathForCommitment(asset, commitment).join());
-        }
+          new ArrayList<>(checkedCommitments.size());
+      for (final byte[] commitment : checkedCommitments) {
+        out.add(getMerklePathForCommitment(asset, commitment).join());
       }
       return CompletableFuture.completedFuture(out);
     } catch (final RuntimeException ex) {
@@ -107,15 +108,14 @@ public final class LocalZkAssetMerklePathProvider implements ZkAssetMerklePathPr
   }
 
   private static List<byte[]> copyFixed32List(final List<byte[]> source, final String field) {
-    final ArrayList<byte[]> out = new ArrayList<>(source == null ? 0 : source.size());
-    if (source != null) {
-      for (int i = 0; i < source.size(); i++) {
-        final byte[] value = source.get(i);
-        if (value == null || value.length != 32) {
-          throw new IllegalArgumentException(field + "[" + i + "] must be 32 bytes");
-        }
-        out.add(value.clone());
+    final List<byte[]> checkedSource = Objects.requireNonNull(source, field);
+    final ArrayList<byte[]> out = new ArrayList<>(checkedSource.size());
+    for (int i = 0; i < checkedSource.size(); i++) {
+      final byte[] value = checkedSource.get(i);
+      if (value == null || value.length != 32) {
+        throw new IllegalArgumentException(field + "[" + i + "] must be 32 bytes");
       }
+      out.add(value.clone());
     }
     return java.util.Collections.unmodifiableList(out);
   }

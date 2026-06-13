@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.client;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -75,6 +76,11 @@ final class ZkMerklePathJson {
           || item instanceof Long) {
         final Number number = (Number) item;
         parsed = number.longValue();
+      } else if (item instanceof BigInteger bigInteger) {
+        if (!BigInteger.ZERO.equals(bigInteger) && !BigInteger.ONE.equals(bigInteger)) {
+          throw new IllegalArgumentException(field + "[" + i + "] must be 0 or 1");
+        }
+        parsed = bigInteger.longValue();
       } else {
         throw new IllegalArgumentException(field + "[" + i + "] must be a JSON integer");
       }
@@ -94,6 +100,11 @@ final class ZkMerklePathJson {
         || value instanceof Long) {
       final Number number = (Number) value;
       parsed = number.longValue();
+    } else if (value instanceof BigInteger bigInteger) {
+      if (bigInteger.signum() < 0 || bigInteger.compareTo(BigInteger.valueOf(Integer.MAX_VALUE)) > 0) {
+        throw new IllegalArgumentException(field + " is outside u32-compatible Int range");
+      }
+      parsed = bigInteger.longValue();
     } else {
       throw new IllegalArgumentException(field + " must be a JSON integer");
     }

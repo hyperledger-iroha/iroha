@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.client;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /** Response body emitted by {@code POST /v1/zk/roots}. */
 public final class ZkRootsResponse {
@@ -12,11 +13,10 @@ public final class ZkRootsResponse {
 
   public ZkRootsResponse(final String latest, final List<String> roots, final int height) {
     this.latest = normalizeRootHexOrEmpty(latest, "latest");
-    final ArrayList<String> normalized = new ArrayList<>(roots == null ? 0 : roots.size());
-    if (roots != null) {
-      for (int i = 0; i < roots.size(); i++) {
-        normalized.add(normalizeRootHex(roots.get(i), "roots[" + i + "]"));
-      }
+    final List<String> checkedRoots = Objects.requireNonNull(roots, "roots");
+    final ArrayList<String> normalized = new ArrayList<>(checkedRoots.size());
+    for (int i = 0; i < checkedRoots.size(); i++) {
+      normalized.add(normalizeRootHex(checkedRoots.get(i), "roots[" + i + "]"));
     }
     if (height < 0) {
       throw new IllegalArgumentException("height must be non-negative");

@@ -47,9 +47,15 @@ class ZkMerklePathEntry(
         require(normalizedWitnessNodes.size == normalizedSiblings.size) {
             "witness_nodes size must match siblings size"
         }
+        require(directionBytes.size < Int.SIZE_BITS) { "path depth must fit in leaf_index bits" }
+        require((leafIndex ushr directionBytes.size) == 0) { "leaf_index must fit within path depth" }
         for (i in directionBytes.indices) {
             require(directionBytes[i].toInt() == 0 || directionBytes[i].toInt() == 1) {
                 "directions[$i] must be 0 or 1"
+            }
+            val expectedDirection = (leafIndex ushr i) and 1
+            require(directionBytes[i].toInt() == expectedDirection) {
+                "directions[$i] must match leaf_index bit $i"
             }
         }
     }
@@ -80,6 +86,10 @@ class ZkMerklePathResponse(
         require(treeDepth >= 0) { "tree_depth must be non-negative" }
         for ((index, path) in normalizedPaths.withIndex()) {
             require(path.root == this.root) { "paths[$index].root must match response root" }
+            require(path.leafIndex < frontierLen) { "paths[$index].leaf_index must be below frontier_len" }
+            require(path.siblings.size == treeDepth) {
+                "paths[$index].siblings size must match tree_depth"
+            }
         }
     }
 

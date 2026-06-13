@@ -43,15 +43,14 @@ public final class ToriiZkAssetMerklePathProvider implements ZkAssetMerklePathPr
       if (asset == null || asset.trim().isEmpty()) {
         throw new IllegalArgumentException("asset must not be blank");
       }
-      final ArrayList<byte[]> copied = new ArrayList<>(commitments == null ? 0 : commitments.size());
-      if (commitments != null) {
-        for (int i = 0; i < commitments.size(); i++) {
-          final byte[] commitment = commitments.get(i);
-          if (commitment == null || commitment.length != 32) {
-            throw new IllegalArgumentException("commitments[" + i + "] must be 32 bytes");
-          }
-          copied.add(commitment.clone());
+      final List<byte[]> checkedCommitments = Objects.requireNonNull(commitments, "commitments");
+      final ArrayList<byte[]> copied = new ArrayList<>(checkedCommitments.size());
+      for (int i = 0; i < checkedCommitments.size(); i++) {
+        final byte[] commitment = checkedCommitments.get(i);
+        if (commitment == null || commitment.length != 32) {
+          throw new IllegalArgumentException("commitments[" + i + "] must be 32 bytes");
         }
+        copied.add(commitment.clone());
       }
       if (copied.isEmpty()) {
         return CompletableFuture.completedFuture(Collections.emptyList());

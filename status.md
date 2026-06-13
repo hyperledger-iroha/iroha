@@ -173985,3 +173985,20 @@ Last updated: 2026-06-13
 - Focused validation passed:
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineJsonParserTest,org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - ZK Merkle Path Response Exactness
+
+- Hardened Kotlin/JVM and Android Java ZK Merkle-path response models so
+  node-supplied path entries reject impossible leaf indices, direction bits that
+  do not match the leaf index, path-root mismatches, sibling/tree-depth
+  mismatches, witness-node cardinality mismatches, and entries outside the
+  reported `frontier_len` before wallet code consumes Torii proof material.
+- Mirrored Java JSON parser behavior with Kotlin for oversized integer tokens,
+  preserving them as `BigInteger` values so typed ZK response validators emit
+  controlled range errors instead of raw parser overflow failures.
+- Tightened Java ZK public constructors and providers so null lists are rejected
+  instead of silently becoming empty request or proof material.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.client.JsonParserTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.JsonParserTests,org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check`
