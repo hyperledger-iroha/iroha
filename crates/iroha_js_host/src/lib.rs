@@ -10831,6 +10831,15 @@ struct PrivacyProductionLocalnetEvidenceV1 {
     chain_id: &'static str,
     smoke_passed: bool,
     smoke_tx_hash: &'static str,
+    lifecycle_passed: bool,
+    lifecycle_shield_tx_hash: &'static str,
+    lifecycle_hop_proof_hash: &'static str,
+    lifecycle_recursive_init_hash: &'static str,
+    lifecycle_recursive_init_verify_hash: &'static str,
+    lifecycle_recursive_append_hash: &'static str,
+    lifecycle_recursive_append_verify_hash: &'static str,
+    lifecycle_unshield_proof_hash: &'static str,
+    lifecycle_redeem_tx_hash: &'static str,
     replay_rejected: bool,
     replay_rejection_hash: &'static str,
     restart_persistence_checked: bool,
@@ -11220,6 +11229,14 @@ fn privacy_production_localnet_artifact_hashes_are_valid(
 ) -> bool {
     let hashes = [
         acceptance.smoke_tx_hash,
+        acceptance.lifecycle_shield_tx_hash,
+        acceptance.lifecycle_hop_proof_hash,
+        acceptance.lifecycle_recursive_init_hash,
+        acceptance.lifecycle_recursive_init_verify_hash,
+        acceptance.lifecycle_recursive_append_hash,
+        acceptance.lifecycle_recursive_append_verify_hash,
+        acceptance.lifecycle_unshield_proof_hash,
+        acceptance.lifecycle_redeem_tx_hash,
         acceptance.replay_rejection_hash,
         acceptance.restart_replay_rejection_hash,
         acceptance.state_recovery_hash,
@@ -11248,6 +11265,7 @@ fn privacy_production_localnet_evidence_is_valid(
         && privacy_text_field_is_portable_identifier(acceptance.chain_id)
         && !privacy_evidence_text_has_non_production_marker(acceptance.chain_id)
         && acceptance.smoke_passed
+        && acceptance.lifecycle_passed
         && acceptance.replay_rejected
         && acceptance.restart_persistence_checked
         && acceptance.restart_replay_rejected
@@ -11518,6 +11536,58 @@ fn privacy_production_gate_from_evidence(
                 evidence.performance_artifact_hash
             ),
             format!("localnet_run_id:{}", evidence.localnet_acceptance.run_id),
+            format!(
+                "localnet_smoke_tx_hash:{}",
+                evidence.localnet_acceptance.smoke_tx_hash
+            ),
+            format!(
+                "localnet_replay_rejection_hash:{}",
+                evidence.localnet_acceptance.replay_rejection_hash
+            ),
+            format!(
+                "localnet_restart_replay_rejection_hash:{}",
+                evidence.localnet_acceptance.restart_replay_rejection_hash
+            ),
+            format!(
+                "localnet_state_recovery_hash:{}",
+                evidence.localnet_acceptance.state_recovery_hash
+            ),
+            format!(
+                "localnet_lifecycle_shield_tx_hash:{}",
+                evidence.localnet_acceptance.lifecycle_shield_tx_hash
+            ),
+            format!(
+                "localnet_lifecycle_hop_proof_hash:{}",
+                evidence.localnet_acceptance.lifecycle_hop_proof_hash
+            ),
+            format!(
+                "localnet_lifecycle_recursive_init_hash:{}",
+                evidence.localnet_acceptance.lifecycle_recursive_init_hash
+            ),
+            format!(
+                "localnet_lifecycle_recursive_init_verify_hash:{}",
+                evidence
+                    .localnet_acceptance
+                    .lifecycle_recursive_init_verify_hash
+            ),
+            format!(
+                "localnet_lifecycle_recursive_append_hash:{}",
+                evidence.localnet_acceptance.lifecycle_recursive_append_hash
+            ),
+            format!(
+                "localnet_lifecycle_recursive_append_verify_hash:{}",
+                evidence
+                    .localnet_acceptance
+                    .lifecycle_recursive_append_verify_hash
+            ),
+            format!(
+                "localnet_lifecycle_unshield_proof_hash:{}",
+                evidence.localnet_acceptance.lifecycle_unshield_proof_hash
+            ),
+            format!(
+                "localnet_lifecycle_redeem_tx_hash:{}",
+                evidence.localnet_acceptance.lifecycle_redeem_tx_hash
+            ),
         ],
     }
 }
@@ -11978,7 +12048,7 @@ fn privacy_gate_missing_reasons_match_requirements(
 }
 
 fn privacy_ready_gate_audit_references_are_valid(audit_references: &[String]) -> bool {
-    if audit_references.len() != 7
+    if audit_references.len() != 19
         || privacy_string_vec_has_duplicates(audit_references)
         || !audit_references
             .iter()
@@ -12013,6 +12083,80 @@ fn privacy_ready_gate_audit_references_are_valid(audit_references: &[String]) ->
     let Some(localnet_run_id) = audit_references[6].strip_prefix("localnet_run_id:") else {
         return false;
     };
+    let Some(localnet_smoke_hash) = audit_references[7].strip_prefix("localnet_smoke_tx_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_replay_hash) =
+        audit_references[8].strip_prefix("localnet_replay_rejection_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_restart_replay_hash) =
+        audit_references[9].strip_prefix("localnet_restart_replay_rejection_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_state_recovery_hash) =
+        audit_references[10].strip_prefix("localnet_state_recovery_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_shield_hash) =
+        audit_references[11].strip_prefix("localnet_lifecycle_shield_tx_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_hop_hash) =
+        audit_references[12].strip_prefix("localnet_lifecycle_hop_proof_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_init_hash) =
+        audit_references[13].strip_prefix("localnet_lifecycle_recursive_init_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_init_verify_hash) =
+        audit_references[14].strip_prefix("localnet_lifecycle_recursive_init_verify_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_append_hash) =
+        audit_references[15].strip_prefix("localnet_lifecycle_recursive_append_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_append_verify_hash) =
+        audit_references[16].strip_prefix("localnet_lifecycle_recursive_append_verify_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_unshield_hash) =
+        audit_references[17].strip_prefix("localnet_lifecycle_unshield_proof_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_lifecycle_redeem_hash) =
+        audit_references[18].strip_prefix("localnet_lifecycle_redeem_tx_hash:")
+    else {
+        return false;
+    };
+
+    let localnet_hashes = [
+        localnet_smoke_hash,
+        localnet_replay_hash,
+        localnet_restart_replay_hash,
+        localnet_state_recovery_hash,
+        localnet_lifecycle_shield_hash,
+        localnet_lifecycle_hop_hash,
+        localnet_lifecycle_init_hash,
+        localnet_lifecycle_init_verify_hash,
+        localnet_lifecycle_append_hash,
+        localnet_lifecycle_append_verify_hash,
+        localnet_lifecycle_unshield_hash,
+        localnet_lifecycle_redeem_hash,
+    ];
 
     privacy_text_field_is_portable_identifier(chain_id)
         && !privacy_evidence_text_has_non_production_marker(chain_id)
@@ -12023,6 +12167,15 @@ fn privacy_ready_gate_audit_references_are_valid(audit_references: &[String]) ->
         && privacy_production_evidence_hash_is_valid(fuzz_hash)
         && privacy_production_evidence_hash_is_valid(performance_hash)
         && privacy_production_localnet_run_id_is_valid(localnet_run_id)
+        && localnet_hashes.iter().all(|hash| {
+            privacy_production_evidence_hash_is_valid(hash)
+                && !privacy_evidence_text_has_non_production_marker(hash)
+        })
+        && !localnet_hashes.iter().enumerate().any(|(index, hash)| {
+            localnet_hashes[(index + 1)..]
+                .iter()
+                .any(|other| other == hash)
+        })
 }
 
 fn privacy_production_gate_invariants_hold(
@@ -15370,6 +15523,22 @@ mod tests {
         "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
     const PRIVACY_TEST_PRODUCTION_STATE_RECOVERY_HASH: &str =
         "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_SHIELD_HASH: &str =
+        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_HOP_PROOF_HASH: &str =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_INIT_HASH: &str =
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_INIT_VERIFY_HASH: &str =
+        "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_APPEND_HASH: &str =
+        "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_APPEND_VERIFY_HASH: &str =
+        "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_UNSHIELD_HASH: &str =
+        "sha256:6666666666666666666666666666666666666666666666666666666666666666";
+    const PRIVACY_TEST_PRODUCTION_LIFECYCLE_REDEEM_HASH: &str =
+        "sha256:7777777777777777777777777777777777777777777777777777777777777777";
     const PRIVACY_TEST_PRODUCTION_SIGNATURE: &str = "ed25519:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const PRIVACY_TEST_UPPERCASE_PRODUCTION_SIGNATURE: &str = "ed25519:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
@@ -15474,6 +15643,17 @@ mod tests {
                 chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
                 smoke_passed: true,
                 smoke_tx_hash: PRIVACY_TEST_PRODUCTION_SMOKE_HASH,
+                lifecycle_passed: true,
+                lifecycle_shield_tx_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_SHIELD_HASH,
+                lifecycle_hop_proof_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_HOP_PROOF_HASH,
+                lifecycle_recursive_init_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_INIT_HASH,
+                lifecycle_recursive_init_verify_hash:
+                    PRIVACY_TEST_PRODUCTION_LIFECYCLE_INIT_VERIFY_HASH,
+                lifecycle_recursive_append_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_APPEND_HASH,
+                lifecycle_recursive_append_verify_hash:
+                    PRIVACY_TEST_PRODUCTION_LIFECYCLE_APPEND_VERIFY_HASH,
+                lifecycle_unshield_proof_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_UNSHIELD_HASH,
+                lifecycle_redeem_tx_hash: PRIVACY_TEST_PRODUCTION_LIFECYCLE_REDEEM_HASH,
                 replay_rejected: true,
                 replay_rejection_hash: PRIVACY_TEST_PRODUCTION_REPLAY_HASH,
                 restart_persistence_checked: true,
@@ -15714,7 +15894,7 @@ mod tests {
                 algorithm.production_gate.required_gates,
                 privacy_required_production_gate_keys(entry),
             );
-            assert_eq!(algorithm.production_gate.audit_references.len(), 7);
+            assert_eq!(algorithm.production_gate.audit_references.len(), 19);
             for status in &algorithm.production_gate.gates {
                 assert_eq!(
                     status.passed,
@@ -15820,6 +16000,16 @@ mod tests {
         });
         assert_zk_ace_evidence_rejected("bad localnet smoke hash", |row| {
             row.localnet_acceptance.smoke_tx_hash = "sha256:not-a-hex-digest";
+        });
+        assert_zk_ace_evidence_rejected("localnet lifecycle failure", |row| {
+            row.localnet_acceptance.lifecycle_passed = false;
+        });
+        assert_zk_ace_evidence_rejected("bad localnet lifecycle shield hash", |row| {
+            row.localnet_acceptance.lifecycle_shield_tx_hash = "sha256:not-a-hex-digest";
+        });
+        assert_zk_ace_evidence_rejected("reused localnet lifecycle hash", |row| {
+            row.localnet_acceptance.lifecycle_redeem_tx_hash =
+                row.localnet_acceptance.lifecycle_unshield_proof_hash;
         });
         assert_zk_ace_evidence_rejected("reused localnet replay hash", |row| {
             row.localnet_acceptance.replay_rejection_hash = row.localnet_acceptance.smoke_tx_hash;
@@ -15951,6 +16141,22 @@ mod tests {
         assert_privacy_evidence_rejected_for_all_rows("bad localnet smoke hash", |row| {
             row.localnet_acceptance.smoke_tx_hash = "sha256:not-a-hex-digest";
         });
+        assert_privacy_evidence_rejected_for_all_rows("localnet lifecycle failure", |row| {
+            row.localnet_acceptance.lifecycle_passed = false;
+        });
+        assert_privacy_evidence_rejected_for_all_rows(
+            "bad localnet lifecycle append hash",
+            |row| {
+                row.localnet_acceptance.lifecycle_recursive_append_hash = "sha256:not-a-hex-digest";
+            },
+        );
+        assert_privacy_evidence_rejected_for_all_rows(
+            "reused localnet lifecycle proof hash",
+            |row| {
+                row.localnet_acceptance.lifecycle_hop_proof_hash =
+                    row.localnet_acceptance.lifecycle_shield_tx_hash;
+            },
+        );
         assert_privacy_evidence_rejected_for_all_rows("replay acceptance", |row| {
             row.localnet_acceptance.replay_rejected = false;
         });

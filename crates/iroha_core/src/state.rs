@@ -19726,7 +19726,7 @@ impl State {
         let nexus = iroha_config::parameters::actual::Nexus::default();
         let streaming = iroha_config::parameters::actual::Streaming {
             key_material: iroha_crypto::streaming::StreamingKeyMaterial::new(
-                iroha_crypto::KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519),
+                iroha_crypto::KeyPair::from_seed(vec![0x73u8; 32], Algorithm::Ed25519),
             )
             .expect("streaming key material"),
             session_store_dir: PathBuf::from(
@@ -36893,7 +36893,7 @@ pub(crate) mod deserialize {
         let nexus = iroha_config::parameters::actual::Nexus::default();
         let streaming = iroha_config::parameters::actual::Streaming {
             key_material: iroha_crypto::streaming::StreamingKeyMaterial::new(
-                iroha_crypto::KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519),
+                iroha_crypto::KeyPair::from_seed(vec![0x73u8; 32], Algorithm::Ed25519),
             )
             .expect("streaming key material"),
             session_store_dir: PathBuf::from(

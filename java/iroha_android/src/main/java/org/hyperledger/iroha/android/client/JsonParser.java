@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.client;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -202,7 +203,11 @@ public final class JsonParser {
     final String token = input.substring(start, index);
     try {
       if (!hasFraction && !hasExponent) {
-        return Long.parseLong(token);
+        try {
+          return Long.parseLong(token);
+        } catch (NumberFormatException ex) {
+          return new BigInteger(token);
+        }
       }
       final double value = Double.parseDouble(token);
       if (!Double.isFinite(value)) {

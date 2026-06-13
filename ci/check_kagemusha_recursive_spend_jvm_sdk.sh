@@ -74,6 +74,7 @@ cd "${ROOT_DIR}/kotlin"
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyStatusTest \
   --tests org.hyperledger.iroha.sdk.crypto.SigningAlgorithmTest \
+  --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest \
   --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest \
   --tests org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest \
   --tests org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest \
@@ -82,11 +83,9 @@ cd "${ROOT_DIR}/kotlin"
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest
 
 cd "${ROOT_DIR}"
-javac -d "${JAVA_OUT}" \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java \
+javac \
+  -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" \
+  -d "${JAVA_OUT}" \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java
 java -ea -cp "${JAVA_OUT}" \
   org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest

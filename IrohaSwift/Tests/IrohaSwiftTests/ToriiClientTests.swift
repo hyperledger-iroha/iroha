@@ -768,6 +768,139 @@ final class ToriiClientTests: XCTestCase {
         )
     }
 
+    private func ramLfeExecuteResponseJSON(
+        programId: String = "identifier_lookup_retail",
+        opaqueHash: String = String(repeating: "11", count: 32),
+        receiptHash: String = String(repeating: "22", count: 32),
+        outputCiphertext: String = "C0FFEE",
+        outputHash: String = String(repeating: "44", count: 32),
+        associatedDataHash: String = String(repeating: "55", count: 32),
+        backend: String = "bfv-programmed-sha3-256-v1",
+        verificationMode: String = "signed"
+    ) -> Data {
+        """
+        {
+          "program_id":"\(programId)",
+          "opaque_hash":"\(opaqueHash)",
+          "receipt_hash":"\(receiptHash)",
+          "output_ciphertext":"\(outputCiphertext)",
+          "output_hash":"\(outputHash)",
+          "associated_data_hash":"\(associatedDataHash)",
+          "executed_at_ms":42,
+          "expires_at_ms":142,
+          "backend":"\(backend)",
+          "verification_mode":"\(verificationMode)",
+          "receipt":{
+            "payload":{
+              "program_id":"identifier_lookup_retail",
+              "program_digest":"\(String(repeating: "11", count: 32))",
+              "backend":"bfv-programmed-sha3-256-v1",
+              "verification_mode":"signed",
+              "output_hash":"\(String(repeating: "22", count: 32))",
+              "associated_data_hash":"\(String(repeating: "33", count: 32))",
+              "executed_at_ms":42,
+              "expires_at_ms":142
+            },
+            "attestation":{
+              "kind":"signed",
+              "signature":"\(String(repeating: "aa", count: 64))"
+            }
+          },
+          "output_opening":{
+            "payload":{
+              "program_id":"identifier_lookup_retail",
+              "input_ciphertext_hash":"\(String(repeating: "ab", count: 32))",
+              "output_ciphertext_hash":"\(String(repeating: "bb", count: 32))",
+              "parameter_digest":"\(String(repeating: "cd", count: 32))",
+              "evaluation_key_digest":"\(String(repeating: "dd", count: 32))",
+              "opened_output_hash":"\(String(repeating: "ee", count: 32))",
+              "opened_at_ms":42,
+              "expires_at_ms":142
+            },
+            "signature":"\(String(repeating: "ff", count: 64))"
+          }
+        }
+        """.data(using: .utf8)!
+    }
+
+    private func ramLfeReceiptVerifyResponseJSON(
+        programId: String = "identifier_lookup_retail",
+        backend: String = "bfv-programmed-sha3-256-v1",
+        verificationMode: String = "signed",
+        outputHash: String = String(repeating: "44", count: 32),
+        associatedDataHash: String = String(repeating: "55", count: 32)
+    ) -> Data {
+        """
+        {
+          "valid":true,
+          "program_id":"\(programId)",
+          "backend":"\(backend)",
+          "verification_mode":"\(verificationMode)",
+          "output_hash":"\(outputHash)",
+          "associated_data_hash":"\(associatedDataHash)",
+          "output_hash_matches":true
+        }
+        """.data(using: .utf8)!
+    }
+
+    private func ramLfeProgramPoliciesJSON(
+        programId: String = "identifier_lookup_retail",
+        owner: String = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        resolverPublicKey: String = "ed25519:resolver-key",
+        backend: String = "bfv-programmed-sha3-256-v1",
+        verificationMode: String = "signed",
+        inputEncryption: String = "bfv-v1",
+        inputEncryptionPublicParameters: String = "ABCD",
+        proofBackend: String = "halo2-ipa",
+        circuitId: String = "ram-lfe-v1",
+        publicInputsSchemaHash: String = String(repeating: "44", count: 32),
+        verifyingKeyBytesB64: String = "AQID"
+    ) -> Data {
+        """
+        {
+          "total":1,
+          "items":[{
+            "program_id":"\(programId)",
+            "owner":"\(owner)",
+            "active":true,
+            "resolver_public_key":"\(resolverPublicKey)",
+            "backend":"\(backend)",
+            "verification_mode":"\(verificationMode)",
+            "input_encryption":"\(inputEncryption)",
+            "input_encryption_public_parameters":"\(inputEncryptionPublicParameters)",
+            "input_encryption_public_parameters_decoded":{
+              "parameters":{
+                "polynomial_degree":64,
+                "plaintext_modulus":257,
+                "ciphertext_modulus":1099511627776,
+                "decomposition_base_log":12
+              },
+              "public_key":{
+                "b":[1,2,3],
+                "a":[4,5,6]
+              },
+              "max_input_bytes":32
+            },
+            "ram_fhe_profile":{
+              "profile_version":1,
+              "register_count":4,
+              "memory_lane_count":32,
+              "ciphertext_mul_per_step":1,
+              "encrypted_input_mode":"encrypted_envelope_v1",
+              "min_ciphertext_modulus":1099511627776
+            },
+            "proof_verifier":{
+              "proof_backend":"\(proofBackend)",
+              "circuit_id":"\(circuitId)",
+              "public_inputs_schema_hash":"\(publicInputsSchemaHash)",
+              "verifying_key_bytes_b64":"\(verifyingKeyBytesB64)"
+            },
+            "note":"retail programmed policy"
+          }]
+        }
+        """.data(using: .utf8)!
+    }
+
     private func signedIdentifierReceiptFixture(
         payload: ToriiIdentifierResolutionPayload,
         canonicalPayloadBytes: Data? = nil
@@ -1139,8 +1272,7 @@ final class ToriiClientTests: XCTestCase {
             {
               "alias":"alice",
               "account_ids":[
-                "  sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB  ",
-                "",
+                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
                 "sorauﾛ1Nｼﾒnq9A2ｵﾗﾐｵGﾕﾕｸﾜLﾁﾐAfｻQ5Rcj2DRﾒﾀqTgnUoU72NGB"
               ],
               "source":"world_state"
@@ -1160,6 +1292,69 @@ final class ToriiClientTests: XCTestCase {
             ]
         )
         XCTAssertEqual(resolved?.source, "world_state")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveAccountAliasRejectsNonExactResponseFields() async throws {
+        let accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        let canonical = """
+        {
+          "alias":"alice",
+          "account_id":"\(accountId)",
+          "account_ids":["\(accountId)"],
+          "index":7,
+          "source":"world_state"
+        }
+        """
+        let cases = [
+            (
+                "account alias resolution.alias",
+                "\"alias\":\"alice\"",
+                "\"alias\":\" alice\""
+            ),
+            (
+                "account alias resolution.account_id",
+                "\"account_id\":\"\(accountId)\"",
+                "\"account_id\":\" \(accountId)\""
+            ),
+            (
+                "account alias resolution.account_ids",
+                "\"account_ids\":[\"\(accountId)\"]",
+                "\"account_ids\":[\"\(accountId) \"]"
+            ),
+            (
+                "account alias resolution.source",
+                "\"source\":\"world_state\"",
+                "\"source\":\"world_state \""
+            )
+        ]
+
+        for (field, needle, replacement) in cases {
+            StubURLProtocol.handler = { request in
+                XCTAssertEqual(request.url?.path, "/v1/aliases/resolve")
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                let body = canonical.replacingOccurrences(of: needle, with: replacement)
+                    .data(using: .utf8)!
+                return (response, body)
+            }
+
+            do {
+                _ = try await makeClient().resolveAccountAlias("alice")
+                XCTFail("expected \(field) exactness failure")
+            } catch let DecodingError.dataCorrupted(context) {
+                XCTAssertTrue(
+                    context.debugDescription.contains(field),
+                    "expected \(field) failure, got \(context.debugDescription)"
+                )
+            } catch {
+                XCTFail("expected dataCorrupted decode error for \(field), got \(error)")
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1211,7 +1406,8 @@ final class ToriiClientTests: XCTestCase {
                     "b":[1,2,3],
                     "a":[4,5,6]
                   },
-                  "max_input_bytes":32
+                  "max_input_bytes":32,
+                  "norito_length_encoding":"u64-v1"
                 },
                 "ram_fhe_profile":{
                   "profile_version":1,
@@ -1220,6 +1416,12 @@ final class ToriiClientTests: XCTestCase {
                   "ciphertext_mul_per_step":1,
                   "encrypted_input_mode":"encrypted_envelope_v1",
                   "min_ciphertext_modulus":1099511627776
+                },
+                "proof_verifier":{
+                  "proof_backend":"halo2-ipa",
+                  "circuit_id":"identifier-ram-lfe-v1",
+                  "public_inputs_schema_hash":"\(String(repeating: "66", count: 32))",
+                  "verifying_key_bytes_b64":"AQID"
                 },
                 "note":"retail phone policy"
               }]
@@ -1246,6 +1448,10 @@ final class ToriiClientTests: XCTestCase {
             response.items.first?.inputEncryptionPublicParametersDecoded?.parameters.decompositionBaseLog,
             12
         )
+        XCTAssertEqual(
+            response.items.first?.inputEncryptionPublicParametersDecoded?.noritoLengthEncoding,
+            "u64-v1"
+        )
         XCTAssertEqual(response.items.first?.ramFheProfile?.profileVersion, 1)
         XCTAssertEqual(response.items.first?.ramFheProfile?.registerCount, 4)
         XCTAssertEqual(response.items.first?.ramFheProfile?.memoryLaneCount, 32)
@@ -1253,6 +1459,107 @@ final class ToriiClientTests: XCTestCase {
             response.items.first?.ramFheProfile?.encryptedInputMode,
             .encryptedEnvelopeV1
         )
+        XCTAssertEqual(response.items.first?.proofVerifier?.proofBackend, "halo2-ipa")
+        XCTAssertEqual(response.items.first?.proofVerifier?.publicInputsSchemaHash, String(repeating: "66", count: 32))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testListIdentifierPoliciesRejectsNonExactMetadata() async throws {
+        let owner = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        let canonical = """
+        {
+          "total": 1,
+          "items": [{
+            "policy_id":"phone#retail",
+            "owner":"\(owner)",
+            "active":true,
+            "normalization":"phone_e164",
+            "resolver_public_key":"ed25519:resolver-key",
+            "backend":"bfv-affine-sha3-256-v1",
+            "input_encryption":"bfv-v1",
+            "input_encryption_public_parameters":"ABCD",
+            "input_encryption_public_parameters_decoded":{
+              "parameters":{
+                "polynomial_degree":64,
+                "plaintext_modulus":257,
+                "ciphertext_modulus":1099511627776,
+                "decomposition_base_log":12
+              },
+              "public_key":{
+                "b":[1,2,3],
+                "a":[4,5,6]
+              },
+              "max_input_bytes":32,
+              "norito_length_encoding":"u64-v1"
+            },
+            "note":"retail phone policy"
+          }]
+        }
+        """
+        let cases = [
+            (
+                "identifier policy.owner",
+                "\"owner\":\"\(owner)\"",
+                "\"owner\":\" \(owner)\""
+            ),
+            (
+                "identifier policy.normalization",
+                "\"normalization\":\"phone_e164\"",
+                "\"normalization\":\"Phone_E164\""
+            ),
+            (
+                "identifier policy.backend",
+                "\"backend\":\"bfv-affine-sha3-256-v1\"",
+                "\"backend\":\"bfv-affine-sha3-256-v1 \""
+            ),
+            (
+                "identifier policy.input_encryption",
+                "\"input_encryption\":\"bfv-v1\"",
+                "\"input_encryption\":\"BFV-v1\""
+            ),
+            (
+                "identifier policy.input_encryption_public_parameters",
+                "\"input_encryption_public_parameters\":\"ABCD\"",
+                "\"input_encryption_public_parameters\":\" ABCD\""
+            ),
+            (
+                "identifier policy.input_encryption_public_parameters_decoded.norito_length_encoding",
+                "\"norito_length_encoding\":\"u64-v1\"",
+                "\"norito_length_encoding\":\" u64-v1\""
+            ),
+            (
+                "identifier policy.note",
+                "\"note\":\"retail phone policy\"",
+                "\"note\":\"retail phone policy \""
+            )
+        ]
+
+        for (field, needle, replacement) in cases {
+            StubURLProtocol.handler = { request in
+                XCTAssertEqual(request.url?.path, "/v1/identifier-policies")
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                let body = canonical.replacingOccurrences(of: needle, with: replacement)
+                    .data(using: .utf8)!
+                return (response, body)
+            }
+
+            do {
+                _ = try await makeClient().listIdentifierPolicies()
+                XCTFail("expected \(field) exactness failure")
+            } catch let DecodingError.dataCorrupted(context) {
+                XCTAssertTrue(
+                    context.debugDescription.contains(field),
+                    "expected \(field) failure, got \(context.debugDescription)"
+                )
+            } catch {
+                XCTFail("expected dataCorrupted decode error for \(field), got \(error)")
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1395,43 +1702,7 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {
-              "total": 1,
-              "items": [{
-                "program_id":"identifier_lookup_retail",
-                "owner":"\(owner)",
-                "active":true,
-                "resolver_public_key":"ed25519:resolver-key",
-                "backend":"bfv-programmed-sha3-256-v1",
-                "verification_mode":"signed",
-                "input_encryption":"bfv-v1",
-                "input_encryption_public_parameters":"ABCD",
-                "input_encryption_public_parameters_decoded":{
-                  "parameters":{
-                    "polynomial_degree":64,
-                    "plaintext_modulus":257,
-                    "ciphertext_modulus":1099511627776,
-                    "decomposition_base_log":12
-                  },
-                  "public_key":{
-                    "b":[1,2,3],
-                    "a":[4,5,6]
-                  },
-                  "max_input_bytes":32
-                },
-                "ram_fhe_profile":{
-                  "profile_version":1,
-                  "register_count":4,
-                  "memory_lane_count":32,
-                  "ciphertext_mul_per_step":1,
-                  "encrypted_input_mode":"encrypted_envelope_v1",
-                  "min_ciphertext_modulus":1099511627776
-                },
-                "note":"retail programmed policy"
-              }]
-            }
-            """.data(using: .utf8)!
+            let body = self.ramLfeProgramPoliciesJSON(owner: owner)
             return (response, body)
         }
 
@@ -1447,6 +1718,41 @@ final class ToriiClientTests: XCTestCase {
             64
         )
         XCTAssertEqual(response.items.first?.ramFheProfile?.profileVersion, 1)
+        XCTAssertEqual(response.items.first?.proofVerifier?.proofBackend, "halo2-ipa")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRamLfeProgramPolicyParserRejectsNonExactFieldsAsync() async throws {
+        let owner = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        let cases: [(field: String, body: Data)] = [
+            ("ram-lfe program policy.program_id", ramLfeProgramPoliciesJSON(programId: " identifier_lookup_retail")),
+            ("ram-lfe program policy.owner", ramLfeProgramPoliciesJSON(owner: "\(owner) ")),
+            ("ram-lfe program policy.resolver_public_key", ramLfeProgramPoliciesJSON(resolverPublicKey: " ed25519:resolver-key")),
+            ("ram-lfe program policy.backend", ramLfeProgramPoliciesJSON(backend: "BFV-programmed-sha3-256-v1")),
+            ("ram-lfe program policy.verification_mode", ramLfeProgramPoliciesJSON(verificationMode: " signed")),
+            ("ram-lfe program policy.input_encryption", ramLfeProgramPoliciesJSON(inputEncryption: "bfv-v1 ")),
+            (
+                "ram-lfe program policy.input_encryption_public_parameters",
+                ramLfeProgramPoliciesJSON(inputEncryptionPublicParameters: " ABCD")
+            ),
+            ("ram-lfe proof verifier.proof_backend", ramLfeProgramPoliciesJSON(proofBackend: " halo2-ipa")),
+            ("ram-lfe proof verifier.circuit_id", ramLfeProgramPoliciesJSON(circuitId: "ram-lfe-v1 ")),
+            (
+                "ram-lfe proof verifier.public_inputs_schema_hash",
+                ramLfeProgramPoliciesJSON(publicInputsSchemaHash: " \(String(repeating: "44", count: 32))")
+            ),
+            ("ram-lfe proof verifier.verifying_key_bytes_b64", ramLfeProgramPoliciesJSON(verifyingKeyBytesB64: "AQID "))
+        ]
+        for testCase in cases {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiRamLfeProgramPolicyListResponse.self, from: testCase.body)
+            ) { error in
+                XCTAssertTrue(
+                    String(describing: error).contains(testCase.field),
+                    "\(testCase.field): \(error)"
+                )
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1463,50 +1769,7 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {
-              "program_id":"identifier_lookup_retail",
-              "opaque_hash":"opaque-hash-literal",
-              "receipt_hash":"receipt-hash-literal",
-              "output_ciphertext":"c0ffee",
-              "output_hash":"output-hash-literal",
-              "associated_data_hash":"associated-data-hash-literal",
-              "executed_at_ms":42,
-              "expires_at_ms":142,
-              "backend":"bfv-programmed-sha3-256-v1",
-              "verification_mode":"signed",
-              "receipt":{
-                "payload":{
-                  "program_id":"identifier_lookup_retail",
-                  "program_digest":"\(String(repeating: "11", count: 32))",
-                  "backend":"bfv-programmed-sha3-256-v1",
-                  "verification_mode":"signed",
-                  "output_hash":"\(String(repeating: "22", count: 32))",
-                  "associated_data_hash":"\(String(repeating: "33", count: 32))",
-                  "executed_at_ms":42,
-                  "expires_at_ms":142
-                },
-                "attestation":{
-                  "kind":"signed",
-                  "signature":"\(String(repeating: "aa", count: 64))"
-                }
-              },
-              "output_opening":{
-                "payload":{
-                  "program_id":"identifier_lookup_retail",
-                  "input_ciphertext_hash":"\(String(repeating: "ab", count: 32))",
-                  "output_ciphertext_hash":"\(String(repeating: "bb", count: 32))",
-                  "parameter_digest":"\(String(repeating: "cd", count: 32))",
-                  "evaluation_key_digest":"\(String(repeating: "dd", count: 32))",
-                  "opened_output_hash":"\(String(repeating: "ee", count: 32))",
-                  "opened_at_ms":42,
-                  "expires_at_ms":142
-                },
-                "signature":"\(String(repeating: "ff", count: 64))"
-              }
-            }
-            """.data(using: .utf8)!
-            return (response, body)
+            return (response, self.ramLfeExecuteResponseJSON())
         }
 
         let response = try await makeClient().executeRamLfeProgram(
@@ -1514,8 +1777,8 @@ final class ToriiClientTests: XCTestCase {
             encryptedInputHex: "0xABCD"
         )
         XCTAssertEqual(response?.programId, "identifier_lookup_retail")
-        XCTAssertEqual(response?.outputCiphertext, "c0ffee")
-        XCTAssertEqual(response?.outputHash, "output-hash-literal")
+        XCTAssertEqual(response?.outputCiphertext, "C0FFEE")
+        XCTAssertEqual(response?.outputHash, String(repeating: "44", count: 32))
         XCTAssertEqual(response?.verificationMode, "signed")
         if case let .object(receipt)? = response?.receipt["payload"] {
             XCTAssertNotNil(receipt["program_id"])
@@ -1574,18 +1837,7 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {
-              "valid":true,
-              "program_id":"identifier_lookup_retail",
-              "backend":"bfv-programmed-sha3-256-v1",
-              "verification_mode":"signed",
-              "output_hash":"output-hash-literal",
-              "associated_data_hash":"associated-data-hash-literal",
-              "output_hash_matches":true
-            }
-            """.data(using: .utf8)!
-            return (response, body)
+            return (response, self.ramLfeReceiptVerifyResponseJSON())
         }
 
         let response = try await makeClient().verifyRamLfeReceipt(
@@ -1595,6 +1847,51 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertTrue(response.valid)
         XCTAssertEqual(response.programId, "identifier_lookup_retail")
         XCTAssertEqual(response.outputHashMatches, true)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRamLfeResponseParsersRejectNonExactFieldsAsync() async throws {
+        let executeCases: [(field: String, body: Data)] = [
+            ("program_id", ramLfeExecuteResponseJSON(programId: " identifier_lookup_retail")),
+            ("opaque_hash", ramLfeExecuteResponseJSON(opaqueHash: "\(String(repeating: "11", count: 32)) ")),
+            ("receipt_hash", ramLfeExecuteResponseJSON(receiptHash: " \(String(repeating: "22", count: 32))")),
+            ("output_ciphertext", ramLfeExecuteResponseJSON(outputCiphertext: " C0FFEE")),
+            ("output_hash", ramLfeExecuteResponseJSON(outputHash: "\(String(repeating: "44", count: 32)) ")),
+            ("associated_data_hash", ramLfeExecuteResponseJSON(associatedDataHash: " \(String(repeating: "55", count: 32))")),
+            ("backend", ramLfeExecuteResponseJSON(backend: "BFV-programmed-sha3-256-v1")),
+            ("verification_mode", ramLfeExecuteResponseJSON(verificationMode: " signed"))
+        ]
+        for testCase in executeCases {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiRamLfeExecuteResponse.self, from: testCase.body)
+            ) { error in
+                XCTAssertTrue(
+                    String(describing: error).contains("ram-lfe execute response.\(testCase.field)"),
+                    "\(testCase.field): \(error)"
+                )
+            }
+        }
+
+        let verifyCases: [(field: String, body: Data)] = [
+            ("program_id", ramLfeReceiptVerifyResponseJSON(programId: "identifier_lookup_retail ")),
+            ("backend", ramLfeReceiptVerifyResponseJSON(backend: " bfv-programmed-sha3-256-v1")),
+            ("verification_mode", ramLfeReceiptVerifyResponseJSON(verificationMode: "Signed")),
+            ("output_hash", ramLfeReceiptVerifyResponseJSON(outputHash: " \(String(repeating: "44", count: 32))")),
+            (
+                "associated_data_hash",
+                ramLfeReceiptVerifyResponseJSON(associatedDataHash: "\(String(repeating: "55", count: 32)) ")
+            )
+        ]
+        for testCase in verifyCases {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiRamLfeReceiptVerifyResponse.self, from: testCase.body)
+            ) { error in
+                XCTAssertTrue(
+                    String(describing: error).contains("ram-lfe receipt verify response.\(testCase.field)"),
+                    "\(testCase.field): \(error)"
+                )
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1663,7 +1960,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(try receipt?.verifyAttestation(using: policy), true)
     }
 
-    func testIdentifierReceiptDecodeNormalizesPaddedAccountIdBeforeSignatureVerification() throws {
+    func testIdentifierReceiptDecodeRejectsPaddedAccountIdBeforeSignatureVerification() throws {
         let accountId = try canonicalOwnerLiteral()
         let payload = makeSignedIdentifierReceiptPayload(
             accountId: accountId,
@@ -1683,23 +1980,16 @@ final class ToriiClientTests: XCTestCase {
         receiptObject["payload"] = payloadObject
 
         let receiptData = try JSONSerialization.data(withJSONObject: receiptObject, options: [])
-        let decoded = try JSONDecoder().decode(ToriiIdentifierResolutionReceipt.self, from: receiptData)
-        XCTAssertEqual(decoded.payload.accountId, accountId)
-        let policy = ToriiIdentifierPolicySummary(
-            policyId: "phone#retail",
-            owner: accountId,
-            active: true,
-            normalization: .phoneE164,
-            resolverPublicKey: signed.resolverPublicKey,
-            backend: "bfv-affine-sha3-256-v1",
-            inputEncryption: "bfv-v1",
-            inputEncryptionPublicParameters: nil,
-            inputEncryptionPublicParametersDecoded: nil,
-            ramFheProfile: nil,
-            proofVerifier: nil,
-            note: nil
-        )
-        XCTAssertEqual(try decoded.verifyAttestation(using: policy), true)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiIdentifierResolutionReceipt.self, from: receiptData)
+        ) { error in
+            guard case let DecodingError.dataCorrupted(context) = error else {
+                XCTFail("expected dataCorrupted decode error, got \(error)")
+                return
+            }
+            XCTAssertTrue(context.debugDescription.contains("payload.account_id"))
+            XCTAssertTrue(context.debugDescription.contains("surrounding whitespace"))
+        }
     }
 
     func testIdentifierReceiptOpeningSignatureUsesConstVecEncoding() throws {
@@ -2378,11 +2668,19 @@ final class ToriiClientTests: XCTestCase {
                 options: []
             )
 
-            let decoded = try JSONDecoder().decode(
-                ToriiIdentifierResolutionPayload.self,
-                from: mutatedData
-            )
-            XCTAssertEqual(decoded.accountId, accountId)
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiIdentifierResolutionPayload.self,
+                    from: mutatedData
+                )
+            ) { error in
+                guard case let DecodingError.dataCorrupted(context) = error else {
+                    XCTFail("expected dataCorrupted decode error, got \(error)")
+                    return
+                }
+                XCTAssertTrue(context.debugDescription.contains("payload.account_id"))
+                XCTAssertTrue(context.debugDescription.contains("surrounding whitespace"))
+            }
         }
 
         let hashExactnessCases: [(path: [String], value: String, reason: String)] = [
@@ -3355,6 +3653,64 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(claim?.policyId, "phone#retail")
         XCTAssertEqual(claim?.accountId, accountId)
         XCTAssertEqual(claim?.verifiedAtMs, 7)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetIdentifierClaimByReceiptHashRejectsNonExactClaimFieldsAsync() async throws {
+        let accountId = try canonicalOwnerLiteral()
+        let receiptHash = String(repeating: "55", count: 32)
+        let opaqueId = "opaque:\(String(repeating: "44", count: 32))"
+        let uaid = "uaid:\(String(repeating: "66", count: 31))67"
+
+        func claimRecordJSON(policyId: String = "phone#retail",
+                             opaqueId: String = opaqueId,
+                             receiptHash: String = receiptHash,
+                             uaid: String = uaid,
+                             accountId: String = accountId) -> Data {
+            """
+            {
+              "policy_id":"\(policyId)",
+              "opaque_id":"\(opaqueId)",
+              "receipt_hash":"\(receiptHash)",
+              "uaid":"\(uaid)",
+              "account_id":"\(accountId)",
+              "verified_at_ms":7
+            }
+            """.data(using: .utf8)!
+        }
+
+        let cases: [(field: String, body: Data)] = [
+            ("policy_id", claimRecordJSON(policyId: " phone#retail")),
+            ("opaque_id", claimRecordJSON(opaqueId: "\(opaqueId) ")),
+            ("receipt_hash", claimRecordJSON(receiptHash: " \(receiptHash)")),
+            ("uaid", claimRecordJSON(uaid: "\(uaid) ")),
+            ("account_id", claimRecordJSON(accountId: " \(accountId)")),
+        ]
+
+        for testCase in cases {
+            StubURLProtocol.handler = { request in
+                XCTAssertEqual(
+                    request.url?.path,
+                    "/v1/identifiers/receipts/\(receiptHash)"
+                )
+                XCTAssertEqual(request.httpMethod, "GET")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, testCase.body)
+            }
+
+            do {
+                _ = try await makeClient().getIdentifierClaimByReceiptHash(receiptHash)
+                XCTFail("expected non-exact claim record \(testCase.field) to fail")
+            } catch {
+                XCTAssertTrue(
+                    String(describing: error).contains("identifier claim record.\(testCase.field)"),
+                    "\(testCase.field): \(error)"
+                )
+            }
+        }
     }
 
     func testIdentifierNormalizationCanonicalizesPhoneAndEmail() throws {
@@ -13322,6 +13678,40 @@ id: 88
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
+    }
+
+    func testMultisigResponsesRejectNonExactResolvedAccountIds() {
+        let accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        let paddedAccountId = "\(accountId) "
+        let proposalId = String(repeating: "f", count: 64)
+        func data(_ body: String) -> Data {
+            body.data(using: .utf8)!
+        }
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiMultisigResponse.self,
+                from: data(#"{"ok":true,"resolved_multisig_account_id":"\#(paddedAccountId)"}"#)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiMultisigSpecResponse.self,
+                from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","spec":{"quorum":2}}"#)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiMultisigProposalsListResponse.self,
+                from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","proposals":[]}"#)
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiMultisigProposalGetResponse.self,
+                from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","proposal_id":"\#(proposalId)","instructions_hash":"\#(proposalId)","proposal":{"approvals":[]}}"#)
+            )
+        )
     }
 
     func testProposeMultisigRejectsFalseOkResponse() {

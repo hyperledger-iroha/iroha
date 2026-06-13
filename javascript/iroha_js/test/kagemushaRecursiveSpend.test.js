@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { AccountAddress } from "../src/address.js";
 import {
+  KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
   KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
@@ -31,10 +33,26 @@ import {
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1,
+  KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME,
+  KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+  KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
+  KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME,
+  KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME,
+  KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME,
+  KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME,
+  buildKagemushaRecursiveSpendableNoteDescriptor,
+  buildKagemushaRecursiveSpendVerifierRecordRef,
   canAppendKagemushaRecursiveSpendWitnesslessLineage,
   canProveKagemushaRecursiveSpendAppendOutputProofCircuitId,
   canRedeemKagemushaRecursiveSpendWitnessless,
   canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId,
+  decodeKagemushaRecursiveSpendBundle,
+  decodeKagemushaRecursiveSpendVerifyResult,
+  encodeKagemushaRecursiveSpendAppendRequest,
+  encodeKagemushaRecursiveSpendInitRequest,
+  encodeKagemushaRecursiveSpendRedeemRequest,
+  encodeKagemushaRecursiveSpendVerifyRequest,
   isKagemushaCompactPaymentTokenNativeAvailable,
   isKagemushaRecursiveAggregationProofBundleNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenNativeAvailable,
@@ -62,9 +80,13 @@ import {
   kagemushaRecursiveSpendLineageWitnessAppendResult,
   kagemushaRecursiveSpendLineageWitnessFromInitResult,
   kagemushaRecursiveSpendRedeem,
+  kagemushaRecursiveSpendAppendTyped,
+  kagemushaRecursiveSpendInitTyped,
+  kagemushaRecursiveSpendRedeemTyped,
   kagemushaRecursiveSpendTransitionProfileAppend,
   kagemushaRecursiveSpendTransitionProfileInit,
   kagemushaRecursiveSpendVerify,
+  kagemushaRecursiveSpendVerifyTyped,
   normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId,
   preferredKagemushaOfflineSpendMode,
   preferredKagemushaOfflineSpendModeForCapabilities,
@@ -351,6 +373,117 @@ function sharedRecursiveSpendArchives() {
       "utf8",
     ),
   );
+}
+
+function sharedRecursiveSpendAbi7Archives() {
+  return JSON.parse(
+    readFileSync(
+      new URL("../../../fixtures/kagemusha_recursive_spend_abi7/archives.json", import.meta.url),
+      "utf8",
+    ),
+  );
+}
+
+function sharedRecursiveSpendArchive(name) {
+  const entry = sharedRecursiveSpendArchives().archives.find(
+    (archive) => archive.name === name,
+  );
+  assert.ok(entry, `missing ABI-6 archive fixture ${name}`);
+  return Buffer.from(entry.bytes_base64, "base64");
+}
+
+function sharedRecursiveSpendAbi7Archive(name) {
+  const entry = sharedRecursiveSpendAbi7Archives().archives.find(
+    (archive) => archive.name === name,
+  );
+  assert.ok(entry, `missing ABI-7 archive fixture ${name}`);
+  return Buffer.from(entry.bytes_base64, "base64");
+}
+
+function kagemushaSchemaHashForTypeName(typeName) {
+  return createHash("sha256")
+    .update(Buffer.from("norito:v1:type-name\0", "utf8"))
+    .update(Buffer.from(typeName, "utf8"))
+    .digest()
+    .subarray(0, 16);
+}
+
+function syntheticKagemushaArchive(typeName, seed, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(typeName),
+    Buffer.from([seed]),
+    flags,
+  );
+}
+
+function assertKagemushaArchiveSchema(archive, typeName) {
+  const buffer = Buffer.from(archive);
+  assert.equal(buffer.subarray(0, 4).toString("ascii"), "NRT0");
+  assert.deepEqual(buffer.subarray(6, 22), kagemushaSchemaHashForTypeName(typeName));
+  assert.equal(buffer[22], 0);
+  assert.equal(buffer[39], TEST_NORITO_COMPACT_LEN_FLAG);
+  const length = Number(buffer.readBigUInt64LE(23));
+  const payload = buffer.subarray(buffer.length - length);
+  assert.equal(testCrc64(payload), buffer.readBigUInt64LE(31));
+  return payload;
+}
+
+function kagemushaReadCompactLength(buffer, offset) {
+  let value = 0n;
+  let shift = 0n;
+  let cursor = offset;
+  for (let index = 0; index < 10; index += 1) {
+    assert.ok(cursor < buffer.length, "compact length must not be truncated");
+    const byte = BigInt(buffer[cursor]);
+    cursor += 1;
+    value |= (byte & 0x7fn) << shift;
+    if ((byte & 0x80n) === 0n) {
+      return { value: Number(value), offset: cursor };
+    }
+    shift += 7n;
+  }
+  throw new Error("compact length is too long");
+}
+
+function kagemushaReadField(buffer, offset) {
+  const length = kagemushaReadCompactLength(buffer, offset);
+  const end = length.offset + length.value;
+  assert.ok(end <= buffer.length, "field payload must not be truncated");
+  return {
+    payload: buffer.subarray(length.offset, end),
+    offset: end,
+  };
+}
+
+function kagemushaReadAllFields(payload) {
+  const fields = [];
+  let offset = 0;
+  while (offset < payload.length) {
+    const field = kagemushaReadField(payload, offset);
+    fields.push(field.payload);
+    offset = field.offset;
+  }
+  assert.equal(offset, payload.length);
+  return fields;
+}
+
+function recursiveSpendNote(amount = "7", commitmentSeed = 0x21, nullifierSeed = 0x22) {
+  return buildKagemushaRecursiveSpendableNoteDescriptor({
+    noteCommitment: Buffer.alloc(32, commitmentSeed),
+    spendNullifier: Buffer.alloc(32, nullifierSeed),
+    amount,
+  });
+}
+
+function recursiveSpendVerifierRecord() {
+  return buildKagemushaRecursiveSpendVerifierRecordRef({
+    verifierKeyId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    recordBytes: syntheticKagemushaArchive(KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME, 0x66),
+  });
+}
+
+function recursiveSpendRecipient() {
+  return AccountAddress.fromAccount({ publicKey: Buffer.alloc(32, 0x44) }).toI105();
 }
 
 test("Kagemusha recursive spend helpers reject empty request archives before native calls", () => {
@@ -996,6 +1129,336 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
     ),
     false,
   );
+});
+
+test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", () => {
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME,
+    "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1",
+  );
+  const abi6Result = decodeKagemushaRecursiveSpendVerifyResult(
+    sharedRecursiveSpendArchive("verify_result"),
+  );
+  assert.equal(abi6Result.valid, false);
+  assert.equal(abi6Result.hopCount, 2);
+  assert.equal(abi6Result.hop_count, abi6Result.hopCount);
+  assert.equal(abi6Result.encodedBytes > 0, true);
+  assert.equal(abi6Result.witnesslessRedeemSupported, false);
+  assert.equal(abi6Result.lineageWitnessRequired, true);
+
+  const abi7Result = decodeKagemushaRecursiveSpendVerifyResult(
+    sharedRecursiveSpendAbi7Archive("verify_result"),
+  );
+  assert.equal(abi7Result.valid, true);
+  assert.equal(abi7Result.witnesslessRedeemSupported, false);
+  assert.equal(abi7Result.lineageWitnessRequired, true);
+
+  const initBundle = decodeKagemushaRecursiveSpendBundle(
+    sharedRecursiveSpendArchive("init_bundle"),
+  );
+  assert.equal(
+    initBundle.proofCircuitId,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+  );
+  assert.equal(initBundle.hopCount, 1);
+  assert.equal(initBundle.chainId.length > 0, true);
+  assert.equal(initBundle.initialRoot.length, 32);
+  assert.equal(initBundle.finalRoot.length, 32);
+  assert.equal(initBundle.currentNote.amount, "7");
+
+  const appendBundle = decodeKagemushaRecursiveSpendBundle(
+    sharedRecursiveSpendAbi7Archive("append_bundle"),
+  );
+  assert.equal(appendBundle.hopCount, 1);
+  assert.equal(
+    appendBundle.proofCircuitId,
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+  );
+});
+
+test("Kagemusha recursive spend typed encoders write request schemas and compact layouts", () => {
+  const recordBundle = syntheticKagemushaArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
+    0x61,
+  );
+  const pallasOpenEnvelopes = syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x62);
+  const lineageProvingKeyArchive = syntheticKagemushaArchive("test::LineageKey", 0x63);
+  const verifierRecord = recursiveSpendVerifierRecord();
+  const note = recursiveSpendNote();
+
+  const initPayload = assertKagemushaArchiveSchema(
+    encodeKagemushaRecursiveSpendInitRequest({
+      recordBundle,
+      pallasOpenEnvelopes,
+      currentNote: note,
+      lineageVerifierKey: Buffer.from("lineage-vk", "utf8"),
+      lineageProvingKeyArchive,
+      blockHeight: 7,
+    }),
+    KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+  );
+  const initFields = kagemushaReadAllFields(initPayload);
+  assert.equal(initFields.length, 6);
+  assert.deepEqual(initFields[0], Buffer.from([0x61]));
+  assert.equal(initFields[1].readBigUInt64LE(0), BigInt(pallasOpenEnvelopes.length));
+  assert.equal(initFields[3][0], 1);
+  assert.equal(initFields[4][0], 1);
+  assert.equal(initFields[5][0], 1);
+
+  const appendPayload = assertKagemushaArchiveSchema(
+    encodeKagemushaRecursiveSpendAppendRequest({
+      previousBundle: sharedRecursiveSpendArchive("init_bundle"),
+      recordBundle,
+      pallasOpenEnvelopes,
+      currentNote: note,
+      previousLineageVerifierRecord: verifierRecord,
+      blockHeight: 8,
+    }),
+    KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME,
+  );
+  const appendFields = kagemushaReadAllFields(appendPayload);
+  assert.equal(appendFields.length, 10);
+  assert.deepEqual(appendFields[1], Buffer.from([0x61]));
+  assert.deepEqual(appendFields[4], Buffer.from([0]));
+  assert.equal(appendFields[5][0], 1);
+  assert.equal(appendFields[6].readBigUInt64LE(0), 0n);
+
+  const verifyPayload = assertKagemushaArchiveSchema(
+    encodeKagemushaRecursiveSpendVerifyRequest({
+      bundle: sharedRecursiveSpendArchive("init_bundle"),
+      lineageVerifierRecord: verifierRecord,
+      blockHeight: 9,
+    }),
+    KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME,
+  );
+  const verifyFields = kagemushaReadAllFields(verifyPayload);
+  assert.equal(verifyFields.length, 3);
+  assert.equal(verifyFields[1][0], 1);
+
+  const redeemPayload = assertKagemushaArchiveSchema(
+    encodeKagemushaRecursiveSpendRedeemRequest({
+      bundle: sharedRecursiveSpendArchive("init_bundle"),
+      recipient: recursiveSpendRecipient(),
+      publicAmount: "7",
+      redeemProof: syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x64),
+      lineageWitness: syntheticKagemushaArchive(
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+        0x65,
+      ),
+      lineageVerifierRecord: verifierRecord,
+      blockHeight: 10,
+    }),
+    KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME,
+  );
+  const redeemFields = kagemushaReadAllFields(redeemPayload);
+  assert.equal(redeemFields.length, 7);
+  assert.equal(redeemFields[1].readUInt32LE(0), 0);
+  assert.deepEqual(redeemFields[2], Buffer.from([7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+  assert.deepEqual(redeemFields[3], Buffer.from([0x64]));
+  assert.equal(redeemFields[4][0], 1);
+  assert.equal(redeemFields[5][0], 1);
+});
+
+test("Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch", () => {
+  for (const amount of ["", "0", "01", "-1", "+1", "1.0", "1e3", String(1n << 128n)]) {
+    assert.throws(
+      () => recursiveSpendNote(amount),
+      /amount|u128|canonical/,
+    );
+  }
+  assert.throws(
+    () => recursiveSpendNote("7", 0),
+    /noteCommitment/,
+  );
+  assert.throws(
+    () => recursiveSpendNote("7", 0x22, 0x22),
+    /spendNullifier/,
+  );
+
+  const recordBundle = syntheticKagemushaArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
+    0x71,
+  );
+  const pallasOpenEnvelopes = syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x72);
+  const note = recursiveSpendNote();
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote: note,
+        lineageProvingKeyArchive: syntheticKagemushaArchive("test::Key", 0x73),
+      }),
+    /lineageVerifierKey/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes: Buffer.from([1, 2, 3]),
+        currentNote: note,
+        lineageVerifierKey: Buffer.from("vk"),
+        lineageProvingKeyArchive: syntheticKagemushaArchive("test::Key", 0x74),
+      }),
+    /pallasOpenEnvelopes/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendInitRequest({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote: note,
+        lineageVerifierKey: Buffer.from("vk"),
+        lineageProvingKeyArchive: syntheticKagemushaArchive("test::Key", 0x75),
+        blockHeight: -1,
+      }),
+    /blockHeight/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendArchive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote: note,
+      }),
+    /previousLineageVerifierRecord/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendArchive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord: recursiveSpendVerifierRecord(),
+        lineageVerifierKey: Buffer.from("vk"),
+        lineageProvingKeyArchive: syntheticKagemushaArchive("test::Key", 0x76),
+      }),
+    /previousProofOpenEnvelopes/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendVerifyRequest({
+        bundle: syntheticKagemushaArchive(
+          KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
+          0x77,
+        ),
+      }),
+    /bundle/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendArchive("init_bundle"),
+        recipient: "alice@wonderland",
+        publicAmount: "1",
+        redeemProof: syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x78),
+      }),
+    /recipient/,
+  );
+  const tampered = Buffer.from(sharedRecursiveSpendArchive("init_bundle"));
+  tampered[6] ^= 0x7f;
+  assert.throws(
+    () => decodeKagemushaRecursiveSpendBundle(tampered),
+    /bundle/,
+  );
+});
+
+test("Kagemusha recursive spend typed helpers delegate encoded requests", () => {
+  const calls = [];
+  const binding = completeRecursiveSpendBinding({
+    kagemushaRecursiveSpendInit(request) {
+      rejectMalformedProbe("init", request);
+      calls.push(["init", Buffer.from(request)]);
+      return kagemushaNoritoFrameWithPayload(0x31);
+    },
+    kagemushaRecursiveSpendAppend(request) {
+      rejectMalformedProbe("append", request);
+      calls.push(["append", Buffer.from(request)]);
+      return kagemushaNoritoFrameWithPayload(0x32);
+    },
+    kagemushaRecursiveSpendVerify(request) {
+      rejectMalformedProbe("verify", request);
+      calls.push(["verify", Buffer.from(request)]);
+      return sharedRecursiveSpendArchive("verify_result");
+    },
+    kagemushaRecursiveSpendRedeem(request) {
+      rejectMalformedProbe("redeem", request);
+      calls.push(["redeem", Buffer.from(request)]);
+      return kagemushaNoritoFrameWithPayload(0x36);
+    },
+  });
+  const recordBundle = syntheticKagemushaArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
+    0x81,
+  );
+  const pallasOpenEnvelopes = syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x82);
+  const verifierRecord = recursiveSpendVerifierRecord();
+  const note = recursiveSpendNote();
+
+  withNativeBinding(binding, () => {
+    assert.ok(
+      kagemushaRecursiveSpendInitTyped({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote: note,
+        lineageVerifierKey: Buffer.from("vk"),
+        lineageProvingKeyArchive: syntheticKagemushaArchive("test::Key", 0x83),
+      }).subarray(0, 4).equals(Buffer.from("NRT0", "ascii")),
+    );
+    assert.equal(calls.at(-1)[0], "init");
+    assertKagemushaArchiveSchema(
+      calls.at(-1)[1],
+      KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+    );
+
+    assert.ok(
+      kagemushaRecursiveSpendAppendTyped({
+        previousBundle: sharedRecursiveSpendArchive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote: note,
+        previousLineageVerifierRecord: verifierRecord,
+      }).subarray(0, 4).equals(Buffer.from("NRT0", "ascii")),
+    );
+    assert.equal(calls.at(-1)[0], "append");
+    assertKagemushaArchiveSchema(
+      calls.at(-1)[1],
+      KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME,
+    );
+
+    const verifyResult = kagemushaRecursiveSpendVerifyTyped({
+      bundle: sharedRecursiveSpendArchive("init_bundle"),
+      lineageVerifierRecord: verifierRecord,
+    });
+    assert.equal(verifyResult.hopCount, 2);
+    assert.equal(calls.at(-1)[0], "verify");
+    assertKagemushaArchiveSchema(
+      calls.at(-1)[1],
+      KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME,
+    );
+
+    assert.ok(
+      kagemushaRecursiveSpendRedeemTyped({
+        bundle: sharedRecursiveSpendArchive("init_bundle"),
+        recipient: recursiveSpendRecipient(),
+        publicAmount: "7",
+        redeemProof: syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x84),
+        lineageWitness: syntheticKagemushaArchive(
+          KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+          0x85,
+        ),
+        lineageVerifierRecord: verifierRecord,
+      }).subarray(0, 4).equals(Buffer.from("NRT0", "ascii")),
+    );
+    assert.equal(calls.at(-1)[0], "redeem");
+    assertKagemushaArchiveSchema(
+      calls.at(-1)[1],
+      KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME,
+    );
+  });
 });
 
 test("Kagemusha offline spend mode defaults to recursive when native support is complete", () => {

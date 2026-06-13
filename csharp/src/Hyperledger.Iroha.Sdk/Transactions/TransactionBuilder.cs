@@ -259,7 +259,11 @@ public sealed class TransactionBuilder
         {
             throw new ArgumentException("Value cannot be null or whitespace.", paramName);
         }
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Value must not contain surrounding whitespace.", paramName);
+        }
 
-        return value.Trim();
+        return value;
     }
 }

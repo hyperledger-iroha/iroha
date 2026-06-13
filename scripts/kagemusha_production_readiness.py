@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import datetime as dt
 import hashlib
 import json
@@ -46,6 +47,9 @@ EVIDENCE_ERRORS_NORMALIZED_FIELD = "android_report_errors_normalized"
 EVIDENCE_ERROR_REDACTION = "<malformed-android-report-error>"
 ANDROID_SIGNED_EVIDENCE_SUMMARY_FIELDS: tuple[tuple[str, str], ...] = (
     ("signed_at_utc", "signed_at_utc"),
+    ("device_family", "device_family"),
+    ("device_model", "device_model"),
+    ("device_codename", "device_codename"),
     ("signed_evidence_artifact_sha256", "artifact_sha256"),
     ("signed_evidence_signer_public_key_sha256", "signer_public_key_sha256"),
     ("offline_wallet_apk_path", "offline_wallet_apk_path"),
@@ -56,6 +60,9 @@ ANDROID_SIGNED_EVIDENCE_SUMMARY_FIELDS: tuple[tuple[str, str], ...] = (
     ("wallet_integrity_transcript_sha256", "wallet_integrity_transcript_sha256"),
     ("attestation_certificate_chain_path", "attestation_certificate_chain_path"),
     ("attestation_certificate_chain_sha256", "attestation_certificate_chain_sha256"),
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_TARGET_FIELDS = frozenset(
+    target_key for _, target_key in ANDROID_SIGNED_EVIDENCE_SUMMARY_FIELDS
 )
 ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS = frozenset(
     (
@@ -73,6 +80,27 @@ ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_FIELDS = frozenset(
         "d2d_payment_transcript_path",
         "wallet_integrity_transcript_path",
         "attestation_certificate_chain_path",
+    )
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_ARTIFACT_PAIRS: tuple[tuple[str, str], ...] = (
+    ("offline_wallet_apk_path", "offline_wallet_apk_sha256"),
+    ("d2d_payment_transcript_path", "d2d_payment_transcript_sha256"),
+    ("wallet_integrity_transcript_path", "wallet_integrity_transcript_sha256"),
+    ("attestation_certificate_chain_path", "attestation_certificate_chain_sha256"),
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_CORE_FIELDS = frozenset(
+    ("signed_at_utc", "artifact_sha256", "signer_public_key_sha256")
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS = frozenset(
+    ("device_family", "device_model", "device_codename")
+)
+ANDROID_SLOT_RELEASE_KAGEMUSHA_FIELDS = frozenset(
+    (
+        "required",
+        "native_bridge_abi_version",
+        "device_fingerprint_sha256",
+        "attestation_challenge_sha256",
+        *(source_key for source_key, _ in ANDROID_SIGNED_EVIDENCE_SUMMARY_FIELDS),
     )
 )
 MAX_ABI6_MANIFEST_JSON_BYTES = 1024 * 1024
@@ -3310,11 +3338,14 @@ def _check_android_matrix_unique_bindings(
             if not isinstance(slot, str) or not isinstance(value, str) or not value:
                 continue
             safe_slot = _display_evidence_value(slot)
-            if field.endswith("_sha256") and device_lab.SHA256_HEX_RE.fullmatch(value) is None:
+            if field.endswith("_sha256") and (
+                device_lab.SHA256_HEX_RE.fullmatch(value) is None
+                or value == "0" * 64
+            ):
                 blockers.append(
                     blocker(
                         "android_device_lab_binding_digest_invalid",
-                        "Android device-lab production binding digests must be lowercase sha256 hex",
+                        "Android device-lab production binding digests must be non-zero lowercase sha256 hex",
                         slot=safe_slot,
                         field=field,
                         value_sha256=_display_evidence_value(value),
@@ -3374,6 +3405,19 @@ def _valid_android_signed_evidence_summary_value(
         if normalized is not None and normalized == value:
             return value
         return None
+    if target_key in ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS:
+        if (
+            value != value.strip()
+            or device_lab._contains_control_character(value)
+            or device_lab.SECRET_RE.search(value)
+        ):
+            return None
+        if (
+            target_key == "device_family"
+            and value not in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+        ):
+            return None
+        return value
     return value
 
 
@@ -3393,6 +3437,16 @@ def _check_android_signed_evidence_summary_values(
             if isinstance(raw_slot, str)
             else "<invalid-slot-report>"
         )
+        safe_slot = _android_safe_slot_id(report)
+        if safe_slot is None:
+            blockers.append(
+                blocker(
+                    "android_signed_evidence_summary_slot_invalid",
+                    "validated Android device-lab reports must use a safe signed-evidence summary slot",
+                    slot=slot,
+                )
+            )
+            continue
         if slot in seen_slots:
             blockers.append(
                 blocker(
@@ -3445,6 +3499,42 @@ def _check_android_signed_evidence_summary_values(
                     parse_blocker["slot"] = slot
                     parse_blocker["field"] = target_key
                     blockers.append(parse_blocker)
+        device_family = kagemusha.get("device_family")
+        device_model = kagemusha.get("device_model")
+        device_codename = kagemusha.get("device_codename")
+        if (
+            isinstance(device_family, str)
+            and isinstance(device_model, str)
+            and isinstance(device_codename, str)
+            and _valid_android_signed_evidence_summary_value(
+                "device_family",
+                device_family,
+            )
+            is not None
+            and _valid_android_signed_evidence_summary_value(
+                "device_model",
+                device_model,
+            )
+            is not None
+            and _valid_android_signed_evidence_summary_value(
+                "device_codename",
+                device_codename,
+            )
+            is not None
+        ):
+            inferred_family = device_lab.infer_kagemusha_device_family(
+                device_model,
+                device_codename,
+            )
+            if inferred_family != device_family:
+                blockers.append(
+                    blocker(
+                        "android_signed_evidence_summary_invalid",
+                        "validated Android device-lab report model/codename must match its device family",
+                        slot=slot,
+                        field="device_family",
+                    )
+                )
     return blockers
 
 
@@ -3455,9 +3545,9 @@ def _android_signed_evidence_summary(reports: list[dict[str, Any]]) -> dict[str,
     for report in reports:
         if report.get("status") != "ok":
             continue
-        slot = report.get("slot")
+        slot = _android_safe_slot_id(report)
         kagemusha = _android_report_kagemusha(report)
-        if not isinstance(slot, str) or not isinstance(kagemusha, dict):
+        if slot is None or not isinstance(kagemusha, dict):
             continue
         entry: dict[str, str] = {}
         for source_key, target_key in ANDROID_SIGNED_EVIDENCE_SUMMARY_FIELDS:
@@ -3467,22 +3557,116 @@ def _android_signed_evidence_summary(reports: list[dict[str, Any]]) -> dict[str,
             )
             if value is not None:
                 entry[target_key] = value
+        for pair in ANDROID_SIGNED_EVIDENCE_SUMMARY_ARTIFACT_PAIRS:
+            expected = set(pair)
+            artifact_fields = expected & set(entry)
+            if artifact_fields and artifact_fields != expected:
+                for field in pair:
+                    entry.pop(field, None)
+        core_fields = ANDROID_SIGNED_EVIDENCE_SUMMARY_CORE_FIELDS & set(entry)
+        if core_fields and core_fields != ANDROID_SIGNED_EVIDENCE_SUMMARY_CORE_FIELDS:
+            for field in ANDROID_SIGNED_EVIDENCE_SUMMARY_CORE_FIELDS:
+                entry.pop(field, None)
+        identity_fields = ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS & set(entry)
+        if identity_fields and identity_fields != ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS:
+            for field in ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS:
+                entry.pop(field, None)
+        elif identity_fields == ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS:
+            inferred_family = device_lab.infer_kagemusha_device_family(
+                entry["device_model"],
+                entry["device_codename"],
+            )
+            if inferred_family != entry["device_family"]:
+                for field in ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS:
+                    entry.pop(field, None)
+        if set(entry) != ANDROID_SIGNED_EVIDENCE_SUMMARY_TARGET_FIELDS:
+            continue
         if entry:
-            safe_slot = _display_evidence_value(slot)
-            if isinstance(safe_slot, str) and safe_slot not in signed_evidence:
-                signed_evidence[safe_slot] = entry
+            if slot not in signed_evidence:
+                signed_evidence[slot] = entry
     return signed_evidence
 
 
+def _android_safe_slot_id(report: dict[str, Any]) -> str | None:
+    """Return a release-safe slot id for Android summary cross-checks."""
+
+    slot = report.get("slot")
+    if not isinstance(slot, str):
+        return None
+    slot_ids, slot_errors = device_lab.validate_slot_ids([slot])
+    if slot_errors or slot_ids != [slot]:
+        return None
+    return slot
+
+
+def _android_report_has_complete_signed_evidence(
+    report: dict[str, Any],
+    signed_evidence: dict[str, dict[str, str]],
+) -> bool:
+    """Return true when this report matches its admitted signed-evidence entry."""
+
+    if report.get("status") != "ok":
+        return False
+    slot = _android_safe_slot_id(report)
+    if slot is None:
+        return False
+    summary_entry = signed_evidence.get(slot)
+    if not isinstance(summary_entry, dict):
+        return False
+    kagemusha = _android_report_kagemusha(report)
+    for source_key, target_key in ANDROID_SIGNED_EVIDENCE_SUMMARY_FIELDS:
+        if kagemusha.get(source_key) != summary_entry.get(target_key):
+            return False
+    return True
+
+
+def _android_slot_reports_summary(
+    reports: list[dict[str, Any]],
+    signed_evidence: dict[str, dict[str, str]],
+) -> list[dict[str, Any]]:
+    """Return slot reports without partial release-facing Kagemusha claims."""
+
+    summaries: list[dict[str, Any]] = []
+    for report in reports:
+        summary = dict(report)
+        if report.get("status") == "ok":
+            if not _android_report_has_complete_signed_evidence(report, signed_evidence):
+                kagemusha = summary.get("kagemusha")
+                if isinstance(kagemusha, dict):
+                    pruned_kagemusha = dict(kagemusha)
+                    for field in ANDROID_SLOT_RELEASE_KAGEMUSHA_FIELDS:
+                        pruned_kagemusha.pop(field, None)
+                    summary["kagemusha"] = pruned_kagemusha
+                else:
+                    summary["kagemusha"] = {}
+        summaries.append(summary)
+    return summaries
+
+
+def _android_duplicate_matrix_bindings_summary(
+    reports: list[dict[str, Any]],
+    signed_evidence: dict[str, dict[str, str]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Return duplicate physical-device bindings only for admitted slot reports."""
+
+    return device_lab.kagemusha_duplicate_matrix_bindings(
+        [
+            report
+            for report in reports
+            if _android_report_has_complete_signed_evidence(report, signed_evidence)
+        ]
+    )
+
+
 def _safe_trusted_signer_public_key_sha256(
-    trusted_signer_public_keys: dict[str, Path],
+    trusted_signer_public_keys: Mapping[Any, Any] | None,
 ) -> list[str]:
     """Return only canonical trusted signer ids safe for readiness summaries."""
 
     return sorted(
-        key
-        for key in trusted_signer_public_keys
-        if isinstance(key, str) and device_lab.SHA256_HEX_RE.fullmatch(key)
+        device_lab._trusted_signer_public_key_sha256_set(  # type: ignore[attr-defined]
+            trusted_signer_public_keys
+        )
     )
 
 
@@ -3617,12 +3801,14 @@ def check_android_device_lab(
                 )
             )
 
+    signed_evidence = _android_signed_evidence_summary(reports)
     covered = sorted(
         {
             family
             for report in reports
             for family in [_android_report_device_family(report)]
             if report.get("status") == "ok"
+            and _android_report_has_complete_signed_evidence(report, signed_evidence)
             and family is not None
         }
     )
@@ -3653,11 +3839,14 @@ def check_android_device_lab(
     return {
         "ok": not blockers,
         "root": ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL,
-        "slots": reports,
+        "slots": _android_slot_reports_summary(reports, signed_evidence),
         "covered_device_families": covered,
         "missing_device_families": missing,
-        "duplicate_bindings": device_lab.kagemusha_duplicate_matrix_bindings(reports),
-        "signed_evidence": _android_signed_evidence_summary(reports),
+        "duplicate_bindings": _android_duplicate_matrix_bindings_summary(
+            reports,
+            signed_evidence,
+        ),
+        "signed_evidence": signed_evidence,
         "min_signed_at_utc": (
             min_signed_at.isoformat().replace("+00:00", "Z")
             if min_signed_at is not None

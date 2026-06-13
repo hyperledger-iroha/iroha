@@ -19,12 +19,12 @@ object OfflineJsonParser {
             asOptionalBoolean(obj["offline_sync_optional"], false),
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
             kagemushaRecursiveCompactAvailable(obj),
-            firstOptionalString(
+            matchingOptionalStringAlias(
                 obj,
                 "offline_kagemusha_abi7_mode",
                 "offline_kagemusha_recursive_compact_mode",
             ),
-            firstOptionalInt(
+            matchingOptionalIntAlias(
                 obj,
                 "offline_kagemusha_abi7_bridge_abi_version",
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
@@ -41,12 +41,12 @@ object OfflineJsonParser {
         return OfflineV2Readiness(
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
             kagemushaRecursiveCompactAvailable(obj),
-            firstOptionalString(
+            matchingOptionalStringAlias(
                 obj,
                 "offline_kagemusha_abi7_mode",
                 "offline_kagemusha_recursive_compact_mode",
             ),
-            firstOptionalInt(
+            matchingOptionalIntAlias(
                 obj,
                 "offline_kagemusha_abi7_bridge_abi_version",
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
@@ -57,24 +57,65 @@ object OfflineJsonParser {
     }
 
     private fun kagemushaRecursiveCompactAvailable(obj: Map<String, Any>): Boolean {
-        if (obj.containsKey("offline_kagemusha_abi7")) {
-            return asOptionalBoolean(obj["offline_kagemusha_abi7"], false)
-        }
-        return asOptionalBoolean(obj["offline_kagemusha_recursive_compact_available"], false)
+        return matchingOptionalBooleanAlias(
+            obj,
+            "offline_kagemusha_abi7",
+            "offline_kagemusha_recursive_compact_available",
+            false,
+        )
     }
 
     private fun kagemushaRecursiveCompactCircuitId(obj: Map<String, Any>): String? {
-        if (obj.containsKey("offline_kagemusha_abi7_circuit_id")) {
-            return asOptionalString(obj["offline_kagemusha_abi7_circuit_id"])
+        val hasAbi7 = obj.containsKey("offline_kagemusha_abi7_circuit_id")
+        val hasCompact = obj.containsKey("offline_kagemusha_recursive_compact_circuit_id")
+        val abi7 = if (hasAbi7) {
+            asOptionalString(obj["offline_kagemusha_abi7_circuit_id"])
+            asPresentAliasString(
+                obj["offline_kagemusha_abi7_circuit_id"],
+                "offline_kagemusha_abi7_circuit_id",
+            )
+        } else {
+            null
         }
-        return asOptionalString(obj["offline_kagemusha_recursive_compact_circuit_id"])
+        val compact = if (hasCompact) {
+            asPresentAliasString(
+                obj["offline_kagemusha_recursive_compact_circuit_id"],
+                "offline_kagemusha_recursive_compact_circuit_id",
+            )
+        } else {
+            null
+        }
+        if (hasAbi7 && hasCompact) {
+            check(abi7 == compact) {
+                "offline_kagemusha_abi7_circuit_id and offline_kagemusha_recursive_compact_circuit_id must match"
+            }
+        }
+        return abi7 ?: compact
     }
 
     private fun kagemushaRecursiveCompactArtifactsAvailable(obj: Map<String, Any>): Boolean {
-        if (obj.containsKey("offline_kagemusha_abi7_artifacts")) {
-            return asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false)
+        val hasAbi7 = obj.containsKey("offline_kagemusha_abi7_artifacts")
+        val hasCompact = obj.containsKey("offline_kagemusha_recursive_compact_artifacts_available")
+        val abi7 = asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false)
+        val abi7Value = if (hasAbi7) {
+            asBoolean(obj["offline_kagemusha_abi7_artifacts"], "offline_kagemusha_abi7_artifacts")
+        } else {
+            null
         }
-        return asOptionalBoolean(obj["offline_kagemusha_recursive_compact_artifacts_available"], false)
+        val compact = if (hasCompact) {
+            asBoolean(
+                obj["offline_kagemusha_recursive_compact_artifacts_available"],
+                "offline_kagemusha_recursive_compact_artifacts_available",
+            )
+        } else {
+            null
+        }
+        if (hasAbi7 && hasCompact) {
+            check(abi7Value == compact) {
+                "offline_kagemusha_abi7_artifacts and offline_kagemusha_recursive_compact_artifacts_available must match"
+            }
+        }
+        return if (abi7Value != null) abi7 else compact ?: false
     }
 
     /** Returns a canonical JSON string for the provided payload (keys sorted). */
@@ -426,18 +467,59 @@ object OfflineJsonParser {
         return if (value is String) value else value.toString()
     }
 
-    private fun firstOptionalString(obj: Map<String, Any>, vararg keys: String): String? {
-        for (key in keys) {
-            if (obj.containsKey(key)) return asOptionalString(obj[key])
+    private fun matchingOptionalStringAlias(obj: Map<String, Any>, legacyKey: String, compactKey: String): String? {
+        val hasLegacy = obj.containsKey(legacyKey)
+        val hasCompact = obj.containsKey(compactKey)
+        val legacy = if (hasLegacy) asPresentAliasString(obj[legacyKey], legacyKey) else null
+        val compact = if (hasCompact) asPresentAliasString(obj[compactKey], compactKey) else null
+        if (hasLegacy && hasCompact) {
+            check(legacy == compact) { "$legacyKey and $compactKey must match" }
         }
-        return null
+        return legacy ?: compact
     }
 
-    private fun firstOptionalInt(obj: Map<String, Any>, vararg keys: String): Int? {
-        for (key in keys) {
-            if (obj.containsKey(key)) return asOptionalInt(obj[key], key)
+    private fun matchingOptionalIntAlias(obj: Map<String, Any>, legacyKey: String, compactKey: String): Int? {
+        val hasLegacy = obj.containsKey(legacyKey)
+        val hasCompact = obj.containsKey(compactKey)
+        val legacy = if (hasLegacy) asPresentAliasInt(obj[legacyKey], legacyKey) else null
+        val compact = if (hasCompact) asPresentAliasInt(obj[compactKey], compactKey) else null
+        if (hasLegacy && hasCompact) {
+            check(legacy == compact) { "$legacyKey and $compactKey must match" }
         }
-        return null
+        return legacy ?: compact
+    }
+
+    private fun matchingOptionalBooleanAlias(
+        obj: Map<String, Any>,
+        legacyKey: String,
+        compactKey: String,
+        default: Boolean,
+    ): Boolean {
+        val hasLegacy = obj.containsKey(legacyKey)
+        val hasCompact = obj.containsKey(compactKey)
+        val legacy = if (hasLegacy) asBoolean(obj[legacyKey], legacyKey) else null
+        val compact = if (hasCompact) asBoolean(obj[compactKey], compactKey) else null
+        if (hasLegacy && hasCompact) {
+            check(legacy == compact) { "$legacyKey and $compactKey must match" }
+        }
+        return legacy ?: compact ?: default
+    }
+
+    private fun asPresentAliasString(value: Any?, path: String): String {
+        check(value is String) { "$path must be a string" }
+        check(value.isNotEmpty() && value == value.trim()) { "$path must be an exact non-empty string" }
+        return value
+    }
+
+    private fun asPresentAliasInt(value: Any?, path: String): Int {
+        val parsed = if (value is String) {
+            check(value.isNotEmpty() && value == value.trim()) { "$path must be an exact integer string" }
+            value.toLong()
+        } else {
+            JsonNumbers.asLong(value, path)
+        }
+        check(parsed in Int.MIN_VALUE..Int.MAX_VALUE) { "$path is outside Int range" }
+        return parsed.toInt()
     }
 
     private fun asLong(value: Any?, path: String): Long {
@@ -451,19 +533,6 @@ object OfflineJsonParser {
 
     private fun asOptionalBoolean(value: Any?, default: Boolean): Boolean {
         return if (value is Boolean) value else default
-    }
-
-    private fun asOptionalInt(value: Any?, path: String): Int? {
-        if (value == null) return null
-        val parsed = if (value is String) {
-            val trimmed = value.trim()
-            if (trimmed.isEmpty()) return null
-            trimmed.toLong()
-        } else {
-            JsonNumbers.asLong(value, path)
-        }
-        check(parsed in Int.MIN_VALUE..Int.MAX_VALUE) { "$path is outside Int range" }
-        return parsed.toInt()
     }
 
     private fun asBytes(value: Any?, path: String): ByteArray {

@@ -17961,6 +17961,31 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME:
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME:
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME:
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyRequestV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME:
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME:
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME:
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME:
+  "iroha_data_model::offline::model::KagemushaVerifiedFoldRecordBundle";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME:
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1";
+export const KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME:
+  "iroha_data_model::proof::ProofAttachment";
+export const KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME:
+  "iroha_data_model::proof::VerifyingKeyRecord";
+export class KagemushaRecursiveSpendRequestCodecError extends Error {
+  readonly kind: "field" | "archive" | string;
+  readonly field: string;
+  constructor(kind: string, field: string, message?: string);
+}
 export type KagemushaOfflineSpendMode =
   | "recursive_compact_v1"
   | "recursive_spend_v1"
@@ -18108,6 +18133,161 @@ export function kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
   verifierRecordArchive: BinaryLike,
   blockHeight?: number | bigint | null,
 ): boolean;
+export interface KagemushaRecursiveSpendableNoteDescriptorInput {
+  readonly noteCommitment?: BinaryLike;
+  readonly note_commitment?: BinaryLike;
+  readonly commitment?: BinaryLike;
+  readonly spendNullifier?: BinaryLike;
+  readonly spend_nullifier?: BinaryLike;
+  readonly nullifier?: BinaryLike;
+  readonly amount: NumericLike;
+}
+export interface KagemushaRecursiveSpendableNoteDescriptor {
+  readonly noteCommitment: Buffer;
+  readonly note_commitment: Buffer;
+  readonly spendNullifier: Buffer;
+  readonly spend_nullifier: Buffer;
+  readonly amount: string;
+}
+export interface KagemushaRecursiveSpendVerifierRecordRefInput {
+  readonly verifierKeyId?: string;
+  readonly verifier_key_id?: string;
+  readonly recordBytes?: BinaryLike;
+  readonly record_bytes?: BinaryLike;
+}
+export interface KagemushaRecursiveSpendVerifierRecordRef {
+  readonly verifierKeyId: string;
+  readonly verifier_key_id: string;
+  readonly recordBytes: Buffer;
+  readonly record_bytes: Buffer;
+}
+export interface KagemushaRecursiveSpendInitRequestInput {
+  readonly recordBundle?: BinaryLike;
+  readonly record_bundle?: BinaryLike;
+  readonly pallasOpenEnvelopes?: BinaryLike;
+  readonly pallas_open_envelopes?: BinaryLike;
+  readonly pallasOpenEnvelopesArchive?: BinaryLike;
+  readonly currentNote?: KagemushaRecursiveSpendableNoteDescriptorInput;
+  readonly current_note?: KagemushaRecursiveSpendableNoteDescriptorInput;
+  readonly lineageVerifierKey?: BinaryLike | null;
+  readonly lineage_verifier_key?: BinaryLike | null;
+  readonly lineageProvingKeyArchive?: BinaryLike | null;
+  readonly lineage_proving_key_archive?: BinaryLike | null;
+  readonly blockHeight?: number | bigint | string | null;
+  readonly block_height?: number | bigint | string | null;
+}
+export interface KagemushaRecursiveSpendAppendRequestInput {
+  readonly previousBundle?: BinaryLike;
+  readonly previous_bundle?: BinaryLike;
+  readonly recordBundle?: BinaryLike;
+  readonly record_bundle?: BinaryLike;
+  readonly pallasOpenEnvelopes?: BinaryLike;
+  readonly pallas_open_envelopes?: BinaryLike;
+  readonly pallasOpenEnvelopesArchive?: BinaryLike;
+  readonly currentNote?: KagemushaRecursiveSpendableNoteDescriptorInput;
+  readonly current_note?: KagemushaRecursiveSpendableNoteDescriptorInput;
+  readonly outputProofCircuitId?: string | null;
+  readonly output_proof_circuit_id?: string | null;
+  readonly previousLineageVerifierRecord?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
+  readonly previous_lineage_verifier_record?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
+  readonly previousProofOpenEnvelopes?: BinaryLike | null;
+  readonly previous_proof_open_envelopes?: BinaryLike | null;
+  readonly previousRecursiveProofOpenEnvelopesArchive?: BinaryLike | null;
+  readonly lineageVerifierKey?: BinaryLike | null;
+  readonly lineage_verifier_key?: BinaryLike | null;
+  readonly lineageProvingKeyArchive?: BinaryLike | null;
+  readonly lineage_proving_key_archive?: BinaryLike | null;
+  readonly blockHeight?: number | bigint | string | null;
+  readonly block_height?: number | bigint | string | null;
+}
+export interface KagemushaRecursiveSpendVerifyRequestInput {
+  readonly bundle: BinaryLike;
+  readonly lineageVerifierRecord?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
+  readonly lineage_verifier_record?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
+  readonly blockHeight?: number | bigint | string | null;
+  readonly block_height?: number | bigint | string | null;
+}
+export interface KagemushaRecursiveSpendRedeemRequestInput {
+  readonly bundle: BinaryLike;
+  readonly recipient: string;
+  readonly publicAmount?: NumericLike;
+  readonly public_amount?: NumericLike;
+  readonly redeemProof?: BinaryLike;
+  readonly redeem_proof?: BinaryLike;
+  readonly lineageWitness?: BinaryLike | null;
+  readonly lineage_witness?: BinaryLike | null;
+  readonly lineageVerifierRecord?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
+  readonly lineage_verifier_record?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
+  readonly blockHeight?: number | bigint | string | null;
+  readonly block_height?: number | bigint | string | null;
+}
+export interface KagemushaRecursiveSpendVerifyResult {
+  readonly valid: boolean;
+  readonly hopCount: number;
+  readonly hop_count: number;
+  readonly encodedBytes: number;
+  readonly encoded_bytes: number;
+  readonly reason: string;
+  readonly chainAdmissible: boolean;
+  readonly chain_admissible: boolean;
+  readonly chainAdmissionReason: string;
+  readonly chain_admission_reason: string;
+  readonly witnesslessRedeemSupported: boolean;
+  readonly witnessless_redeem_supported: boolean;
+  readonly lineageWitnessRequired: boolean;
+  readonly lineage_witness_required: boolean;
+}
+export interface KagemushaRecursiveSpendBundleSummary {
+  readonly hopCount: number;
+  readonly hop_count: number;
+  readonly proofCircuitId: string;
+  readonly proof_circuit_id: string;
+  readonly asset: string;
+  readonly chainId: string;
+  readonly chain_id: string;
+  readonly initialRoot: Buffer;
+  readonly initial_root: Buffer;
+  readonly finalRoot: Buffer;
+  readonly final_root: Buffer;
+  readonly currentNote: KagemushaRecursiveSpendableNoteDescriptor;
+  readonly current_note: KagemushaRecursiveSpendableNoteDescriptor;
+}
+export function buildKagemushaRecursiveSpendableNoteDescriptor(
+  input: KagemushaRecursiveSpendableNoteDescriptorInput,
+): KagemushaRecursiveSpendableNoteDescriptor;
+export function buildKagemushaRecursiveSpendVerifierRecordRef(
+  input: KagemushaRecursiveSpendVerifierRecordRefInput,
+): KagemushaRecursiveSpendVerifierRecordRef;
+export function encodeKagemushaRecursiveSpendInitRequest(
+  request: KagemushaRecursiveSpendInitRequestInput,
+): Buffer;
+export function encodeKagemushaRecursiveSpendAppendRequest(
+  request: KagemushaRecursiveSpendAppendRequestInput,
+): Buffer;
+export function encodeKagemushaRecursiveSpendVerifyRequest(
+  request: KagemushaRecursiveSpendVerifyRequestInput,
+): Buffer;
+export function encodeKagemushaRecursiveSpendRedeemRequest(
+  request: KagemushaRecursiveSpendRedeemRequestInput,
+): Buffer;
+export function decodeKagemushaRecursiveSpendVerifyResult(
+  archive: BinaryLike,
+): KagemushaRecursiveSpendVerifyResult;
+export function decodeKagemushaRecursiveSpendBundle(
+  archive: BinaryLike,
+): KagemushaRecursiveSpendBundleSummary;
+export function kagemushaRecursiveSpendInitTyped(
+  request: KagemushaRecursiveSpendInitRequestInput,
+): Buffer;
+export function kagemushaRecursiveSpendAppendTyped(
+  request: KagemushaRecursiveSpendAppendRequestInput,
+): Buffer;
+export function kagemushaRecursiveSpendVerifyTyped(
+  request: KagemushaRecursiveSpendVerifyRequestInput,
+): KagemushaRecursiveSpendVerifyResult;
+export function kagemushaRecursiveSpendRedeemTyped(
+  request: KagemushaRecursiveSpendRedeemRequestInput,
+): Buffer;
 export function kagemushaRecursiveSpendInit(requestArchive: BinaryLike): Buffer;
 export function kagemushaRecursiveSpendAppend(
   requestArchive: BinaryLike,

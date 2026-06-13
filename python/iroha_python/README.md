@@ -213,6 +213,19 @@ Reserved-lineage append output is valid only when the previous bundle is
 already Reserved-lineage; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.
 
+Python callers can build the ABI-6 init/append/verify/redeem request archives
+with frozen typed dataclasses such as
+`KagemushaRecursiveSpendInitRequest`,
+`KagemushaRecursiveSpendAppendRequest`,
+`KagemushaRecursiveSpendVerifyRequest`, and
+`KagemushaRecursiveSpendRedeemRequest`, then pass them to
+`encode_kagemusha_recursive_spend_*_request(...)` or the
+`kagemusha_recursive_spend_*_typed(...)` convenience wrappers. The typed codecs
+also decode `KagemushaRecursiveSpendVerifyResultV1` and summarize
+`KagemushaRecursiveSpendBundleV1`, while rejecting malformed nested Norito
+archives, noncanonical note amounts, negative block heights, missing lineage
+records, and invalid append-output transitions before native dispatch.
+
 `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is currently `64`,
 and `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is
 `True`: witnessless Reserved-lineage online redemption is available for lineage

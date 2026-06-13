@@ -5,6 +5,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 
 /** Minimal JSON parser for Torii contract deploy/call responses. */
 public final class ContractJsonParser {
@@ -141,7 +142,7 @@ public final class ContractJsonParser {
     }
     return new MultisigResponse(
         true,
-        requiredString(root.get("resolved_multisig_account_id"), "multisig response.resolved_multisig_account_id"),
+        requiredExactAccountId(root.get("resolved_multisig_account_id"), "multisig response.resolved_multisig_account_id"),
         optionalBoolean(root.get("submitted"), "multisig response.submitted"),
         optionalString(root.get("proposal_id")),
         root.containsKey("instructions_hash") && root.get("instructions_hash") != null
@@ -202,6 +203,29 @@ public final class ContractJsonParser {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
     return string.trim();
+  }
+
+  private static String requiredExactAccountId(final Object value, final String path) {
+    final String string = requiredExactString(value, path);
+    try {
+      return AccountIdLiteral.requireCanonicalI105Address(string, path);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalStateException(path + " must be a canonical I105 account id", ex);
+    }
+  }
+
+  private static String requiredExactString(final Object value, final String path) {
+    if (value == null) {
+      throw new IllegalStateException(path + " must be a non-empty string");
+    }
+    final String string = value instanceof String ? (String) value : String.valueOf(value);
+    if (string == null || string.isBlank()) {
+      throw new IllegalStateException(path + " must be a non-empty string");
+    }
+    if (!string.trim().equals(string)) {
+      throw new IllegalStateException(path + " must not contain surrounding whitespace");
+    }
+    return string;
   }
 
   private static String optionalString(final Object value) {

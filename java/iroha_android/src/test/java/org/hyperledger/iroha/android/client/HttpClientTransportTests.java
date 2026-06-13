@@ -171,16 +171,20 @@ public final class HttpClientTransportTests {
     uaidBindingsRequestParsesResponse();
     uaidManifestsRequestSupportsQuery();
     identifierPoliciesRequestParsesResponse();
+    identifierPolicyParserRejectsNonExactPolicyAndProofVerifierFields();
     ramLfeProgramPoliciesRequestParsesResponse();
+    ramLfeProgramPolicyParserRejectsNonExactFields();
     identifierResolveRequestParsesResponse();
     identifierResolveRequestParsesProgrammedReceiptResponse();
     identifierResolveRequestAllowsNotFound();
     identifierHiddenFunctionRequestsRejectMalformedCiphertextEnvelopeFields();
     identifierClaimLookupAllowsNotFound();
+    identifierClaimRecordParserRejectsNonExactClaimFields();
     identifierClaimReceiptUsesAccountPath();
     ramLfeExecuteRequestParsesResponse();
     ramLfeExecuteRequestAllowsNotFound();
     ramLfeReceiptVerifyUsesRawReceipt();
+    ramLfeResponseParsersRejectNonExactFields();
     vpnProfileRequestParsesNativeLeaseFields();
     vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction();
     vpnSessionAndReceiptRequestsUseNativeLeaseDtos();
@@ -197,6 +201,7 @@ public final class HttpClientTransportTests {
     resolveAccountAliasRequestParsesResponseWithoutIndex();
     resolveAccountAliasAllowsNotFound();
     resolveAccountAliasRejectsNonIntegerIndex();
+    accountAliasParserRejectsNonExactResponseFields();
     resolveAccountAliasFailsOnMalformedJson();
     identifierNormalizationCanonicalizesInputs();
     identifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors();
@@ -1833,26 +1838,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierPoliciesRequestParsesResponse() {
-    final String json =
-        "{"
-            + "\"total\":1,"
-            + "\"items\":[{"
-            + "\"policy_id\":\"phone#retail\","
-            + "\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\","
-            + "\"active\":true,"
-            + "\"normalization\":\"phone_e164\","
-            + "\"resolver_public_key\":\"ed25519:resolver-key\","
-            + "\"backend\":\"bfv-affine-sha3-256-v1\","
-            + "\"input_encryption\":\"bfv-v1\","
-            + "\"input_encryption_public_parameters\":\"ABCD\","
-            + "\"input_encryption_public_parameters_decoded\":{"
-            + "\"parameters\":{\"polynomial_degree\":64,\"plaintext_modulus\":257,\"ciphertext_modulus\":1099511627776,\"decomposition_base_log\":12},"
-            + "\"public_key\":{\"b\":[1,2,3],\"a\":[4,5,6]},"
-            + "\"max_input_bytes\":32"
-            + "},"
-            + "\"note\":\"retail phone policy\""
-            + "}]"
-            + "}";
+    final String json = identifierPoliciesJson();
     final StubResponseExecutor executor =
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final HttpClientTransport transport =
@@ -1878,6 +1864,11 @@ public final class HttpClientTransportTests {
         : "Decoded BFV polynomial degree mismatch";
     assert item.inputEncryptionPublicParametersDecoded().parameters().decompositionBaseLog() == 12
         : "Decoded BFV decomposition-base-log mismatch";
+    assert "u64-v1".equals(item.inputEncryptionPublicParametersDecoded().noritoLengthEncoding())
+        : "Decoded BFV Norito length encoding mismatch";
+    assert item.proofVerifier() != null : "Proof verifier metadata should be parsed";
+    assert "halo2-ipa".equals(item.proofVerifier().proofBackend())
+        : "Proof verifier backend mismatch";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "Identifier policy request must be captured";
@@ -1888,27 +1879,112 @@ public final class HttpClientTransportTests {
         : "Identifier policy request must accept JSON";
   }
 
+  private static void identifierPolicyParserRejectsNonExactPolicyAndProofVerifierFields() {
+    final String canonical = identifierPoliciesJson();
+    final String[][] cases = {
+      {
+        "identifier policy list.items[0].owner",
+        canonical.replace(
+            "\"owner\":\"sorauﾛ1Np",
+            "\"owner\":\" sorauﾛ1Np")
+      },
+      {
+        "identifier policy list.items[0].normalization",
+        canonical.replace(
+            "\"normalization\":\"phone_e164\"",
+            "\"normalization\":\"Phone_E164\"")
+      },
+      {
+        "identifier policy list.items[0].backend",
+        canonical.replace(
+            "\"backend\":\"bfv-affine-sha3-256-v1\"",
+            "\"backend\":\"bfv-affine-sha3-256-v1 \"")
+      },
+      {
+        "identifier policy list.items[0].input_encryption",
+        canonical.replace(
+            "\"input_encryption\":\"bfv-v1\"",
+            "\"input_encryption\":\"BFV-v1\"")
+      },
+      {
+        "identifier policy list.items[0].input_encryption_public_parameters",
+        canonical.replace(
+            "\"input_encryption_public_parameters\":\"ABCD\"",
+            "\"input_encryption_public_parameters\":\" ABCD\"")
+      },
+      {
+        "identifier policy list.items[0].input_encryption_public_parameters_decoded.norito_length_encoding",
+        canonical.replace(
+            "\"norito_length_encoding\":\"u64-v1\"",
+            "\"norito_length_encoding\":\" u64-v1\"")
+      },
+      {
+        "identifier policy list.items[0].note",
+        canonical.replace(
+            "\"note\":\"retail phone policy\"",
+            "\"note\":\"retail phone policy \"")
+      },
+      {
+        "identifier policy list.items[0].proof_verifier.proof_backend",
+        canonical.replace("\"proof_backend\":\"halo2-ipa\"", "\"proof_backend\":\" halo2-ipa\"")
+      },
+      {
+        "identifier policy list.items[0].proof_verifier.circuit_id",
+        canonical.replace("\"circuit_id\":\"identifier-ram-lfe-v1\"", "\"circuit_id\":\"identifier-ram-lfe-v1 \"")
+      },
+      {
+        "identifier policy list.items[0].proof_verifier.public_inputs_schema_hash",
+        canonical.replace(
+            "\"public_inputs_schema_hash\":\"" + "66".repeat(32) + "\"",
+            "\"public_inputs_schema_hash\":\" " + "66".repeat(32) + "\"")
+      },
+      {
+        "identifier policy list.items[0].proof_verifier.verifying_key_bytes_b64",
+        canonical.replace(
+            "\"verifying_key_bytes_b64\":\"AQID\"",
+            "\"verifying_key_bytes_b64\":\"AQID \"")
+      }
+    };
+    for (final String[] testCase : cases) {
+      assertRamLfeParseFails(
+          testCase[0],
+          () -> IdentifierJsonParser.parsePolicyList(testCase[1].getBytes(StandardCharsets.UTF_8)));
+    }
+  }
+
+  private static String identifierPoliciesJson() {
+    return "{"
+        + "\"total\":1,"
+        + "\"items\":[{"
+        + "\"policy_id\":\"phone#retail\","
+        + "\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\","
+        + "\"active\":true,"
+        + "\"normalization\":\"phone_e164\","
+        + "\"resolver_public_key\":\"ed25519:resolver-key\","
+        + "\"backend\":\"bfv-affine-sha3-256-v1\","
+        + "\"input_encryption\":\"bfv-v1\","
+        + "\"input_encryption_public_parameters\":\"ABCD\","
+        + "\"input_encryption_public_parameters_decoded\":{"
+        + "\"parameters\":{\"polynomial_degree\":64,\"plaintext_modulus\":257,\"ciphertext_modulus\":1099511627776,\"decomposition_base_log\":12},"
+        + "\"public_key\":{\"b\":[1,2,3],\"a\":[4,5,6]},"
+        + "\"max_input_bytes\":32,"
+        + "\"norito_length_encoding\":\"u64-v1\""
+        + "},"
+        + "\"proof_verifier\":{"
+        + "\"proof_backend\":\"halo2-ipa\","
+        + "\"circuit_id\":\"identifier-ram-lfe-v1\","
+        + "\"public_inputs_schema_hash\":\""
+        + "66".repeat(32)
+        + "\","
+        + "\"verifying_key_bytes_b64\":\"AQID\""
+        + "},"
+        + "\"note\":\"retail phone policy\""
+        + "}]"
+        + "}";
+  }
+
   private static void ramLfeProgramPoliciesRequestParsesResponse() {
-    final String json =
-        "{"
-            + "\"total\":1,"
-            + "\"items\":[{"
-            + "\"program_id\":\"identifier_lookup_retail\","
-            + "\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\","
-            + "\"active\":true,"
-            + "\"resolver_public_key\":\"ed25519:resolver-key\","
-            + "\"backend\":\"bfv-programmed-sha3-256-v1\","
-            + "\"verification_mode\":\"signed\","
-            + "\"input_encryption\":\"bfv-v1\","
-            + "\"input_encryption_public_parameters\":\"ABCD\","
-            + "\"input_encryption_public_parameters_decoded\":{"
-            + "\"parameters\":{\"polynomial_degree\":64,\"plaintext_modulus\":257,\"ciphertext_modulus\":1099511627776,\"decomposition_base_log\":12},"
-            + "\"public_key\":{\"b\":[1,2,3],\"a\":[4,5,6]},"
-            + "\"max_input_bytes\":32"
-            + "},"
-            + "\"note\":\"retail programmed policy\""
-            + "}]"
-            + "}";
+    final String json = ramLfeProgramPoliciesJson();
     final StubResponseExecutor executor =
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final HttpClientTransport transport =
@@ -1929,6 +2005,9 @@ public final class HttpClientTransportTests {
         : "Decoded BFV parameters should be present";
     assert item.inputEncryptionPublicParametersDecoded().parameters().polynomialDegree() == 64L
         : "Decoded BFV polynomial degree mismatch";
+    assert item.proofVerifier() != null : "Proof verifier metadata should be parsed";
+    assert "halo2-ipa".equals(item.proofVerifier().proofBackend())
+        : "Proof verifier backend mismatch";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "RAM-LFE policy request must be captured";
@@ -1937,6 +2016,105 @@ public final class HttpClientTransportTests {
         : "RAM-LFE policy URI mismatch";
     assert request.headers().getOrDefault("Accept", List.of()).contains("application/json")
         : "RAM-LFE policy request must accept JSON";
+  }
+
+  private static void ramLfeProgramPolicyParserRejectsNonExactFields() {
+    final String canonical = ramLfeProgramPoliciesJson();
+    final String[][] cases = {
+      {
+        "ram-lfe program policy list.items[0].program_id",
+        canonical.replace(
+            "\"program_id\":\"identifier_lookup_retail\"",
+            "\"program_id\":\" identifier_lookup_retail\"")
+      },
+      {
+        "ram-lfe program policy list.items[0].owner",
+        canonical.replace(
+            "\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"",
+            "\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \"")
+      },
+      {
+        "ram-lfe program policy list.items[0].resolver_public_key",
+        canonical.replace(
+            "\"resolver_public_key\":\"ed25519:resolver-key\"",
+            "\"resolver_public_key\":\" ed25519:resolver-key\"")
+      },
+      {
+        "ram-lfe program policy list.items[0].backend",
+        canonical.replace(
+            "\"backend\":\"bfv-programmed-sha3-256-v1\"",
+            "\"backend\":\"BFV-programmed-sha3-256-v1\"")
+      },
+      {
+        "ram-lfe program policy list.items[0].verification_mode",
+        canonical.replace("\"verification_mode\":\"signed\"", "\"verification_mode\":\" signed\"")
+      },
+      {
+        "ram-lfe program policy list.items[0].input_encryption",
+        canonical.replace("\"input_encryption\":\"bfv-v1\"", "\"input_encryption\":\"bfv-v1 \"")
+      },
+      {
+        "ram-lfe program policy list.items[0].input_encryption_public_parameters",
+        canonical.replace(
+            "\"input_encryption_public_parameters\":\"ABCD\"",
+            "\"input_encryption_public_parameters\":\" ABCD\"")
+      },
+      {
+        "ram-lfe program policy list.items[0].proof_verifier.proof_backend",
+        canonical.replace("\"proof_backend\":\"halo2-ipa\"", "\"proof_backend\":\" halo2-ipa\"")
+      },
+      {
+        "ram-lfe program policy list.items[0].proof_verifier.circuit_id",
+        canonical.replace("\"circuit_id\":\"ram-lfe-v1\"", "\"circuit_id\":\"ram-lfe-v1 \"")
+      },
+      {
+        "ram-lfe program policy list.items[0].proof_verifier.public_inputs_schema_hash",
+        canonical.replace(
+            "\"public_inputs_schema_hash\":\"" + "44".repeat(32) + "\"",
+            "\"public_inputs_schema_hash\":\" " + "44".repeat(32) + "\"")
+      },
+      {
+        "ram-lfe program policy list.items[0].proof_verifier.verifying_key_bytes_b64",
+        canonical.replace(
+            "\"verifying_key_bytes_b64\":\"AQID\"",
+            "\"verifying_key_bytes_b64\":\"AQID \"")
+      }
+    };
+    for (final String[] testCase : cases) {
+      assertRamLfeParseFails(
+          testCase[0],
+          () -> RamLfeJsonParser.parsePolicyList(testCase[1].getBytes(StandardCharsets.UTF_8)));
+    }
+  }
+
+  private static String ramLfeProgramPoliciesJson() {
+    return "{"
+        + "\"total\":1,"
+        + "\"items\":[{"
+        + "\"program_id\":\"identifier_lookup_retail\","
+        + "\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\","
+        + "\"active\":true,"
+        + "\"resolver_public_key\":\"ed25519:resolver-key\","
+        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+        + "\"verification_mode\":\"signed\","
+        + "\"input_encryption\":\"bfv-v1\","
+        + "\"input_encryption_public_parameters\":\"ABCD\","
+        + "\"input_encryption_public_parameters_decoded\":{"
+        + "\"parameters\":{\"polynomial_degree\":64,\"plaintext_modulus\":257,\"ciphertext_modulus\":1099511627776,\"decomposition_base_log\":12},"
+        + "\"public_key\":{\"b\":[1,2,3],\"a\":[4,5,6]},"
+        + "\"max_input_bytes\":32"
+        + "},"
+        + "\"proof_verifier\":{"
+        + "\"proof_backend\":\"halo2-ipa\","
+        + "\"circuit_id\":\"ram-lfe-v1\","
+        + "\"public_inputs_schema_hash\":\""
+        + "44".repeat(32)
+        + "\","
+        + "\"verifying_key_bytes_b64\":\"AQID\""
+        + "},"
+        + "\"note\":\"retail programmed policy\""
+        + "}]"
+        + "}";
   }
 
   private static IdentifierReceiptFixture signedIdentifierReceiptFixture(
@@ -2306,6 +2484,103 @@ public final class HttpClientTransportTests {
         : "Identifier claim lookup URI mismatch";
   }
 
+  private static void identifierClaimRecordParserRejectsNonExactClaimFields() {
+    final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    final IdentifierResolutionPayload payload = sampleIdentifierResolutionPayload(accountId, "66");
+
+    final String canonical = identifierClaimRecordJson(
+        payload.policyId(),
+        payload.opaqueId(),
+        payload.receiptHash(),
+        payload.uaid(),
+        payload.accountId());
+    final IdentifierClaimRecord claim =
+        IdentifierJsonParser.parseClaimRecord(canonical.getBytes(StandardCharsets.UTF_8));
+    assert payload.policyId().equals(claim.policyId()) : "claim policy id mismatch";
+    assert payload.opaqueId().equals(claim.opaqueId()) : "claim opaque id mismatch";
+    assert payload.receiptHash().equals(claim.receiptHash()) : "claim receipt hash mismatch";
+    assert payload.uaid().equals(claim.uaid()) : "claim uaid mismatch";
+    assert payload.accountId().equals(claim.accountId()) : "claim account id mismatch";
+    assert claim.verifiedAtMs() == 42L : "claim verified_at_ms mismatch";
+    assert Long.valueOf(142L).equals(claim.expiresAtMs()) : "claim expires_at_ms mismatch";
+
+    final String[][] adversarial =
+        new String[][] {
+          {
+            "policy_id",
+            identifierClaimRecordJson(
+                " " + payload.policyId(),
+                payload.opaqueId(),
+                payload.receiptHash(),
+                payload.uaid(),
+                payload.accountId())
+          },
+          {
+            "opaque_id",
+            identifierClaimRecordJson(
+                payload.policyId(),
+                payload.opaqueId() + " ",
+                payload.receiptHash(),
+                payload.uaid(),
+                payload.accountId())
+          },
+          {
+            "receipt_hash",
+            identifierClaimRecordJson(
+                payload.policyId(),
+                payload.opaqueId(),
+                " " + payload.receiptHash(),
+                payload.uaid(),
+                payload.accountId())
+          },
+          {
+            "uaid",
+            identifierClaimRecordJson(
+                payload.policyId(),
+                payload.opaqueId(),
+                payload.receiptHash(),
+                payload.uaid() + " ",
+                payload.accountId())
+          },
+          {
+            "account_id",
+            identifierClaimRecordJson(
+                payload.policyId(),
+                payload.opaqueId(),
+                payload.receiptHash(),
+                payload.uaid(),
+                " " + payload.accountId())
+          },
+        };
+    for (final String[] item : adversarial) {
+      expectRuntimeException(
+          () -> IdentifierJsonParser.parseClaimRecord(item[1].getBytes(StandardCharsets.UTF_8)),
+          "identifier claim record parser must reject non-exact " + item[0]);
+    }
+  }
+
+  private static String identifierClaimRecordJson(
+      final String policyId,
+      final String opaqueId,
+      final String receiptHash,
+      final String uaid,
+      final String accountId) {
+    return "{"
+        + "\"policy_id\":"
+        + jsonString(policyId)
+        + ",\"opaque_id\":"
+        + jsonString(opaqueId)
+        + ",\"receipt_hash\":"
+        + jsonString(receiptHash)
+        + ",\"uaid\":"
+        + jsonString(uaid)
+        + ",\"account_id\":"
+        + jsonString(accountId)
+        + ",\"verified_at_ms\":42"
+        + ",\"expires_at_ms\":142"
+        + "}";
+  }
+
   private static void identifierClaimReceiptUsesAccountPath() {
     final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     final IdentifierResolutionPayload payload =
@@ -2361,42 +2636,8 @@ public final class HttpClientTransportTests {
   }
 
   private static void ramLfeExecuteRequestParsesResponse() {
-    final String json =
-        "{"
-            + "\"program_id\":\"identifier_lookup_retail\","
-            + "\"opaque_hash\":\"opaque-hash-literal\","
-            + "\"receipt_hash\":\"receipt-hash-literal\","
-            + "\"output_ciphertext\":\"abcd\","
-            + "\"output_hash\":\"output-hash-literal\","
-            + "\"associated_data_hash\":\"associated-data-hash-literal\","
-            + "\"executed_at_ms\":42,"
-            + "\"expires_at_ms\":142,"
-            + "\"backend\":\"bfv-programmed-sha3-256-v1\","
-            + "\"verification_mode\":\"signed\","
-            + "\"receipt\":{"
-            + "\"payload\":{"
-            + "\"program_id\":{\"name\":\"identifier_lookup_retail\"},"
-            + "\"program_digest\":\"hash:"
-            + "11".repeat(32).toUpperCase()
-            + "#ABCD\","
-            + "\"backend\":\"bfv-programmed-sha3-256-v1\","
-            + "\"verification_mode\":{\"mode\":\"Signed\",\"value\":null},"
-            + "\"output_hash\":\"hash:"
-            + "22".repeat(32).toUpperCase()
-            + "#BCDE\","
-            + "\"associated_data_hash\":\"hash:"
-            + "33".repeat(32).toUpperCase()
-            + "#CDEF\","
-            + "\"executed_at_ms\":42,"
-            + "\"expires_at_ms\":142"
-            + "},"
-            + "\"signature\":\""
-            + "aa".repeat(64)
-            + "\""
-            + "},"
-            + "\"output_opening\":"
-            + identifierOpeningJson(sampleOpening("identifier_lookup_retail"))
-            + "}";
+    final String outputHash = "44".repeat(32);
+    final String json = ramLfeExecuteResponseJson();
     final StubResponseExecutor executor =
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final HttpClientTransport transport =
@@ -2409,7 +2650,7 @@ public final class HttpClientTransportTests {
     assert response.isPresent() : "Expected RAM-LFE execute response";
     final RamLfeExecuteResponse execute = response.orElseThrow();
     assert "identifier_lookup_retail".equals(execute.programId()) : "Program id mismatch";
-    assert "output-hash-literal".equals(execute.outputHash()) : "Output hash mismatch";
+    assert outputHash.equals(execute.outputHash()) : "Output hash mismatch";
     assert "abcd".equals(execute.outputCiphertext()) : "Output ciphertext mismatch";
     assert "signed".equals(execute.verificationMode()) : "Verification mode mismatch";
     assert execute.receipt().containsKey("payload") : "Raw receipt payload must be preserved";
@@ -2446,16 +2687,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void ramLfeReceiptVerifyUsesRawReceipt() {
-    final String json =
-        "{"
-            + "\"valid\":true,"
-            + "\"program_id\":\"identifier_lookup_retail\","
-            + "\"backend\":\"bfv-programmed-sha3-256-v1\","
-            + "\"verification_mode\":\"signed\","
-            + "\"output_hash\":\"output-hash-literal\","
-            + "\"associated_data_hash\":\"associated-data-hash-literal\","
-            + "\"output_hash_matches\":true"
-            + "}";
+    final String json = ramLfeReceiptVerifyResponseJson();
     final StubResponseExecutor executor =
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final HttpClientTransport transport =
@@ -2495,6 +2727,176 @@ public final class HttpClientTransportTests {
     assert "c0ffee".equals(requestPayload.get("output_hex")) : "Verify output_hex mismatch";
     assert requestPayload.get("receipt") instanceof Map<?, ?>
         : "Verify request must preserve raw receipt";
+  }
+
+  private static void ramLfeResponseParsersRejectNonExactFields() {
+    final String canonicalExecute = ramLfeExecuteResponseJson();
+    final String[][] executeCases = {
+      {
+        "program_id",
+        canonicalExecute.replace(
+            "\"program_id\":\"identifier_lookup_retail\",\"opaque_hash\"",
+            "\"program_id\":\" identifier_lookup_retail\",\"opaque_hash\"")
+      },
+      {
+        "opaque_hash",
+        canonicalExecute.replace(
+            "\"opaque_hash\":\"" + "11".repeat(32) + "\"",
+            "\"opaque_hash\":\" " + "11".repeat(32) + "\"")
+      },
+      {
+        "receipt_hash",
+        canonicalExecute.replace(
+            "\"receipt_hash\":\"" + "22".repeat(32) + "\"",
+            "\"receipt_hash\":\"" + "22".repeat(32) + " \"")
+      },
+      {
+        "output_ciphertext",
+        canonicalExecute.replace(
+            "\"output_ciphertext\":\"abcd\"",
+            "\"output_ciphertext\":\" abcd\"")
+      },
+      {
+        "output_hash",
+        canonicalExecute.replace(
+            "\"output_hash\":\"" + "44".repeat(32) + "\"",
+            "\"output_hash\":\" " + "44".repeat(32) + "\"")
+      },
+      {
+        "associated_data_hash",
+        canonicalExecute.replace(
+            "\"associated_data_hash\":\"" + "55".repeat(32) + "\"",
+            "\"associated_data_hash\":\"" + "55".repeat(32) + " \"")
+      },
+      {
+        "backend",
+        canonicalExecute.replace(
+            "\"backend\":\"bfv-programmed-sha3-256-v1\",\"verification_mode\"",
+            "\"backend\":\" bfv-programmed-sha3-256-v1\",\"verification_mode\"")
+      },
+      {
+        "verification_mode",
+        canonicalExecute.replace(
+            "\"verification_mode\":\"signed\",\"receipt\"",
+            "\"verification_mode\":\"Signed\",\"receipt\"")
+      }
+    };
+    for (final String[] testCase : executeCases) {
+      assertRamLfeParseFails(
+          "ram-lfe execute response." + testCase[0],
+          () -> RamLfeJsonParser.parseExecuteResponse(testCase[1].getBytes(StandardCharsets.UTF_8)));
+    }
+
+    final String canonicalVerify = ramLfeReceiptVerifyResponseJson();
+    final String[][] verifyCases = {
+      {
+        "program_id",
+        canonicalVerify.replace(
+            "\"program_id\":\"identifier_lookup_retail\"",
+            "\"program_id\":\"identifier_lookup_retail \"")
+      },
+      {
+        "backend",
+        canonicalVerify.replace(
+            "\"backend\":\"bfv-programmed-sha3-256-v1\"",
+            "\"backend\":\"BFV-programmed-sha3-256-v1\"")
+      },
+      {
+        "verification_mode",
+        canonicalVerify.replace("\"verification_mode\":\"signed\"", "\"verification_mode\":\" signed\"")
+      },
+      {
+        "output_hash",
+        canonicalVerify.replace(
+            "\"output_hash\":\"" + "44".repeat(32) + "\"",
+            "\"output_hash\":\"" + "44".repeat(32) + " \"")
+      },
+      {
+        "associated_data_hash",
+        canonicalVerify.replace(
+            "\"associated_data_hash\":\"" + "55".repeat(32) + "\"",
+            "\"associated_data_hash\":\" " + "55".repeat(32) + "\"")
+      }
+    };
+    for (final String[] testCase : verifyCases) {
+      assertRamLfeParseFails(
+          "ram-lfe receipt verify response." + testCase[0],
+          () ->
+              RamLfeJsonParser.parseReceiptVerifyResponse(
+                  testCase[1].getBytes(StandardCharsets.UTF_8)));
+    }
+  }
+
+  private static void assertRamLfeParseFails(final String label, final Runnable parse) {
+    try {
+      parse.run();
+      assert false : "expected non-exact " + label + " to fail";
+    } catch (final RuntimeException expected) {
+      assert expected.getMessage() == null || expected.getMessage().contains(label)
+          : label + " failure should mention field, got " + expected;
+    }
+  }
+
+  private static String ramLfeExecuteResponseJson() {
+    return "{"
+        + "\"program_id\":\"identifier_lookup_retail\","
+        + "\"opaque_hash\":\""
+        + "11".repeat(32)
+        + "\","
+        + "\"receipt_hash\":\""
+        + "22".repeat(32)
+        + "\","
+        + "\"output_ciphertext\":\"abcd\","
+        + "\"output_hash\":\""
+        + "44".repeat(32)
+        + "\","
+        + "\"associated_data_hash\":\""
+        + "55".repeat(32)
+        + "\","
+        + "\"executed_at_ms\":42,"
+        + "\"expires_at_ms\":142,"
+        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+        + "\"verification_mode\":\"signed\","
+        + "\"receipt\":{"
+        + "\"payload\":{"
+        + "\"program_id\":{\"name\":\"identifier_lookup_retail\"},"
+        + "\"program_digest\":\"hash:"
+        + "11".repeat(32).toUpperCase()
+        + "#ABCD\","
+        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+        + "\"verification_mode\":{\"mode\":\"Signed\",\"value\":null},"
+        + "\"output_hash\":\"hash:"
+        + "22".repeat(32).toUpperCase()
+        + "#BCDE\","
+        + "\"associated_data_hash\":\"hash:"
+        + "33".repeat(32).toUpperCase()
+        + "#CDEF\","
+        + "\"executed_at_ms\":42,"
+        + "\"expires_at_ms\":142"
+        + "},"
+        + "\"signature\":\""
+        + "aa".repeat(64)
+        + "\""
+        + "},"
+        + "\"output_opening\":"
+        + identifierOpeningJson(sampleOpening("identifier_lookup_retail"))
+        + "}";
+  }
+
+  private static String ramLfeReceiptVerifyResponseJson() {
+    return "{"
+        + "\"valid\":true,"
+        + "\"program_id\":\"identifier_lookup_retail\","
+        + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+        + "\"verification_mode\":\"signed\","
+        + "\"output_hash\":\""
+        + "44".repeat(32)
+        + "\","
+        + "\"associated_data_hash\":\""
+        + "55".repeat(32)
+        + "\","
+        + "\"output_hash_matches\":true"
+        + "}";
   }
 
   private static void vpnProfileRequestParsesNativeLeaseFields() {
@@ -3021,12 +3423,15 @@ public final class HttpClientTransportTests {
   private static void proposeMultisigRequestParsesResponse() {
     final byte[] instructionBytes = new byte[] {1, 2, 3, 4};
     final String proposalId = "aa".repeat(32);
+    final String multisigAccountId = TestAccountIds.ed25519Authority(0x37);
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             200,
             ("{"
                     + "\"ok\":true,"
-                    + "\"resolved_multisig_account_id\":\"multisig\","
+                    + "\"resolved_multisig_account_id\":\""
+                    + multisigAccountId
+                    + "\","
                     + "\"submitted\":false,"
                     + "\"proposal_id\":\""
                     + proposalId
@@ -3059,7 +3464,7 @@ public final class HttpClientTransportTests {
             .join();
 
     assert response.ok() : "Multisig response should be successful";
-    assert "multisig".equals(response.resolvedMultisigAccountId())
+    assert multisigAccountId.equals(response.resolvedMultisigAccountId())
         : "resolved multisig account mismatch";
     assert Boolean.FALSE.equals(response.submitted()) : "submitted mismatch";
     assert proposalId.equals(response.instructionsHash()) : "instructions_hash mismatch";
@@ -3154,12 +3559,15 @@ public final class HttpClientTransportTests {
   }
 
   private static void multisigResponseParserRejectsMalformedFields() {
+    final String multisigAccountId = TestAccountIds.ed25519Authority(0x37);
     expectRuntimeException(
         () ->
             ContractJsonParser.parseMultisigResponse(
                 ("{"
                         + "\"ok\":false,"
-                        + "\"resolved_multisig_account_id\":\"multisig\"}")
+                        + "\"resolved_multisig_account_id\":\""
+                        + multisigAccountId
+                        + "\"}")
                     .getBytes(StandardCharsets.UTF_8)),
         "false ok response must be rejected");
     expectRuntimeException(
@@ -3167,7 +3575,27 @@ public final class HttpClientTransportTests {
             ContractJsonParser.parseMultisigResponse(
                 ("{"
                         + "\"ok\":true,"
-                        + "\"resolved_multisig_account_id\":\"multisig\","
+                        + "\"resolved_multisig_account_id\":\""
+                        + multisigAccountId
+                        + " \"}")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "padded resolved multisig account id must be rejected");
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseMultisigResponse(
+                ("{"
+                        + "\"ok\":true,"
+                        + "\"resolved_multisig_account_id\":\"multisig\"}")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "non-canonical resolved multisig account id must be rejected");
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseMultisigResponse(
+                ("{"
+                        + "\"ok\":true,"
+                        + "\"resolved_multisig_account_id\":\""
+                        + multisigAccountId
+                        + "\","
                         + "\"submitted\":\"false\"}")
                     .getBytes(StandardCharsets.UTF_8)),
         "string submitted flag must be rejected");
@@ -3176,7 +3604,9 @@ public final class HttpClientTransportTests {
             ContractJsonParser.parseMultisigResponse(
                 ("{"
                         + "\"ok\":true,"
-                        + "\"resolved_multisig_account_id\":\"multisig\","
+                        + "\"resolved_multisig_account_id\":\""
+                        + multisigAccountId
+                        + "\","
                         + "\"instructions_hash\":\"aa\"}")
                     .getBytes(StandardCharsets.UTF_8)),
         "short instructions hash must be rejected");
@@ -3185,7 +3615,9 @@ public final class HttpClientTransportTests {
             ContractJsonParser.parseMultisigResponse(
                 ("{"
                         + "\"ok\":true,"
-                        + "\"resolved_multisig_account_id\":\"multisig\","
+                        + "\"resolved_multisig_account_id\":\""
+                        + multisigAccountId
+                        + "\","
                         + "\"signing_message_b64\":\"not base64\"}")
                     .getBytes(StandardCharsets.UTF_8)),
         "malformed signing message must be rejected");
@@ -3194,7 +3626,9 @@ public final class HttpClientTransportTests {
             ContractJsonParser.parseMultisigResponse(
                 ("{"
                         + "\"ok\":true,"
-                        + "\"resolved_multisig_account_id\":\"multisig\","
+                        + "\"resolved_multisig_account_id\":\""
+                        + multisigAccountId
+                        + "\","
                         + "\"signing_message_b64\":\"\"}")
                     .getBytes(StandardCharsets.UTF_8)),
         "empty signing message must be rejected");
@@ -3203,7 +3637,9 @@ public final class HttpClientTransportTests {
             ContractJsonParser.parseMultisigResponse(
                 ("{"
                         + "\"ok\":true,"
-                        + "\"resolved_multisig_account_id\":\"multisig\","
+                        + "\"resolved_multisig_account_id\":\""
+                        + multisigAccountId
+                        + "\","
                         + "\"creation_time_ms\":-1}")
                     .getBytes(StandardCharsets.UTF_8)),
         "negative creation time must be rejected");
@@ -3377,6 +3813,35 @@ public final class HttpClientTransportTests {
     assert threw : "Non-integer index must complete exceptionally";
     assert future.isCompletedExceptionally()
         : "Future must be completed exceptionally for a non-integer index";
+  }
+
+  private static void accountAliasParserRejectsNonExactResponseFields() {
+    final String canonical =
+        "{"
+            + "\"alias\":\"alice@universal\","
+            + "\"account_id\":\"aid:alice-123\","
+            + "\"index\":7,"
+            + "\"source\":\"directory\""
+            + "}";
+    final String[][] cases = {
+      {
+        "account alias resolution.alias",
+        canonical.replace("\"alias\":\"alice@universal\"", "\"alias\":\" alice@universal\"")
+      },
+      {
+        "account alias resolution.account_id",
+        canonical.replace("\"account_id\":\"aid:alice-123\"", "\"account_id\":\"aid:alice-123 \"")
+      },
+      {
+        "account alias resolution.source",
+        canonical.replace("\"source\":\"directory\"", "\"source\":\" directory\"")
+      }
+    };
+    for (final String[] testCase : cases) {
+      assertRamLfeParseFails(
+          testCase[0],
+          () -> AccountAliasJsonParser.parseResolution(testCase[1].getBytes(StandardCharsets.UTF_8)));
+    }
   }
 
   private static void resolveAccountAliasFailsOnMalformedJson() {

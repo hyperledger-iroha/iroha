@@ -6,13 +6,12 @@ public sealed class CanonicalRequestCredentials
 
     public CanonicalRequestCredentials(string accountId, ReadOnlySpan<byte> privateKeySeed)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
         if (privateKeySeed.Length == 0)
         {
             throw new ArgumentException("private key seed must not be empty", nameof(privateKeySeed));
         }
 
-        AccountId = accountId;
+        AccountId = CanonicalRequest.RequireExactNonBlank(accountId, nameof(accountId));
         this.privateKeySeed = privateKeySeed.ToArray();
     }
 

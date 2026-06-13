@@ -173,6 +173,75 @@ REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS = (
     "validate_kagemusha_recursive_spend_lineage_key_artifacts",
 )
 
+REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_PYTHON_PUBLIC_METHODS = (
+    "KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME",
+    "KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME",
+    "KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME",
+    "KagemushaRecursiveSpendableNoteDescriptor",
+    "KagemushaRecursiveSpendVerifierRecordRef",
+    "KagemushaRecursiveSpendInitRequest",
+    "KagemushaRecursiveSpendAppendRequest",
+    "KagemushaRecursiveSpendVerifyRequest",
+    "KagemushaRecursiveSpendVerifyResult",
+    "KagemushaRecursiveSpendRedeemRequest",
+    "KagemushaRecursiveSpendBundleSummary",
+    "encode_kagemusha_recursive_spend_init_request",
+    "encode_kagemusha_recursive_spend_append_request",
+    "encode_kagemusha_recursive_spend_verify_request",
+    "encode_kagemusha_recursive_spend_redeem_request",
+    "decode_kagemusha_recursive_spend_verify_result",
+    "decode_kagemusha_recursive_spend_bundle",
+    "kagemusha_recursive_spend_init_typed",
+    "kagemusha_recursive_spend_append_typed",
+    "kagemusha_recursive_spend_verify_typed",
+    "kagemusha_recursive_spend_redeem_typed",
+)
+
+REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS = (
+    "KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME",
+    "KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME",
+    "KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME",
+    "KagemushaRecursiveSpendRequestCodecError",
+    "buildKagemushaRecursiveSpendableNoteDescriptor",
+    "buildKagemushaRecursiveSpendVerifierRecordRef",
+    "encodeKagemushaRecursiveSpendInitRequest",
+    "encodeKagemushaRecursiveSpendAppendRequest",
+    "encodeKagemushaRecursiveSpendVerifyRequest",
+    "encodeKagemushaRecursiveSpendRedeemRequest",
+    "decodeKagemushaRecursiveSpendVerifyResult",
+    "decodeKagemushaRecursiveSpendBundle",
+    "kagemushaRecursiveSpendInitTyped",
+    "kagemushaRecursiveSpendAppendTyped",
+    "kagemushaRecursiveSpendVerifyTyped",
+    "kagemushaRecursiveSpendRedeemTyped",
+)
+
+REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_DECLARATIONS = (
+    "KagemushaRecursiveSpendableNoteDescriptorInput",
+    "KagemushaRecursiveSpendableNoteDescriptor",
+    "KagemushaRecursiveSpendVerifierRecordRefInput",
+    "KagemushaRecursiveSpendVerifierRecordRef",
+    "KagemushaRecursiveSpendInitRequestInput",
+    "KagemushaRecursiveSpendAppendRequestInput",
+    "KagemushaRecursiveSpendVerifyRequestInput",
+    "KagemushaRecursiveSpendRedeemRequestInput",
+    "KagemushaRecursiveSpendVerifyResult",
+    "KagemushaRecursiveSpendBundleSummary",
+) + REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS
+
 REQUIRED_PUBLIC_METHODS = (
     "initSpend",
     "appendSpend",
@@ -202,7 +271,7 @@ REQUIRED_JS_PUBLIC_EXPORTS = REQUIRED_JS_NATIVE_METHODS + (
     "canProveKagemushaRecursiveSpendAppendOutputProofCircuitId",
     "canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId",
     "requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend",
-) + REQUIRED_LINEAGE_KEY_ARTIFACT_JS_PUBLIC_EXPORTS
+) + REQUIRED_LINEAGE_KEY_ARTIFACT_JS_PUBLIC_EXPORTS + REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS
 
 REQUIRED_PYTHON_PUBLIC_METHODS = REQUIRED_PYTHON_NATIVE_METHODS + (
     "is_kagemusha_recursive_spend_available",
@@ -219,7 +288,7 @@ REQUIRED_PYTHON_PUBLIC_METHODS = REQUIRED_PYTHON_NATIVE_METHODS + (
     "can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id",
     "can_select_kagemusha_recursive_spend_append_output_proof_circuit_id",
     "requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append",
-) + REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS + REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS
+) + REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS + REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS + REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_PYTHON_PUBLIC_METHODS
 
 JNI_METHODS = (
     "nativeBridgeAbiVersion",
@@ -251,6 +320,8 @@ SOURCE_PATHS = (
     "crates/iroha_data_model/src/offline/mod.rs",
     "crates/iroha_js_host/src/lib.rs",
     "docs/source/offline_kagemusha.md",
+    "scripts/kagemusha_android_device_lab_slot.py",
+    "scripts/tests/check_android_device_lab_slot_test.py",
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
     "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
     "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
@@ -259,6 +330,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
     "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
@@ -291,11 +363,13 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/OfflineQrStreamScan.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineTransferDiagnostics.swift",
+    "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
@@ -318,9 +392,13 @@ SOURCE_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineRevocationBundleTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountIdLiteral.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/AccountAliasJsonParser.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/CanonicalRequestSigner.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractJsonParser.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierJsonParser.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/RamLfeJsonParser.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoder.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptVerifier.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClient.java",
@@ -333,6 +411,7 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycle.java",
@@ -356,9 +435,13 @@ SOURCE_PATHS = (
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+    "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountIdLiteral.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AccountAliasJsonParser.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/CanonicalRequestSigner.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ContractJsonParser.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierJsonParser.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/RamLfeJsonParser.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptCanonicalEncoder.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptVerifier.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamClient.kt",
@@ -370,6 +453,7 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/SigningAlgorithm.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycle.kt",
@@ -392,6 +476,7 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
     "javascript/iroha_js/src/address.js",
@@ -430,6 +515,7 @@ SOURCE_PATHS = (
     "javascript/iroha_js/test/package_dist.test.js",
     "javascript/iroha_js/test/privacyNative.test.js",
     "javascript/iroha_js/test/toriiClient.identifier.test.js",
+    "javascript/iroha_js/test/toriiClient.ramLfe.test.js",
     "javascript/iroha_js/test/toriiClient.test.js",
     "python/iroha_python/src/iroha_python/__init__.py",
     "python/iroha_python/src/iroha_python/_privacy_backends.py",
@@ -452,15 +538,23 @@ SOURCE_PATHS = (
     "python/iroha_torii_client/client.py",
     "python/iroha_torii_client/tests/test_client.py",
     "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj",
+    "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestCredentials.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestHeaders.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
 )
 
@@ -593,6 +687,26 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "C# lineage key package binding negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-key-package-binding",
+    ),
+    (
+        "C# lineage CID1 exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-cid1-exactness",
+    ),
+    (
+        "C# canonical request exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-canonical-request-exactness",
+    ),
+    (
+        "C# identifier receipt exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-identifier-receipt-exactness",
+    ),
+    (
+        "C# transaction builder top-level exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-transaction-builder-exactness",
+    ),
+    (
+        "C# transaction encoder exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-transaction-encoding-exactness",
     ),
     (
         "Swift lineage key package binding negative control",
@@ -791,6 +905,62 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-compact-projection-unsigned-block-height",
     ),
     (
+        "JVM ClaimIdentifier account binding test negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-claim-identifier-account-binding-test",
+    ),
+    (
+        "JVM ClaimIdentifier account exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-claim-identifier-account-exactness",
+    ),
+    (
+        "JVM identifier claim-record exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-identifier-claim-record-exactness",
+    ),
+    (
+        "JS/Swift identifier claim-record exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-swift-identifier-claim-record-exactness",
+    ),
+    (
+        "RAM-LFE response exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-ram-lfe-response-exactness",
+    ),
+    (
+        "RAM-LFE program-policy exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-ram-lfe-program-policy-exactness",
+    ),
+    (
+        "identifier policy proof-verifier exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-policy-proof-verifier-exactness",
+    ),
+    (
+        "identifier policy metadata exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-policy-metadata-exactness",
+    ),
+    (
+        "account alias resolution exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-account-alias-resolution-exactness",
+    ),
+    (
+        "multisig resolved account exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-multisig-resolved-account-exactness",
+    ),
+    (
+        "Android device-lab family fail-closed negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-fail-closed",
+    ),
+    (
+        "Android device-lab family overmatch negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-overmatch",
+    ),
+    (
+        "Android device-lab requested family binding negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-override-binding",
+    ),
+    (
+        "Android device-lab assembler identity fields negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-assembler-identity-fields",
+    ),
+    (
         "native bridge zero-envelope Pallas guard negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-zero-envelope-pallas-guard",
     ),
@@ -945,6 +1115,18 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "identifier receipt account-id exactness negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-account-id-exactness-guard",
+    ),
+    (
+        "Swift identifier receipt account-id exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-identifier-receipt-account-id-exactness",
+    ),
+    (
+        "native bridge identifier receipt exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-identifier-receipt-exactness",
+    ),
+    (
+        "native bridge claim-identifier account binding negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-claim-identifier-account-binding",
     ),
     (
         "identifier receipt hash-field exactness negative control",
@@ -1161,6 +1343,30 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Swift Kagemusha instruction transaction builder negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-instruction-transaction-builder",
+    ),
+    (
+        "Swift identifier receipt account-id decode test negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-identifier-receipt-account-id-decode-test",
+    ),
+    (
+        "Swift NFC receive success preservation negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-receive-success-preservation",
+    ),
+    (
+        "Swift NFC receipt ACK single-success negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-receipt-ack-single-success",
+    ),
+    (
+        "Swift NFC receipt ACK-read single-success negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-receipt-ack-read-single-success",
+    ),
+    (
+        "Swift NFC emulation progress-after-success negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-emulation-progress-after-success",
+    ),
+    (
+        "Swift NFC send terminal-success policy negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-send-terminal-success-policy",
     ),
     (
         "Swift SDK version script negative control",
@@ -2074,6 +2280,47 @@ def check_c_bridge(texts, errors):
             "zero-envelope nested Pallas archives",
         ),
         "Rust C recursive spend nested Pallas guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/connect_norito_bridge/src/lib.rs",
+        (
+            "fn parse_identifier_exact_str(value: &JsonValue) -> BridgeResult<String>",
+            "raw.is_empty() || raw.trim() != raw",
+            ".decode(proof_b64)",
+            "let kind =\n        parse_identifier_exact_str",
+            "parse_identifier_receipt_rejects_padded_payload_fields",
+            "parse_identifier_receipt_rejects_padded_proof_attestation_fields",
+            'vec!["payload", "opaque_id"]',
+            'vec!["payload", "uaid"]',
+            'vec!["payload", "account_id"]',
+            'vec!["attestation", "kind"]',
+            "padded policy-id object fields must fail",
+        ),
+        "Rust native identifier receipt exactness",
+        errors,
+    )
+    require_regex(
+        texts,
+        "crates/connect_norito_bridge/src/lib.rs",
+        r"let\s+account_id\s*=\s*parse_identifier_exact_str\([\s\S]*?"
+        r"\.and_then\(\|value\|\s*parse_account_id\(value\)"
+        r"\.map_err\(\|_\|\s*BridgeError::IdentifierReceipt\)\)\?;",
+        "Rust native identifier receipt account-id exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/connect_norito_bridge/src/lib.rs",
+        (
+            "fn validate_identifier_claim_account(",
+            "if &receipt.payload.account_id != account",
+            "validate_identifier_claim_account(&account, &receipt)?;",
+            "validate_identifier_claim_account_rejects_mismatched_receipt_account",
+            "mismatched claim account must fail before transaction encoding",
+        ),
+        "Rust native claim identifier account binding",
         errors,
     )
 
@@ -3614,6 +3861,7 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest",
         "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyStatusTest",
         "org.hyperledger.iroha.sdk.crypto.SigningAlgorithmTest",
+        "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest",
         "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest",
         "org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest",
         "org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest",
@@ -3627,8 +3875,12 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
             errors,
         )
     require(
-        "KagemushaRecursiveAggregationProofBundleProver.java" in script,
-        "Kagemusha JVM SDK script must compile the Android recursive aggregation prover wrapper",
+        (
+            'java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java'
+            in script
+        )
+        and "KagemushaRecursiveSpendProverTest.java" in script,
+        "Kagemusha JVM SDK script must compile the Android recursive spend harness with project sourcepath",
         errors,
     )
     require(
@@ -3691,6 +3943,101 @@ def check_javascript(texts, errors):
     ):
         require_contains(texts, relative, constants, f"{relative} constants", errors)
         require_contains(texts, relative, REQUIRED_JS_PUBLIC_EXPORTS, f"{relative} public API", errors)
+
+    for relative in ("javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"):
+        require_contains(
+            texts,
+            relative,
+            REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS
+            + (
+                "import { AccountAddress } from \"./address.js\"",
+                "function kagemushaNormalizeInitRequest(",
+                "function kagemushaNormalizeAppendRequest(",
+                "function kagemushaNormalizeVerifyRequest(",
+                "function kagemushaNormalizeRedeemRequest(",
+                "function kagemushaNoritoArchiveForType(",
+                "function kagemushaSchemaHashForTypeName(",
+                "function kagemushaTypedArchivePayload(",
+                "function kagemushaCompactPayloadForRequest(",
+                "function kagemushaSpendableNotePayload(",
+                "function kagemushaAccountIdPayload(",
+                "AccountAddress.parseEncoded(recipient)",
+                "kagemushaCanonicalU128Decimal",
+                "kagemushaNormalizeBlockHeight",
+                "previousLineageVerifierRecord",
+                "previousProofOpenEnvelopes",
+                "requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend",
+                "requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend",
+                "decodeKagemushaRecursiveSpendVerifyResult(",
+                "decodeKagemushaRecursiveSpendBundle(",
+            ),
+            f"{relative} typed recursive spend request codecs",
+            errors,
+        )
+    require_contains(
+        texts,
+        "javascript/iroha_js/index.d.ts",
+        REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_DECLARATIONS
+        + (
+            "readonly noteCommitment: Buffer",
+            "readonly spendNullifier: Buffer",
+            "readonly previousProofOpenEnvelopes?: BinaryLike | null",
+            "readonly witnesslessRedeemSupported: boolean",
+            "readonly currentNote: KagemushaRecursiveSpendableNoteDescriptor",
+            "request: KagemushaRecursiveSpendInitRequestInput",
+            "request: KagemushaRecursiveSpendAppendRequestInput",
+            "request: KagemushaRecursiveSpendVerifyRequestInput",
+            "request: KagemushaRecursiveSpendRedeemRequestInput",
+        ),
+        "JavaScript typed recursive spend request codec declarations",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures",
+            "Kagemusha recursive spend typed encoders write request schemas and compact layouts",
+            "Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch",
+            "Kagemusha recursive spend typed helpers delegate encoded requests",
+            "decodeKagemushaRecursiveSpendVerifyResult",
+            "decodeKagemushaRecursiveSpendBundle",
+            "encodeKagemushaRecursiveSpendInitRequest",
+            "encodeKagemushaRecursiveSpendAppendRequest",
+            "encodeKagemushaRecursiveSpendVerifyRequest",
+            "encodeKagemushaRecursiveSpendRedeemRequest",
+            "buildKagemushaRecursiveSpendableNoteDescriptor",
+            "buildKagemushaRecursiveSpendVerifierRecordRef",
+            "previousLineageVerifierRecord",
+            "previousProofOpenEnvelopes",
+            "alice@wonderland",
+            "String(1n << 128n)",
+            "calls.at(-1)",
+        ),
+        "JavaScript typed recursive spend request codec tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS,
+        "JavaScript package dist typed recursive spend request codec exports",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/crypto.browser.test.js",
+        (
+            "KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME",
+            "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME",
+            "KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME",
+            "encodeKagemushaRecursiveSpendInitRequest",
+            "decodeKagemushaRecursiveSpendBundle",
+            "kagemushaRecursiveSpendVerifyTyped",
+        ),
+        "JavaScript browser typed recursive spend request codec stubs",
+        errors,
+    )
 
     require_contains(
         texts,
@@ -3774,6 +4121,191 @@ def check_javascript(texts, errors):
             f"{relative} identifier receipt proof base64 exactness",
             errors,
         )
+        require_regex(
+            texts,
+            relative,
+            r"function normalizeIdentifierClaimLookupResponse[\s\S]*?"
+            r"policy_id: requireIdentifierPolicyId\(record\.policy_id[\s\S]*?"
+            r"opaque_id: requireExactReceiptPrefixedHash\(record\.opaque_id[\s\S]*?"
+            r"receipt_hash: requireExactReceiptHash\(record\.receipt_hash[\s\S]*?"
+            r"uaid: requireExactReceiptUaid\(record\.uaid[\s\S]*?"
+            r"account_id: requireExactAccountId\(record\.account_id",
+            f"{relative} identifier claim record exactness",
+            errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"function normalizeAliasResolutionResponse[\s\S]*?"
+            r"const alias = requireExactNonEmptyString\(record\.alias[\s\S]*?"
+            r"const rawAccountId = requireExactNonEmptyString\([\s\S]*?"
+            r"record\.account_id[\s\S]*?"
+            r"const accountId = ToriiClient\._requireAccountId\([\s\S]*?"
+            r"rawAccountId[\s\S]*?"
+            r"result\.source = requireExactNonEmptyString\(sourceValue",
+            f"{relative} account alias resolution exactness",
+            errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"function normalizeMultisigContractCallResponse[\s\S]*?"
+            r"resolved_multisig_account_id: requireExactAccountId\([\s\S]*?"
+            r"function normalizeMultisigSpecResponse[\s\S]*?"
+            r"resolved_multisig_account_id: requireExactAccountId\([\s\S]*?"
+            r"function normalizeMultisigProposalsListResponse[\s\S]*?"
+            r"resolved_multisig_account_id: requireExactAccountId\([\s\S]*?"
+            r"function normalizeMultisigProposalGetResponse[\s\S]*?"
+            r"resolved_multisig_account_id: requireExactAccountId\(",
+            f"{relative} multisig resolved account exactness",
+            errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"function normalizeIdentifierBfvPublicParameters[\s\S]*?"
+            r"norito_length_encoding = requireExactNonEmptyString\([\s\S]*?"
+            r"`\$\{context\}\.norito_length_encoding`",
+            f"{relative} identifier BFV metadata exactness",
+            errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"function normalizeIdentifierPolicySummary[\s\S]*?"
+            r"const normalization = requireExactNonEmptyString\([\s\S]*?"
+            r"normalization !== normalization\.toLowerCase\(\)[\s\S]*?"
+            r"const backend = requireExactNonEmptyString\(record\.backend[\s\S]*?"
+            r"backend !== backend\.toLowerCase\(\)[\s\S]*?"
+            r"owner: requireExactAccountId\(record\.owner[\s\S]*?"
+            r"resolver_public_key: requireExactNonEmptyString\([\s\S]*?"
+            r"const inputEncryption = requireExactNonEmptyString\([\s\S]*?"
+            r"inputEncryption !== inputEncryption\.toLowerCase\(\)[\s\S]*?"
+            r"result\.input_encryption_public_parameters = requireExactHexString\([\s\S]*?"
+            r"result\.note = requireExactNonEmptyString\(",
+            f"{relative} identifier policy metadata exactness",
+            errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"function normalizeIdentifierPolicySummary[\s\S]*?"
+            r"result\.proof_verifier = normalizeRamLfeProofVerifierMetadata\("
+            r"[\s\S]*?record\.proof_verifier[\s\S]*?"
+            r"`\$\{context\}\.proof_verifier`",
+            f"{relative} identifier policy proof-verifier exactness",
+            errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"function normalizeRamLfeExecuteResponse[\s\S]*?"
+            r"program_id: requireExactNonEmptyString\(record\.program_id[\s\S]*?"
+            r"opaque_hash: requireExactReceiptHash\(record\.opaque_hash[\s\S]*?"
+            r"receipt_hash: requireExactReceiptHash\(record\.receipt_hash[\s\S]*?"
+            r"output_ciphertext: requireExactHexString\([\s\S]*?"
+            r"output_hash: requireExactReceiptHash\(record\.output_hash[\s\S]*?"
+            r"associated_data_hash: requireExactReceiptHash\([\s\S]*?"
+            r"backend,[\s\S]*?verification_mode: verificationMode",
+            f"{relative} RAM-LFE execute response exactness",
+            errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"function normalizeRamLfeReceiptVerifyResponse[\s\S]*?"
+            r"program_id: requireExactNonEmptyString\(record\.program_id[\s\S]*?"
+            r"backend,[\s\S]*?verification_mode: verificationMode[\s\S]*?"
+            r"output_hash: requireExactReceiptHash\(record\.output_hash[\s\S]*?"
+            r"associated_data_hash: requireExactReceiptHash\(",
+            f"{relative} RAM-LFE receipt verify response exactness",
+            errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"function normalizeRamLfeProgramPolicySummary[\s\S]*?"
+            r"const backend = requireExactNonEmptyString\(record\.backend[\s\S]*?"
+            r"backend !== backend\.toLowerCase\(\)[\s\S]*?"
+            r"const verificationMode = requireExactNonEmptyString\([\s\S]*?"
+            r"verificationMode !== verificationMode\.toLowerCase\(\)[\s\S]*?"
+            r"program_id: requireExactNonEmptyString\(record\.program_id[\s\S]*?"
+            r"owner: requireExactAccountId\(record\.owner[\s\S]*?"
+            r"resolver_public_key: requireExactNonEmptyString\([\s\S]*?"
+            r"result\.input_encryption = requireExactNonEmptyString\([\s\S]*?"
+            r"result\.input_encryption_public_parameters = requireExactHexString\([\s\S]*?"
+            r"result\.proof_verifier = normalizeRamLfeProofVerifierMetadata\([\s\S]*?"
+            r"function normalizeRamLfeProofVerifierMetadata[\s\S]*?"
+            r"proof_backend: requireExactNonEmptyString\(record\.proof_backend[\s\S]*?"
+            r"circuit_id: requireExactNonEmptyString\(record\.circuit_id[\s\S]*?"
+            r"public_inputs_schema_hash: requireExactReceiptHash\([\s\S]*?"
+            r"verifying_key_bytes_b64: requireExactNonEmptyString\(",
+            f"{relative} RAM-LFE program policy exactness",
+            errors,
+        )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiClient.identifier.test.js",
+        (
+            "identifierPolicyFixture",
+            "listIdentifierPolicies normalizes BFV and proof-verifier metadata",
+            "listIdentifierPolicies rejects non-exact policy metadata",
+            "identifier policy metadata ${field} exactness",
+            "input_encryption_public_parameters_decoded.norito_length_encoding",
+            "listIdentifierPolicies rejects non-exact proof-verifier metadata",
+            "identifier policy list response\\\\.items\\\\[0\\\\]\\\\.proof_verifier\\\\.${field}",
+            "identifier policy proof verifier ${field} exactness",
+            "claimRecordFixture",
+            "getIdentifierClaimByReceiptHash parses exact claim records",
+            "getIdentifierClaimByReceiptHash rejects non-exact claim record fields",
+            "identifier claim lookup response\\\\.${field}",
+            "claim record ${field} exactness",
+        ),
+        "JavaScript identifier policy metadata, proof-verifier, and claim record exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiClient.test.js",
+        (
+            "resolveAlias parses exact payload fields",
+            "alias resolve response\\.alias must not contain surrounding whitespace",
+            "alias resolve response\\.account_id must not contain surrounding whitespace",
+            "alias resolve response\\.source must not contain surrounding whitespace",
+        ),
+        "JavaScript account alias resolution exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiClient.test.js",
+        (
+            "multisig response decoders reject non-exact resolved account ids",
+            "resolved_multisig_account_id must not contain surrounding whitespace",
+        ),
+        "JavaScript multisig resolved account exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiClient.ramLfe.test.js",
+        (
+            "ramLfeProgramPolicy",
+            "listRamLfeProgramPolicies rejects non-exact policy metadata",
+            "ram-lfe program policy list response\\\\.items\\\\[0\\\\]\\\\.${field}",
+            "RAM-LFE program policy ${field} exactness",
+            "listRamLfeProgramPolicies rejects non-exact proof-verifier metadata",
+            "ram-lfe program policy list response\\\\.items\\\\[0\\\\]\\\\.proof_verifier\\\\.${field}",
+            "RAM-LFE proof verifier ${field} exactness",
+            "ramLfeExecuteResponse",
+            "executeRamLfeProgram rejects non-exact response fields",
+            "verifyRamLfeReceipt rejects non-exact response fields",
+            "ram-lfe execute response\\\\.${field}",
+            "ram-lfe receipt verify response\\\\.${field}",
+        ),
+        "JavaScript RAM-LFE response and program-policy exactness tests",
+        errors,
+    )
 
     for relative in ("javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"):
         require_contains(
@@ -4462,6 +4994,59 @@ def check_python(texts, errors):
     require_contains(
         texts,
         wrapper,
+        REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_PYTHON_PUBLIC_METHODS
+        + (
+            "def _kagemusha_typed_archive_payload(",
+            "def _kagemusha_norito_archive(",
+            "def _kagemusha_compact_payload_for_request(",
+            "def _kagemusha_spendable_note_payload(",
+            "def _kagemusha_account_id_payload(",
+            "AccountAddress.parse_encoded(recipient)",
+            "_kagemusha_canonical_u128_decimal",
+            "_kagemusha_validate_block_height",
+            "previous_lineage_verifier_record is required for lineage previous bundles",
+            "previous_proof_open_envelopes is required for lineage append output",
+            "_kagemusha_lineage_key_artifacts_for_init_request",
+            "_kagemusha_lineage_key_artifacts_for_append_request",
+            "lineage_key_artifacts are only valid for lineage append output",
+            "lineage_verifier_key is required for recursive spend lineage proving",
+            "decode_kagemusha_recursive_spend_verify_result(",
+            "decode_kagemusha_recursive_spend_bundle(",
+        ),
+        "Python typed recursive spend request codecs",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures",
+            "test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs",
+            "test_recursive_kagemusha_typed_helpers_delegate_encoded_requests",
+            "decode_kagemusha_recursive_spend_verify_result",
+            "decode_kagemusha_recursive_spend_bundle",
+            "encode_kagemusha_recursive_spend_init_request",
+            "encode_kagemusha_recursive_spend_append_request",
+            "encode_kagemusha_recursive_spend_verify_request",
+            "encode_kagemusha_recursive_spend_redeem_request",
+            "KagemushaRecursiveSpendableNoteDescriptor",
+            "KagemushaRecursiveSpendVerifierRecordRef",
+            "KagemushaRecursiveSpendInitRequest",
+            "KagemushaRecursiveSpendAppendRequest",
+            "KagemushaRecursiveSpendVerifyRequest",
+            "KagemushaRecursiveSpendRedeemRequest",
+            "previous_lineage_verifier_record",
+            "previous_proof_open_envelopes",
+            "alice@wonderland",
+            "str(1 << 128)",
+            "native.calls[-1]",
+        ),
+        "Python typed recursive spend request codec tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        wrapper,
         REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS
         + (
             "def _normalize_kagemusha_instruction_archive_type(",
@@ -4803,11 +5388,13 @@ def check_python(texts, errors):
 
 def check_swift(texts, errors):
     prover = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"
+    request_codecs = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift"
     compact_prover = "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift"
     recursive_aggregation_prover = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift"
     bridge = "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
     instruction_encoder = "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift"
     test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
+    request_codecs_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"
     compact_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift"
     recursive_aggregation_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift"
     instruction_encoder_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"
@@ -4821,6 +5408,192 @@ def check_swift(texts, errors):
     tx_builder_test = "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift"
     offline_note_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
     offline_v2_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift"
+    nfc_mobile_transport = "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift"
+    transport_ui_test = "IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift"
+    require_contains(
+        texts,
+        request_codecs,
+        (
+            "public struct KagemushaRecursiveSpendableNoteDescriptor",
+            "public struct KagemushaRecursiveSpendVerifierRecordRef",
+            "public struct KagemushaRecursiveSpendInitRequest",
+            "public struct KagemushaRecursiveSpendAppendRequest",
+            "public struct KagemushaRecursiveSpendVerifyRequest",
+            "public struct KagemushaRecursiveSpendVerifyResult",
+            "public struct KagemushaRecursiveSpendRedeemRequest",
+            "public struct KagemushaRecursiveSpendBundleSummary",
+            "public enum KagemushaRecursiveSpendRequestCodecs",
+            "public static let initRequestWireName",
+            "public static let appendRequestWireName",
+            "public static let verifyRequestWireName",
+            "public static let verifyResultWireName",
+            "public static let redeemRequestWireName",
+            "public static let bundleWireName",
+            "public static let recordBundleWireName",
+            "public static let lineageWitnessWireName",
+            "public static let proofAttachmentWireName",
+            "public static let verifyingKeyRecordWireName",
+            "public static func encodeInitRequest",
+            "public static func encodeAppendRequest",
+            "public static func encodeVerifyRequest",
+            "public static func encodeRedeemRequest",
+            "public static func decodeVerifyResult",
+            "public static func decodeBundle",
+            "static func initSpend(request: KagemushaRecursiveSpendInitRequest)",
+            "static func appendSpend(request: KagemushaRecursiveSpendAppendRequest)",
+            "static func verifySpend(",
+            "static func redeemSpend(request: KagemushaRecursiveSpendRedeemRequest)",
+            "canonicalU128Decimal",
+            "requiresPreviousLineageVerifierRecordForAppend",
+            "requiresPreviousProofOpenEnvelopesForAppend",
+            "readFixedBytesFlexible(expectedCount: 16)",
+            "readFixed32Flexible()",
+            "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
+        ),
+        "Swift typed recursive spend request codecs",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
+            "testDecodeVerifyResultReadsAbi6AndAbi7Fields",
+            "testDecodeBundleExtractsLineageSummariesFromFixtureArchives",
+            "testTypedEncodersWriteExpectedRequestSchemasAndLayouts",
+            "testTypedRequestsRejectMalformedInputsBeforeNativeDispatch",
+            "KagemushaRecursiveSpendRequestCodecs.encodeInitRequest",
+            "KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest",
+            "KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest",
+            "KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest",
+            "KagemushaRecursiveSpendRequestCodecs.decodeBundle",
+            "KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult",
+            "lineageVerifierKey: nil",
+            "u128MaxPlusOne",
+            "previousProofOpenEnvelopes",
+            "readFixedArrayPayload",
+            "optionSomePayload",
+        ),
+        "Swift typed recursive spend request codec tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        nfc_mobile_transport,
+        (
+            "public enum IrohaOfflineNfcReceiveCompletionPolicy",
+            "shouldPublishReceiveSuccessOnAckReady(hasAcceptedPayment: Bool) -> Bool",
+            "shouldPublishReceiveSuccessOnAckRead(hasAcceptedPayment: Bool) -> Bool",
+            "shouldFailSessionInvalidation(hasAcceptedPayment: Bool) -> Bool",
+            "shouldApplyEmulationStartedProgress(",
+            "shouldPreserveAcceptedPaymentSuccessOnInvalidation(",
+            "private var didAcceptPayment = false",
+            "private var didPublishReceiveSuccess = false",
+            "hasSuccessState: didPublishReceiveSuccess || didComplete",
+            "shouldFailSessionInvalidation(\n                hasAcceptedPayment: didAcceptPayment",
+            "let completion = markReceiptAckReadComplete()",
+            "if completion.shouldNotify {\n                            onReceiptAckRead?()",
+            "if completion.shouldStopEmulation {\n                            await session.stopEmulation(status: .success)",
+            "private func markReceiptAckReadComplete() -> (",
+            "shouldPublishReceiveSuccessOnAckRead(\n                hasAcceptedPayment: didAcceptPayment",
+            "private func markReceiptAckReady() -> Bool",
+            "shouldPublishReceiveSuccessOnAckReady(hasAcceptedPayment: didAcceptPayment)",
+            "let shouldNotifyReceiptAckReady = markReceiptAckReady()",
+            "if shouldNotifyReceiptAckReady {\n                onReceiptAckReady?()",
+            "public enum IrohaOfflineDeviceTransferSendCompletionPolicy",
+            "private var didReceiveReceiptAckPayload = false",
+            "private var didVerifyReceiptAckEvent = false",
+            "private var didPublishSendTransferSucceededEvent = false",
+            "private var didSetSendSuccessState = false",
+            "markReceiptAckPayloadVerified()",
+            "private var hasTerminalSendSuccess: Bool",
+            "hasTerminalSuccess: hasTerminalSendSuccess",
+            "shouldApplyFailureState(",
+            "shouldPublishFailureEvent(",
+            "shouldApplyProgress(",
+        ),
+        "Swift NFC receive/send success runtime wiring",
+        errors,
+    )
+    require_regex(
+        texts,
+        nfc_mobile_transport,
+        r"shouldApplyEmulationStartedProgress\([\s\S]*?\)\s*->\s*Bool\s*\{\s*"
+        r"activeSessionMatches && isReceiving && !hasAcceptedPayment\s*\}",
+        "Swift NFC receive emulation-started policy",
+        errors,
+    )
+    require_regex(
+        texts,
+        nfc_mobile_transport,
+        r"shouldPreserveAcceptedPaymentSuccessOnInvalidation\([\s\S]*?\)\s*->\s*Bool\s*\{\s*"
+        r"hasAcceptedPayment && hasSuccessState\s*\}",
+        "Swift NFC receive success preservation policy",
+        errors,
+    )
+    require_regex(
+        texts,
+        nfc_mobile_transport,
+        r"private func notifyEmulationStarted\(\)[\s\S]*?shouldApplyEmulationStartedProgress"
+        r"\(\s*activeSessionMatches:\s*true,\s*isReceiving:\s*true,\s*"
+        r"hasAcceptedPayment:\s*didAcceptPayment\s*\)",
+        "Swift NFC receive emulation progress suppression after success",
+        errors,
+    )
+    require_regex(
+        texts,
+        nfc_mobile_transport,
+        r"private func markReceiptAckReady\(\) -> Bool \{[\s\S]*?"
+        r"shouldPublishReceiveSuccessOnAckReady\(hasAcceptedPayment:\s*didAcceptPayment\)"
+        r"[\s\S]*?didAcceptPayment = true[\s\S]*?"
+        r"if shouldPublishSuccess \{[\s\S]*?didPublishReceiveSuccess = true[\s\S]*?"
+        r"return shouldPublishSuccess",
+        "Swift NFC receive ACK-ready single-success state transition",
+        errors,
+    )
+    require_regex(
+        texts,
+        nfc_mobile_transport,
+        r"private func markReceiptAckReadComplete\(\) -> \([\s\S]*?"
+        r"let shouldStopEmulation = !didComplete[\s\S]*?"
+        r"let shouldNotify = shouldStopEmulation[\s\S]*?"
+        r"shouldPublishReceiveSuccessOnAckRead\(\s*hasAcceptedPayment:\s*didAcceptPayment\s*\)"
+        r"[\s\S]*?if shouldStopEmulation \{[\s\S]*?didComplete = true[\s\S]*?"
+        r"if shouldNotify \{[\s\S]*?didAcceptPayment = true[\s\S]*?"
+        r"didPublishReceiveSuccess = true[\s\S]*?"
+        r"return \(shouldStopEmulation, shouldNotify\)",
+        "Swift NFC receive ACK-read single-success state transition",
+        errors,
+    )
+    require_regex(
+        texts,
+        nfc_mobile_transport,
+        r"private func log\(_ message: String\)[\s\S]*?"
+        r"if isSendingPayment \{[\s\S]*?"
+        r"IrohaOfflineDeviceTransferSendCompletionPolicy\.shouldApplyProgress\(\s*"
+        r"isTransferring:\s*true,\s*"
+        r"hasTerminalSuccess:\s*hasTerminalSendSuccess\s*\)",
+        "Swift NFC send progress terminal-success gate",
+        errors,
+    )
+    require_contains(
+        texts,
+        transport_ui_test,
+        (
+            "testNfcReceiveCompletionPolicyKeepsAcceptedPaymentSuccessful",
+            "shouldPublishReceiveSuccessOnAckReady(",
+            "shouldPublishReceiveSuccessOnAckRead(",
+            "shouldFailSessionInvalidation(",
+            "shouldApplyEmulationStartedProgress(",
+            "shouldPreserveAcceptedPaymentSuccessOnInvalidation(",
+            "hasAcceptedPayment: true",
+            "hasSuccessState: false",
+            "testDeviceTransferSendCompletionPolicyPreservesOnlyTerminalSuccess",
+            "hasReceiptAckPayload: hasReceiptAckPayload",
+            "hasSendTransferSucceededEvent: hasSendTransferSucceededEvent",
+        ),
+        "Swift NFC receive/send completion policy tests",
+        errors,
+    )
     require_contains(
         texts,
         torii_client,
@@ -4828,10 +5601,11 @@ def check_swift(texts, errors):
             "identifier receipt attestation kind must be exact",
             "exactReceiptPolicyId",
             "exactProgramId",
-            "payload.policy_id.kind must not contain surrounding whitespace.",
+            "\\(debugName).kind must not contain surrounding whitespace.",
             "payload.accountId must be an exact canonical account identifier.",
             "payload.accountId must be a canonical account identifier.",
             "payload.account_id must not contain surrounding whitespace.",
+            "accountId = rawAccountId",
             "normalizedHash(_ raw: String, field: String) throws",
             "\\(field) must not contain surrounding whitespace.",
             "self.inputCiphertextHash = inputCiphertextHash",
@@ -4843,8 +5617,80 @@ def check_swift(texts, errors):
             "proof_b64 must be exact and contain no surrounding whitespace.",
             "Data(base64Encoded: proofB64) == nil",
             "proof_b64 must be valid base64.",
+            "exactPolicyId(",
+            "exactAccountId(",
+            "exactHash(",
+            "exactEvenLengthHex(",
+            'debugName: "identifier claim record.policy_id"',
+            'field: "identifier claim record.opaque_id"',
+            'field: "identifier claim record.receipt_hash"',
+            'field: "identifier claim record.uaid"',
+            'debugName: "identifier claim record.account_id"',
+            'debugName: "ram-lfe execute response.opaque_hash"',
+            'debugName: "ram-lfe execute response.output_ciphertext"',
+            'debugName: "ram-lfe receipt verify response.output_hash"',
+            'debugName: "ram-lfe receipt verify response.associated_data_hash"',
         ),
         "Swift identifier receipt attestation kind and proof base64 validation",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client,
+        (
+            "decodeOptionalExactStringValue",
+            "decodeOptionalExactStringArrayValue",
+            'debugName: "account alias resolution.alias"',
+            'debugName: "account alias resolution.account_id"',
+            'debugName: "account alias resolution.account_ids"',
+            'debugName: "account alias resolution.source"',
+        ),
+        "Swift account alias resolution exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client,
+        (
+            "decodeExactToriiAccountId",
+            'guard !raw.contains("@")',
+            'debugName: "resolved_multisig_account_id"',
+        ),
+        "Swift multisig resolved account exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client,
+        (
+            'debugName: "identifier policy.policy_id"',
+            'debugName: "identifier policy.owner"',
+            'debugName: "identifier policy.normalization"',
+            'debugName: "identifier policy.resolver_public_key"',
+            'debugName: "identifier policy.backend"',
+            'debugName: "identifier policy.input_encryption"',
+            'debugName: "identifier policy.input_encryption_public_parameters"',
+            'debugName: "identifier policy.input_encryption_public_parameters_decoded.norito_length_encoding"',
+            'debugName: "identifier policy.note"',
+        ),
+        "Swift identifier policy metadata exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client,
+        (
+            'debugName: "ram-lfe program policy.program_id"',
+            'debugName: "ram-lfe program policy.owner"',
+            'debugName: "ram-lfe program policy.resolver_public_key"',
+            'debugName: "ram-lfe program policy.backend"',
+            'debugName: "ram-lfe program policy.verification_mode"',
+            'debugName: "ram-lfe program policy.input_encryption"',
+            'debugName: "ram-lfe program policy.input_encryption_public_parameters"',
+            'debugName: "ram-lfe proof verifier.proof_backend"',
+            'debugName: "ram-lfe proof verifier.public_inputs_schema_hash"',
+        ),
+        "Swift RAM-LFE program policy exactness",
         errors,
     )
     require_contains(
@@ -4856,11 +5702,13 @@ def check_swift(texts, errors):
             "testIdentifierReceiptRejectsPaddedOpeningSignatureDuringDecode",
             "testIdentifierReceiptRejectsPaddedProofAttestationBase64DuringDecode",
             "testIdentifierReceiptRejectsMalformedProofAttestationBase64DuringDecode",
+            "testIdentifierReceiptDecodeRejectsPaddedAccountIdBeforeSignatureVerification",
             "phone #retail",
             "identifier_lookup_retail ",
             "policy_id",
             "program_id",
             "account_id",
+            "payload.account_id",
             "accountId",
             "opaque_id",
             "receipt_hash",
@@ -4871,8 +5719,70 @@ def check_swift(texts, errors):
             "\"AAAA \"",
             "\"proof_b64\":\"@@@\"",
             "proof_b64",
+            "testGetIdentifierClaimByReceiptHashRejectsNonExactClaimFieldsAsync",
+            "expected non-exact claim record",
+            "identifier claim record.\\(testCase.field)",
+            "testRamLfeResponseParsersRejectNonExactFieldsAsync",
+            "ram-lfe execute response.\\(testCase.field)",
+            "ram-lfe receipt verify response.\\(testCase.field)",
         ),
-        "Swift identifier receipt attestation kind and malformed proof base64 tests",
+        "Swift identifier receipt account-id, attestation kind, and malformed proof base64 tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client_test,
+        (
+            "testResolveAccountAliasRejectsNonExactResponseFields",
+            "account alias resolution.account_ids",
+            "account alias resolution.source",
+        ),
+        "Swift account alias resolution exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client_test,
+        (
+            "testMultisigResponsesRejectNonExactResolvedAccountIds",
+            "paddedAccountId",
+            "resolved_multisig_account_id",
+        ),
+        "Swift multisig resolved account exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client_test,
+        (
+            "testListIdentifierPoliciesRejectsNonExactMetadata",
+            "identifier policy.input_encryption_public_parameters_decoded.norito_length_encoding",
+            "identifier policy.note",
+        ),
+        "Swift identifier policy metadata exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client_test,
+        (
+            '"proof_verifier":{',
+            'proofVerifier?.proofBackend, "halo2-ipa"',
+            "identifier-ram-lfe-v1",
+        ),
+        "Swift identifier policy proof-verifier metadata tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client_test,
+        (
+            "ramLfeProgramPoliciesJSON",
+            "testRamLfeProgramPolicyParserRejectsNonExactFieldsAsync",
+            "ram-lfe program policy.input_encryption_public_parameters",
+            "ram-lfe proof verifier.public_inputs_schema_hash",
+        ),
+        "Swift RAM-LFE program policy exactness tests",
         errors,
     )
     require_contains(
@@ -5550,6 +6460,7 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
         "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
         "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift",
@@ -5580,11 +6491,13 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Sources/IrohaSwift/OfflineQrStreamScan.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift",
         "IrohaSwift/Sources/IrohaSwift/OfflineTransferDiagnostics.swift",
+        "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
@@ -5607,6 +6520,7 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineRevocationBundleTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift",
     ):
         require(
             relative in script,
@@ -5675,14 +6589,26 @@ def check_java_kotlin(texts, errors):
     kotlin_recursive_compact = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"
     java_offline_v2 = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java"
     kotlin_offline_v2 = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt"
+    java_account_alias_json = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/AccountAliasJsonParser.java"
+    java_contract_json = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractJsonParser.java"
     java_identifier_json = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierJsonParser.java"
+    java_ram_lfe_json = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/RamLfeJsonParser.java"
+    kotlin_account_alias_json = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AccountAliasJsonParser.kt"
+    kotlin_contract_json = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ContractJsonParser.kt"
     kotlin_identifier_json = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierJsonParser.kt"
+    kotlin_ram_lfe_json = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/RamLfeJsonParser.kt"
     java_identifier_encoder = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoder.java"
     java_identifier_verifier = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptVerifier.java"
     kotlin_identifier_encoder = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptCanonicalEncoder.kt"
     kotlin_identifier_verifier = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptVerifier.kt"
+    java_claim_identifier = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoder.java"
+    kotlin_claim_identifier = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoder.kt"
+    android_device_lab_exporter = "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java"
+    android_slot_assembler = "scripts/kagemusha_android_device_lab_slot.py"
+    android_slot_assembler_test = "scripts/tests/check_android_device_lab_slot_test.py"
     java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
     kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt"
+    java_claim_identifier_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoderTests.java"
     java_identifier_encoder_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoderTests.java"
     kotlin_identifier_encoder_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoderParityTest.kt"
     java_identifier_parser_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
@@ -5691,6 +6617,39 @@ def check_java_kotlin(texts, errors):
     kotlin_offline_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
     java_offline_v2_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java"
     kotlin_offline_v2_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"
+    for relative, marker, label in (
+        (
+            java_account_alias_json,
+            'requiredExactString(root.get("alias"), "account alias resolution.alias")',
+            "Android Java account alias resolution alias exactness",
+        ),
+        (
+            java_account_alias_json,
+            'requiredExactString(root.get("account_id"), "account alias resolution.account_id")',
+            "Android Java account alias resolution account-id exactness",
+        ),
+        (
+            java_account_alias_json,
+            'optionalExactString(root.get("source"), "account alias resolution.source")',
+            "Android Java account alias resolution source exactness",
+        ),
+        (
+            kotlin_account_alias_json,
+            'requiredExactString(root["alias"], "account alias resolution.alias")',
+            "Kotlin account alias resolution alias exactness",
+        ),
+        (
+            kotlin_account_alias_json,
+            'requiredExactString(root["account_id"], "account alias resolution.account_id")',
+            "Kotlin account alias resolution account-id exactness",
+        ),
+        (
+            kotlin_account_alias_json,
+            'optionalExactString(root["source"], "account alias resolution.source")',
+            "Kotlin account alias resolution source exactness",
+        ),
+    ):
+        require_contains(texts, relative, (marker,), label, errors)
     for relative, label in (
         (java_identifier_json, "Android Java identifier receipt kind/proof base64 parser validation"),
         (kotlin_identifier_json, "Kotlin identifier receipt kind/proof base64 parser validation"),
@@ -5734,6 +6693,171 @@ def check_java_kotlin(texts, errors):
             kotlin_identifier_json,
             'requiredExactString(root["account_id"], "$context.account_id")',
             "Kotlin identifier receipt parser account-id exactness",
+        ),
+        (
+            java_identifier_json,
+            'requiredExactString(root.get("policy_id"), "identifier claim record.policy_id")',
+            "Android Java identifier claim record policy-id exactness",
+        ),
+        (
+            java_identifier_json,
+            'requiredExactString(root.get("opaque_id"), "identifier claim record.opaque_id")',
+            "Android Java identifier claim record opaque-id exactness",
+        ),
+        (
+            java_identifier_json,
+            'requiredExactString(root.get("receipt_hash"), "identifier claim record.receipt_hash")',
+            "Android Java identifier claim record receipt-hash exactness",
+        ),
+        (
+            java_identifier_json,
+            'requiredExactString(root.get("uaid"), "identifier claim record.uaid")',
+            "Android Java identifier claim record uaid exactness",
+        ),
+        (
+            java_identifier_json,
+            'requiredExactString(root.get("account_id"), "identifier claim record.account_id")',
+            "Android Java identifier claim record account-id exactness",
+        ),
+        (
+            kotlin_identifier_json,
+            'requiredExactString(root["policy_id"], "identifier claim record.policy_id")',
+            "Kotlin identifier claim record policy-id exactness",
+        ),
+        (
+            kotlin_identifier_json,
+            'requiredExactString(root["opaque_id"], "identifier claim record.opaque_id")',
+            "Kotlin identifier claim record opaque-id exactness",
+        ),
+        (
+            kotlin_identifier_json,
+            'requiredExactString(root["receipt_hash"], "identifier claim record.receipt_hash")',
+            "Kotlin identifier claim record receipt-hash exactness",
+        ),
+        (
+            kotlin_identifier_json,
+            'requiredExactString(root["uaid"], "identifier claim record.uaid")',
+            "Kotlin identifier claim record uaid exactness",
+        ),
+        (
+            kotlin_identifier_json,
+            'requiredExactString(root["account_id"], "identifier claim record.account_id")',
+            "Kotlin identifier claim record account-id exactness",
+        ),
+        (
+            java_contract_json,
+            'requiredExactAccountId(root.get("resolved_multisig_account_id"), "multisig response.resolved_multisig_account_id")',
+            "Android Java multisig resolved account exactness",
+        ),
+        (
+            java_contract_json,
+            "AccountIdLiteral.requireCanonicalI105Address(string, path)",
+            "Android Java multisig resolved account canonical validation",
+        ),
+        (
+            kotlin_contract_json,
+            'requiredExactAccountId(root["resolved_multisig_account_id"], "multisig response.resolved_multisig_account_id")',
+            "Kotlin multisig resolved account exactness",
+        ),
+        (
+            kotlin_contract_json,
+            "requireCanonicalI105Address(string, path)",
+            "Kotlin multisig resolved account canonical validation",
+        ),
+        (
+            java_ram_lfe_json,
+            'requiredExactString(root.get("program_id"), "ram-lfe execute response.program_id")',
+            "Android Java RAM-LFE execute response program-id exactness",
+        ),
+        (
+            java_ram_lfe_json,
+            'requiredExactString(\n                  item.get("program_id"),\n                  "ram-lfe program policy list.items[" + i + "].program_id")',
+            "Android Java RAM-LFE program policy program-id exactness",
+        ),
+        (
+            java_ram_lfe_json,
+            'requiredExactLowercaseString(\n                  item.get("backend"), "ram-lfe program policy list.items[" + i + "].backend")',
+            "Android Java RAM-LFE program policy backend exactness",
+        ),
+        (
+            java_ram_lfe_json,
+            'optionalExactHex(\n                  item.get("input_encryption_public_parameters"),',
+            "Android Java RAM-LFE program policy public-parameters exactness",
+        ),
+        (
+            java_ram_lfe_json,
+            'requiredExactString(root.get("proof_backend"), context + ".proof_backend")',
+            "Android Java RAM-LFE proof verifier backend exactness",
+        ),
+        (
+            java_ram_lfe_json,
+            'canonicalizeExactHash32(\n            root.get("public_inputs_schema_hash"), context + ".public_inputs_schema_hash")',
+            "Android Java RAM-LFE proof verifier schema-hash exactness",
+        ),
+        (
+            java_ram_lfe_json,
+            'canonicalizeExactHash32(root.get("opaque_hash"), "ram-lfe execute response.opaque_hash")',
+            "Android Java RAM-LFE execute response opaque-hash exactness",
+        ),
+        (
+            java_ram_lfe_json,
+            'canonicalizeExactHex(\n            root.get("output_ciphertext"),',
+            "Android Java RAM-LFE execute response output-ciphertext exactness",
+        ),
+        (
+            java_ram_lfe_json,
+            'requiredExactLowercaseString(\n            root.get("verification_mode"), "ram-lfe execute response.verification_mode")',
+            "Android Java RAM-LFE execute response mode exactness",
+        ),
+        (
+            java_ram_lfe_json,
+            'canonicalizeExactHash32(\n            root.get("output_hash"), "ram-lfe receipt verify response.output_hash")',
+            "Android Java RAM-LFE receipt verify response output-hash exactness",
+        ),
+        (
+            kotlin_ram_lfe_json,
+            'requiredExactString(root["program_id"], "ram-lfe execute response.program_id")',
+            "Kotlin RAM-LFE execute response program-id exactness",
+        ),
+        (
+            kotlin_ram_lfe_json,
+            'requiredExactString(item["program_id"], "ram-lfe program policy list.items[$i].program_id")',
+            "Kotlin RAM-LFE program policy program-id exactness",
+        ),
+        (
+            kotlin_ram_lfe_json,
+            'requiredExactLowercaseString(item["backend"], "ram-lfe program policy list.items[$i].backend")',
+            "Kotlin RAM-LFE program policy backend exactness",
+        ),
+        (
+            kotlin_ram_lfe_json,
+            'optionalExactHex(item["input_encryption_public_parameters"], "ram-lfe program policy list.items[$i].input_encryption_public_parameters")',
+            "Kotlin RAM-LFE program policy public-parameters exactness",
+        ),
+        (
+            kotlin_ram_lfe_json,
+            'requiredExactString(root["proof_backend"], "$context.proof_backend")',
+            "Kotlin RAM-LFE proof verifier backend exactness",
+        ),
+        (
+            kotlin_ram_lfe_json,
+            'canonicalizeExactHash32(root["public_inputs_schema_hash"], "$context.public_inputs_schema_hash")',
+            "Kotlin RAM-LFE proof verifier schema-hash exactness",
+        ),
+        (
+            kotlin_ram_lfe_json,
+            'canonicalizeExactHash32(root["opaque_hash"], "ram-lfe execute response.opaque_hash")',
+            "Kotlin RAM-LFE execute response opaque-hash exactness",
+        ),
+        (
+            kotlin_ram_lfe_json,
+            'requiredExactLowercaseString(root["verification_mode"], "ram-lfe execute response.verification_mode")',
+            "Kotlin RAM-LFE execute response mode exactness",
+        ),
+        (
+            kotlin_ram_lfe_json,
+            'canonicalizeExactHash32(root["output_hash"], "ram-lfe receipt verify response.output_hash")',
+            "Kotlin RAM-LFE receipt verify response output-hash exactness",
         ),
         (
             java_identifier_encoder,
@@ -5892,6 +7016,54 @@ def check_java_kotlin(texts, errors):
         ),
     ):
         require_contains(texts, relative, (marker,), label, errors)
+    require_regex(
+        texts,
+        java_identifier_json,
+        r"parsePolicyList[\s\S]*?"
+        r"requiredExactString\(item\.get\(\"owner\"\),[\s\S]*?"
+        r"requiredExactLowercaseString\([\s\S]*?item\.get\(\"normalization\"\)[\s\S]*?"
+        r"requiredExactLowercaseString\([\s\S]*?item\.get\(\"backend\"\)[\s\S]*?"
+        r"optionalExactLowercaseString\([\s\S]*?item\.get\(\"input_encryption\"\)[\s\S]*?"
+        r"optionalExactHexString\([\s\S]*?item\.get\(\"input_encryption_public_parameters\"\)[\s\S]*?"
+        r"optionalExactString\(item\.get\(\"note\"\)[\s\S]*?"
+        r"optionalExactString\(root\.get\(\"norito_length_encoding\"\), context \+ \"\.norito_length_encoding\"\)",
+        "Android Java identifier policy metadata exactness",
+        errors,
+    )
+    require_regex(
+        texts,
+        kotlin_identifier_json,
+        r"parsePolicyList[\s\S]*?"
+        r"requiredExactString\(item\[\"owner\"\],[\s\S]*?"
+        r"requiredExactLowercaseString\(item\[\"normalization\"\],[\s\S]*?"
+        r"requiredExactLowercaseString\(item\[\"backend\"\],[\s\S]*?"
+        r"optionalExactLowercaseString\(item\[\"input_encryption\"\],[\s\S]*?"
+        r"optionalExactHexString\(item\[\"input_encryption_public_parameters\"\],[\s\S]*?"
+        r"optionalExactString\(item\[\"note\"\],[\s\S]*?"
+        r"optionalExactString\(root\[\"norito_length_encoding\"\], \"\$context\.norito_length_encoding\"\)",
+        "Kotlin identifier policy metadata exactness",
+        errors,
+    )
+    require_regex(
+        texts,
+        java_identifier_json,
+        r"private static RamLfeProofVerifierMetadata parseProofVerifier[\s\S]*?"
+        r"requiredExactString\(root\.get\(\"proof_backend\"\), context \+ \"\.proof_backend\"\)"
+        r"[\s\S]*?requiredExactString\(\s*root\.get\(\"public_inputs_schema_hash\"\), context \+ \"\.public_inputs_schema_hash\"\)"
+        r"[\s\S]*?requiredExactString\(\s*root\.get\(\"verifying_key_bytes_b64\"\), context \+ \"\.verifying_key_bytes_b64\"\)",
+        "Android Java identifier policy proof-verifier exactness",
+        errors,
+    )
+    require_regex(
+        texts,
+        kotlin_identifier_json,
+        r"private fun parseProofVerifier[\s\S]*?"
+        r"requiredExactString\(root\[\"proof_backend\"\], \"\$context\.proof_backend\"\)"
+        r"[\s\S]*?requiredExactString\(root\[\"public_inputs_schema_hash\"\], \"\$context\.public_inputs_schema_hash\"\)"
+        r"[\s\S]*?requiredExactString\(root\[\"verifying_key_bytes_b64\"\], \"\$context\.verifying_key_bytes_b64\"\)",
+        "Kotlin identifier policy proof-verifier exactness",
+        errors,
+    )
     for relative, label in (
         (java_identifier_encoder_test, "Android Java identifier receipt malformed proof base64 encoder tests"),
         (kotlin_identifier_encoder_test, "Kotlin identifier receipt malformed proof base64 encoder tests"),
@@ -5925,6 +7097,265 @@ def check_java_kotlin(texts, errors):
         java_identifier_parser_test,
         ("overflow",),
         "Android Java identifier receipt parser timestamp overflow test",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_identifier_parser_test,
+        (
+            "accountAliasParserRejectsNonExactResponseFields",
+            "account alias resolution.alias",
+            "account alias resolution.account_id",
+            "account alias resolution.source",
+        ),
+        "Android Java account alias resolution exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_identifier_parser_test,
+        (
+            "padded resolved multisig account id must be rejected",
+            "non-canonical resolved multisig account id must be rejected",
+            "TestAccountIds.ed25519Authority(0x37)",
+        ),
+        "Android Java multisig resolved account exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_identifier_parser_test,
+        (
+            "accountAliasParserRejectsNonExactResponseFields",
+            "account alias resolution.alias",
+            "account alias resolution.account_id",
+            "account alias resolution.source",
+        ),
+        "Kotlin account alias resolution exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_identifier_parser_test,
+        (
+            "testMultisigAccountId",
+            '"resolved_multisig_account_id": "$multisigAccountId "',
+            '"resolved_multisig_account_id": "multisig"',
+        ),
+        "Kotlin multisig resolved account exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_identifier_parser_test,
+        (
+            "identifierPolicyParserRejectsNonExactPolicyAndProofVerifierFields",
+            "identifier policy list.items[0].input_encryption_public_parameters_decoded.norito_length_encoding",
+            "identifier policy list.items[0].note",
+            "identifier policy list.items[0].proof_verifier.public_inputs_schema_hash",
+            "identifierClaimRecordParserRejectsNonExactClaimFields",
+            "identifier claim record parser must reject non-exact",
+            "payload.receiptHash()",
+            "payload.accountId()",
+        ),
+        "Android Java identifier policy metadata, proof-verifier, and claim record parser tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_identifier_parser_test,
+        (
+            "identifierPolicyParserRejectsNonExactPolicyAndProofVerifierFields",
+            "identifier policy list.items[0].input_encryption_public_parameters_decoded.norito_length_encoding",
+            "identifier policy list.items[0].note",
+            "identifier policy list.items[0].proof_verifier.public_inputs_schema_hash",
+            "identifierClaimRecordParserRejectsNonExactClaimFields",
+            "identifier claim record $label exactness",
+            "payload.receiptHash",
+            "payload.accountId",
+        ),
+        "Kotlin identifier policy metadata, proof-verifier, and claim record parser tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_identifier_parser_test,
+        (
+            "ramLfeProgramPolicyParserRejectsNonExactFields",
+            "ram-lfe program policy list.items[0].program_id",
+            "proof_verifier.public_inputs_schema_hash",
+            "ramLfeProgramPoliciesJson",
+            "ramLfeResponseParsersRejectNonExactFields",
+            "expected non-exact ",
+            "ram-lfe execute response.",
+            "ram-lfe receipt verify response.",
+            "output_ciphertext",
+        ),
+        "Android Java RAM-LFE response and program-policy exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_identifier_parser_test,
+        (
+            "ramLfeProgramPolicyParserRejectsNonExactFields",
+            "ram-lfe program policy list.items[0].program_id",
+            "proof_verifier.public_inputs_schema_hash",
+            "ramLfeProgramPoliciesJson",
+            "ramLfeResponseParsersRejectNonExactFields",
+            "expected ram-lfe execute response.$field failure",
+            "expected ram-lfe receipt verify response.$field failure",
+            "output_hash",
+            "associated_data_hash",
+        ),
+        "Kotlin RAM-LFE response and program-policy exactness tests",
+        errors,
+    )
+    for relative, label in (
+        (java_claim_identifier, "Android Java ClaimIdentifier account exactness"),
+        (kotlin_claim_identifier, "Kotlin ClaimIdentifier account exactness"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "requireExactNonBlank(accountId, \"accountId\")",
+                "requireExactNonBlank(receipt.accountId",
+                "must not contain surrounding whitespace",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (java_claim_identifier_test, "Android Java ClaimIdentifier account binding test"),
+        (kotlin_identifier_encoder_test, "Kotlin ClaimIdentifier account binding test"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "ClaimIdentifier accountId must match receipt.accountId",
+                "mismatched ClaimIdentifier account must fail before encoding",
+                "padded ClaimIdentifier account must fail before encoding",
+                "accountId must not contain surrounding whitespace",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        java_claim_identifier_test,
+        ("claimIdentifierRejectsAccountMismatchBeforeEncoding",),
+        "Android Java ClaimIdentifier account mismatch regression name",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_identifier_encoder_test,
+        ("claim identifier rejects account mismatch before encoding",),
+        "Kotlin ClaimIdentifier account mismatch regression name",
+        errors,
+    )
+    require_contains(
+        texts,
+        android_device_lab_exporter,
+        (
+            "import java.util.Locale;",
+            "private static String inferDeviceFamily()",
+            "toLowerCase(Locale.ROOT)",
+            "private static boolean matchesFamily(",
+            'new String[] {"pixel 6", "pixel 6a"}',
+            'new String[] {"oriole", "bluejay"}',
+            'new String[] {"pixel 7", "pixel 7 pro"}',
+            'new String[] {"panther", "cheetah"}',
+            'new String[] {"pixel 8", "pixel 8a", "pixel 8 pro"}',
+            'new String[] {"shiba", "akita", "husky"}',
+            'new String[] {"sm-s911", "sm-s916", "sm-s918"}',
+            'new String[] {"dm1q", "dm2q", "dm3q"}',
+            'new String[] {"sm-s921", "sm-s926", "sm-s928"}',
+            'new String[] {"e1q", "e2q", "e3q"}',
+            "&& isExactDevice(device, exactDevices)",
+            "attached device is not in the standard Kagemusha production matrix",
+            "+ Build.MODEL",
+            "+ Build.DEVICE",
+        ),
+        "Android device-lab exporter exact family matching",
+        errors,
+    )
+    require_regex(
+        texts,
+        android_device_lab_exporter,
+        r'new String\[\] \{"sm-s921", "sm-s926", "sm-s928"\}[\s\S]*?return "Samsung Galaxy S24";\s*\}\s*fail\(\s*"attached device is not in the standard Kagemusha production matrix',
+        "Android device-lab exporter must fail closed after the standard device matrix",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        android_device_lab_exporter,
+        r'text\.contains\("pixel [678]"|model\.contains\("pixel [678]"|text\.contains\("galaxy s2[34]"|model\.contains\("galaxy s2[34]"',
+        "Android device-lab exporter must not use broad family substring matching",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        android_device_lab_exporter,
+        r'hasModelPrefix\(model, "sm-s921", "sm-s926", "sm-s928"\)[\s\S]*?return "Samsung Galaxy S24";\s*\}\s*return "Google Pixel 6 / 6a";',
+        "Android device-lab exporter must not default unknown devices to Pixel 6",
+        errors,
+    )
+    require_contains(
+        texts,
+        android_slot_assembler,
+        (
+            "DEVICE_FAMILY_MODEL_RULES",
+            "model_text in exact_models",
+            "codename_text in codenames",
+            "model_text.startswith(prefix)",
+            "has_device_identity = bool",
+            "if has_device_identity and inferred != family:",
+            "device family must match attached device model/codename",
+            '"device_model": facts["device_model"]',
+            '"device_codename": facts["device_codename"]',
+            "expected_device_model=facts[\"device_model\"]",
+            "expected_device_codename=facts[\"device_codename\"]",
+            "model_family = _match_device_model_family(model_text)",
+            "codename_family = _match_device_codename_family(codename_text)",
+            "model_family is None or codename_family is None",
+            "model_family != codename_family",
+            '"pixel 6", "pixel 6a"',
+            '"pixel 7", "pixel 7 pro"',
+            '"pixel 8", "pixel 8a", "pixel 8 pro"',
+            '"sm-s911", "sm-s916", "sm-s918"',
+            '"dm1q", "dm2q", "dm3q"',
+            '"sm-s921", "sm-s926", "sm-s928"',
+            '"e1q", "e2q", "e3q"',
+        ),
+        "Android slot assembler exact family matching",
+        errors,
+    )
+    require_contains(
+        texts,
+        android_slot_assembler_test,
+        (
+            "test_kagemusha_slot_assembler_infers_only_standard_device_families",
+            "test_kagemusha_slot_assembler_rejects_family_override_mismatch",
+            "test_kagemusha_slot_assembler_rejects_family_override_for_near_match",
+            "test_kagemusha_slot_assembler_rejects_conflicting_model_codename",
+            "test_production_metadata_rejects_signed_evidence_device_model_mismatch",
+            "test_production_metadata_rejects_slot_family_model_codename_mismatch",
+            "test_production_metadata_rejects_conflicting_model_codename",
+            "test_production_metadata_rejects_unknown_model_with_known_codename",
+            "test_production_metadata_rejects_telemetry_model_slot_mismatch",
+            "Pixel 6 Pro",
+            "raven",
+            "Pixel 7a",
+            "lynx",
+            "Pixel 8 Pro",
+            "panther",
+            "Galaxy S23 FE",
+            "SM-S711B",
+        ),
+        "Android slot assembler exact family inference tests",
         errors,
     )
     for relative, label in (
@@ -7100,8 +8531,124 @@ def check_csharp(texts, errors):
         errors,
     )
     require(
-        '--filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests|FullyQualifiedName~PrivacyNativeTests|FullyQualifiedName~TransactionBuilderTests"' in script,
-        "Kagemusha C# SDK script must run recursive spend, privacy native, and transaction builder tests",
+        '--filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests|FullyQualifiedName~PrivacyNativeTests|FullyQualifiedName~TransactionBuilderTests|FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiIdentifierReceiptTests"' in script,
+        "Kagemusha C# SDK script must run recursive spend, privacy native, transaction builder, canonical request, and identifier receipt tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs",
+        (
+            "internal static string RequireExactNonBlank(string? value, string paramName)",
+            "value.Trim()",
+            "must not contain surrounding whitespace",
+            "var exactAccountId = RequireExactNonBlank(accountId, nameof(accountId));",
+            "var effectiveNonce = nonce is null ? GenerateNonce() : RequireExactNonBlank(nonce, nameof(nonce));",
+            "var exactNonce = RequireExactNonBlank(nonce, nameof(nonce));",
+            "return new CanonicalRequestHeaders(",
+        ),
+        "C# canonical request account-id and nonce exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestCredentials.cs",
+        (
+            "CanonicalRequest.RequireExactNonBlank(accountId, nameof(accountId))",
+            "private key seed must not be empty",
+        ),
+        "C# canonical request credentials exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestHeaders.cs",
+        (
+            "CanonicalRequest.RequireExactNonBlank(accountId, nameof(accountId))",
+            "CanonicalRequest.RequireExactNonBlank(signatureBase64, nameof(signatureBase64))",
+            "CanonicalRequest.RequireExactNonBlank(nonce, nameof(nonce))",
+            '"X-Iroha-Account"',
+            '"X-Iroha-Nonce"',
+            '"X-Iroha-Signature"',
+        ),
+        "C# canonical request header exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs",
+        (
+            "CanonicalRequestAuthRejectsPaddedAndBlankFields",
+            "new CanonicalRequestCredentials($\" {FixtureAccountId}\"",
+            "accountId: $\"{FixtureAccountId} \"",
+            "nonce: \" abcdef0123456789abcdef0123456789 \"",
+            "nonce: \" \"",
+            "BuildSignatureMessage(",
+            "new CanonicalRequestHeaders(",
+            "\" signature \"",
+        ),
+        "C# canonical request exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs",
+        (
+            "internal static class ToriiIdentifierJson",
+            "RequireExactPolicyId",
+            "RequireExactNonBlank",
+            "must not contain surrounding whitespace",
+            "ReadNonNegativeInt64",
+            "RequireUniqueProperty",
+            "ToriiIdentifierPolicySummaryJsonConverter",
+            "ToriiIdentifierResolveResponseJsonConverter",
+            "policy.policy_id",
+            "identifier receipt.account_id",
+            "identifier receipt.signature_payload_hex",
+        ),
+        "C# Torii identifier receipt JSON exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs",
+        (
+            "PolicyId = NormalizeIdentifierPolicyId(request.PolicyId, nameof(request.PolicyId))",
+            "EncryptedInput = NormalizeOptionalIdentifierCiphertext(",
+            "private static string NormalizeIdentifierPolicyId",
+            "private static string? NormalizeOptionalIdentifierCiphertext",
+            "private static string NormalizeExactIdentifierValue",
+            "Value must not contain surrounding whitespace.",
+        ),
+        "C# Torii identifier resolve request exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs",
+        (
+            "[JsonConverter(typeof(ToriiIdentifierPolicySummaryJsonConverter))]",
+            "[JsonConverter(typeof(ToriiIdentifierResolveResponseJsonConverter))]",
+            "public sealed record class ToriiIdentifierPolicySummary",
+            "public sealed record class ToriiIdentifierResolveResponse",
+        ),
+        "C# Torii identifier receipt converter binding",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs",
+        (
+            "ResolveIdentifierAsyncRejectsPaddedPolicyIdBeforePost",
+            "IdentifierResolveResponseRejectsPaddedReceiptFields",
+            "IdentifierResolveResponseRejectsNegativeReceiptTimes",
+            "IdentifierPolicySummaryRejectsPaddedProofMetadata",
+            "\"signature_payload_hex\"",
+            "\"resolver_public_key\"",
+            "\"surrounding whitespace\"",
+            "\"non-negative\"",
+        ),
+        "C# Torii identifier receipt exactness tests",
         errors,
     )
     relative = "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
@@ -7385,6 +8932,85 @@ def check_csharp(texts, errors):
     )
     require_contains(
         texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs",
+        (
+            "Value must not contain surrounding whitespace.",
+            "return value;",
+            "metadata[NormalizeRequiredValue(key, nameof(key))]",
+            "metadata[NormalizeRequiredValue(key, nameof(values))]",
+        ),
+        "C# transaction builder top-level exactness",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs",
+        r"return\s+value\.Trim\(\);",
+        "C# transaction builder required values must not be trimmed",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
+        (
+            "TransactionBuilderRejectsPaddedTopLevelFields",
+            "new TransactionBuilder(\" 00000042\"",
+            "new TransactionBuilder(\"00000042\", $\" {FixtureAccountId}\"",
+            "builder.SetMetadata(\" trace \"",
+            "[\" trace \"] = JsonValue.Create(\"abc\")",
+        ),
+        "C# transaction builder top-level exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs",
+        (
+            "private static string RequireExactNonBlank(string? value, string paramName)",
+            "Value must not contain surrounding whitespace.",
+            "writer.WriteField(EncodeString(RequireExactNonBlank(chainId, nameof(chainId))))",
+            "return EncodeString(RequireExactNonBlank(value, nameof(value)))",
+            "value = RequireExactNonBlank(value, nameof(value));",
+            "var trimmed = RequireExactNonBlank(value, nameof(value));",
+            "var exactNftId = RequireExactNonBlank(nftId, nameof(nftId));",
+            "var exactLiteral = RequireExactNonBlank(literal, nameof(literal));",
+            "RequireExactNonBlank(accountId, nameof(accountId)),",
+            "var normalized = RequireExactNonBlank(literal, nameof(literal));",
+        ),
+        "C# transaction encoding boundary exactness",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs",
+        r"chainId\.Trim\(\)|return\s+EncodeString\(value\.Trim\(\)\);|"
+        r"string\.IsNullOrWhiteSpace\(value\) \? null : value\.Trim\(\)|"
+        r"var\s+trimmed\s*=\s*value\.Trim\(\);|var\s+trimmed\s*=\s*nftId\.Trim\(\);|"
+        r"var\s+trimmed\s*=\s*literal\.Trim\(\);|accountId\.Trim\(\)",
+        "C# transaction encoding boundary values must not be trimmed",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
+        (
+            "TransactionEncodingContextRejectsPaddedBoundaryFields",
+            "new TransactionEncodingContext($\" {FixtureAccountId}\")",
+            "context.EncodeChainId(\" 00000042\")",
+            "context.EncodeAccountId($\" {FixtureAccountId}\")",
+            "context.EncodeName(\" display_name\")",
+            "context.EncodeOptionalString(\" memo \")",
+            "context.EncodeNumeric(\" 15.7500\")",
+            "context.EncodeAssetDefinitionId(\" 62Fk4FPcMuLvW5QjDGNF2a4jAmjM\")",
+            "context.EncodeNftId(\" dragon$wonderland\")",
+            "context.EncodeHashLiteral(\" \" + new string('a', 64))",
+            "context.EncodeFixedBytesLiteral(\" 0x0102\", expectedLength: 2)",
+        ),
+        "C# transaction encoding boundary exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
         relative,
         (
             "RecursiveSpendLineageTransitionCircuitWiredV1",
@@ -7422,6 +9048,13 @@ def check_csharp(texts, errors):
         "C# witnessless Reserved-lineage helper bounds",
         errors,
     )
+    require_not_regex(
+        texts,
+        relative,
+        r"Encoding\.UTF8\.GetString\(payload\)\.Trim\(\)",
+        "C# lineage verifier CID1 parser must preserve exact payload text",
+        errors,
+    )
     require_contains(
         texts,
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
@@ -7442,6 +9075,8 @@ def check_csharp(texts, errors):
             "KagemushaNoritoFrameFromPayload",
             "appendVerifierKey",
             "duplicateCidVerifierKey",
+            "whitespaceCidVerifierKey",
+            "whitespaceCidProvingKeyArchive",
             "missingCircuitArchive",
             "wrongCommitmentArchive",
             "smuggledCircuitArchive",
@@ -8862,6 +10497,90 @@ if mode == "--negative-control-identifier-receipt-account-id-exactness-guard":
         raise SystemExit(0)
     raise SystemExit("negative control failed: identifier receipt account-id exactness drift was not detected")
 
+if mode == "--negative-control-swift-identifier-receipt-account-id-exactness":
+    mutated_texts = dict(texts)
+    target = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    original = read(target)
+    mutated = original.replace(
+        "        accountId = rawAccountId\n",
+        "        accountId = trimmedAccountId\n",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift identifier receipt account-id exactness")
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        print("negative control rejected Swift identifier receipt account-id exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift identifier receipt account-id exactness drift was not detected")
+
+if mode == "--negative-control-native-bridge-identifier-receipt-exactness":
+    mutated = dict(texts)
+    target = "crates/connect_norito_bridge/src/lib.rs"
+    original = mutated[target]
+    updated = original.replace(
+        "if raw.is_empty() || raw.trim() != raw {",
+        "if raw.trim().is_empty() {",
+        1,
+    )
+    updated = updated.replace(
+        "fn parse_identifier_receipt_rejects_padded_payload_fields()",
+        "fn parse_identifier_receipt_allows_padded_payload_fields()",
+        1,
+    )
+    updated = updated.replace(
+        "fn parse_identifier_receipt_rejects_padded_proof_attestation_fields()",
+        "fn parse_identifier_receipt_allows_padded_proof_attestation_fields()",
+        1,
+    )
+    if updated == original:
+        raise SystemExit("negative control failed: unable to mutate native bridge identifier receipt exactness")
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        if "Rust native identifier receipt exactness" not in message:
+            raise SystemExit(
+                "negative control failed: native bridge identifier receipt exactness drift was not detected"
+            )
+        print("negative control rejected native bridge identifier receipt exactness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: native bridge identifier receipt exactness drift was not detected")
+
+if mode == "--negative-control-native-bridge-claim-identifier-account-binding":
+    mutated = dict(texts)
+    target = "crates/connect_norito_bridge/src/lib.rs"
+    original = mutated[target]
+    updated = original.replace(
+        "        validate_identifier_claim_account(&account, &receipt)?;\n",
+        "",
+    )
+    updated = updated.replace(
+        "fn validate_identifier_claim_account_rejects_mismatched_receipt_account()",
+        "fn validate_identifier_claim_account_allows_mismatched_receipt_account()",
+        1,
+    )
+    if updated == original:
+        raise SystemExit("negative control failed: unable to mutate native claim-identifier account binding")
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        if "Rust native claim identifier account binding" not in message:
+            raise SystemExit(
+                "negative control failed: native claim-identifier account binding drift was not detected"
+            )
+        print("negative control rejected native claim-identifier account binding drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: native claim-identifier account binding drift was not detected")
+
 if mode == "--negative-control-identifier-receipt-hash-exactness-guard":
     target = "python/iroha_torii_client/client.py"
     original = read(target)
@@ -9985,6 +11704,146 @@ if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":
     raise SystemExit(
         "negative control failed: Swift Kagemusha instruction transaction builder drift was not detected"
     )
+
+if mode == "--negative-control-swift-identifier-receipt-account-id-decode-test":
+    mutated_texts = dict(texts)
+    target = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    original = read(target)
+    mutated = original.replace(
+        "testIdentifierReceiptDecodeRejectsPaddedAccountIdBeforeSignatureVerification",
+        "testIdentifierReceiptDecodeAllowsPaddedAccountIdBeforeSignatureVerification",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate Swift identifier receipt account-id decode coverage"
+        )
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        print("negative control rejected Swift identifier receipt account-id decode coverage drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift identifier receipt account-id decode coverage drift was not detected")
+
+if mode == "--negative-control-swift-nfc-receive-success-preservation":
+    mutated_texts = dict(texts)
+    target = "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift"
+    original = read(target)
+    mutated = original.replace(
+        "hasSuccessState: didPublishReceiveSuccess || didComplete",
+        "hasSuccessState: didComplete",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift NFC receive success preservation")
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        print("negative control rejected Swift NFC receive success preservation drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift NFC receive success preservation drift was not detected")
+
+if mode == "--negative-control-swift-nfc-receipt-ack-single-success":
+    mutated_texts = dict(texts)
+    target = "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift"
+    original = read(target)
+    mutated = original.replace(
+        "let shouldNotifyReceiptAckReady = markReceiptAckReady()",
+        "let shouldNotifyReceiptAckReady = true",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift NFC receipt ACK single-success gate")
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        print("negative control rejected Swift NFC receipt ACK single-success drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift NFC receipt ACK single-success drift was not detected")
+
+if mode == "--negative-control-swift-nfc-receipt-ack-read-single-success":
+    mutated_texts = dict(texts)
+    target = "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift"
+    original = read(target)
+    expected = (
+        "IrohaOfflineNfcReceiveCompletionPolicy.shouldPublishReceiveSuccessOnAckRead(\n"
+        "                hasAcceptedPayment: didAcceptPayment\n"
+        "            )"
+    )
+    mutated = original.replace(
+        expected,
+        expected.replace("hasAcceptedPayment: didAcceptPayment", "hasAcceptedPayment: false"),
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift NFC receipt ACK-read single-success gate")
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        print("negative control rejected Swift NFC receipt ACK-read single-success drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift NFC receipt ACK-read single-success drift was not detected")
+
+if mode == "--negative-control-swift-nfc-emulation-progress-after-success":
+    mutated_texts = dict(texts)
+    target = "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift"
+    original = read(target)
+    expected = (
+        "IrohaOfflineNfcReceiveCompletionPolicy.shouldApplyEmulationStartedProgress(\n"
+        "                activeSessionMatches: true,\n"
+        "                isReceiving: true,\n"
+        "                hasAcceptedPayment: didAcceptPayment\n"
+        "            )"
+    )
+    mutated = original.replace(
+        expected,
+        expected.replace("hasAcceptedPayment: didAcceptPayment", "hasAcceptedPayment: false"),
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift NFC emulation progress after success")
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        print("negative control rejected Swift NFC emulation progress-after-success drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift NFC emulation progress-after-success drift was not detected")
+
+if mode == "--negative-control-swift-nfc-send-terminal-success-policy":
+    mutated_texts = dict(texts)
+    target = "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift"
+    original = read(target)
+    expected = (
+        "IrohaOfflineDeviceTransferSendCompletionPolicy.shouldApplyProgress(\n"
+        "                isTransferring: true,\n"
+        "                hasTerminalSuccess: hasTerminalSendSuccess\n"
+        "            )"
+    )
+    mutated = original.replace(
+        expected,
+        expected.replace("hasTerminalSuccess: hasTerminalSendSuccess", "hasTerminalSuccess: false"),
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift NFC send terminal-success policy")
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        print("negative control rejected Swift NFC send terminal-success policy drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift NFC send terminal-success policy drift was not detected")
 
 if mode == "--negative-control-swift-sdk-version-script":
     target = SWIFT_SDK_PARSE_COMMAND
@@ -11145,6 +13004,136 @@ if mode == "--negative-control-csharp-lineage-key-package-binding":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: C# lineage key package binding drift was not detected")
+
+if mode == "--negative-control-csharp-lineage-cid1-exactness":
+    mutated = dict(texts)
+    source_target = "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
+    test_target = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs"
+    mutated_source = texts[source_target].replace(
+        "circuitId = Encoding.UTF8.GetString(payload);",
+        "circuitId = Encoding.UTF8.GetString(payload).Trim();",
+        1,
+    )
+    mutated_test = texts[test_target].replace(
+        "whitespaceCidVerifierKey",
+        "normalizedCidVerifierKey",
+        1,
+    )
+    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+        raise SystemExit("negative control failed: unable to mutate C# lineage CID1 exactness guard")
+    mutated[source_target] = mutated_source
+    mutated[test_target] = mutated_test
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected C# lineage CID1 exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# lineage CID1 exactness drift was not detected")
+
+if mode == "--negative-control-csharp-canonical-request-exactness":
+    mutated = dict(texts)
+    source_target = "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequest.cs"
+    test_target = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs"
+    mutated_source = texts[source_target].replace(
+        "var effectiveNonce = nonce is null ? GenerateNonce() : RequireExactNonBlank(nonce, nameof(nonce));",
+        "var effectiveNonce = string.IsNullOrWhiteSpace(nonce) ? GenerateNonce() : nonce;",
+        1,
+    )
+    mutated_test = texts[test_target].replace(
+        "CanonicalRequestAuthRejectsPaddedAndBlankFields",
+        "CanonicalRequestAuthAllowsPaddedAndBlankFields",
+        1,
+    )
+    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+        raise SystemExit("negative control failed: unable to mutate C# canonical request exactness guard")
+    mutated[source_target] = mutated_source
+    mutated[test_target] = mutated_test
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected C# canonical request exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# canonical request exactness drift was not detected")
+
+if mode == "--negative-control-csharp-identifier-receipt-exactness":
+    mutated = dict(texts)
+    source_target = "csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs"
+    test_target = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs"
+    mutated_source = texts[source_target].replace(
+        "ToriiIdentifierResolveResponseJsonConverter",
+        "ToriiIdentifierResolveResponseUncheckedJsonConverter",
+        1,
+    )
+    mutated_test = texts[test_target].replace(
+        "IdentifierResolveResponseRejectsPaddedReceiptFields",
+        "IdentifierResolveResponseAllowsPaddedReceiptFields",
+        1,
+    )
+    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+        raise SystemExit("negative control failed: unable to mutate C# identifier receipt exactness guard")
+    mutated[source_target] = mutated_source
+    mutated[test_target] = mutated_test
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected C# identifier receipt exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# identifier receipt exactness drift was not detected")
+
+if mode == "--negative-control-csharp-transaction-builder-exactness":
+    mutated = dict(texts)
+    source_target = "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs"
+    test_target = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs"
+    mutated_source = texts[source_target].replace(
+        "return value;",
+        "return value.Trim();",
+        1,
+    )
+    mutated_test = texts[test_target].replace(
+        "TransactionBuilderRejectsPaddedTopLevelFields",
+        "TransactionBuilderAllowsPaddedTopLevelFields",
+        1,
+    )
+    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+        raise SystemExit("negative control failed: unable to mutate C# transaction builder exactness guard")
+    mutated[source_target] = mutated_source
+    mutated[test_target] = mutated_test
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected C# transaction builder exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# transaction builder exactness drift was not detected")
+
+if mode == "--negative-control-csharp-transaction-encoding-exactness":
+    mutated = dict(texts)
+    source_target = "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs"
+    test_target = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs"
+    mutated_source = texts[source_target].replace(
+        "writer.WriteField(EncodeString(RequireExactNonBlank(chainId, nameof(chainId))));",
+        "writer.WriteField(EncodeString(chainId.Trim()));",
+        1,
+    )
+    mutated_test = texts[test_target].replace(
+        "TransactionEncodingContextRejectsPaddedBoundaryFields",
+        "TransactionEncodingContextAllowsPaddedBoundaryFields",
+        1,
+    )
+    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+        raise SystemExit("negative control failed: unable to mutate C# transaction encoding exactness guard")
+    mutated[source_target] = mutated_source
+    mutated[test_target] = mutated_test
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected C# transaction encoding exactness drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# transaction encoding exactness drift was not detected")
 
 if mode == "--negative-control-swift-lineage-key-package-binding":
     mutated = dict(texts)
@@ -13223,6 +15212,1214 @@ if mode == "--negative-control-jvm-compact-projection-unsigned-block-height":
     raise SystemExit(
         "negative control failed: JVM compact projection unsigned block-height drift was not detected"
     )
+
+if mode == "--negative-control-jvm-claim-identifier-account-binding-test":
+    mutated_texts = dict(texts)
+    java_target = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoderTests.java"
+    kotlin_target = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoderParityTest.kt"
+    java_mutated = mutated_texts[java_target].replace(
+        "claimIdentifierRejectsAccountMismatchBeforeEncoding",
+        "claimIdentifierAllowsAccountMismatchBeforeEncoding",
+    ).replace(
+        "ClaimIdentifier accountId must match receipt.accountId",
+        "ClaimIdentifier account mismatch may be checked by core",
+    )
+    kotlin_mutated = mutated_texts[kotlin_target].replace(
+        "claim identifier rejects account mismatch before encoding",
+        "claim identifier allows account mismatch before encoding",
+    ).replace(
+        "ClaimIdentifier accountId must match receipt.accountId",
+        "ClaimIdentifier account mismatch may be checked by core",
+    )
+    if java_mutated == mutated_texts[java_target] or kotlin_mutated == mutated_texts[kotlin_target]:
+        raise SystemExit("negative control failed: unable to mutate JVM ClaimIdentifier account binding tests")
+    mutated_texts[java_target] = java_mutated
+    mutated_texts[kotlin_target] = kotlin_mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        if "ClaimIdentifier account binding test" not in message:
+            raise SystemExit(
+                "negative control failed: JVM ClaimIdentifier account binding drift was not detected"
+            )
+        print("negative control rejected JVM ClaimIdentifier account binding drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM ClaimIdentifier account binding drift was not detected")
+
+if mode == "--negative-control-jvm-claim-identifier-account-exactness":
+    mutated_texts = dict(texts)
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoder.java"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoder.kt"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoderTests.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoderParityTest.kt"
+    java_source_mutated = mutated_texts[java_source].replace(
+        "requireExactNonBlank(accountId, \"accountId\")",
+        "requireNonBlank(accountId, \"accountId\")",
+    ).replace(
+        "requireExactNonBlank(receipt.accountId",
+        "requireNonBlank(receipt.accountId",
+    ).replace(
+        "must not contain surrounding whitespace",
+        "may be trimmed before encoding",
+    )
+    kotlin_source_mutated = mutated_texts[kotlin_source].replace(
+        "requireExactNonBlank(accountId, \"accountId\")",
+        "requireNonBlank(accountId, \"accountId\")",
+    ).replace(
+        "requireExactNonBlank(receipt.accountId",
+        "requireNonBlank(receipt.accountId",
+    ).replace(
+        "must not contain surrounding whitespace",
+        "may be trimmed before encoding",
+    )
+    java_test_mutated = mutated_texts[java_test].replace(
+        "padded ClaimIdentifier account must fail before encoding",
+        "padded ClaimIdentifier account may normalize before encoding",
+    ).replace(
+        "accountId must not contain surrounding whitespace",
+        "accountId may be trimmed before encoding",
+    )
+    kotlin_test_mutated = mutated_texts[kotlin_test].replace(
+        "padded ClaimIdentifier account must fail before encoding",
+        "padded ClaimIdentifier account may normalize before encoding",
+    ).replace(
+        "accountId must not contain surrounding whitespace",
+        "accountId may be trimmed before encoding",
+    )
+    if (
+        java_source_mutated == mutated_texts[java_source]
+        or kotlin_source_mutated == mutated_texts[kotlin_source]
+        or java_test_mutated == mutated_texts[java_test]
+        or kotlin_test_mutated == mutated_texts[kotlin_test]
+    ):
+        raise SystemExit("negative control failed: unable to mutate JVM ClaimIdentifier account exactness")
+    mutated_texts[java_source] = java_source_mutated
+    mutated_texts[kotlin_source] = kotlin_source_mutated
+    mutated_texts[java_test] = java_test_mutated
+    mutated_texts[kotlin_test] = kotlin_test_mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Android Java ClaimIdentifier account exactness",
+            "Kotlin ClaimIdentifier account exactness",
+            "Android Java ClaimIdentifier account binding test",
+            "Kotlin ClaimIdentifier account binding test",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM ClaimIdentifier account exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM ClaimIdentifier account exactness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM ClaimIdentifier account exactness drift was not detected")
+
+if mode == "--negative-control-jvm-identifier-claim-record-exactness":
+    mutated_texts = dict(texts)
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierJsonParser.java"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierJsonParser.kt"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+    java_source_mutated = mutated_texts[java_source]
+    kotlin_source_mutated = mutated_texts[kotlin_source]
+    for field in ("policy_id", "opaque_id", "receipt_hash", "uaid", "account_id"):
+        java_source_mutated = java_source_mutated.replace(
+            f'requiredExactString(root.get("{field}"), "identifier claim record.{field}")',
+            f'requiredString(root.get("{field}"), "identifier claim record.{field}")',
+        )
+        kotlin_source_mutated = kotlin_source_mutated.replace(
+            f'requiredExactString(root["{field}"], "identifier claim record.{field}")',
+            f'requiredString(root["{field}"], "identifier claim record.{field}")',
+        )
+    java_test_mutated = mutated_texts[java_test].replace(
+        "identifierClaimRecordParserRejectsNonExactClaimFields",
+        "identifierClaimRecordParserAllowsPaddedClaimFields",
+    ).replace(
+        "identifier claim record parser must reject non-exact",
+        "identifier claim record parser may normalize",
+    )
+    kotlin_test_mutated = mutated_texts[kotlin_test].replace(
+        "identifierClaimRecordParserRejectsNonExactClaimFields",
+        "identifierClaimRecordParserAllowsPaddedClaimFields",
+    ).replace(
+        "identifier claim record $label exactness",
+        "identifier claim record $label may normalize",
+    )
+    if (
+        java_source_mutated == mutated_texts[java_source]
+        or kotlin_source_mutated == mutated_texts[kotlin_source]
+        or java_test_mutated == mutated_texts[java_test]
+        or kotlin_test_mutated == mutated_texts[kotlin_test]
+    ):
+        raise SystemExit("negative control failed: unable to mutate JVM identifier claim-record exactness")
+    mutated_texts[java_source] = java_source_mutated
+    mutated_texts[kotlin_source] = kotlin_source_mutated
+    mutated_texts[java_test] = java_test_mutated
+    mutated_texts[kotlin_test] = kotlin_test_mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Android Java identifier claim record policy-id exactness",
+            "Kotlin identifier claim record policy-id exactness",
+            "Android Java identifier claim record parser tests",
+            "Kotlin identifier claim record parser tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM identifier claim-record exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM identifier claim-record exactness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM identifier claim-record exactness drift was not detected")
+
+if mode == "--negative-control-js-swift-identifier-claim-record-exactness":
+    mutated_texts = dict(texts)
+    js_targets = (
+        "javascript/iroha_js/src/toriiClient.js",
+        "javascript/iroha_js/dist/toriiClient.js",
+    )
+    for target in js_targets:
+        updated = mutated_texts[target]
+        updated = updated.replace(
+            "policy_id: requireIdentifierPolicyId(record.policy_id",
+            "policy_id: requireNonEmptyString(record.policy_id",
+        ).replace(
+            'opaque_id: requireExactReceiptPrefixedHash(record.opaque_id, "opaque:",',
+            "opaque_id: normalizeOpaqueLiteral(record.opaque_id,",
+        ).replace(
+            "receipt_hash: requireExactReceiptHash(record.receipt_hash",
+            "receipt_hash: normalizeHex32String(record.receipt_hash",
+        ).replace(
+            "uaid: requireExactReceiptUaid(record.uaid",
+            "uaid: normalizeUaidLiteral(record.uaid",
+        ).replace(
+            "account_id: requireExactAccountId(record.account_id",
+            "account_id: ToriiClient._requireAccountId(record.account_id",
+        )
+        if updated == mutated_texts[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate JavaScript claim-record exactness in {target}"
+            )
+        mutated_texts[target] = updated
+
+    js_test = "javascript/iroha_js/test/toriiClient.identifier.test.js"
+    js_test_mutated = mutated_texts[js_test].replace(
+        "getIdentifierClaimByReceiptHash rejects non-exact claim record fields",
+        "getIdentifierClaimByReceiptHash allows normalized claim record fields",
+    ).replace(
+        "claim record ${field} exactness",
+        "claim record ${field} may normalize",
+    )
+    if js_test_mutated == mutated_texts[js_test]:
+        raise SystemExit("negative control failed: unable to mutate JavaScript claim-record tests")
+    mutated_texts[js_test] = js_test_mutated
+
+    swift_source = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    swift_source_mutated = mutated_texts[swift_source].replace(
+        "ToriiIdentifierReceiptWireValue.exactPolicyId(",
+        "ToriiIdentifierReceiptWireValue.normalizedPolicyId(",
+        1,
+    ).replace(
+        'field: "identifier claim record.opaque_id"',
+        'field: "payload.opaque_id"',
+    ).replace(
+        'field: "identifier claim record.receipt_hash"',
+        'field: "payload.receipt_hash"',
+    ).replace(
+        'field: "identifier claim record.uaid"',
+        'field: "payload.uaid"',
+    ).replace(
+        "ToriiIdentifierReceiptWireValue.exactAccountId(",
+        "ToriiIdentifierReceiptWireValue.normalizedPolicyId(",
+        1,
+    ).replace(
+        'debugName: "identifier claim record.policy_id"',
+        'debugName: "payload.policy_id"',
+    ).replace(
+        'debugName: "identifier claim record.account_id"',
+        'debugName: "payload.account_id"',
+    )
+    if swift_source_mutated == mutated_texts[swift_source]:
+        raise SystemExit("negative control failed: unable to mutate Swift claim-record exactness")
+    mutated_texts[swift_source] = swift_source_mutated
+
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    swift_test_mutated = mutated_texts[swift_test].replace(
+        "testGetIdentifierClaimByReceiptHashRejectsNonExactClaimFieldsAsync",
+        "testGetIdentifierClaimByReceiptHashAllowsNormalizedClaimFieldsAsync",
+    ).replace(
+        "expected non-exact claim record",
+        "expected normalized claim record",
+    ).replace(
+        "identifier claim record.\\(testCase.field)",
+        "identifier claim record may normalize.\\(testCase.field)",
+    )
+    if swift_test_mutated == mutated_texts[swift_test]:
+        raise SystemExit("negative control failed: unable to mutate Swift claim-record tests")
+    mutated_texts[swift_test] = swift_test_mutated
+
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "javascript/iroha_js/src/toriiClient.js identifier claim record exactness",
+            "javascript/iroha_js/dist/toriiClient.js identifier claim record exactness",
+            "JavaScript identifier claim record exactness tests",
+            "Swift identifier receipt attestation kind and proof base64 validation",
+            "Swift identifier receipt account-id, attestation kind, and malformed proof base64 tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JS/Swift identifier claim-record exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JS/Swift identifier claim-record exactness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JS/Swift identifier claim-record exactness drift was not detected")
+
+if mode == "--negative-control-ram-lfe-response-exactness":
+    mutated_texts = dict(texts)
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/RamLfeJsonParser.java"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/RamLfeJsonParser.kt"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+    mutated_texts[java_source] = (
+        mutated_texts[java_source]
+        .replace(
+            'requiredExactString(root.get("program_id"), "ram-lfe execute response.program_id")',
+            'requiredString(root.get("program_id"), "ram-lfe execute response.program_id")',
+        )
+        .replace(
+            'canonicalizeExactHash32(root.get("opaque_hash"), "ram-lfe execute response.opaque_hash")',
+            'requiredString(root.get("opaque_hash"), "ram-lfe execute response.opaque_hash")',
+        )
+        .replace(
+            'canonicalizeExactHex(\n            root.get("output_ciphertext"),',
+            'canonicalizeHex(\n            requiredString(root.get("output_ciphertext"), "ram-lfe execute response.output_ciphertext"),',
+        )
+        .replace(
+            'requiredExactLowercaseString(\n            root.get("verification_mode"), "ram-lfe execute response.verification_mode")',
+            'normalizedMode(\n            requiredString(root.get("verification_mode"), "ram-lfe execute response.verification_mode"))',
+        )
+        .replace(
+            'canonicalizeExactHash32(\n            root.get("output_hash"), "ram-lfe receipt verify response.output_hash")',
+            'requiredString(root.get("output_hash"), "ram-lfe receipt verify response.output_hash")',
+        )
+    )
+    mutated_texts[kotlin_source] = (
+        mutated_texts[kotlin_source]
+        .replace(
+            'requiredExactString(root["program_id"], "ram-lfe execute response.program_id")',
+            'requiredString(root["program_id"], "ram-lfe execute response.program_id")',
+        )
+        .replace(
+            'canonicalizeExactHash32(root["opaque_hash"], "ram-lfe execute response.opaque_hash")',
+            'requiredString(root["opaque_hash"], "ram-lfe execute response.opaque_hash")',
+        )
+        .replace(
+            'requiredExactLowercaseString(root["verification_mode"], "ram-lfe execute response.verification_mode")',
+            'normalizedMode(requiredString(root["verification_mode"], "ram-lfe execute response.verification_mode"))',
+        )
+        .replace(
+            'canonicalizeExactHash32(root["output_hash"], "ram-lfe receipt verify response.output_hash")',
+            'requiredString(root["output_hash"], "ram-lfe receipt verify response.output_hash")',
+        )
+    )
+    mutated_texts[java_test] = mutated_texts[java_test].replace(
+        "ramLfeResponseParsersRejectNonExactFields",
+        "ramLfeResponseParsersAllowNormalizedFields",
+    ).replace(
+        "expected non-exact ",
+        "expected normalized ",
+    )
+    mutated_texts[kotlin_test] = mutated_texts[kotlin_test].replace(
+        "ramLfeResponseParsersRejectNonExactFields",
+        "ramLfeResponseParsersAllowNormalizedFields",
+    ).replace(
+        "expected ram-lfe execute response.$field failure",
+        "expected ram-lfe execute response.$field normalization",
+    ).replace(
+        "expected ram-lfe receipt verify response.$field failure",
+        "expected ram-lfe receipt verify response.$field normalization",
+    )
+
+    js_targets = (
+        "javascript/iroha_js/src/toriiClient.js",
+        "javascript/iroha_js/dist/toriiClient.js",
+    )
+    for target in js_targets:
+        mutated_texts[target] = (
+            mutated_texts[target]
+            .replace(
+                "program_id: requireExactNonEmptyString(record.program_id",
+                "program_id: requireNonEmptyString(record.program_id",
+            )
+            .replace(
+                "opaque_hash: requireExactReceiptHash(record.opaque_hash",
+                "opaque_hash: requireNonEmptyString(record.opaque_hash",
+            )
+            .replace(
+                "receipt_hash: requireExactReceiptHash(record.receipt_hash",
+                "receipt_hash: requireNonEmptyString(record.receipt_hash",
+            )
+            .replace(
+                "output_ciphertext: requireExactHexString(",
+                "output_ciphertext: requireHexString(",
+            )
+            .replace(
+                "output_hash: requireExactReceiptHash(record.output_hash",
+                "output_hash: requireNonEmptyString(record.output_hash",
+            )
+            .replace(
+                "associated_data_hash: requireExactReceiptHash(",
+                "associated_data_hash: requireNonEmptyString(",
+            )
+        )
+
+    js_test = "javascript/iroha_js/test/toriiClient.ramLfe.test.js"
+    mutated_texts[js_test] = mutated_texts[js_test].replace(
+        "executeRamLfeProgram rejects non-exact response fields",
+        "executeRamLfeProgram allows normalized response fields",
+    ).replace(
+        "verifyRamLfeReceipt rejects non-exact response fields",
+        "verifyRamLfeReceipt allows normalized response fields",
+    ).replace(
+        "RAM-LFE execute response ${field} exactness",
+        "RAM-LFE execute response ${field} may normalize",
+    )
+
+    swift_source = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    mutated_texts[swift_source] = (
+        mutated_texts[swift_source]
+        .replace(
+            'debugName: "ram-lfe execute response.opaque_hash"',
+            'debugName: "ram-lfe execute response.opaque_hash may normalize"',
+        )
+        .replace(
+            'debugName: "ram-lfe execute response.output_ciphertext"',
+            'debugName: "ram-lfe execute response.output_ciphertext may normalize"',
+        )
+        .replace(
+            'debugName: "ram-lfe receipt verify response.output_hash"',
+            'debugName: "ram-lfe receipt verify response.output_hash may normalize"',
+        )
+    )
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    mutated_texts[swift_test] = mutated_texts[swift_test].replace(
+        "testRamLfeResponseParsersRejectNonExactFieldsAsync",
+        "testRamLfeResponseParsersAllowNormalizedFieldsAsync",
+    ).replace(
+        "ram-lfe execute response.\\(testCase.field)",
+        "ram-lfe execute response may normalize.\\(testCase.field)",
+    ).replace(
+        "ram-lfe receipt verify response.\\(testCase.field)",
+        "ram-lfe receipt verify response may normalize.\\(testCase.field)",
+    )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate RAM-LFE response exactness")
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Android Java RAM-LFE execute response opaque-hash exactness",
+            "Kotlin RAM-LFE execute response opaque-hash exactness",
+            "javascript/iroha_js/src/toriiClient.js RAM-LFE execute response exactness",
+            "Swift identifier receipt attestation kind and proof base64 validation",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: RAM-LFE response exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected RAM-LFE response exactness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: RAM-LFE response exactness drift was not detected")
+
+if mode == "--negative-control-ram-lfe-program-policy-exactness":
+    mutated_texts = dict(texts)
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/RamLfeJsonParser.java"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/RamLfeJsonParser.kt"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+    mutated_texts[java_source] = (
+        mutated_texts[java_source]
+        .replace(
+            'requiredExactString(\n                  item.get("program_id"),\n                  "ram-lfe program policy list.items[" + i + "].program_id")',
+            'requiredString(\n                  item.get("program_id"),\n                  "ram-lfe program policy list.items[" + i + "].program_id")',
+        )
+        .replace(
+            'requiredExactLowercaseString(\n                  item.get("backend"), "ram-lfe program policy list.items[" + i + "].backend")',
+            'normalizedMode(requiredString(\n                  item.get("backend"), "ram-lfe program policy list.items[" + i + "].backend"))',
+        )
+        .replace(
+            'optionalExactHex(\n                  item.get("input_encryption_public_parameters"),',
+            'optionalString(\n                  item.get("input_encryption_public_parameters")),',
+        )
+        .replace(
+            'requiredExactString(root.get("proof_backend"), context + ".proof_backend")',
+            'requiredString(root.get("proof_backend"), context + ".proof_backend")',
+        )
+        .replace(
+            'canonicalizeExactHash32(\n            root.get("public_inputs_schema_hash"), context + ".public_inputs_schema_hash")',
+            'requiredString(root.get("public_inputs_schema_hash"), context + ".public_inputs_schema_hash")',
+        )
+    )
+    mutated_texts[kotlin_source] = (
+        mutated_texts[kotlin_source]
+        .replace(
+            'requiredExactString(item["program_id"], "ram-lfe program policy list.items[$i].program_id")',
+            'requiredString(item["program_id"], "ram-lfe program policy list.items[$i].program_id")',
+        )
+        .replace(
+            'requiredExactLowercaseString(item["backend"], "ram-lfe program policy list.items[$i].backend")',
+            'normalizedMode(requiredString(item["backend"], "ram-lfe program policy list.items[$i].backend"))',
+        )
+        .replace(
+            'optionalExactHex(item["input_encryption_public_parameters"], "ram-lfe program policy list.items[$i].input_encryption_public_parameters")',
+            'optionalString(item["input_encryption_public_parameters"])',
+        )
+        .replace(
+            'requiredExactString(root["proof_backend"], "$context.proof_backend")',
+            'requiredString(root["proof_backend"], "$context.proof_backend")',
+        )
+        .replace(
+            'canonicalizeExactHash32(root["public_inputs_schema_hash"], "$context.public_inputs_schema_hash")',
+            'requiredString(root["public_inputs_schema_hash"], "$context.public_inputs_schema_hash")',
+        )
+    )
+    mutated_texts[java_test] = mutated_texts[java_test].replace(
+        "ramLfeProgramPolicyParserRejectsNonExactFields",
+        "ramLfeProgramPolicyParserAllowsNormalizedFields",
+    )
+    mutated_texts[kotlin_test] = mutated_texts[kotlin_test].replace(
+        "ramLfeProgramPolicyParserRejectsNonExactFields",
+        "ramLfeProgramPolicyParserAllowsNormalizedFields",
+    )
+
+    js_targets = (
+        "javascript/iroha_js/src/toriiClient.js",
+        "javascript/iroha_js/dist/toriiClient.js",
+    )
+    for target in js_targets:
+        mutated_texts[target] = (
+            mutated_texts[target]
+            .replace(
+                "const backend = requireExactNonEmptyString(record.backend",
+                "const backend = requireNonEmptyString(record.backend",
+            )
+            .replace(
+                "const verificationMode = requireExactNonEmptyString(",
+                "const verificationMode = requireNonEmptyString(",
+            )
+            .replace(
+                "program_id: requireExactNonEmptyString(record.program_id",
+                "program_id: requireNonEmptyString(record.program_id",
+            )
+            .replace(
+                "owner: requireExactAccountId(record.owner",
+                "owner: ToriiClient._requireAccountId(record.owner",
+            )
+            .replace(
+                "result.input_encryption = requireExactNonEmptyString(",
+                "result.input_encryption = requireNonEmptyString(",
+            )
+            .replace(
+                "result.input_encryption_public_parameters = requireExactHexString(",
+                "result.input_encryption_public_parameters = requireHexString(",
+            )
+            .replace(
+                "result.proof_verifier = normalizeRamLfeProofVerifierMetadata(",
+                "result.proof_verifier = record.proof_verifier;",
+            )
+        )
+
+    js_test = "javascript/iroha_js/test/toriiClient.ramLfe.test.js"
+    mutated_texts[js_test] = mutated_texts[js_test].replace(
+        "listRamLfeProgramPolicies rejects non-exact policy metadata",
+        "listRamLfeProgramPolicies allows normalized policy metadata",
+    ).replace(
+        "RAM-LFE program policy ${field} exactness",
+        "RAM-LFE program policy ${field} may normalize",
+    ).replace(
+        "listRamLfeProgramPolicies rejects non-exact proof-verifier metadata",
+        "listRamLfeProgramPolicies allows normalized proof-verifier metadata",
+    ).replace(
+        "RAM-LFE proof verifier ${field} exactness",
+        "RAM-LFE proof verifier ${field} may normalize",
+    )
+
+    swift_source = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    mutated_texts[swift_source] = (
+        mutated_texts[swift_source]
+        .replace(
+            'debugName: "ram-lfe program policy.program_id"',
+            'debugName: "ram-lfe program policy.program_id may normalize"',
+        )
+        .replace(
+            'debugName: "ram-lfe program policy.input_encryption_public_parameters"',
+            'debugName: "ram-lfe program policy.input_encryption_public_parameters may normalize"',
+        )
+        .replace(
+            'debugName: "ram-lfe proof verifier.public_inputs_schema_hash"',
+            'debugName: "ram-lfe proof verifier.public_inputs_schema_hash may normalize"',
+        )
+    )
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    mutated_texts[swift_test] = mutated_texts[swift_test].replace(
+        "testRamLfeProgramPolicyParserRejectsNonExactFieldsAsync",
+        "testRamLfeProgramPolicyParserAllowsNormalizedFieldsAsync",
+    ).replace(
+        "ram-lfe program policy.input_encryption_public_parameters",
+        "ram-lfe program policy.input_encryption_public_parameters may normalize",
+    ).replace(
+        "ram-lfe proof verifier.public_inputs_schema_hash",
+        "ram-lfe proof verifier.public_inputs_schema_hash may normalize",
+    )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate RAM-LFE program-policy exactness")
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Android Java RAM-LFE program policy program-id exactness",
+            "Kotlin RAM-LFE program policy program-id exactness",
+            "javascript/iroha_js/src/toriiClient.js RAM-LFE program policy exactness",
+            "Swift RAM-LFE program policy exactness",
+            "Swift RAM-LFE program policy exactness tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: RAM-LFE program-policy exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected RAM-LFE program-policy exactness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: RAM-LFE program-policy exactness drift was not detected")
+
+if mode == "--negative-control-identifier-policy-proof-verifier-exactness":
+    mutated_texts = dict(texts)
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierJsonParser.java"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierJsonParser.kt"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+    mutated_texts[java_source] = (
+        mutated_texts[java_source]
+        .replace(
+            'requiredExactString(root.get("proof_backend"), context + ".proof_backend")',
+            'requiredString(root.get("proof_backend"), context + ".proof_backend")',
+        )
+        .replace(
+            'requiredExactString(\n                root.get("public_inputs_schema_hash"), context + ".public_inputs_schema_hash")',
+            'requiredString(root.get("public_inputs_schema_hash"), context + ".public_inputs_schema_hash")',
+        )
+        .replace(
+            'requiredExactString(\n            root.get("verifying_key_bytes_b64"), context + ".verifying_key_bytes_b64")',
+            'requiredString(root.get("verifying_key_bytes_b64"), context + ".verifying_key_bytes_b64")',
+        )
+    )
+    mutated_texts[kotlin_source] = (
+        mutated_texts[kotlin_source]
+        .replace(
+            'requiredExactString(root["proof_backend"], "$context.proof_backend")',
+            'requiredString(root["proof_backend"], "$context.proof_backend")',
+        )
+        .replace(
+            'requiredExactString(root["public_inputs_schema_hash"], "$context.public_inputs_schema_hash")',
+            'requiredString(root["public_inputs_schema_hash"], "$context.public_inputs_schema_hash")',
+        )
+        .replace(
+            'requiredExactString(root["verifying_key_bytes_b64"], "$context.verifying_key_bytes_b64")',
+            'requiredString(root["verifying_key_bytes_b64"], "$context.verifying_key_bytes_b64")',
+        )
+    )
+    mutated_texts[java_test] = mutated_texts[java_test].replace(
+        "identifierPolicyParserRejectsNonExactPolicyAndProofVerifierFields",
+        "identifierPolicyParserAllowsNormalizedProofVerifierFields",
+    )
+    mutated_texts[kotlin_test] = mutated_texts[kotlin_test].replace(
+        "identifierPolicyParserRejectsNonExactPolicyAndProofVerifierFields",
+        "identifierPolicyParserAllowsNormalizedProofVerifierFields",
+    )
+
+    for target in (
+        "javascript/iroha_js/src/toriiClient.js",
+        "javascript/iroha_js/dist/toriiClient.js",
+    ):
+        mutated_texts[target] = mutated_texts[target].replace(
+            "result.proof_verifier = normalizeRamLfeProofVerifierMetadata(",
+            "result.proof_verifier = record.proof_verifier;",
+        )
+
+    js_test = "javascript/iroha_js/test/toriiClient.identifier.test.js"
+    mutated_texts[js_test] = mutated_texts[js_test].replace(
+        "listIdentifierPolicies rejects non-exact proof-verifier metadata",
+        "listIdentifierPolicies allows normalized proof-verifier metadata",
+    ).replace(
+        "identifier policy proof verifier ${field} exactness",
+        "identifier policy proof verifier ${field} may normalize",
+    )
+
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    mutated_texts[swift_test] = mutated_texts[swift_test].replace(
+        'proofVerifier?.proofBackend, "halo2-ipa"',
+        'proofVerifier?.proofBackend, "halo2-ipa may normalize"',
+    )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate identifier policy proof-verifier exactness")
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Android Java identifier policy proof-verifier exactness",
+            "Kotlin identifier policy proof-verifier exactness",
+            "javascript/iroha_js/src/toriiClient.js identifier policy proof-verifier exactness",
+            "JavaScript identifier policy metadata, proof-verifier, and claim record exactness tests",
+            "Swift identifier policy proof-verifier metadata tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier policy proof-verifier exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected identifier policy proof-verifier exactness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier policy proof-verifier exactness drift was not detected")
+
+if mode == "--negative-control-identifier-policy-metadata-exactness":
+    mutated_texts = dict(texts)
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierJsonParser.java"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierJsonParser.kt"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+    swift_source = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    js_test = "javascript/iroha_js/test/toriiClient.identifier.test.js"
+
+    for target in (
+        "javascript/iroha_js/src/toriiClient.js",
+        "javascript/iroha_js/dist/toriiClient.js",
+    ):
+        mutated_texts[target] = (
+            mutated_texts[target]
+            .replace(
+                "norito_length_encoding = requireExactNonEmptyString(",
+                "norito_length_encoding = requireNonEmptyString(",
+            )
+            .replace(
+                "const normalization = requireExactNonEmptyString(",
+                "const normalization = requireNonEmptyString(",
+            )
+            .replace(
+                "const backend = requireExactNonEmptyString(record.backend",
+                "const backend = requireNonEmptyString(record.backend",
+            )
+            .replace(
+                "owner: requireExactAccountId(record.owner",
+                "owner: ToriiClient._requireAccountId(record.owner",
+            )
+            .replace(
+                "const inputEncryption = requireExactNonEmptyString(",
+                "const inputEncryption = requireNonEmptyString(",
+            )
+            .replace(
+                "result.input_encryption_public_parameters = requireExactHexString(",
+                "result.input_encryption_public_parameters = requireHexString(",
+            )
+            .replace(
+                "result.note = requireExactNonEmptyString(",
+                "result.note = requireNonEmptyString(",
+            )
+        )
+
+    mutated_texts[java_source] = (
+        mutated_texts[java_source]
+        .replace(
+            'requiredExactString(item.get("owner"), "identifier policy list.items[" + i + "].owner")',
+            'requiredString(item.get("owner"), "identifier policy list.items[" + i + "].owner")',
+        )
+        .replace(
+            'requiredExactLowercaseString(\n                      item.get("normalization"),',
+            'requiredString(\n                      item.get("normalization"),',
+        )
+        .replace(
+            'requiredExactLowercaseString(\n                  item.get("backend"),',
+            'requiredString(\n                  item.get("backend"),',
+        )
+        .replace("optionalExactLowercaseString(", "optionalString(")
+        .replace("optionalExactHexString(", "optionalString(")
+        .replace(
+            'optionalExactString(item.get("note"), "identifier policy list.items[" + i + "].note")',
+            'optionalString(item.get("note"))',
+        )
+        .replace(
+            'optionalExactString(root.get("norito_length_encoding"), context + ".norito_length_encoding")',
+            'root.get("norito_length_encoding") instanceof String\n            ? (String) root.get("norito_length_encoding")\n            : null',
+        )
+    )
+    mutated_texts[kotlin_source] = (
+        mutated_texts[kotlin_source]
+        .replace(
+            'requiredExactString(item["owner"], "identifier policy list.items[$i].owner")',
+            'requiredString(item["owner"], "identifier policy list.items[$i].owner")',
+        )
+        .replace(
+            'requiredExactLowercaseString(item["normalization"], "identifier policy list.items[$i].normalization")',
+            'requiredString(item["normalization"], "identifier policy list.items[$i].normalization")',
+        )
+        .replace(
+            'requiredExactLowercaseString(item["backend"], "identifier policy list.items[$i].backend")',
+            'requiredString(item["backend"], "identifier policy list.items[$i].backend")',
+        )
+        .replace("optionalExactLowercaseString(", "optionalString(")
+        .replace("optionalExactHexString(", "optionalString(")
+        .replace(
+            'optionalExactString(item["note"], "identifier policy list.items[$i].note")',
+            'optionalString(item["note"])',
+        )
+        .replace(
+            'optionalExactString(root["norito_length_encoding"], "$context.norito_length_encoding")',
+            'root["norito_length_encoding"] as? String',
+        )
+    )
+    mutated_texts[swift_source] = (
+        mutated_texts[swift_source]
+        .replace(
+            'debugName: "identifier policy.owner"',
+            'debugName: "identifier policy.owner may normalize"',
+        )
+        .replace(
+            'debugName: "identifier policy.input_encryption_public_parameters_decoded.norito_length_encoding"',
+            'debugName: "identifier policy.input_encryption_public_parameters_decoded.norito_length_encoding may normalize"',
+        )
+    )
+    mutated_texts[js_test] = mutated_texts[js_test].replace(
+        "listIdentifierPolicies rejects non-exact policy metadata",
+        "listIdentifierPolicies allows normalized policy metadata",
+    ).replace(
+        "identifier policy metadata ${field} exactness",
+        "identifier policy metadata ${field} may normalize",
+    )
+    mutated_texts[java_test] = mutated_texts[java_test].replace(
+        "identifierPolicyParserRejectsNonExactPolicyAndProofVerifierFields",
+        "identifierPolicyParserAllowsNormalizedPolicyMetadataFields",
+    )
+    mutated_texts[kotlin_test] = mutated_texts[kotlin_test].replace(
+        "identifierPolicyParserRejectsNonExactPolicyAndProofVerifierFields",
+        "identifierPolicyParserAllowsNormalizedPolicyMetadataFields",
+    )
+    mutated_texts[swift_test] = mutated_texts[swift_test].replace(
+        "testListIdentifierPoliciesRejectsNonExactMetadata",
+        "testListIdentifierPoliciesAllowsNormalizedMetadata",
+    )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate identifier policy metadata exactness")
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "javascript/iroha_js/src/toriiClient.js identifier BFV metadata exactness",
+            "javascript/iroha_js/src/toriiClient.js identifier policy metadata exactness",
+            "JavaScript identifier policy metadata, proof-verifier, and claim record exactness tests",
+            "Swift identifier policy metadata exactness",
+            "Swift identifier policy metadata exactness tests",
+            "Android Java identifier policy metadata exactness",
+            "Kotlin identifier policy metadata exactness",
+            "Android Java identifier policy metadata, proof-verifier, and claim record parser tests",
+            "Kotlin identifier policy metadata, proof-verifier, and claim record parser tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: identifier policy metadata exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected identifier policy metadata exactness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: identifier policy metadata exactness drift was not detected")
+
+if mode == "--negative-control-account-alias-resolution-exactness":
+    mutated_texts = dict(texts)
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/AccountAliasJsonParser.java"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/AccountAliasJsonParser.kt"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+    swift_source = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    js_test = "javascript/iroha_js/test/toriiClient.test.js"
+
+    for target in (
+        "javascript/iroha_js/src/toriiClient.js",
+        "javascript/iroha_js/dist/toriiClient.js",
+    ):
+        mutated_texts[target] = (
+            mutated_texts[target]
+            .replace(
+                "const alias = requireExactNonEmptyString(record.alias",
+                "const alias = requireNonEmptyString(record.alias",
+            )
+            .replace(
+                "const rawAccountId = requireExactNonEmptyString(",
+                "const rawAccountId = requireNonEmptyString(",
+            )
+            .replace(
+                "result.source = requireExactNonEmptyString(sourceValue",
+                "result.source = requireNonEmptyString(sourceValue",
+            )
+        )
+
+    mutated_texts[java_source] = (
+        mutated_texts[java_source]
+        .replace(
+            'requiredExactString(root.get("alias"), "account alias resolution.alias")',
+            'requiredString(root.get("alias"), "account alias resolution.alias")',
+        )
+        .replace(
+            'requiredExactString(root.get("account_id"), "account alias resolution.account_id")',
+            'requiredString(root.get("account_id"), "account alias resolution.account_id")',
+        )
+        .replace(
+            'optionalExactString(root.get("source"), "account alias resolution.source")',
+            'optionalString(root.get("source"))',
+        )
+    )
+    mutated_texts[kotlin_source] = (
+        mutated_texts[kotlin_source]
+        .replace(
+            'requiredExactString(root["alias"], "account alias resolution.alias")',
+            'requiredString(root["alias"], "account alias resolution.alias")',
+        )
+        .replace(
+            'requiredExactString(root["account_id"], "account alias resolution.account_id")',
+            'requiredString(root["account_id"], "account alias resolution.account_id")',
+        )
+        .replace(
+            'optionalExactString(root["source"], "account alias resolution.source")',
+            'optionalString(root["source"])',
+        )
+    )
+    mutated_texts[swift_source] = (
+        mutated_texts[swift_source]
+        .replace("decodeOptionalExactStringValue", "decodeOptionalNormalizedStringValue")
+        .replace("decodeOptionalExactStringArrayValue", "decodeOptionalNormalizedStringArrayValue")
+        .replace(
+            'debugName: "account alias resolution.source"',
+            'debugName: "account alias resolution.source may normalize"',
+        )
+    )
+    mutated_texts[js_test] = (
+        mutated_texts[js_test]
+        .replace("resolveAlias parses exact payload fields", "resolveAlias normalizes payload fields")
+        .replace(
+            "alias resolve response\\\\.alias must not contain surrounding whitespace",
+            "alias resolve response\\\\.alias may normalize",
+        )
+        .replace(
+            "alias resolve response\\\\.account_id must not contain surrounding whitespace",
+            "alias resolve response\\\\.account_id may normalize",
+        )
+        .replace(
+            "alias resolve response\\\\.source must not contain surrounding whitespace",
+            "alias resolve response\\\\.source may normalize",
+        )
+    )
+    mutated_texts[java_test] = mutated_texts[java_test].replace(
+        "accountAliasParserRejectsNonExactResponseFields",
+        "accountAliasParserAllowsNormalizedResponseFields",
+    )
+    mutated_texts[kotlin_test] = mutated_texts[kotlin_test].replace(
+        "accountAliasParserRejectsNonExactResponseFields",
+        "accountAliasParserAllowsNormalizedResponseFields",
+    )
+    mutated_texts[swift_test] = mutated_texts[swift_test].replace(
+        "testResolveAccountAliasRejectsNonExactResponseFields",
+        "testResolveAccountAliasAllowsNormalizedResponseFields",
+    )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate account alias resolution exactness")
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "javascript/iroha_js/src/toriiClient.js account alias resolution exactness",
+            "JavaScript account alias resolution exactness tests",
+            "Swift account alias resolution exactness",
+            "Swift account alias resolution exactness tests",
+            "Android Java account alias resolution alias exactness",
+            "Kotlin account alias resolution alias exactness",
+            "Android Java account alias resolution exactness tests",
+            "Kotlin account alias resolution exactness tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: account alias resolution exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected account alias resolution exactness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: account alias resolution exactness drift was not detected")
+
+if mode == "--negative-control-multisig-resolved-account-exactness":
+    mutated_texts = dict(texts)
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractJsonParser.java"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ContractJsonParser.kt"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+    swift_source = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    js_test = "javascript/iroha_js/test/toriiClient.test.js"
+
+    for target in (
+        "javascript/iroha_js/src/toriiClient.js",
+        "javascript/iroha_js/dist/toriiClient.js",
+    ):
+        mutated_texts[target] = mutated_texts[target].replace(
+            "resolved_multisig_account_id: requireExactAccountId(",
+            "resolved_multisig_account_id: ToriiClient._normalizeAccountId(",
+        )
+
+    mutated_texts[java_source] = (
+        mutated_texts[java_source]
+        .replace(
+            'requiredExactAccountId(root.get("resolved_multisig_account_id"), "multisig response.resolved_multisig_account_id")',
+            'requiredString(root.get("resolved_multisig_account_id"), "multisig response.resolved_multisig_account_id")',
+        )
+        .replace(
+            "AccountIdLiteral.requireCanonicalI105Address(string, path)",
+            "string",
+        )
+    )
+    mutated_texts[kotlin_source] = (
+        mutated_texts[kotlin_source]
+        .replace(
+            'requiredExactAccountId(root["resolved_multisig_account_id"], "multisig response.resolved_multisig_account_id")',
+            'requiredString(root["resolved_multisig_account_id"], "multisig response.resolved_multisig_account_id")',
+        )
+        .replace(
+            "requireCanonicalI105Address(string, path)",
+            "string",
+        )
+    )
+    mutated_texts[swift_source] = (
+        mutated_texts[swift_source]
+        .replace("decodeExactToriiAccountId", "decodeNormalizedToriiAccountId")
+        .replace('guard !raw.contains("@")', 'guard raw.contains("@") || true')
+        .replace(
+            'debugName: "resolved_multisig_account_id"',
+            'debugName: "resolved_multisig_account_id may normalize"',
+        )
+    )
+    mutated_texts[js_test] = (
+        mutated_texts[js_test]
+        .replace(
+            "multisig response decoders reject non-exact resolved account ids",
+            "multisig response decoders allow normalized resolved account ids",
+        )
+        .replace(
+            "resolved_multisig_account_id must not contain surrounding whitespace",
+            "resolved_multisig_account_id may normalize",
+        )
+    )
+    mutated_texts[swift_test] = mutated_texts[swift_test].replace(
+        "testMultisigResponsesRejectNonExactResolvedAccountIds",
+        "testMultisigResponsesAllowNormalizedResolvedAccountIds",
+    )
+    mutated_texts[java_test] = (
+        mutated_texts[java_test]
+        .replace(
+            "padded resolved multisig account id must be rejected",
+            "padded resolved multisig account id may normalize",
+        )
+        .replace(
+            "non-canonical resolved multisig account id must be rejected",
+            "non-canonical resolved multisig account id may normalize",
+        )
+        .replace("TestAccountIds.ed25519Authority(0x37)", '"multisig"')
+    )
+    mutated_texts[kotlin_test] = (
+        mutated_texts[kotlin_test]
+        .replace("testMultisigAccountId", "testNormalizedMultisigAccountId")
+        .replace(
+            '"resolved_multisig_account_id": "$multisigAccountId "',
+            '"resolved_multisig_account_id": "$multisigAccountId"',
+        )
+        .replace(
+            '"resolved_multisig_account_id": "multisig"',
+            '"resolved_multisig_account_id": "multisig-normalized"',
+        )
+    )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate multisig resolved account exactness")
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "javascript/iroha_js/src/toriiClient.js multisig resolved account exactness",
+            "JavaScript multisig resolved account exactness tests",
+            "Swift multisig resolved account exactness",
+            "Swift multisig resolved account exactness tests",
+            "Android Java multisig resolved account exactness",
+            "Kotlin multisig resolved account exactness",
+            "Android Java multisig resolved account exactness tests",
+            "Kotlin multisig resolved account exactness tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: multisig resolved account exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected multisig resolved account exactness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: multisig resolved account exactness drift was not detected")
+
+if mode == "--negative-control-android-device-lab-family-fail-closed":
+    mutated_texts = dict(texts)
+    target = "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java"
+    original = mutated_texts[target]
+    mutated = original.replace(
+        """    fail(
+        "attached device is not in the standard Kagemusha production matrix: model="
+            + Build.MODEL
+            + " device="
+            + Build.DEVICE);
+    return "";
+""",
+        '    return "Google Pixel 6 / 6a";\n',
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Android device-lab family fallback")
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        if "Android device-lab exporter must fail closed" not in message:
+            raise SystemExit(
+                "negative control failed: Android device-lab family fallback drift was not detected"
+            )
+        print("negative control rejected Android device-lab family fallback drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Android device-lab family fallback drift was not detected")
+
+if mode == "--negative-control-android-device-lab-family-overmatch":
+    mutated_texts = dict(texts)
+    target = "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java"
+    original = mutated_texts[target]
+    mutated = original.replace(
+        "        && isExactDevice(device, exactDevices);",
+        "        || isExactDevice(device, exactDevices);",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Android device-lab family exact match")
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        if "Android device-lab exporter exact family matching" not in message:
+            raise SystemExit(
+                "negative control failed: Android device-lab family overmatch drift was not detected"
+            )
+        print("negative control rejected Android device-lab family overmatch drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Android device-lab family overmatch drift was not detected")
+
+if mode == "--negative-control-android-device-lab-family-override-binding":
+    mutated_texts = dict(texts)
+    target = "scripts/kagemusha_android_device_lab_slot.py"
+    original = mutated_texts[target]
+    mutated = original.replace(
+        """        if has_device_identity and inferred != family:
+            errors.append("device family must match attached device model/codename")
+            return None
+""",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Android device-lab family override binding")
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        if "Android slot assembler exact family matching" not in message:
+            raise SystemExit(
+                "negative control failed: Android device-lab family override drift was not detected"
+            )
+        print("negative control rejected Android device-lab family override drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Android device-lab family override drift was not detected")
+
+if mode == "--negative-control-android-device-lab-assembler-identity-fields":
+    mutated_texts = dict(texts)
+    target = "scripts/kagemusha_android_device_lab_slot.py"
+    original = mutated_texts[target]
+    mutated = original.replace(
+        """        "device_model": facts["device_model"],
+        "device_codename": facts["device_codename"],
+""",
+        """        "device_model": family,
+        "device_codename": family,
+""",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Android device-lab assembler identity fields")
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        if "Android slot assembler exact family matching" not in message:
+            raise SystemExit(
+                "negative control failed: Android device-lab assembler identity field drift was not detected"
+            )
+        print("negative control rejected Android device-lab assembler identity field drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Android device-lab assembler identity field drift was not detected")
 
 if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":
     mutated = dict(texts)

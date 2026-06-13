@@ -1,6 +1,1323 @@
 # Status
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
+
+## 2026-06-13 Confidential note payload encryption SDK contract
+
+- Defined the mobile SDK confidential-v2 note plaintext contract behind the
+  existing `ConfidentialEncryptedPayload` envelope: plaintext version `1`
+  contains `rho`, `owner_tag`, `asset`, `chain_id`, and canonical decimal
+  `amount` so decrypted notes are self-contained and can derive commitments and
+  nullifiers without caller-supplied hidden fields.
+- Added Kotlin/JVM and Android Java X25519/HKDF-SHA256/XChaCha20-Poly1305 note
+  encryption and authenticated decryption helpers, including optional
+  expected-chain validation, defensive key/plaintext wiping, and deterministic
+  payload vectors shared by both SDKs.
+- Added adversarial coverage for ciphertext tampering, wrong-recipient keys,
+  and wrong-chain use so wallet callers cannot accidentally treat unauthenticated
+  or cross-chain payloads as spendable notes.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 Confidential note derivation SDK primitives
+
+- Added Kotlin/JVM and Android Java confidential-v2 note opening models plus
+  owner-tag, asset-tag, chain-tag, note-commitment, and nullifier derivation
+  helpers that byte-match the Rust `confidential_v2` derivation path.
+- The SDK helpers defensively copy secret material, reject malformed fixed-size
+  fields, non-canonical Pasta scalars, ambiguous asset/chain text, noncanonical
+  `u128` amounts, and empty spend keys before deriving proof inputs.
+- Added fail-closed `ConfidentialNoteDecryption` entry points until the node or
+  bridge defines the encrypted note plaintext layout; callers cannot silently
+  parse opaque ciphertext as a wallet note.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 ZK asset Merkle-path Torii endpoint
+
+- Added `POST /v1/zk/merkle-path` for current confidential-v2 `zk_assets`
+  commitment inclusion paths, with JSON/Norito response negotiation, OpenAPI
+  discovery, API-token route wiring, batch request ordering, and fail-closed
+  validation for non-confidential-v2 assets, duplicate/ambiguous commitments,
+  malformed commitment hex, oversized batches, missing commitments, missing ZK
+  state, and root-history/frontier mismatches.
+- Wired the Kotlin/JVM and Android Java confidential-asset Torii clients and
+  Merkle-path providers to call the endpoint, parse typed path responses, and
+  reject node responses whose path count, commitment order, or sibling depth do
+  not match the request.
+- Validation passed:
+  - `cargo test -p iroha_torii handle_v1_zk_merkle_path --lib` (`11` tests)
+  - `cargo test -p iroha_torii zk_roots_selector_tests --lib` (`51` tests)
+  - `cargo test -p iroha_torii openapi --lib` (`30` tests)
+  - `cargo check -p iroha_torii`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 Kagemusha Android raw puller private artifact permissions
+
+- Hardened `scripts/kagemusha_pull_android_device_lab_raw_slot.py` so raw tar
+  extraction tightens the raw output root to `0700`, forces artifact
+  directories to `0700`, and forces files to `0600` instead of relying on the
+  host process umask.
+- Added a umask-zero raw-puller regression test, production-readiness negative
+  control, workflow invocation, JS meta-test marker, and Android readiness docs
+  covering the private extracted-artifact permission gate.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_installs_private_permissions`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-private-permissions`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`42` tests)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py` (`745` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-13 Kagemusha Android raw puller tar entry cap
+
+- Hardened `scripts/kagemusha_pull_android_device_lab_raw_slot.py` with a
+  256-entry raw tar cap so a malicious device-side tar cannot flood host-side
+  staging with empty directories before slot validation.
+- Added adversarial raw-puller coverage for over-entry-limit tar streams and
+  pinned the guard with a production-readiness negative control, workflow
+  invocation, JS meta-test marker, and Android readiness docs.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_rejects_too_many_tar_entries`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-entry-cap`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`42` tests)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py` (`744` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-13 Kagemusha Android raw puller blank serial gate
+
+- Hardened `scripts/kagemusha_pull_android_device_lab_raw_slot.py` so an
+  explicitly blank `--serial` value fails preflight as `ADB serial must be a
+  non-empty string` instead of being treated like an omitted serial and allowing
+  an unscoped ADB pull.
+- Extended Android raw-puller adversarial coverage to prove blank serials are
+  rejected before any ADB command is built. The production-readiness guard,
+  workflow, and JS meta-test now pin the blank-serial gate with a dedicated
+  negative control.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_rejects_noncanonical_adb_arguments_before_command`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py` (`743` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-blank-serial`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`42` tests)
+
+## 2026-06-12 Kagemusha JavaScript recursive-spend request codecs
+
+- Added JavaScript/Node typed ABI-6 recursive-spend request codecs for
+  init/append/verify/redeem, public wire-name constants, spendable-note and
+  verifier-record helpers, verify-result and bundle-summary decoders, and
+  typed native convenience wrappers that encode requests before native dispatch.
+- Added TypeScript declarations, package `dist` exports, browser-safe native-only
+  stubs, shared ABI-6/ABI-7 fixture coverage, adversarial codec coverage, typed
+  wrapper delegation tests, and parity-guard markers for source, `dist`,
+  declarations, browser stubs, and package exports.
+- Updated docs, roadmap, and the recursive-spend SDK parity inventory so the
+  JavaScript/Node typed request-codec surface stays pinned with the Swift,
+  Kotlin/JVM, Android Java, and Python surfaces.
+- Validation passed:
+  - `node --test --test-name-pattern "typed codecs|typed helpers delegate|shared ABI-6 fixture" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test --test-name-pattern "package dist entrypoint exports Kagemusha recursive spend helpers" test/package_dist.test.js`
+  - `node --test --test-name-pattern "browser crypto exposes native-only helpers as safe stubs|browser crypto covers the package root crypto export surface" test/crypto.browser.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh` (`56` passed, `1087`
+    skipped, `0` failed)
+
+## 2026-06-12 Kagemusha Swift recursive-spend request codecs
+
+- Added Swift typed ABI-6 recursive-spend request codecs for
+  init/append/verify/redeem, value-typed request/result/bundle-summary structs,
+  verify-result and bundle-summary decoders, and typed
+  `KagemushaRecursiveSpendProver` overloads that encode requests before native
+  dispatch.
+- Added Swift fixture/adversarial coverage for shared ABI-6/ABI-7
+  verify-result and bundle decoding, compact request schema/layout preservation,
+  malformed note amounts, zero/equal note material, wrong bundle schemas,
+  corrupted nested archives, missing lineage verifier keys, and missing previous
+  proof-open envelopes for lineage append output.
+- Updated the Swift SDK guard, workflow trigger paths, docs, roadmap, and parity
+  inventory so the Swift typed request-codec surface stays pinned with the
+  Kotlin/JVM, Android Java, JavaScript/Node, and Python surfaces.
+- Validation passed:
+  - `swift test --package-path IrohaSwift --filter KagemushaRecursiveSpendRequestCodecsTests`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-12 Kagemusha Android slot assembler source identity fallback
+
+- Hardened `scripts/kagemusha_android_device_lab_slot.py` so signed-slot
+  assembly can promote completed raw captures without a live attached device
+  when the source artifacts already carry the required identity. Explicit
+  overrides still win; otherwise the assembler validates fingerprint/build
+  hints from `attestation/result.json` and `attestation/report.json`, plus
+  model/codename hints from `telemetry/telemetry.json`, before falling back to
+  ADB. Duplicate captured identity hints for the same field must now agree, so
+  result/report fingerprint or build drift fails before ADB fallback or slot
+  installation. Explicit identity overrides must also match captured hints
+  when both are present, preventing operator-supplied values from masking
+  source artifact drift until later staging checks. Present-but-empty captured
+  identity strings are rejected immediately instead of being treated as
+  missing and recovered from overrides or ADB, and explicit empty identity
+  overrides are rejected instead of falling back to source artifacts.
+- Added adversarial scanner-suite coverage that proves the fallback does not
+  query ADB, and that blank, malformed, conflicting, or override-mismatched
+  source identity fails before a slot directory is installed. Blank-source
+  coverage exercises result/report fingerprint and build fields plus telemetry
+  model/codename fields; override/source mismatch coverage exercises
+  fingerprint, OS build, model, and codename inputs without echoing the
+  mismatched values. Blank override coverage exercises the same four override
+  flags before ADB fallback. The production-readiness guard, workflow, and JS
+  meta-test now pin the fallback, blank-source, blank-override,
+  source-conflict, and override/source binding checks with negative controls.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_uses_source_identity_without_adb scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_rejects_bad_source_identity_without_adb scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_rejects_blank_identity_override_without_adb scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_rejects_blank_source_identity_without_adb scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_rejects_conflicting_source_identity_without_adb scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_rejects_override_source_identity_mismatch_without_adb`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py` (`743` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-identity-fallback`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-blank-source-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-blank-identity-override`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-identity-conflict`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-override-source-identity-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`42` tests)
+
+## 2026-06-12 Kagemusha Android Pixel 6 identity-bound evidence refresh
+
+- Reassembled the existing physical Pixel 6 device-lab artifacts into
+  `target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh-identity-bound`
+  with explicit `device_model = Pixel 6`, `device_codename = oriole`, OS build
+  `CP1A.260405.005`, and the existing lab evidence key. The previous refresh
+  root had valid attestation/transcripts but blank model/codename fields, so it
+  failed the stricter production scanner.
+- Refreshed `dist/kagemusha-production-readiness.json` against the
+  identity-bound root. The summary now records `Google Pixel 6 / 6a` as covered
+  and keeps the expected remaining Android blockers for Pixel 7/7 Pro, Pixel
+  8/8a/8 Pro, Pixel Fold/Tablet, Galaxy S23, and Galaxy S24.
+- Validation passed:
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh-identity-bound --require-slot --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --json-out target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh-identity-bound-summary.json`
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh-identity-bound --require-slot --require-kagemusha-production-evidence --require-kagemusha-standard-matrix --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --json-out target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh-identity-bound-matrix-summary.json`
+    (expected blocker: five standard Android families still missing)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260612-refresh-identity-bound --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --summary-out dist/kagemusha-production-readiness.json`
+    (expected blockers remain: missing Reserved-lineage proof evidence, missing
+    ABI-7 compact-key evidence, and incomplete Android standard matrix)
+
+## 2026-06-12 Kagemusha Python recursive-spend request codecs
+
+- Added Python typed ABI-6 recursive-spend request codecs for
+  init/append/verify/redeem, frozen request/result/bundle-summary dataclasses,
+  and typed native convenience wrappers that encode requests before dispatch.
+- Added Python fixture/adversarial coverage for shared ABI-6/ABI-7
+  verify-result and bundle decoding, request schema preservation, malformed
+  note amounts, zero/equal note material, missing lineage records/open
+  envelopes, invalid recipients, wrong bundle schemas, and negative block
+  heights.
+- Updated the SDK parity inventory so Python package exports, implementation
+  guards, and tests for the typed request-codec surface stay pinned.
+- Validation passed:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/kagemusha_test.py`
+  - direct Python typed-codec smoke over the shared ABI-6/ABI-7 fixtures
+  - `KAGEMUSHA_RECURSIVE_SPEND_PYTHON_VENV=/tmp/iroha-kagemusha-python-sdk-venv-codex-typed bash ci/check_kagemusha_recursive_spend_python_sdk.sh` (`902` passed; focused follow-on `5` passed, `117` deselected)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-12 Kagemusha Android recursive-spend request codecs
+
+- Added Android Java typed ABI-6 recursive-spend request codecs for
+  init/append/verify/redeem plus verify-result and bundle summary decoders,
+  mirroring the Kotlin/JVM request-codec surface.
+- Added Android Java fixture/adversarial coverage for shared ABI-6/ABI-7
+  archives, schema preservation, defensive byte-array copies, malformed bundle
+  rejection, noncanonical note amounts, negative heights, and lineage append
+  gap checks before native dispatch.
+- Updated JVM/parity/workflow inventories so Kotlin and Android Java
+  request-codec coverage stays pinned by the focused SDK guard.
+- Validation passed:
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests`
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-12 Kagemusha staged finalizer execution-report binding
+
+- Hardened the Reserved-lineage and ABI-7 recursive compact staged finalizers
+  so a successful staged exit now requires closed-schema execution reports
+  with zero exit codes and non-zero SHA-256 digests matching the staged child
+  logs before production evidence can publish. The compact-key finalizer also
+  rejects elapsed-time drift between the staged run report and execution
+  report.
+- Added adversarial finalizer regressions for missing execution reports,
+  all-zero digest placeholders, digest drift, and unsafe execution-report
+  command fields, plus compact run/execution elapsed drift. Production
+  readiness negative-control/workflow/meta-test coverage now pins both the
+  finalizer log binding and compact elapsed binding.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test -k staged_finalizer` (`81` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-execution-log-sha256`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-execution-log-sha256`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-execution-elapsed-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`844` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "negative controls"` (`42` tests)
+
+## 2026-06-12 Kagemusha Android source zero-digest gate
+
+- Hardened the Android raw slot puller and slot assembler so source
+  attestation digests, assembled metadata artifact digests, and direct
+  `build_slot_metadata` inputs reject all-zero SHA-256 placeholders before raw
+  device output can be installed or promoted to signed Kagemusha production
+  slot evidence.
+- Added adversarial raw-puller, assembler, and metadata-construction
+  regressions plus a production-readiness negative-control/workflow/meta-test
+  entry for disabling the source zero-placeholder gate.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_metadata_rejects_zero_sha256_placeholders scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_rejects_zero_source_sha256_placeholders_before_publish scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_rejects_zero_result_digests`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-source-zero-sha256-placeholders`
+  - `python3 -m py_compile scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py` (`737` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+
+## 2026-06-12 Kagemusha scanner zero SHA-256 evidence gate
+
+- Hardened Android device-lab scanner evidence so `sha256sum.txt`,
+  production slot metadata bindings, attestation result/report bindings,
+  D2D and wallet transcript digest fields, signed-evidence payload hashes,
+  signer-key digests, and signed-evidence `artifact_digests` reject all-zero
+  SHA-256 placeholders instead of treating them as malformed-but-hash-shaped
+  production evidence.
+- Added adversarial scanner regressions plus a production-readiness
+  negative-control/workflow/meta-test entry for disabling the zero-placeholder
+  gate.
+- Validation passed:
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py` (`734` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-zero-sha256-placeholders`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`834` tests)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+
+## 2026-06-12 Privacy proof production dispatch hardening
+
+- Added the opt-in `privacy-production-enabled` native bridge feature for the
+  confidential-transfer-v2 and unshield proof builders, with default builds
+  still returning the serialized production-disabled privacy result.
+- Hardened confidential proof witness/circuit material with zeroization and
+  changed unshield v3 input aggregation to reject `u128` overflow instead of
+  wrapping before proof generation.
+- Kotlin/JVM and Java Android privacy capability APIs now derive readiness from
+  the native Norito capability archive when the bridge is actually loaded, while
+  malformed, missing, duplicate, or incomplete capability evidence remains
+  fail-closed.
+- Validation passed:
+  - `cargo check -p connect_norito_bridge --features privacy-production-enabled`
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled overflowing_unshield_input_sum_returns_proving_failed -- --nocapture`
+  - `cargo test -p iroha_core --features zk-halo2-ipa generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change --lib -- --nocapture`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest ./gradlew :jvm:test --console=plain`
+
+## 2026-06-12 Kagemusha scanner duplicate-binding zero-digest filter
+
+- Hardened `kagemusha_duplicate_matrix_bindings` so raw scanner
+  duplicate-binding diagnostics ignore all-zero physical-device binding
+  placeholders instead of reporting them as duplicated production evidence.
+- Added an adversarial scanner regression and a production-readiness negative
+  control/workflow entry for zero duplicate-binding digests.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_duplicate_matrix_bindings_ignores_zero_direct_values scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_duplicate_matrix_bindings_ignores_non_sha256_direct_values`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-duplicate-binding-zero-digest`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py` (`727` tests)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`834` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+
+## 2026-06-12 Kagemusha Android zero binding-digest gate
+
+- Hardened readiness Android matrix binding checks so all-zero
+  `device_fingerprint_sha256` and `attestation_challenge_sha256` values are
+  rejected as invalid placeholder digests before duplicate checks or matrix
+  coverage can treat them as production evidence.
+- Added a focused adversarial rollup test and a production-readiness negative
+  control/workflow entry for the all-zero binding-digest guard.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_matrix_rejects_zero_direct_binding_digest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_matrix_rejects_noncanonical_direct_binding_digest`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-android-zero-binding-digest`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`834` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+
+## 2026-06-12 Kagemusha readiness signer summary sanitization
+
+- Hardened the Android production-readiness rollup so blocked summaries derive
+  `trusted_signer_public_key_sha256` through the shared non-zero, mapping-safe
+  signer digest sanitizer. Invalid direct signer maps now stop before Android
+  root classification and cannot publish all-zero signer pins or invoke
+  caller-controlled digest-key representations.
+- Added adversarial rollup tests for all-zero signer digests, non-mapping
+  signer inputs, and unrepresentable malformed digest keys, plus a
+  production-readiness negative control and workflow entry.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_rollup_redacts_zero_trusted_signer_digest_before_root_classify scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_rollup_rejects_non_mapping_trusted_signer_map_without_crash scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_rollup_rejects_unrepresentable_trusted_signer_digest_without_crash scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_rollup_rejects_unsafe_trusted_signer_map_before_root_classify`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-trusted-signer-sanitization`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`833` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+
+## 2026-06-12 Kagemusha release-bundle blocked-manifest signer sanitization
+
+- Hardened release-bundle blocked manifests so Android trusted-signer digest
+  lists are derived through the same non-zero, mapping-safe sanitizer used by
+  scanner summaries. Invalid direct signer maps now return structured
+  `android_trusted_signer_invalid` blockers without reading bundle roots,
+  loading manifests, publishing all-zero signer pins, or invoking
+  caller-controlled digest-key representations.
+- Added build and verify regressions for all-zero signer digests, non-mapping
+  direct signer inputs, and unrepresentable malformed digest keys, plus a
+  production-readiness negative control and workflow entry for the sanitizer.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_release_bundle_build_redacts_zero_trusted_signer_digest_in_blocked_manifest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_release_bundle_build_rejects_non_mapping_trusted_signer_map_without_crash scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_release_bundle_verify_redacts_zero_trusted_signer_digest_in_blocked_manifest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_release_bundle_verify_rejects_unrepresentable_trusted_signer_digest_without_crash`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-blocked-manifest-trusted-signer-sanitization`
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`830` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+
+## 2026-06-12 Kagemusha release-bundle duplicate-binding value inventory
+
+- Hardened release-bundle Android `duplicate_bindings` validation so each
+  field's entries must have unique `value_sha256` digests and be sorted by
+  `value_sha256`, in addition to the existing non-zero digest, sorted unique
+  slot-list, signed-evidence binding, and slot-value binding checks.
+- Applied the same shape gate to readiness-summary input and `--verify-existing`
+  release manifests through the shared Android duplicate-binding validator, so
+  hand-written manifests cannot preserve repeated or noncanonical duplicate
+  inventories before drift comparison.
+- Added regression tests for repeated and out-of-order duplicate-binding values
+  in both release-summary generation and existing-manifest verification, plus a
+  production-readiness negative control and workflow entry.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_repeated_android_duplicate_binding_value scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_noncanonical_android_duplicate_binding_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_repeated_android_duplicate_binding_value scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_noncanonical_android_duplicate_binding_values`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-value-inventory`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`826` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+
+## 2026-06-12 Kagemusha Android scanner summary complete-evidence gate
+
+- Hardened the direct Android device-lab scanner summary so production-mode
+  `covered_device_families` and `duplicate_bindings` only admit status-ok
+  reports with complete signed evidence: safe slot id, canonical
+  family/model/codename identity, ABI 7, canonical signed-evidence timestamp,
+  non-zero signer/artifact digests, membership in the non-zero caller-provided
+  trusted signer digest set, and safe release artifact path/digest pairs.
+- Preserved the raw duplicate-binding helper's redacted diagnostics for
+  malformed direct inputs, but added a complete-signed-evidence mode for
+  release-facing scanner summaries and the CLI duplicate-binding gate.
+- Added adversarial scanner-summary tests for partial direct reports, malformed
+  release fields, incomplete duplicate-binding inputs, and complete-report
+  preservation, plus production-readiness negative controls and workflow entries
+  for complete evidence, trusted signer binding, and all-zero signer digest
+  filtering. The same direct-map preflight now rejects non-`Path` signer-key
+  values, non-mapping containers, and mixed malformed digest key types before
+  scanner metadata reads or summary rendering, without invoking
+  caller-controlled digest-key representations.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_duplicate_matrix_bindings_can_require_complete_signed_evidence scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_build_summary_redacts_unsafe_direct_report_strings scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_build_summary_requires_complete_signed_evidence_for_kagemusha_rollup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_build_summary_preserves_complete_signed_evidence_for_kagemusha_rollup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_build_summary_requires_trusted_signer_for_kagemusha_rollup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_build_summary_rejects_malformed_complete_signed_evidence_rollup_fields scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_production_metadata_rejects_zero_trusted_signer_digest_before_metadata_read scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_production_metadata_rejects_non_path_trusted_signer_map_before_metadata_read scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_production_metadata_rejects_non_mapping_trusted_signer_map_before_metadata_read scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_production_metadata_rejects_mixed_trusted_signer_digest_keys_without_crash scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_production_metadata_rejects_unrepresentable_trusted_signer_digest_without_crash scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_build_summary_ignores_zero_direct_trusted_signer_keys scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_build_summary_ignores_non_mapping_direct_trusted_signer_keys scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_build_summary_ignores_mixed_direct_trusted_signer_key_types`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py` (`726` tests)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`826` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-complete-evidence`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-trusted-signer-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-zero-trusted-signer-digest`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-trusted-signer-map-path-type`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-trusted-signer-map-container`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-trusted-signer-map-mixed-key-sort`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+  - `python3 scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab --require-slot --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --json-out target/kagemusha-readiness/device-lab-check.json` (`google-pixel-6-6a-physical-1781260116917: ok`)
+  - `python3 scripts/kagemusha_production_readiness.py --device-lab-root artifacts/android/device_lab --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --min-signed-at-utc 2026-06-06T00:00:00Z --max-signed-at-future-skew-seconds 300 --max-lineage-proof-evidence-future-skew-seconds 300 --max-compact-key-evidence-future-skew-seconds 300 --summary-out dist/kagemusha-production-readiness.json` (expected blocked status from missing lineage proof evidence, missing compact-key evidence, and missing non-Pixel-6 Android families)
+
+## 2026-06-12 Kagemusha multisig resolved-account exactness
+
+- Hardened non-C# multisig response parsing so JavaScript/Node and Swift reject
+  padded or alias-shaped `resolved_multisig_account_id` values across propose,
+  spec, proposal-list, and proposal-get responses, while Kotlin/JVM and Java
+  Android reject non-canonical or padded resolved account IDs in the multisig
+  response parser.
+- Kept JavaScript `dist` in sync and added the
+  `--negative-control-multisig-resolved-account-exactness` parity guard plus
+  workflow/meta-test coverage.
+- Validation passed:
+  - `npm run build:dist`
+  - `node --test test/toriiClient.test.js` (`694` tests)
+  - `node --test test/kagemushaFfiContractParity.test.js` (`41` tests)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-multisig-resolved-account-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests`
+
+## 2026-06-12 Kagemusha account-alias response exactness
+
+- Hardened non-C# account-alias resolution response parsing so
+  JavaScript/Node, Swift, Kotlin/JVM, and Java Android reject padded returned
+  `alias`, `account_id`, alternate `account_ids`, and `source` fields instead
+  of trimming response data before wallet code consumes it.
+- Kept JavaScript `dist` in sync, moved Swift padded account-id array handling
+  out of the happy path into rejection coverage, and added the
+  `--negative-control-account-alias-resolution-exactness` parity guard plus
+  workflow/meta-test coverage.
+- Validation passed:
+  - `npm run build:dist`
+  - `node --test test/toriiClient.test.js` (`693` tests)
+  - `node --test test/kagemushaFfiContractParity.test.js` (`41` tests)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-account-alias-resolution-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+
+## 2026-06-12 Kagemusha identifier-policy metadata exactness
+
+- Hardened non-C# identifier-policy list parsing so JavaScript/Node, Swift,
+  Kotlin/JVM, and Java Android reject padded or case-normalized returned owner,
+  normalization, backend, input-encryption, input-parameter, nested
+  `norito_length_encoding`, and note metadata before encrypted identifier
+  policy material is trusted.
+- Kept JavaScript `dist` in sync and added regression coverage plus the
+  `--negative-control-identifier-policy-metadata-exactness` parity guard. The
+  existing proof-verifier guard remains green after the shared Java/Kotlin
+  parser test was broadened.
+- Validation passed:
+  - `npm run build:dist`
+  - `node --test test/toriiClient.identifier.test.js` (`24` tests)
+  - `node --test test/kagemushaFfiContractParity.test.js` (`41` tests)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-policy-metadata-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-policy-proof-verifier-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+
+## 2026-06-12 Kagemusha identifier-policy proof-verifier exactness
+
+- Hardened non-C# identifier-policy proof-verifier metadata parsing so
+  JavaScript/Node, Swift, Kotlin/JVM, and Java Android preserve returned
+  `proof_verifier` metadata and reject padded nested proof backend, circuit id,
+  public-input schema hash, and verifier-key base64 fields before policy
+  material is trusted.
+- Fixed the JavaScript identifier-policy normalizer to preserve
+  `proof_verifier` and kept the generated `dist` client in sync. Added
+  JavaScript, Swift, Kotlin/JVM, and Java Android regression coverage plus the
+  `--negative-control-identifier-policy-proof-verifier-exactness` parity guard.
+- Validation passed:
+  - `npm run build:dist`
+  - `node --test test/toriiClient.identifier.test.js` (`23` tests)
+  - `node --test test/toriiClient.ramLfe.test.js` (`9` tests)
+  - `node --test test/kagemushaFfiContractParity.test.js` (`41` tests)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-policy-proof-verifier-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+
+## 2026-06-12 Kagemusha Android complete-slot coverage gate
+
+- Hardened Android readiness rollup so standard device-family coverage and
+  `android_device_lab.slots[*].kagemusha` release-facing fields are admitted
+  only for safe slot ids that also have a complete per-slot signed-evidence
+  summary entry. Incomplete status-ok direct reports still emit blockers, but
+  no longer count as covered production devices or publish partial Kagemusha
+  slot claims.
+- Tightened the slot admission check further so duplicate or colliding OK
+  reports cannot borrow another report's admitted signed-evidence entry; the
+  report's Kagemusha fields must exactly match the admitted per-slot
+  signed-evidence summary before coverage or slot details are reflected.
+- Hardened direct signed-evidence summary keys so unsafe, redacted,
+  traversal-shaped, or control-character slot names are explicit blockers and
+  are omitted instead of being published under placeholder keys.
+- Hardened release-facing Android `duplicate_bindings` metadata so copied
+  physical-device bindings from incomplete direct reports still emit blockers,
+  but only slots admitted into the complete signed-evidence summary are
+  reflected in the duplicate-binding summary.
+- Added adversarial tests for incomplete direct reports and a preservation test
+  for complete signed-evidence reports, plus duplicate-slot, unsafe-slot, and
+  incomplete duplicate-binding regressions and negative controls for
+  partial-slot matrix coverage, partial slot Kagemusha reflection, unsafe
+  signed-evidence summary slot ids, and incomplete duplicate-binding summary
+  reflection.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_slot_summary_omits_incomplete_release_kagemusha_fields scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_slot_summary_preserves_complete_release_kagemusha_fields scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_single_missing_artifact_binding_without_partial_reflection scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_includes_device_identity`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-slot-id`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-incomplete-slot-coverage`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-slot-summary-incomplete-kagemusha`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-duplicate-bindings-incomplete-slot-summary`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_unsafe_direct_slot_keys scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_duplicate_safe_slot_without_overwrite scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_missing_direct_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_includes_device_identity`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_report_malformed_device_family_does_not_cover_matrix scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_slot_summary_omits_incomplete_release_kagemusha_fields scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_slot_summary_preserves_complete_release_kagemusha_fields scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_slot_summary_requires_report_match_for_duplicate_slot_admission scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_duplicate_bindings_summary_omits_incomplete_release_slots scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_duplicate_bindings_summary_preserves_complete_release_slots scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`822` tests)
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` over touched production-readiness source/test/guard/docs files (no matches)
+  - `python3 scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab --require-slot --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --json-out target/kagemusha-readiness/device-lab-check.json` (`google-pixel-6-6a-physical-1781260116917: ok`)
+  - `python3 scripts/kagemusha_production_readiness.py --device-lab-root artifacts/android/device_lab --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --min-signed-at-utc 2026-06-06T00:00:00Z --max-signed-at-future-skew-seconds 300 --max-lineage-proof-evidence-future-skew-seconds 300 --max-compact-key-evidence-future-skew-seconds 300 --summary-out dist/kagemusha-production-readiness.json` (expected blocked status from missing lineage proof evidence, missing compact-key evidence, and missing non-Pixel-6 Android families)
+
+## 2026-06-12 Kagemusha RAM-LFE program-policy exactness
+
+- Hardened non-C# RAM-LFE program-policy metadata parsing so
+  JavaScript/Node, Swift, Kotlin/JVM, and Java Android reject padded returned
+  program IDs, owners, resolver keys, backend tags, verification modes, input
+  encryption metadata, and proof-verifier metadata before policy material is
+  trusted by wallet code.
+- Completed JavaScript/Node policy-summary parity by preserving returned
+  `proof_verifier` metadata with exact nested field checks instead of dropping
+  it during normalization.
+- Added JavaScript, Swift, Kotlin/JVM, and Java Android adversarial coverage
+  for padded policy/proof-verifier fields, regenerated the JavaScript `dist`
+  client, and pinned source/test/workflow markers with
+  `--negative-control-ram-lfe-program-policy-exactness`.
+- Validation passed:
+  - `npm run build:dist`
+  - `node --test test/toriiClient.ramLfe.test.js` (`9` tests)
+  - `node --test test/kagemushaFfiContractParity.test.js` (`41` tests)
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-ram-lfe-program-policy-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-ram-lfe-response-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` over touched RAM-LFE source/test/guard/docs files (no matches)
+
+## 2026-06-12 Kagemusha signed-evidence complete summary omission
+
+- Hardened the Android signed-evidence readiness summary so a per-slot
+  signed-evidence entry is emitted only when every release-facing summary field
+  is valid and its provenance, artifact, and identity groups are coherent.
+  Blocked direct reports still keep diagnostics, but no longer publish a
+  half-complete signed-evidence summary entry.
+- Tightened existing malformed, missing, secret-redaction, and one-sided
+  identity/artifact/core adversarial tests to assert that incomplete direct
+  reports are omitted from the signed-evidence summary entirely.
+- Added
+  `--negative-control-android-signed-evidence-summary-incomplete-entry` and
+  pinned it in the production-readiness guard, JavaScript parity meta-test, and
+  payload-bench workflow inventory.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_malformed_direct_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_missing_direct_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_single_missing_core_binding_without_partial_reflection scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_single_missing_artifact_binding_without_partial_reflection scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_single_missing_identity_without_partial_reflection scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_redacts_secret_direct_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_includes_device_identity`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-incomplete-entry`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`817` tests)
+
+## 2026-06-12 Kagemusha signed-evidence partial core binding omission
+
+- Hardened the Android signed-evidence readiness summary so the signed-at UTC
+  timestamp, signed-evidence artifact digest, and signer public-key digest are
+  reflected as one provenance group. If any core field is missing or malformed,
+  blocked summaries omit all three instead of publishing a partial provenance
+  envelope.
+- Added adversarial coverage for malformed and single-missing core provenance
+  fields, and pinned
+  `--negative-control-android-signed-evidence-summary-partial-core-binding` in
+  the production-readiness guard, JavaScript parity meta-test, and payload-bench
+  workflow inventory.
+- Documented the signed-evidence provenance all-or-nothing rule in the Android
+  StrongBox matrix and Offline Kagemusha readiness notes.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_malformed_direct_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_missing_direct_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_single_missing_core_binding_without_partial_reflection scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_includes_device_identity`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-partial-core-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`817` tests)
+
+## 2026-06-12 Kagemusha RAM-LFE response exactness
+
+- Hardened non-C# RAM-LFE execute and receipt-verify response parsing so
+  JavaScript/Node, Swift, Kotlin/JVM, and Java Android reject padded returned
+  program IDs, hashes, backend tags, verification modes, and Java/JS/Swift
+  output ciphertext before wallet code consumes execution proof material.
+- Replaced placeholder RAM-LFE response test hashes with hash-shaped fixtures,
+  added adversarial parser/client cases, regenerated the JavaScript `dist`
+  client, and pinned the new source/test/workflow markers with
+  `--negative-control-ram-lfe-response-exactness`.
+- Validation passed:
+  - `npm run build:dist`
+  - `node --test test/toriiClient.ramLfe.test.js` (`7` tests)
+  - `node --test test/kagemushaFfiContractParity.test.js` (`41` tests)
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-ram-lfe-response-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+  - `git diff --check`
+
+## 2026-06-12 Kagemusha signed-evidence partial artifact binding omission
+
+- Hardened the Android signed-evidence readiness summary so release-artifact
+  path/digest bindings are all-or-nothing for the offline wallet APK, D2D
+  payment transcript, wallet integrity transcript, and attestation certificate
+  chain. If either side is missing or malformed, blocked summaries omit both
+  fields instead of publishing half of an artifact binding.
+- Added adversarial coverage for malformed and single-missing artifact-binding
+  halves, and pinned
+  `--negative-control-android-signed-evidence-summary-partial-artifact-binding`
+  in the production-readiness guard, JavaScript parity meta-test, and
+  payload-bench workflow inventory.
+- Documented the all-or-nothing path/digest reflection rule in the Android
+  StrongBox matrix and Offline Kagemusha readiness notes.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_malformed_direct_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_missing_direct_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_single_missing_artifact_binding_without_partial_reflection scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_includes_device_identity`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-partial-artifact-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`816` tests)
+
+## 2026-06-12 Kagemusha signed-evidence partial identity omission
+
+- Hardened the Android signed-evidence readiness summary so partial
+  device-family/model/codename metadata is all-or-nothing: if any identity field
+  is missing or malformed, the blocked per-slot summary omits all three fields
+  instead of publishing a partial device identity.
+- Added a single-missing-codename adversarial test and tightened the existing
+  malformed and missing identity tests to assert that `device_family`,
+  `device_model`, and `device_codename` are removed together.
+- Added
+  `--negative-control-android-signed-evidence-summary-partial-identity` and
+  pinned it in the production-readiness guard, JavaScript parity meta-test, and
+  payload-bench workflow inventory.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_malformed_identity_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_missing_identity_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_single_missing_identity_without_partial_reflection scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_includes_device_identity`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-partial-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`815` tests)
+
+## 2026-06-12 Kagemusha JS/Swift identifier claim-record exactness
+
+- Hardened JavaScript `normalizeIdentifierClaimLookupResponse` in both
+  `src` and generated `dist` to use the exact identifier receipt helpers for
+  returned claim records instead of normalizing padded `policy_id`,
+  `opaque_id`, `receipt_hash`, `uaid`, or `account_id` fields.
+- Hardened Swift `ToriiIdentifierClaimRecord` decoding so receipt-hash claim
+  lookups reject padded returned claim fields and require the returned account
+  id to be an exact canonical I105 account identifier.
+- Added focused JavaScript and Swift regressions for canonical claim records
+  and padded claim-record fields, then pinned the source/dist/test markers with
+  `--negative-control-js-swift-identifier-claim-record-exactness` in the SDK
+  parity guard and payload-bench workflow.
+- Validation passed:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/toriiClient.identifier.test.js` from `javascript/iroha_js` (`22` tests)
+  - `node --test test/package_dist.test.js --test-name-pattern "identifier|package dist"` from `javascript/iroha_js` (`85` tests)
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`41` tests)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-swift-identifier-claim-record-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` over the touched JS/Swift/parity/docs/status files (no matches)
+
+## 2026-06-12 Kagemusha signed-evidence summary invalid identity omission
+
+- Hardened the Android signed-evidence readiness summary so mismatched or
+  one-sided device identity tuples keep their blocker but omit
+  `device_family`, `device_model`, and `device_codename` from the published
+  per-slot summary instead of emitting non-standard identity metadata.
+- Extended the adversarial family/model/codename tests to assert that invalid
+  tuples are removed from the direct readiness summary, and updated the
+  production-readiness negative control to mutate every family-inference site.
+- Documented the blocked-summary behavior in the Android StrongBox matrix and
+  Offline Kagemusha release-readiness notes.
+- Validation passed:
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-identity-fields`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`814` tests)
+
+## 2026-06-12 Kagemusha release summary unknown-codename identity coverage
+
+- Added the complementary release-facing Android identity adversarial cases for
+  a valid Pixel model paired with an unsupported near-match codename
+  (`Pixel 6` + `oriole-pro`), covering the direct signed-evidence summary,
+  release-bundle signed-evidence summary, and release-bundle slot Kagemusha
+  summary.
+- Pinned the new tests in the production-readiness guard next to the
+  unknown-model/known-codename cases, so paired model/codename inference stays
+  covered in both one-sided directions.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_one_sided_identity_match scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_unknown_codename_identity_match scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_summary_slot_one_sided_identity scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_summary_slot_unknown_codename_identity scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_signed_evidence_one_sided_identity scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_signed_evidence_unknown_codename_identity`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls|recursive Kagemusha SDK parity negative controls"` (`41` tests)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-overmatch`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`814` tests)
+
+## 2026-06-12 Kagemusha JVM/Android identifier claim-record exactness
+
+- Hardened Kotlin/JVM and Android Java `IdentifierJsonParser.parseClaimRecord`
+  so returned `policy_id`, `opaque_id`, `receipt_hash`, `uaid`, and
+  `account_id` values must be exact strings and cannot be silently trimmed
+  before wallet code consumes receipt-hash claim lookup state.
+- Added mirrored parser regressions that accept the canonical claim record and
+  reject padded variants for each of those five fields.
+- Pinned the source markers, parser-test markers, payload-bench workflow
+  invocation, and JavaScript parity meta-test under
+  `--negative-control-jvm-identifier-claim-record-exactness`, which mutates the
+  parsers back to trimming and proves the SDK parity guard fails closed.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`41` tests)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-identifier-claim-record-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "workflow yaml ok"'`
+- Fresh Gradle JVM/Android test execution was intentionally not started in this
+  slice to avoid adding load while Kagemusha key-artifact generation jobs are
+  already running; the lightweight parity/static checks above cover the new
+  non-C# guard wiring.
+
+## 2026-06-12 Kagemusha release summary one-sided identity adversarial coverage
+
+- Added release-facing adversarial tests proving a known Pixel codename paired
+  with an unsupported near-match model such as `Pixel 6 Pro` fails closed in
+  the direct Android signed-evidence summary, release-bundle signed-evidence
+  summary, and release-bundle slot Kagemusha summary.
+- Pinned those test names in the production-readiness guard so paired
+  model/codename policy coverage cannot silently disappear from the release
+  summary path while scanner-side inference remains strict.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_one_sided_identity_match scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_summary_slot_one_sided_identity scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_signed_evidence_one_sided_identity`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-overmatch`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls|Kagemusha production readiness negative controls"` (`41` tests)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`811` tests)
+
+## 2026-06-12 Kagemusha Android paired device identity inference
+
+- Fixed Android Kagemusha device-family inference so model and codename must
+  both resolve to the same standard matrix family; one-sided matches such as an
+  unsupported Pixel model paired with a known Pixel codename now fail closed.
+- Added Samsung S23/S24 codename mappings to preserve covered Samsung fixtures
+  under the stricter paired model/codename rule.
+- Hardened the Android on-device exporter, host slot assembler, and scanner
+  helper together, with adversarial coverage for mixed valid/invalid identity
+  fields and updated parity/production-readiness guard markers. The exporter now
+  lowercases family inputs with `Locale.ROOT` so matching is independent of the
+  device locale.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_infers_only_standard_device_families scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_production_metadata_rejects_unknown_model_with_known_codename`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py` (`713` tests)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-family-override-binding`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-overmatch`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`41` tests)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-12 Kagemusha Android release identity drift blockers
+
+- Hardened release-bundle readiness-summary comparison so exact Android
+  `device_family`/`device_model`/`device_codename` drift now emits
+  Android-specific signed-evidence and slot identity drift blockers before the
+  broader summary metadata drift checks.
+- Added a schema-valid same-family Pixel 6a/bluejay substitution test that
+  keeps the public signed-evidence and slot summaries internally consistent,
+  proving the release bundle still rejects model/codename swaps against freshly
+  scanned device-lab evidence.
+- Extended the same exact identity binding to verify-existing release manifests,
+  so forged `android_device_lab.signed_evidence` model/codename edits get a
+  manifest Android signed-evidence identity blocker instead of falling through
+  to generic manifest drift.
+- Pinned the new blocker codes and test through the production-readiness guard,
+  workflow negative controls, JavaScript parity meta-test, roadmap, offline
+  Kagemusha docs, and Android StrongBox matrix.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_summary_identity_drift`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_summary_slot_metadata_drift scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_signed_evidence_summary_path_drift scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_summary_drift scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_manifest_passes_ready_fixture`
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-identity-drift`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-identity-drift`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_identity_binding_drift scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_summary_timestamp_binding_drift scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_digest_binding_drift`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-manifest-android-signed-evidence-identity-binding`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`808` tests)
+
+## 2026-06-12 Kagemusha Swift NFC send terminal-success policy
+
+- Wired `IrohaOfflineDeviceTransferSendCompletionPolicy` into
+  `IrohaOfflineNfcReaderService` so sender progress/failure publication checks
+  terminal success derived from send success state plus receipt ACK
+  payload/verification/send-success events.
+- Marked receipt ACK payloads on both fresh ACK reads and already-available ACK
+  paths, while keeping receive/read-mode progress publication outside the
+  send-only terminal-success gate.
+- Added the SDK parity guard markers, workflow negative control, and JavaScript
+  meta-test branch that prove the send completion policy cannot drift into dead
+  code.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`41` tests)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-send-terminal-success-policy`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+
+## 2026-06-12 Kagemusha direct signed identity summary adversarial coverage
+
+- Added direct readiness-summary adversarial tests proving scanner-validated
+  Android reports reject missing `device_model`/`device_codename` and reject
+  padded or secret-looking identity values before those fields can appear in the
+  release-facing `android_device_lab.signed_evidence` summary.
+- Pinned those tests in the production-readiness source inventory so future
+  guard drift cannot silently drop direct malformed-identity coverage.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_malformed_identity_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_missing_identity_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_family_model_mismatch`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`806` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-12 Kagemusha Android release summary blank identity guard
+
+- Hardened release-bundle Android summary validation so public
+  `device_model`/`device_codename` identity fields must be non-empty before
+  model/codename family inference runs.
+- Added release-bundle adversarial coverage for blank Android readiness-summary
+  slot identity and blank signed-evidence summary identity, with field-specific
+  CLI blocker text to make failures actionable.
+- Updated the production-readiness guard inventory, roadmap, and offline
+  Kagemusha docs to pin non-empty exact public Android identity fields.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_summary_slot_device_identity scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_blank_android_summary_slot_device_identity scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_signed_evidence_identity_mismatch scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_blank_android_signed_evidence_identity`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`804` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`41` passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_swift_sdk.sh ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh` (`52` selected tests passed, `1081` skipped by focused pattern)
+  - `cargo fmt --check --package connect_norito_bridge`
+  - `git diff --check`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' ci/check_kagemusha_production_readiness.sh scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py docs/source/offline_kagemusha.md roadmap.md status.md` (no matches)
+
+## 2026-06-12 Kagemusha Android signed identity summary binding
+
+- Extended the Kagemusha readiness summary and release bundle Android
+  `signed_evidence` entries to carry `device_family`, `device_model`, and
+  `device_codename` from scanner-validated signed evidence.
+- The readiness summary and release bundle now reject public summary entries
+  whose model/codename do not infer the claimed standard device family, so a
+  copied or edited summary cannot relabel Pixel/Samsung device evidence after
+  slot validation.
+- Added focused unit coverage, production-readiness negative controls, payload
+  workflow entries, JavaScript meta-test assertions, and docs/roadmap text for
+  the public summary identity binding. A dedicated release-bundle negative
+  control now pins the per-slot Kagemusha summary identity error path separately
+  from the signed-evidence summary map.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_includes_device_identity scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_signed_evidence_summary_rejects_family_model_mismatch scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_signed_evidence_identity_mismatch`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-identity-fields`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-summary-identity`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls"` (`41` tests)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py` (`802` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `git diff --check`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md javascript/iroha_js/test/kagemushaFfiContractParity.test.js` (no matches)
+
+## 2026-06-12 Kagemusha Android device identity conflict rejection
+
+- Hardened the Android device-lab family inference used by the host slot
+  assembler and signed-slot scanner so model and codename evidence must agree
+  when both identify standard matrix families. Mixed identities such as a Pixel
+  6 model with a Pixel 7 codename now fail closed instead of selecting the
+  first matching field.
+- Added focused adversarial coverage for direct inference, assembler override
+  rejection, and signed production metadata rejection. Updated the SDK parity,
+  production-readiness, JavaScript meta-test, roadmap, Android readiness matrix,
+  and offline Kagemusha docs so the conflict rule stays pinned.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_device_lab_slot.py scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_infers_only_standard_device_families scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_rejects_conflicting_model_codename scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_production_metadata_rejects_conflicting_model_codename`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest` (`712` tests)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-override-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-device-identity-binding`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`41` passed)
+
+## 2026-06-12 Kagemusha Android signed device identity binding
+
+- Promoted Android device model and codename into the signed device-lab
+  contract: `slot.json` and `evidence/signed-evidence.json` now carry exact
+  `device_model` and `device_codename` fields, telemetry must repeat them, and
+  the scanner recomputes the standard matrix family from those signed fields
+  before accepting a covered slot.
+- Updated the host slot assembler to write and pre-validate the attached
+  device identity, re-signed the local Pixel 6 / 6a physical slot with the
+  existing ignored lab key, and added adversarial tests for signed-evidence
+  model mismatch, forged family/model/codename combinations with valid
+  signatures, and telemetry/slot identity drift.
+- Added production-readiness and SDK parity negative controls, wired them into
+  the payload-bench workflow, and updated the Android readiness and offline
+  Kagemusha docs. Production readiness remains blocked by missing lineage-proof
+  evidence, missing ABI-7 recursive compact key evidence, and the remaining
+  standard Android matrix families.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py scripts/sign_android_device_lab_evidence.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest` (`710` tests)
+  - `python3 scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab --require-slot --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --json-out target/kagemusha-readiness/device-lab-check.json`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-device-identity-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-device-identity-fields`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-assembler-identity-fields`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls|Kagemusha production readiness negative controls"` (`41` tests)
+  - `ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path); puts "#{path}: ok" }' .github/workflows/pr_kagemusha_payload_bench.yml`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/check_android_device_lab_slot.py scripts/kagemusha_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_production_readiness.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh .github/workflows/pr_kagemusha_payload_bench.yml javascript/iroha_js/test/kagemushaFfiContractParity.test.js docs/source/sdk/android/readiness/android_strongbox_device_matrix.md docs/source/offline_kagemusha.md roadmap.md status.md` (no matches)
+
+## 2026-06-12 Kagemusha JVM ClaimIdentifier account exactness guard
+
+- Added a dedicated SDK parity negative control,
+  `--negative-control-jvm-claim-identifier-account-exactness`, so the
+  Kotlin/JVM and Android Java ClaimIdentifier encoders must keep exact account
+  text boundaries: explicit claim accounts and receipt account IDs use
+  `requireExactNonBlank(...)`, and padded claim-account tests must stay present.
+- Wired the negative control into the payload-bench workflow and JavaScript
+  parity meta-test, separate from the existing account/receipt mismatch
+  negative control, so whitespace normalization drift and account-binding drift
+  fail independently.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-claim-identifier-account-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`41` passed)
+
+## 2026-06-12 Kagemusha Android device-lab requested-family binding
+
+- Hardened the host signed-slot assembler so an explicit `--device-family`
+  must match the family inferred from the attached device model/codename when
+  that identity evidence is available. Operators can no longer promote a Pixel
+  6 Pro, Pixel 7a, or a wrong standard-family override into a signed covered
+  matrix slot by supplying a trusted family string manually.
+- Pinned the invariant with focused assembler regressions, an SDK parity
+  negative control, and a production-readiness negative control wired into the
+  payload-bench workflow. The Android readiness matrix, offline Kagemusha doc,
+  and roadmap now describe the override-binding requirement.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_infers_only_standard_device_families scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_rejects_family_override_mismatch scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_rejects_family_override_for_near_match`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-override-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-family-override-binding`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls|Kagemusha production readiness negative controls"` (`41` tests)
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/kagemusha_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml javascript/iroha_js/test/kagemushaFfiContractParity.test.js docs/source/sdk/android/readiness/android_strongbox_device_matrix.md docs/source/offline_kagemusha.md roadmap.md status.md` (no matches)
+
+## 2026-06-12 Kagemusha Android device-lab exact family gating
+
+- Hardened `KagemushaDeviceLabArtifactExportTest` and the host signed-slot
+  assembler so Android device-family inference accepts only exact standard
+  matrix models/codenames, plus the expected Samsung S23/S24 model prefixes.
+  Unknown devices still fail before raw lab evidence is written, and near
+  matches such as Pixel 6 Pro, Pixel 7a, and Galaxy S23 FE cannot be silently
+  labeled as covered production families.
+- Pinned both invariants in the SDK parity guard with
+  `--negative-control-android-device-lab-family-fail-closed` and
+  `--negative-control-android-device-lab-family-overmatch`, wired those controls
+  into the payload-bench workflow, and extended the JavaScript parity meta-test
+  so guard branches, workflow entries, Android exporter source, host assembler
+  rules, and host inference tests stay synchronized. The Android readiness
+  matrix, offline Kagemusha doc, and roadmap now describe the exact family
+  gate.
+- Revalidated the focused exporter instrumentation on attached physical device
+  `19181FDF600918` (`Pixel 6`, `oriole`, Android `16`,
+  `CP1A.260405.005`). This confirms the known Pixel 6 / 6a path still runs,
+  but production readiness remains blocked by the missing lineage-proof
+  evidence, missing ABI-7 recursive compact key evidence, and the remaining
+  Android standard-matrix families.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `python3 -m py_compile scripts/kagemusha_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-fail-closed`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-overmatch`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_infers_only_standard_device_families`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls"`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core-jvm:jar --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :offline-wallet-lab-app:compileReleaseAndroidTestJavaWithJavac --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :offline-wallet-lab-app:connectedReleaseAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=org.hyperledger.iroha.android.offline.KagemushaDeviceLabArtifactExportTest --console=plain` (`1` test on Pixel 6)
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java scripts/kagemusha_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml javascript/iroha_js/test/kagemushaFfiContractParity.test.js docs/source/sdk/android/readiness/android_strongbox_device_matrix.md docs/source/offline_kagemusha.md roadmap.md status.md` (no matches)
+
+## 2026-06-12 Kagemusha JVM ClaimIdentifier account binding coverage
+
+- Added Kotlin/JVM and Android Java regression coverage proving
+  `ClaimIdentifier` wire encoders reject an explicit claim account that differs
+  from `receipt.accountId` before serializing instruction bytes.
+- Pinned that coverage in the SDK parity guard with
+  `--negative-control-jvm-claim-identifier-account-binding-test`, wired the
+  control into the payload-bench workflow, and extended the JavaScript parity
+  meta-test so the guard branch, workflow inventory, and Java/Kotlin regression
+  names stay synchronized.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-claim-identifier-account-binding-test`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`41` passed)
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoderTests.java kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoderParityTest.kt ci/check_kagemusha_recursive_spend_sdk_parity.sh .github/workflows/pr_kagemusha_payload_bench.yml javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md` (no matches)
+- Additional non-C# validation passed after the JVM/Android guard was wired:
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'staged_finalizer_rejects_noncanonical_generated_at_before_stage or staged_finalizer_rejects_future_generated_at_before_stage or staged_finalizer_rejects_negative_future_skew_limit'` (`6` passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-timestamp-raw`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-timestamp-raw`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-future-skew`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-future-skew`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `swift test --filter OfflineTransferWidgetTests/testNfcReceiveCompletionPolicyKeepsAcceptedPaymentSuccessful` from `IrohaSwift` (`1` passed)
+  - `swift test --filter ToriiClientTests/testIdentifierReceiptDecodeRejectsPaddedAccountIdBeforeSignatureVerification` from `IrohaSwift` (`1` passed)
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh` (`52` selected tests passed, `1081` skipped)
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh` (`899` passed; follow-on `5` passed, `117` deselected)
+
+## 2026-06-12 Kagemusha native ClaimIdentifier account binding
+
+- Hardened the native `connect_norito_bridge` ClaimIdentifier transaction
+  builders so the explicit claim account must match
+  `receipt.payload.account_id` before signed transaction bytes are produced.
+  This mirrors the Swift/JVM preflight and core admission invariant at the C
+  bridge boundary.
+- Added a native regression for mismatched receipt accounts and pinned the new
+  guard with `--negative-control-native-bridge-claim-identifier-account-binding`
+  in the SDK parity script, payload-bench workflow, and JavaScript parity
+  meta-test.
+- Validation passed:
+  - `cargo fmt -p connect_norito_bridge`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `cargo test -p connect_norito_bridge validate_identifier_claim_account_rejects_mismatched_receipt_account --lib` (`1` passed)
+  - `cargo test -p connect_norito_bridge parse_identifier_receipt_ --lib` (`5` passed)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-claim-identifier-account-binding`
+  - `cargo fmt --check -p connect_norito_bridge`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`41` passed)
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/connect_norito_bridge/src/lib.rs ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js .github/workflows/pr_kagemusha_payload_bench.yml roadmap.md status.md` (no matches)
+
+## 2026-06-12 Kagemusha native bridge identifier receipt exactness
+
+- Tightened the native `connect_norito_bridge` identifier-receipt JSON parser so
+  receipt strings that cross canonical receipt boundaries are exact:
+  attestation kind, proof backend/base64, policy/program IDs, backend/mode
+  labels, hash fields, signatures, `opaque_id`, `uaid`, and
+  `payload.account_id` now reject surrounding whitespace instead of trimming
+  before parsing.
+- Added native bridge adversarial tests for padded signed payload fields, padded
+  policy object components, and padded proof-attestation fields, and pinned the
+  parser plus tests with a SDK parity negative control wired into the
+  payload-bench workflow and JavaScript parity meta-test.
+- Validation passed:
+  - `cargo fmt -p connect_norito_bridge`
+  - `cargo fmt --check -p connect_norito_bridge`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_swift_sdk.sh ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-identifier-receipt-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`41` tests)
+  - `cargo test -p connect_norito_bridge parse_identifier_receipt_ --lib` (`5` passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+
+## 2026-06-12 Kagemusha Swift identifier receipt account-id guard coverage
+
+- Pinned the Swift identifier receipt exact-account-id decoder in the Kagemusha
+  SDK parity guard so production code must keep assigning
+  `accountId = rawAccountId` after rejecting padded `payload.account_id` values.
+- Pinned the Swift identifier receipt padded-account-id rejection regression in
+  the same guard so `ToriiClientTests` must keep
+  `testIdentifierReceiptDecodeRejectsPaddedAccountIdBeforeSignatureVerification`
+  alongside the production exact-account-id decoder checks.
+- Added Swift-specific SDK parity negative controls that mutate the production
+  source back to normalized account-id assignment and mutate away the XCTest
+  coverage; both controls are wired into the payload-bench workflow and
+  JavaScript parity meta-test.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-identifier-receipt-account-id-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-identifier-receipt-account-id-decode-test`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`41` tests)
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `swift test --filter ToriiClientTests/testIdentifierReceiptDecodeRejectsPaddedAccountIdBeforeSignatureVerification` from `IrohaSwift` (`1` test)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-12 Kagemusha Swift NFC guard inventory coverage
+
+- Added the Swift mobile NFC transport source and transport UI tests to the
+  Kagemusha Swift SDK parse runner, payload-bench workflow path triggers, SDK
+  parity source inventory, and JavaScript parity meta-test so the receive
+  success-preservation policy is covered by the same non-C# guard surface as
+  the rest of the Swift offline/Kagemusha code.
+- Pinned the runtime policy wiring with SDK parity negative controls for
+  preserving accepted-payment success on invalidation, suppressing duplicate
+  receipt-ACK-ready and ACK-read success publication, and blocking
+  emulation-started progress after a payment has already been accepted.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-receive-success-preservation`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-receipt-ack-single-success`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-receipt-ack-read-single-success`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-emulation-progress-after-success`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`41` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-12 Kagemusha Swift NFC receive success preservation
+
+- Wired the Swift NFC receive completion policy into the card-session runtime:
+  once a payment token is accepted and the receipt ACK is published, later card
+  session invalidation no longer overwrites that success with a failure.
+- Added runtime state so duplicate ACK-ready success notifications are
+  suppressed, ACK-read completion stops emulation without publishing a second
+  success after ACK-ready acceptance, and emulation-started progress is not
+  re-applied after the receive flow has accepted a payment.
+- Extended the Kagemusha SDK parity guard and PR workflow inventory to cover the
+  Swift NFC mobile transport and UI tests, with negative controls for success
+  preservation, duplicate ACK-ready and ACK-read success publication, and
+  emulation-started progress after an accepted payment.
+- Validation passed:
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-receive-success-preservation`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-receipt-ack-single-success`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-receipt-ack-read-single-success`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-nfc-emulation-progress-after-success`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js` (`41` tests)
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh` (`899` passed; follow-on focused runner `5` passed, `117` deselected)
+  - `swift test --filter OfflineTransferWidgetTests/testNfcReceiveCompletionPolicyKeepsAcceptedPaymentSuccessful` from `IrohaSwift`
+  - `swift test --filter OfflineTransferWidgetTests` from `IrohaSwift` (`34` tests)
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-12 Kagemusha Pixel 6 physical Android refresh
+
+- Ran the installed lab-app instrumentation on attached device
+  `19181FDF600918` (`Pixel 6`, `oriole`, Android `16`,
+  build `CP1A.260405.005`) and pulled a fresh raw StrongBox export into the
+  ignored target tree as slot `google-pixel-6-6a-physical-1781260116917`.
+- Rendered the host attestation report, assembled a signed production slot under
+  `artifacts/android/device_lab/google-pixel-6-6a-physical-1781260116917`, and
+  refreshed `dist/kagemusha-production-readiness.json`. The Pixel 6 family is
+  covered and the summary remains blocked on `lineage_proof_evidence_missing`,
+  `compact_key_evidence_missing`, and `android_device_lab_standard_matrix_missing`.
+- Validation passed:
+  - `adb -s 19181FDF600918 shell am instrument -w -e class org.hyperledger.iroha.android.offline.KagemushaDeviceLabArtifactExportTest org.hyperledger.iroha.sdk.offline.wallet.lab.test/androidx.test.runner.AndroidJUnitRunner` (`OK (1 test)`)
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python scripts/kagemusha_pull_android_device_lab_raw_slot.py --serial 19181FDF600918 --run-as-package org.hyperledger.iroha.sdk.offline.wallet.lab --out-root target/kagemusha-android-raw --summary-out target/kagemusha-android-raw-pull-summary.json`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python scripts/kagemusha_android_attestation_report.py --harness-result target/kagemusha-android-raw/google-pixel-6-6a-physical-1781260116917/attestation/harness-result.json --slot-id google-pixel-6-6a-physical-1781260116917 --device-fingerprint <Pixel 6 ro.build.fingerprint> --os-build-id CP1A.260405.005 --app-package-name org.hyperledger.iroha.sdk.offline.wallet.lab --attestation-certificate-chain target/kagemusha-android-raw/google-pixel-6-6a-physical-1781260116917/attestation/keymint-certificate-chain.pem --physical-device-attestation --out target/kagemusha-android-raw/google-pixel-6-6a-physical-1781260116917/attestation/report.json`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python scripts/kagemusha_android_device_lab_slot.py --slot-root artifacts/android/device_lab --slot-id google-pixel-6-6a-physical-1781260116917 --device-family "Google Pixel 6 / 6a" ... --public-key <lab-public-key.pem> --signer-key-id local-pixel6-lab`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab --slot google-pixel-6-6a-physical-1781260116917 --require-slot --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem` (`google-pixel-6-6a-physical-1781260116917: ok`)
+- Expected blockers reproduced:
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab --require-slot --require-kagemusha-production-evidence --require-kagemusha-standard-matrix --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem` (missing Pixel 7, Pixel 8, Pixel Fold/Tablet, Galaxy S23, and Galaxy S24)
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python scripts/kagemusha_production_readiness.py --device-lab-root artifacts/android/device_lab --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-public.pem --min-signed-at-utc 2026-06-06T00:00:00Z --max-signed-at-future-skew-seconds 300 --max-lineage-proof-evidence-future-skew-seconds 300 --max-compact-key-evidence-future-skew-seconds 300 --summary-out dist/kagemusha-production-readiness.json` (blocked by missing proof evidence, compact key evidence, and remaining Android families)
+
+## 2026-06-12 Kagemusha staged finalizer future-skew preflight
+
+- Hardened the Reserved-lineage and ABI-7 recursive compact staged finalizers
+  so `--generated-at-utc` must be canonical and within the default 300-second
+  future-skew allowance before the finalizer creates a temporary publish stage
+  or copies staged artifacts. The finalizers also pass the same bound into the
+  evidence builders so preflight and generated evidence validation stay aligned.
+- Added adversarial staged-finalizer tests for far-future timestamps and
+  negative skew limits, plus raw noncanonical timestamp tests that prove
+  `+00:00` offsets fail before temporary publish staging starts.
+  Production-readiness negative controls and payload-bench workflow hooks now
+  fail if either finalizer-level timestamp or future-skew preflight is removed.
+- Updated the offline Kagemusha and Android readiness docs and the roadmap so
+  detached finalizer commands and release criteria mention the explicit skew
+  bound.
+- Validation passed:
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m py_compile scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'staged_finalizer_rejects_noncanonical_generated_at_before_stage or staged_finalizer_rejects_future_generated_at_before_stage or staged_finalizer_rejects_negative_future_skew_limit'` (`6` passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-timestamp-raw`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-timestamp-raw`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-future-skew`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-future-skew`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py -k 'staged_finalizer'` (`71` passed, `6` subtests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `/tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q scripts/tests/kagemusha_production_readiness_test.py scripts/tests/check_android_device_lab_slot_test.py` (`1502` passed, `269` subtests passed)
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
 
 ## 2026-06-12 Kagemusha evidence helper future-skew guard
 
@@ -70,6 +1387,7 @@ Last updated: 2026-06-12
   kind, proof base64, signed-attestation signature, and opening-signature
   tests.
 - Validation passed:
+  - `swift test --filter 'ToriiClientTests/testIdentifierReceiptDecodeRejectsPaddedAccountIdBeforeSignatureVerification|ToriiClientTests/testIdentifierReceiptRejectsMalformedProofAttestationBase64DuringDecode'` from `IrohaSwift` (`2` tests)
   - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
   - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
   - `bash ci/check_kagemusha_production_readiness.sh`
@@ -9364,6 +10682,150 @@ Last updated: 2026-06-12
   - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
   - `bash ci/check_kagemusha_production_readiness.sh`
   - `git diff --check`
+
+## 2026-06-12 Kagemusha C# CID1 exact circuit-id validation
+
+- Tightened the C# lineage verifier-key envelope parser so `CID1` payload text
+  is preserved exactly instead of being whitespace-trimmed before the
+  proof-circuit binding check.
+- Added a C# regression where a whitespace-padded verifier-key `CID1` carries a
+  proving-key archive committed to the padded verifier key; it now rejects as
+  `lineage_verifier_key` before native bridge dispatch.
+- Extended the SDK parity guard, workflow negative controls, and JS meta-test
+  so reintroducing C# `CID1` trimming or dropping the padded-`CID1` regression
+  fails CI.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK parity guard"`
+    (`41` tests passed)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-cid1-exactness`
+    (expected negative-control rejection)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+- Focused C# execution is still pending on a host with the pinned .NET SDK:
+  `dotnet test --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests" --no-restore`
+  did not start because `csharp/global.json` requires .NET `8.0.419`, while the
+  visible SDK on this host is `8.0.128`.
+
+## 2026-06-12 Kagemusha C# canonical request exactness
+
+- Hardened C# canonical request auth so `CanonicalRequestCredentials`,
+  `CanonicalRequest.BuildHeaders`, `BuildSignatureMessage`, and
+  `CanonicalRequestHeaders` reject padded or explicitly blank account IDs,
+  nonces, and signature/header strings before signing or header emission.
+  `null` nonce still means “generate a nonce,” but caller-supplied blank nonce
+  text no longer falls back to generated entropy.
+- Added `CanonicalRequestAuthRejectsPaddedAndBlankFields` and included
+  `CanonicalRequestTests` in the focused C# Kagemusha SDK runner filter.
+- Extended the SDK parity guard, workflow path inventory, workflow negative
+  controls, and JS meta-test so the old blank-nonce behavior or missing C#
+  canonical request regression fails CI.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-canonical-request-exactness`
+    (expected negative-control rejection)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-filter-script`
+    (expected negative-control rejection)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK parity guard"`
+    (`41` tests passed)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `git diff --check`
+- Focused C# execution is still pending on a host with the pinned .NET SDK:
+  `dotnet test --filter "FullyQualifiedName~CanonicalRequestTests" --no-restore`
+  did not start because `csharp/global.json` requires .NET `8.0.419`, while the
+  visible SDK on this host is `8.0.128`.
+
+## 2026-06-12 Kagemusha C# Torii identifier receipt exactness
+
+- Added C# Torii identifier JSON converters for flat identifier policy summaries
+  and resolve receipts. The policy path now rejects padded resolver metadata and
+  duplicate fields, while flat resolve receipts reject padded `policy_id`,
+  `opaque_id`, `receipt_hash`, `uaid`, `account_id`, `backend`, `signature`, and
+  `signature_payload_hex`, plus negative receipt timestamps.
+- Hardened `ResolveIdentifierAsync` so outbound `policy_id` must already be the
+  exact `kind#rule` spelling and optional encrypted input cannot be padded.
+- Added `ToriiIdentifierReceiptTests` and included that class in the focused C#
+  Kagemusha SDK runner filter. The SDK parity guard, workflow inventory,
+  workflow negative controls, and JS meta-test now fail if the converter binding,
+  padded receipt regressions, or focused C# filter drift.
+- Validation passed:
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiIdentifierReceiptTests" --no-restore`
+    (`18` tests passed)
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiIdentifierReceiptTests|FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~TransactionBuilderTests" --no-restore`
+    (`38` tests passed)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-identifier-receipt-exactness`
+    (expected negative-control rejection)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK parity guard"`
+    (`41` tests passed)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_csharp_sdk.sh ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml"); puts "parsed"'`
+  - `git diff --check`
+
+## 2026-06-12 Kagemusha JVM/Android ClaimIdentifier exact account binding
+
+- Tightened Kotlin/JVM and Android Java `ClaimIdentifierWirePayloadEncoder`
+  account binding so both the caller account id and receipt account id must be
+  exact nonblank strings. Padded caller account ids now fail before the encoder
+  can trim them into a receipt-account match or emit a signed
+  `ClaimIdentifier` instruction.
+- Extended the existing Kotlin and Java ClaimIdentifier account-mismatch tests
+  to cover padded caller account ids, and expanded the SDK parity guard to pin
+  the exact-account source helpers as well as the runtime regressions.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.ClaimIdentifierWirePayloadEncoderTests ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-claim-identifier-account-binding-test`
+    (expected negative-control rejection)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-12 Kagemusha C# transaction builder top-level exactness
+
+- Tightened the C# `TransactionBuilder` required-value boundary so chain ids,
+  authority account ids, and top-level metadata keys reject surrounding
+  whitespace instead of normalizing with `Trim()` before transaction encoding
+  and signing.
+- Added `TransactionBuilderRejectsPaddedTopLevelFields` covering padded
+  constructor fields, `SetMetadata`, and `ReplaceMetadata`.
+- Extended the SDK parity guard, workflow negative controls, and JS meta-test
+  so reintroducing `return value.Trim();` at the builder boundary or dropping
+  the padded top-level regression fails CI.
+- Remaining C# transaction exactness work is still tracked in `roadmap.md` for
+  instruction arguments and lower-level `TransactionEncodingContext` fields.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-transaction-builder-exactness`
+    (expected negative-control rejection)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK parity guard"`
+    (`41` tests passed)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- Focused C# execution remains pending on a host with the pinned .NET SDK
+  `8.0.419`.
+
+## 2026-06-12 Kagemusha C# transaction encoder exactness
+
+- Hardened `TransactionEncodingContext` so shared C# transaction/query Norito
+  encoders reject padded boundary fields instead of trimming before encoding:
+  chain ids, account ids, name-like fields, optional strings, numeric literals,
+  asset-definition ids, NFT ids, hash literals, and fixed-byte literals.
+- Added `TransactionEncodingContextRejectsPaddedBoundaryFields` to pin the
+  lower-level adversarial cases directly, including padded chain/account ids,
+  metadata/name labels, optional strings, numerics, asset ids, NFT ids, and
+  fixed hashes.
+- Extended the SDK parity guard, workflow negative controls, and JS meta-test
+  so reintroducing lower-level C# encoder trimming or dropping the padded
+  boundary regression fails CI.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-transaction-encoding-exactness`
+    (expected negative-control rejection)
+  - `node --test test/kagemushaFfiContractParity.test.js --test-name-pattern "SDK parity guard"`
+    (`41` tests passed)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- Focused C# execution remains pending on a host with the pinned .NET SDK
+  `8.0.419`.
 
 ## 2026-06-11 Kagemusha proof evidence timestamp exactness
 
@@ -171657,3 +173119,120 @@ Last updated: 2026-06-12
   - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
 - Hygiene checks passed with no lockfile drift. The long-running Rust
   `connect_norito_bridge` proof test was still active and was not interrupted.
+
+## 2026-06-12 - Typed Recursive Spend Request SDK Codecs
+
+- Added Kotlin/JVM and Java Android typed builders for
+  `KagemushaRecursiveSpendInitRequestV1`,
+  `KagemushaRecursiveSpendAppendRequestV1`,
+  `KagemushaRecursiveSpendVerifyRequestV1`, and
+  `KagemushaRecursiveSpendRedeemRequestV1`, plus typed verify-result and bundle
+  summary decoders.
+- The builders validate nested Norito archives, canonical nonzero note amounts,
+  nonnegative block heights, lineage verifier-record requirements, and append
+  output-circuit compatibility before native dispatch.
+- Tightened request layout coverage so encoded SDK requests pin compact Norito
+  root fields, raw embedded archive payloads, `Option` child-length framing, and
+  Rust-compatible `[u8; N]` fixed-array encoding without an extra sequence length.
+- Added Kotlin/JVM and Java Android record-backed hop-evidence helpers for
+  explicit `VerifiedFoldHopEvidence` inputs. The helpers decode privacy
+  build-result archives, validate nested `OpenVerifyEnvelope` metadata, active
+  Kagemusha verifier records, verifier-key commitments, public-input schemas,
+  strict ZK1 `PROF`/`I10P` instance columns, root continuity, and canonical
+  proof attachments before emitting `KagemushaVerifiedFoldRecordBundle` or
+  redeem `ProofAttachment` archives. The proof-output-only Pallas/open-envelope
+  and record-bundle builders now fail closed because privacy proof outputs do
+  not carry Pallas IPA opening envelopes, `chain_id`, `asset`, or `root_after`.
+- Added explicit recursive-spend init/append request helper overloads that pair
+  checked `VerifiedFoldHopEvidence` with caller-supplied Pallas open-envelopes
+  archives before encoding request archives. The proof-output-only init/append
+  helpers fail closed for the same missing-context reason, so app code cannot
+  accidentally serialize under-specified production requests.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Native ZK1 I10P Parser Exactness
+
+- Hardened the native `connect_norito_bridge` ZK1 public-instance parser so
+  `I10P` payloads reject zero column/row counts, oversized matrix dimensions,
+  truncated scalar payloads, and trailing bytes instead of partially projecting
+  public inputs.
+- Added a focused bridge regression proving valid one-column payloads still
+  decode while empty, truncated, trailing, and over-cap payloads fail closed.
+- Focused validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p connect_norito_bridge zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads --lib`
+
+## 2026-06-13 - Kagemusha Readiness Alias Exactness
+
+- Hardened Kotlin/JVM and Java Android Offline/Offline V2 readiness parsers so
+  the legacy `offline_kagemusha_abi7*` keys and the
+  `offline_kagemusha_recursive_compact_*` keys must agree when Torii emits both
+  families. Conflicting derived enablement, mode, bridge ABI, circuit-id, or
+  artifact flags now fail parsing instead of silently preferring one alias.
+- Kept legacy-only and recursive-compact-only readiness bodies supported for
+  compatibility with existing test fixtures, while adding matching-alias and
+  conflicting-alias regression coverage.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineJsonParserTest,org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `cargo test -p iroha_torii --test torii_nexus_sorafs readiness_is_mounted_and_legacy_routes_are_absent -- --nocapture`
+
+## 2026-06-13 - Kagemusha Readiness Alias Type Hardening
+
+- Tightened the Kotlin/JVM and Java Android Offline/Offline V2 readiness alias
+  parsers so present alias values must be typed and exact: booleans must be
+  JSON booleans, string aliases must be exact non-empty strings, and bridge ABI
+  aliases must be exact integers or exact integer strings.
+- Expanded adversarial readiness coverage so each aliased field conflicts
+  independently, and malformed present values fail before clients can treat
+  them as absent defaults.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineJsonParserTest,org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Confidential Note Owner-Tag Binding
+
+- Hardened Kotlin/JVM and Java Android confidential note decryption so the
+  default decrypt path rejects payloads whose plaintext owner tag does not
+  match the owner tag derived from the supplied spend key.
+- Added explicit diversified-owner-tag decrypt overloads and diversified
+  opening constructors, keeping diversified confidential-v2 outputs supported
+  without silently accepting an owner tag chosen by the sender.
+- Moved recipient-private-key handling under the decrypt cleanup path so
+  malformed payload versions or low-order peer keys cannot skip zeroization of
+  copied private material.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Recursive Spend Request Archive Validation
+
+- Hardened Kotlin/JVM and Java Android recursive-spend request objects so
+  record bundles, previous/current bundles, redeem proof attachments, verifier
+  records, and lineage witnesses reject wrong-schema or non-compact Norito
+  archives during construction instead of waiting for encode or native dispatch.
+- Added adversarial request-constructor coverage for wrong-schema init/append
+  record bundles, verify/redeem bundles, redeem proof attachments, and lineage
+  witnesses.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - ZK Merkle Path Response Exactness
+
+- Hardened Kotlin/JVM and Android Java ZK Merkle-path response models so
+  node-supplied path entries reject impossible leaf indices, direction bits that
+  do not match the leaf index, path-root mismatches, sibling/tree-depth
+  mismatches, witness-node cardinality mismatches, and entries outside the
+  reported `frontier_len` before wallet code consumes Torii proof material.
+- Mirrored Java JSON parser behavior with Kotlin for oversized integer tokens,
+  preserving them as `BigInteger` values so typed ZK response validators emit
+  controlled range errors instead of raw parser overflow failures.
+- Tightened Java ZK public constructors and providers so null lists are rejected
+  instead of silently becoming empty request or proof material.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.client.JsonParserTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.JsonParserTests,org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check`

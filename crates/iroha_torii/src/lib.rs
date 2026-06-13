@@ -463,8 +463,9 @@ pub use routing::{
     RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
 };
 pub use routing::{
-    ZkRootsGetRequestDto, ZkRootsGetResponseDto, ZkVoteGetTallyRequestDto,
-    ZkVoteGetTallyResponseDto, handle_v1_zk_roots, handle_v1_zk_submit_proof, handle_v1_zk_verify,
+    ZkMerklePathDto, ZkMerklePathGetRequestDto, ZkMerklePathGetResponseDto, ZkRootsGetRequestDto,
+    ZkRootsGetResponseDto, ZkVoteGetTallyRequestDto, ZkVoteGetTallyResponseDto,
+    handle_v1_zk_merkle_path, handle_v1_zk_roots, handle_v1_zk_submit_proof, handle_v1_zk_verify,
     handle_v1_zk_vote_tally,
 };
 pub use routing::{
@@ -9737,6 +9738,25 @@ async fn handler_zk_roots(
     let remote_ip = remote.ip();
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/roots", true).await?;
     routing::handle_v1_zk_roots(
+        app.state.clone(),
+        accept.map(|value| value.0),
+        crate::utils::extractors::NoritoJson(req),
+    )
+    .await
+}
+
+async fn handler_zk_merkle_path(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
+        routing::ZkMerklePathGetRequestDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/merkle-path", true).await?;
+    routing::handle_v1_zk_merkle_path(
         app.state.clone(),
         accept.map(|value| value.0),
         crate::utils::extractors::NoritoJson(req),
@@ -37586,6 +37606,7 @@ impl Torii {
             )]
             let mut zk_router = Router::new()
                 .route("/v1/zk/roots", post(handler_zk_roots))
+                .route("/v1/zk/merkle-path", post(handler_zk_merkle_path))
                 .route("/v1/zk/verify", post(handler_zk_verify))
                 .route("/v1/zk/submit-proof", post(handler_zk_submit_proof))
                 .route("/v1/zk/vote/tally", post(handler_zk_vote_tally));

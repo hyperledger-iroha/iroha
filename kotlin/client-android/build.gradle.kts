@@ -61,14 +61,23 @@ tasks.register<Exec>("buildNativeLibs") {
     group = "native"
     description = "Build connect_norito_bridge .so from Rust source (requires cargo-ndk + Android NDK)"
 
+    // Pass -PprivacyProductionEnabled=true to enable real proving in the native bridge.
+    // Default is off (fail-closed); flip only when all production gates have passed.
+    val privacyProductionEnabled =
+        project.findProperty("privacyProductionEnabled")?.toString()?.toBoolean() ?: false
+    val cargoFeatureArgs = if (privacyProductionEnabled) {
+        listOf("--features", "privacy-production-enabled")
+    } else {
+        emptyList()
+    }
+
     workingDir = file(irohaDir())
     commandLine(
-        "cargo", "ndk",
-        "-t", "arm64-v8a",
-        "-t", "x86_64",
-        "-o", jniLibsDir.asFile.absolutePath,
-        "build", "--release",
-        "-p", "connect_norito_bridge",
+        buildList {
+            addAll(listOf("cargo", "ndk", "-t", "arm64-v8a", "-t", "x86_64", "-o", jniLibsDir.asFile.absolutePath))
+            addAll(listOf("build", "--release", "-p", "connect_norito_bridge"))
+            addAll(cargoFeatureArgs)
+        }
     )
 }
 

@@ -401,10 +401,17 @@ public sealed class ToriiClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = request with
+        {
+            PolicyId = NormalizeIdentifierPolicyId(request.PolicyId, nameof(request.PolicyId)),
+            EncryptedInput = NormalizeOptionalIdentifierCiphertext(
+                request.EncryptedInput,
+                nameof(request.EncryptedInput)),
+        };
 
         return PostAsync<ToriiIdentifierResolveRequest, ToriiIdentifierResolveResponse>(
             "/v1/identifiers/resolve",
-            request,
+            normalizedRequest,
             cancellationToken: cancellationToken);
     }
 
@@ -2661,6 +2668,40 @@ public sealed class ToriiClient : IDisposable
         }
 
         return value.Trim();
+    }
+
+    private static string NormalizeIdentifierPolicyId(string? value, string paramName)
+    {
+        var exact = NormalizeExactIdentifierValue(value, paramName);
+        var separator = exact.IndexOf('#', StringComparison.Ordinal);
+        if (separator <= 0 || separator != exact.LastIndexOf('#') || separator == exact.Length - 1)
+        {
+            throw new ArgumentException("Value must use `kind#rule`.", paramName);
+        }
+
+        NormalizeExactIdentifierValue(exact[..separator], $"{paramName}.kind");
+        NormalizeExactIdentifierValue(exact[(separator + 1)..], $"{paramName}.rule");
+        return exact;
+    }
+
+    private static string? NormalizeOptionalIdentifierCiphertext(string? value, string paramName)
+    {
+        return value is null ? null : NormalizeExactIdentifierValue(value, paramName);
+    }
+
+    private static string NormalizeExactIdentifierValue(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("Value cannot be null or whitespace.", paramName);
+        }
+
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Value must not contain surrounding whitespace.", paramName);
+        }
+
+        return value;
     }
 
     private static string? NormalizeOptionalValue(string? value)

@@ -30,8 +30,8 @@ public final class ClaimIdentifierWirePayloadEncoder {
       final String accountId, final IdentifierResolutionReceipt receipt) {
     Objects.requireNonNull(accountId, "accountId");
     Objects.requireNonNull(receipt, "receipt");
-    final String normalizedAccountId = requireNonBlank(accountId, "accountId");
-    final String receiptAccountId = requireNonBlank(receipt.accountId(), "receipt.accountId");
+    final String normalizedAccountId = requireExactNonBlank(accountId, "accountId");
+    final String receiptAccountId = requireExactNonBlank(receipt.accountId(), "receipt.accountId");
     if (!normalizedAccountId.equals(receiptAccountId)) {
       throw new IllegalArgumentException(
           "ClaimIdentifier accountId must match receipt.accountId");
@@ -204,12 +204,15 @@ public final class ClaimIdentifierWirePayloadEncoder {
     return value;
   }
 
-  private static String requireNonBlank(final String value, final String field) {
-    final String trimmed = value == null ? "" : value.trim();
-    if (trimmed.isEmpty()) {
+  private static String requireExactNonBlank(final String value, final String field) {
+    final String exact = value == null ? "" : value;
+    if (exact.trim().isEmpty()) {
       throw new IllegalArgumentException(field + " must not be blank");
     }
-    return trimmed;
+    if (!exact.trim().equals(exact)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
+    return exact;
   }
 
 }

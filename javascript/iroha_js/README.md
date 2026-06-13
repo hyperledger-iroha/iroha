@@ -63,6 +63,21 @@ the append-boundary helper `kagemushaRecursiveSpendLineageAppendBoundary`, both
 lineage-witness helpers, `kagemushaRecursiveSpendVerify`, and
 `kagemushaRecursiveSpendRedeem`.
 
+Typed Node callers can build the ABI-6 recursive spend request archives without
+hand-framing Norito payloads. Use
+`encodeKagemushaRecursiveSpendInitRequest(...)`,
+`encodeKagemushaRecursiveSpendAppendRequest(...)`,
+`encodeKagemushaRecursiveSpendVerifyRequest(...)`, and
+`encodeKagemushaRecursiveSpendRedeemRequest(...)` to encode typed object inputs;
+use `decodeKagemushaRecursiveSpendVerifyResult(...)` and
+`decodeKagemushaRecursiveSpendBundle(...)` to inspect returned native archives.
+`kagemushaRecursiveSpendInitTyped(...)`,
+`kagemushaRecursiveSpendAppendTyped(...)`,
+`kagemushaRecursiveSpendVerifyTyped(...)`, and
+`kagemushaRecursiveSpendRedeemTyped(...)` validate exact schemas, nested
+archives, canonical positive note amounts, account recipients, lineage records,
+and previous proof material before delegating to the native bridge.
+
 Transaction builders expose the same Kagemusha instruction surface without
 asking wallet code to reframe native archives. Use
 `buildKagemushaInstructionArchiveInstruction({ instructionType, instructionArchive })`
@@ -74,10 +89,10 @@ helpers require valid Norito archives, reject empty, malformed, tampered, or
 wrong-type instruction archives, and keep recursive redeem derivation inside the
 native host.
 
-All helper inputs and outputs are raw Norito archives. The transition-profile
-helpers return the canonical Reserved-lineage accumulator transition profile for
-fixture generation and circuit preflight. Browser-only builds expose matching
-stubs that throw native-only errors.
+The lower-level native helper inputs and outputs are raw Norito archives. The
+transition-profile helpers return the canonical Reserved-lineage accumulator
+transition profile for fixture generation and circuit preflight. Browser-only
+builds expose matching stubs that throw native-only errors.
 `kagemushaRecursiveSpendLineageAppendBoundary(profileArchive)` derives the
 compact append-boundary Norito archive from a full append transition profile
 with native opening preflight material. The append-boundary digest uses the

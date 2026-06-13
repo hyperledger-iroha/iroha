@@ -17,15 +17,19 @@ public static class CanonicalRequest
         long? timestampMs = null,
         string? nonce = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
+        var exactAccountId = RequireExactNonBlank(accountId, nameof(accountId));
         ArgumentException.ThrowIfNullOrWhiteSpace(method);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         var effectiveTimestamp = timestampMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var effectiveNonce = string.IsNullOrWhiteSpace(nonce) ? GenerateNonce() : nonce;
+        var effectiveNonce = nonce is null ? GenerateNonce() : RequireExactNonBlank(nonce, nameof(nonce));
         var message = BuildSignatureMessage(method, path, query, body, effectiveTimestamp, effectiveNonce);
         var signature = Ed25519Signer.Sign(message, privateKeySeed);
-        return new CanonicalRequestHeaders(accountId, Convert.ToBase64String(signature), effectiveTimestamp, effectiveNonce);
+        return new CanonicalRequestHeaders(
+            exactAccountId,
+            Convert.ToBase64String(signature),
+            effectiveTimestamp,
+            effectiveNonce);
     }
 
     public static string BuildCanonicalQueryString(string? rawQuery)
@@ -74,9 +78,22 @@ public static class CanonicalRequest
         long timestampMs = 0,
         string? nonce = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(nonce);
+        var exactNonce = RequireExactNonBlank(nonce, nameof(nonce));
         var baseMessage = Encoding.UTF8.GetString(BuildMessage(method, path, query, body));
-        return Encoding.UTF8.GetBytes($"{baseMessage}\n{timestampMs}\n{nonce}");
+        return Encoding.UTF8.GetBytes($"{baseMessage}\n{timestampMs}\n{exactNonce}");
+    }
+
+    internal static string RequireExactNonBlank(string? value, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException($"{paramName} must not be null or whitespace.", paramName);
+        }
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{paramName} must not contain surrounding whitespace.", paramName);
+        }
+        return value;
     }
 
     private static int CompareUtf8(string left, string right)
