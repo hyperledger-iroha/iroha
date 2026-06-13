@@ -468,6 +468,35 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         final byte[] recordBundle,
         final byte[] pallasOpenEnvelopes,
         final SpendableNoteDescriptor currentNote,
+        final KagemushaRecursiveSpendProver.LineageKeyArtifacts lineageKeyArtifacts,
+        final Long blockHeight) {
+      this(
+          recordBundle,
+          pallasOpenEnvelopes,
+          currentNote,
+          lineageKeyMaterialForInit(lineageKeyArtifacts),
+          blockHeight);
+    }
+
+    private InitSpendRequest(
+        final byte[] recordBundle,
+        final byte[] pallasOpenEnvelopes,
+        final SpendableNoteDescriptor currentNote,
+        final LineageKeyMaterial lineageKeyMaterial,
+        final Long blockHeight) {
+      this(
+          recordBundle,
+          pallasOpenEnvelopes,
+          currentNote,
+          lineageKeyMaterial.verifierKey,
+          lineageKeyMaterial.provingKeyArchive,
+          blockHeight);
+    }
+
+    public InitSpendRequest(
+        final byte[] recordBundle,
+        final byte[] pallasOpenEnvelopes,
+        final SpendableNoteDescriptor currentNote,
         final byte[] lineageVerifierKey,
         final byte[] lineageProvingKeyArchive,
         final Long blockHeight) {
@@ -524,6 +553,51 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     private final byte[] lineageVerifierKey;
     private final byte[] lineageProvingKeyArchive;
     public final Long blockHeight;
+
+    public AppendSpendRequest(
+        final byte[] previousBundle,
+        final byte[] recordBundle,
+        final byte[] pallasOpenEnvelopes,
+        final SpendableNoteDescriptor currentNote,
+        final String outputProofCircuitId,
+        final VerifierRecordRef previousLineageVerifierRecord,
+        final byte[] previousProofOpenEnvelopes,
+        final KagemushaRecursiveSpendProver.LineageKeyArtifacts lineageKeyArtifacts,
+        final Long blockHeight) {
+      this(
+          previousBundle,
+          recordBundle,
+          pallasOpenEnvelopes,
+          currentNote,
+          outputProofCircuitId,
+          previousLineageVerifierRecord,
+          previousProofOpenEnvelopes,
+          lineageKeyMaterialForAppend(lineageKeyArtifacts),
+          blockHeight);
+    }
+
+    private AppendSpendRequest(
+        final byte[] previousBundle,
+        final byte[] recordBundle,
+        final byte[] pallasOpenEnvelopes,
+        final SpendableNoteDescriptor currentNote,
+        final String outputProofCircuitId,
+        final VerifierRecordRef previousLineageVerifierRecord,
+        final byte[] previousProofOpenEnvelopes,
+        final LineageKeyMaterial lineageKeyMaterial,
+        final Long blockHeight) {
+      this(
+          previousBundle,
+          recordBundle,
+          pallasOpenEnvelopes,
+          currentNote,
+          outputProofCircuitId,
+          previousLineageVerifierRecord,
+          previousProofOpenEnvelopes,
+          lineageKeyMaterial.verifierKey,
+          lineageKeyMaterial.provingKeyArchive,
+          blockHeight);
+    }
 
     public AppendSpendRequest(
         final byte[] previousBundle,
@@ -1310,6 +1384,23 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     }
   }
 
+  private static LineageKeyMaterial lineageKeyMaterialForInit(
+      final KagemushaRecursiveSpendProver.LineageKeyArtifacts artifacts) {
+    final KagemushaRecursiveSpendProver.LineageKeyArtifacts checked =
+        requireInitLineageKeyArtifacts(artifacts);
+    return new LineageKeyMaterial(
+        checked.lineageVerifierKey(),
+        checked.lineageProvingKeyArchive());
+  }
+
+  private static KagemushaRecursiveSpendProver.LineageKeyArtifacts requireInitLineageKeyArtifacts(
+      final KagemushaRecursiveSpendProver.LineageKeyArtifacts artifacts) {
+    final KagemushaRecursiveSpendProver.LineageKeyArtifacts checked =
+        KagemushaRecursiveSpendProver.validateLineageKeyArtifacts(artifacts);
+    require(checked.isInitArtifact(), "lineageKeyArtifacts must be init artifacts");
+    return checked;
+  }
+
   private static void validateLineageKeyArtifactsForAppend(
       final byte[] lineageVerifierKey, final byte[] lineageProvingKeyArchive) {
     try {
@@ -1320,6 +1411,36 @@ public final class KagemushaRecursiveSpendRequestCodecs {
           lineageProvingKeyArchive);
     } catch (final IllegalArgumentException ex) {
       throw new IllegalArgumentException("lineage key artifacts are invalid for lineage append output", ex);
+    }
+  }
+
+  private static LineageKeyMaterial lineageKeyMaterialForAppend(
+      final KagemushaRecursiveSpendProver.LineageKeyArtifacts artifacts) {
+    if (artifacts == null) {
+      return new LineageKeyMaterial(null, null);
+    }
+    final KagemushaRecursiveSpendProver.LineageKeyArtifacts checked =
+        requireAppendLineageKeyArtifacts(artifacts);
+    return new LineageKeyMaterial(
+        checked.lineageVerifierKey(),
+        checked.lineageProvingKeyArchive());
+  }
+
+  private static KagemushaRecursiveSpendProver.LineageKeyArtifacts requireAppendLineageKeyArtifacts(
+      final KagemushaRecursiveSpendProver.LineageKeyArtifacts artifacts) {
+    final KagemushaRecursiveSpendProver.LineageKeyArtifacts checked =
+        KagemushaRecursiveSpendProver.validateLineageKeyArtifacts(artifacts);
+    require(checked.isAppendArtifact(), "lineageKeyArtifacts must be append artifacts");
+    return checked;
+  }
+
+  private static final class LineageKeyMaterial {
+    private final byte[] verifierKey;
+    private final byte[] provingKeyArchive;
+
+    private LineageKeyMaterial(final byte[] verifierKey, final byte[] provingKeyArchive) {
+      this.verifierKey = verifierKey;
+      this.provingKeyArchive = provingKeyArchive;
     }
   }
 

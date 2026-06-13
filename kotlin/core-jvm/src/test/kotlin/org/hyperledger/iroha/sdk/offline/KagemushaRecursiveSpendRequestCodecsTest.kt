@@ -81,8 +81,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     recordBundle = sampleRecordBundle(),
                     pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
                     currentNote = sampleNote(),
-                    lineageVerifierKey = initLineageArtifacts.verifierKey,
-                    lineageProvingKeyArchive = initLineageArtifacts.provingKeyArchive,
+                    lineageKeyArtifacts = initLineageArtifacts.typed,
                     blockHeight = 7L,
                 ),
             ),
@@ -146,8 +145,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                     recordBundle = recordBundle,
                     pallasOpenEnvelopes = pallasOpenEnvelopes,
                     currentNote = note,
-                    lineageVerifierKey = lineageVerifierKey,
-                    lineageProvingKeyArchive = lineageProvingKeyArchive,
+                    lineageKeyArtifacts = lineageArtifacts.typed,
                     blockHeight = 7L,
                 ),
             ),
@@ -681,6 +679,15 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             wrongInitLineage.message.orEmpty().contains("lineage key artifacts") ||
                 wrongInitLineage.cause?.message.orEmpty().contains("lineage_verifier_key"),
         )
+        val wrongInitLineageProfile = assertFailsWith<IllegalArgumentException> {
+            InitSpendRequest(
+                recordBundle = sampleRecordBundle(),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                currentNote = sampleNote(),
+                lineageKeyArtifacts = appendArtifactsOnInit.typed,
+            )
+        }
+        assertTrue(wrongInitLineageProfile.message.orEmpty().contains("init artifacts"))
         val forgedCommitmentArchive = lineageProvingKeyArchive(
             KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
             appendArtifactsOnInit.verifierKey,
@@ -789,6 +796,21 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             wrongAppendLineage.message.orEmpty().contains("lineage key artifacts") ||
                 wrongAppendLineage.cause?.message.orEmpty().contains("lineage_verifier_key"),
         )
+        val wrongAppendLineageProfile = assertFailsWith<IllegalArgumentException> {
+            AppendSpendRequest(
+                previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                recordBundle = sampleRecordBundle(),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                currentNote = sampleNote(seed = 0x43),
+                outputProofCircuitId = KagemushaRecursiveSpendProver
+                    .RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                previousLineageVerifierRecord = sampleVerifierRecord(),
+                previousProofOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                lineageKeyArtifacts = initArtifactsOnAppend.typed,
+                blockHeight = null,
+            )
+        }
+        assertTrue(wrongAppendLineageProfile.message.orEmpty().contains("append artifacts"))
 
         assertArchiveSchema(
             KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
@@ -801,8 +823,8 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                         .RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                     previousLineageVerifierRecord = sampleVerifierRecord(),
                     previousProofOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
-                    lineageVerifierKey = appendLineageArtifacts.verifierKey,
-                    lineageProvingKeyArchive = appendLineageArtifacts.provingKeyArchive,
+                    lineageKeyArtifacts = appendLineageArtifacts.typed,
+                    blockHeight = null,
                 ),
             ),
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST,
@@ -1250,6 +1272,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     private data class SampleLineageArtifacts(
         val verifierKey: ByteArray,
         val provingKeyArchive: ByteArray,
+        val typed: KagemushaRecursiveSpendProver.LineageKeyArtifacts,
     )
 
     private fun sampleInitLineageArtifacts(seed: Int = 0x5a): SampleLineageArtifacts =
@@ -1266,9 +1289,17 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
     private fun sampleLineageArtifacts(circuitId: String, seed: Int): SampleLineageArtifacts {
         val verifierKey = lineageVerifierKey(circuitId, seed)
+        val provingKeyArchive = lineageProvingKeyArchive(circuitId, verifierKey, seed + 1)
         return SampleLineageArtifacts(
             verifierKey = verifierKey,
-            provingKeyArchive = lineageProvingKeyArchive(circuitId, verifierKey, seed + 1),
+            provingKeyArchive = provingKeyArchive,
+            typed = KagemushaRecursiveSpendProver.lineageKeyArtifacts(
+                circuitId,
+                SAMPLE_LINEAGE_OPENING_LEN,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                verifierKey,
+                provingKeyArchive,
+            ),
         )
     }
 
@@ -1474,6 +1505,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
     private companion object {
         private const val U128_MAX_PLUS_ONE = "340282366920938463463374607431768211456"
+        private const val SAMPLE_LINEAGE_OPENING_LEN = 2
         private val PALLAS_OPEN_ENVELOPE_VECTOR_SCHEMA_HASH = byteArrayOf(
             0xfe.toByte(),
             0x38,

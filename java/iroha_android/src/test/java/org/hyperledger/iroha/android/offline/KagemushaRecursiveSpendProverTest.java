@@ -27,6 +27,7 @@ public final class KagemushaRecursiveSpendProverTest {
   private static final int TEST_NORITO_COMPACT_LEN_FLAG = 0x02;
   private static final int TEST_NORITO_PACKED_STRUCT_FLAG = 0x04;
   private static final int TEST_NORITO_FIELD_BITSET_FLAG = 0x20;
+  private static final int SAMPLE_LINEAGE_OPENING_LEN = 2;
   private static final byte[] LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH =
       new byte[] {
         (byte) 0xC8, (byte) 0x84, (byte) 0x89, 0x61,
@@ -1280,8 +1281,7 @@ public final class KagemushaRecursiveSpendProverTest {
                 sampleRecordBundle(),
                 pallasOpenEnvelopeVectorArchive(),
                 sampleNote(),
-                initLineageArtifacts.verifierKey,
-                initLineageArtifacts.provingKeyArchive,
+                initLineageArtifacts.typed,
                 7L)),
         KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST);
 
@@ -1336,8 +1336,7 @@ public final class KagemushaRecursiveSpendProverTest {
                     recordBundle,
                     pallasOpenEnvelopes,
                     note,
-                    lineageVerifierKey,
-                    lineageProvingKeyArchive,
+                    lineageArtifacts.typed,
                     7L)),
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST);
 
@@ -1784,6 +1783,16 @@ public final class KagemushaRecursiveSpendProverTest {
                     null));
     assert messageContains(wrongInitLineage, "lineage key artifacts")
         || messageContains(wrongInitLineage, "lineage_verifier_key");
+    final IllegalArgumentException wrongInitLineageProfile =
+        captureIllegalArgument(
+            () ->
+                new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
+                    sampleRecordBundle(),
+                    pallasOpenEnvelopeVectorArchive(),
+                    sampleNote(),
+                    appendArtifactsOnInit.typed,
+                    null));
+    assert messageContains(wrongInitLineageProfile, "init artifacts");
     final byte[] forgedCommitmentArchive =
         lineageProvingKeyArchive(
             KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
@@ -1890,6 +1899,20 @@ public final class KagemushaRecursiveSpendProverTest {
                     null));
     assert messageContains(wrongAppendLineage, "lineage key artifacts")
         || messageContains(wrongAppendLineage, "lineage_verifier_key");
+    final IllegalArgumentException wrongAppendLineageProfile =
+        captureIllegalArgument(
+            () ->
+                new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    sampleRecordBundle(),
+                    pallasOpenEnvelopeVectorArchive(),
+                    sampleNote((byte) 0x43),
+                    KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                    sampleVerifierRecord(),
+                    pallasOpenEnvelopeVectorArchive(),
+                    initArtifactsOnAppend.typed,
+                    null));
+    assert messageContains(wrongAppendLineageProfile, "append artifacts");
 
     assertArchiveSchema(
         KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
@@ -1901,8 +1924,7 @@ public final class KagemushaRecursiveSpendProverTest {
                 KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                 sampleVerifierRecord(),
                 pallasOpenEnvelopeVectorArchive(),
-                appendLineageArtifacts.verifierKey,
-                appendLineageArtifacts.provingKeyArchive,
+                appendLineageArtifacts.typed,
                 null)),
         KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST);
 
@@ -2722,18 +2744,31 @@ public final class KagemushaRecursiveSpendProverTest {
   private static SampleLineageArtifacts sampleLineageArtifacts(
       final String circuitId, final byte seed) {
     final byte[] verifierKey = lineageVerifierKey(circuitId, seed);
+    final byte[] provingKeyArchive =
+        lineageProvingKeyArchive(circuitId, verifierKey, (byte) (seed + 1));
     return new SampleLineageArtifacts(
         verifierKey,
-        lineageProvingKeyArchive(circuitId, verifierKey, (byte) (seed + 1)));
+        provingKeyArchive,
+        KagemushaRecursiveSpendProver.lineageKeyArtifacts(
+            circuitId,
+            SAMPLE_LINEAGE_OPENING_LEN,
+            KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            verifierKey,
+            provingKeyArchive));
   }
 
   private static final class SampleLineageArtifacts {
     private final byte[] verifierKey;
     private final byte[] provingKeyArchive;
+    private final KagemushaRecursiveSpendProver.LineageKeyArtifacts typed;
 
-    private SampleLineageArtifacts(final byte[] verifierKey, final byte[] provingKeyArchive) {
+    private SampleLineageArtifacts(
+        final byte[] verifierKey,
+        final byte[] provingKeyArchive,
+        final KagemushaRecursiveSpendProver.LineageKeyArtifacts typed) {
       this.verifierKey = verifierKey;
       this.provingKeyArchive = provingKeyArchive;
+      this.typed = typed;
     }
   }
 

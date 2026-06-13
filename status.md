@@ -2,6 +2,23 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Recursive lineage artifact typed request API
+
+- Added Kotlin/JVM and Android Java recursive-spend request constructors that
+  accept validated `LineageKeyArtifacts` directly, so wallet code no longer
+  needs to split artifact packages back into raw verifier/proving-key byte
+  arrays for init and lineage-append requests.
+- Init constructors reject append-profile artifact packages, append
+  constructors reject init-profile packages, and both paths continue delegating
+  through the raw-byte request validation so circuit id and verifier-key
+  commitment binding is preserved.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest,org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check -- kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+
 ## 2026-06-13 Recursive lineage key artifact request validation
 
 - Hardened Kotlin/JVM and Android Java Kagemusha recursive init and

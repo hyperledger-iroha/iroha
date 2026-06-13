@@ -127,6 +127,36 @@ class InitSpendRequest @JvmOverloads constructor(
     private val lineageVerifierKeyBytes = lineageVerifierKey?.copyOf()
     private val lineageProvingKeyArchiveBytes = lineageProvingKeyArchive?.copyOf()
 
+    @JvmOverloads
+    constructor(
+        recordBundle: ByteArray,
+        pallasOpenEnvelopes: ByteArray,
+        currentNote: SpendableNoteDescriptor,
+        lineageKeyArtifacts: KagemushaRecursiveSpendProver.LineageKeyArtifacts,
+        blockHeight: Long? = null,
+    ) : this(
+        recordBundle = recordBundle,
+        pallasOpenEnvelopes = pallasOpenEnvelopes,
+        currentNote = currentNote,
+        lineageKeyMaterial = lineageKeyMaterialForInit(lineageKeyArtifacts),
+        blockHeight = blockHeight,
+    )
+
+    private constructor(
+        recordBundle: ByteArray,
+        pallasOpenEnvelopes: ByteArray,
+        currentNote: SpendableNoteDescriptor,
+        lineageKeyMaterial: LineageKeyMaterial,
+        blockHeight: Long?,
+    ) : this(
+        recordBundle = recordBundle,
+        pallasOpenEnvelopes = pallasOpenEnvelopes,
+        currentNote = currentNote,
+        lineageVerifierKey = lineageKeyMaterial.verifierKey,
+        lineageProvingKeyArchive = lineageKeyMaterial.provingKeyArchive,
+        blockHeight = blockHeight,
+    )
+
     init {
         requireNonNegativeHeight(blockHeight)
         require(lineageVerifierKeyBytes != null) {
@@ -186,6 +216,51 @@ class AppendSpendRequest @JvmOverloads constructor(
     private val previousProofOpenEnvelopesArchive = previousProofOpenEnvelopes?.copyOf()
     private val lineageVerifierKeyBytes = lineageVerifierKey?.copyOf()
     private val lineageProvingKeyArchiveBytes = lineageProvingKeyArchive?.copyOf()
+
+    constructor(
+        previousBundle: ByteArray,
+        recordBundle: ByteArray,
+        pallasOpenEnvelopes: ByteArray,
+        currentNote: SpendableNoteDescriptor,
+        outputProofCircuitId: String?,
+        previousLineageVerifierRecord: VerifierRecordRef?,
+        previousProofOpenEnvelopes: ByteArray?,
+        lineageKeyArtifacts: KagemushaRecursiveSpendProver.LineageKeyArtifacts?,
+        blockHeight: Long?,
+    ) : this(
+        previousBundle = previousBundle,
+        recordBundle = recordBundle,
+        pallasOpenEnvelopes = pallasOpenEnvelopes,
+        currentNote = currentNote,
+        outputProofCircuitId = outputProofCircuitId,
+        previousLineageVerifierRecord = previousLineageVerifierRecord,
+        previousProofOpenEnvelopes = previousProofOpenEnvelopes,
+        lineageKeyMaterial = lineageKeyMaterialForAppend(lineageKeyArtifacts),
+        blockHeight = blockHeight,
+    )
+
+    private constructor(
+        previousBundle: ByteArray,
+        recordBundle: ByteArray,
+        pallasOpenEnvelopes: ByteArray,
+        currentNote: SpendableNoteDescriptor,
+        outputProofCircuitId: String?,
+        previousLineageVerifierRecord: VerifierRecordRef?,
+        previousProofOpenEnvelopes: ByteArray?,
+        lineageKeyMaterial: LineageKeyMaterial,
+        blockHeight: Long?,
+    ) : this(
+        previousBundle = previousBundle,
+        recordBundle = recordBundle,
+        pallasOpenEnvelopes = pallasOpenEnvelopes,
+        currentNote = currentNote,
+        outputProofCircuitId = outputProofCircuitId,
+        previousLineageVerifierRecord = previousLineageVerifierRecord,
+        previousProofOpenEnvelopes = previousProofOpenEnvelopes,
+        lineageVerifierKey = lineageKeyMaterial.verifierKey,
+        lineageProvingKeyArchive = lineageKeyMaterial.provingKeyArchive,
+        blockHeight = blockHeight,
+    )
 
     init {
         requireNonNegativeHeight(blockHeight)
@@ -1298,6 +1373,29 @@ private fun validateLineageKeyArtifactsForInit(
     }
 }
 
+private data class LineageKeyMaterial(
+    val verifierKey: ByteArray?,
+    val provingKeyArchive: ByteArray?,
+)
+
+private fun lineageKeyMaterialForInit(
+    artifacts: KagemushaRecursiveSpendProver.LineageKeyArtifacts,
+): LineageKeyMaterial {
+    val checked = requireInitLineageKeyArtifacts(artifacts)
+    return LineageKeyMaterial(
+        verifierKey = checked.lineageVerifierKey(),
+        provingKeyArchive = checked.lineageProvingKeyArchive(),
+    )
+}
+
+private fun requireInitLineageKeyArtifacts(
+    artifacts: KagemushaRecursiveSpendProver.LineageKeyArtifacts,
+): KagemushaRecursiveSpendProver.LineageKeyArtifacts {
+    val checked = KagemushaRecursiveSpendProver.validateLineageKeyArtifacts(artifacts)
+    require(checked.isInitArtifact()) { "lineageKeyArtifacts must be init artifacts" }
+    return checked
+}
+
 private fun validateLineageKeyArtifactsForAppend(
     lineageVerifierKey: ByteArray,
     lineageProvingKeyArchive: ByteArray,
@@ -1312,6 +1410,27 @@ private fun validateLineageKeyArtifactsForAppend(
     } catch (ex: IllegalArgumentException) {
         throw IllegalArgumentException("lineage key artifacts are invalid for lineage append output", ex)
     }
+}
+
+private fun lineageKeyMaterialForAppend(
+    artifacts: KagemushaRecursiveSpendProver.LineageKeyArtifacts?,
+): LineageKeyMaterial {
+    if (artifacts == null) {
+        return LineageKeyMaterial(verifierKey = null, provingKeyArchive = null)
+    }
+    val checked = requireAppendLineageKeyArtifacts(artifacts)
+    return LineageKeyMaterial(
+        verifierKey = checked.lineageVerifierKey(),
+        provingKeyArchive = checked.lineageProvingKeyArchive(),
+    )
+}
+
+private fun requireAppendLineageKeyArtifacts(
+    artifacts: KagemushaRecursiveSpendProver.LineageKeyArtifacts,
+): KagemushaRecursiveSpendProver.LineageKeyArtifacts {
+    val checked = KagemushaRecursiveSpendProver.validateLineageKeyArtifacts(artifacts)
+    require(checked.isAppendArtifact()) { "lineageKeyArtifacts must be append artifacts" }
+    return checked
 }
 
 private fun readVerifiedFoldRecordBundleHopCount(payload: ByteArray, flags: Int, field: String): Int {

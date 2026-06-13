@@ -59,7 +59,8 @@ and completed history lives in [`status.md`](./status.md).
   request assembly instead of relying on later encode or native dispatch errors.
   Init and lineage-append requests must also keep lineage verifier/proving-key
   artifacts bound to the expected one-hop or append circuit and verifier-key
-  commitment before serialization.
+  commitment before serialization; wallet-facing constructors should prefer
+  validated `LineageKeyArtifacts` packages over manually split raw key bytes.
   The explicit hop-evidence builders must also keep confidential-transfer-v2
   public-instance shape exact: exactly nine single-row ZK1 columns, no extra
   public columns, nonzero root transitions, continuous multi-hop roots, and
