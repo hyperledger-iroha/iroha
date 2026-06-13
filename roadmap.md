@@ -35,6 +35,10 @@ and completed history lives in [`status.md`](./status.md).
   before native probing or dispatch, accepting safe non-negative numbers and
   bounded `u64` bigints only, and the SDK parity guard must continue pinning
   those surfaces.
+- Kagemusha recursive-spend JVM/Android request objects now reject wrong-schema
+  bundles, record bundles, proof attachments, verifier records, and lineage
+  witnesses at construction time; keep this fail-fast contract for wallet
+  request assembly instead of relying on later encode or native dispatch errors.
 - Kagemusha C# SDK validation remains a Windows-machine follow-up because this
   macOS host does not have `dotnet` installed. On Windows, install or select a
   .NET 8 SDK, run the standalone C# Kagemusha guard

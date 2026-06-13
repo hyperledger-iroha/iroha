@@ -1617,6 +1617,20 @@ public final class KagemushaRecursiveSpendProverTest {
                 null,
                 null,
                 null));
+    assertThrows(
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.InitSpendRequest(
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT),
+                syntheticArchive("test.PallasOpenEnvelopes"),
+                sampleNote(),
+                repeat((byte) 0x5a, 64),
+                syntheticArchive("test.LineageProvingKeyArchive"),
+                null));
+    assertThrows(
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef(
+                "halo2/ipa:wrong-schema",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT)));
     final byte[] corruptedPallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes");
     corruptedPallasOpenEnvelopes[corruptedPallasOpenEnvelopes.length - 1] =
         (byte) (corruptedPallasOpenEnvelopes[corruptedPallasOpenEnvelopes.length - 1] ^ 0x01);
@@ -1638,6 +1652,36 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(
                 new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(
                     sharedRecursiveSpendArchive(FixtureAbi.ABI6, "verify_result"), null, null)));
+    assertThrows(
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "verify_result"),
+                sampleRecipient(),
+                "7",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                null,
+                null,
+                null));
+    assertThrows(
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleRecipient(),
+                "7",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT),
+                null,
+                null,
+                null));
+    assertThrows(
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleRecipient(),
+                "7",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                null,
+                null));
 
     final byte[] tampered = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle");
     tampered[tampered.length - 1] = (byte) (tampered[tampered.length - 1] ^ 0x01);
@@ -1658,6 +1702,19 @@ public final class KagemushaRecursiveSpendProverTest {
                     syntheticArchive("test.LineageProvingKeyArchive"),
                     null));
     assert error.getMessage().contains("previousProofOpenEnvelopes is required");
+    assertThrows(
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT),
+                syntheticArchive("test.PallasOpenEnvelopes"),
+                sampleNote((byte) 0x42),
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                sampleVerifierRecord(),
+                null,
+                null,
+                null,
+                null));
   }
 
   private static void rejectsEmptyArchivesBeforeNativeDispatch() {

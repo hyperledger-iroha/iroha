@@ -510,6 +510,21 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 currentNote = sampleNote(),
             )
         }
+        assertFailsWith<IllegalArgumentException> {
+            InitSpendRequest(
+                recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT),
+                pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes"),
+                currentNote = sampleNote(),
+                lineageVerifierKey = ByteArray(64) { 0x5a.toByte() },
+                lineageProvingKeyArchive = syntheticArchive("test.LineageProvingKeyArchive"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            VerifierRecordRef(
+                "halo2/ipa:wrong-schema",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+            )
+        }
         val corruptedPallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes")
         corruptedPallasOpenEnvelopes[corruptedPallasOpenEnvelopes.lastIndex] =
             (corruptedPallasOpenEnvelopes.last().toInt() xor 0x01).toByte()
@@ -533,6 +548,31 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 VerifySpendRequest(sharedRecursiveSpendArchive(FixtureAbi.ABI6, "verify_result")),
             )
         }
+        assertFailsWith<IllegalArgumentException> {
+            RedeemSpendRequest(
+                bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "verify_result"),
+                recipient = sampleRecipient(),
+                publicAmount = "7",
+                redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RedeemSpendRequest(
+                bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                recipient = sampleRecipient(),
+                publicAmount = "7",
+                redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RedeemSpendRequest(
+                bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                recipient = sampleRecipient(),
+                publicAmount = "7",
+                redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                lineageWitness = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+            )
+        }
 
         val tampered = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")
         tampered[tampered.lastIndex] = (tampered[tampered.lastIndex].toInt() xor 0x01).toByte()
@@ -554,6 +594,17 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             )
         }
         assertTrue(error.message.orEmpty().contains("previousProofOpenEnvelopes is required"))
+
+        assertFailsWith<IllegalArgumentException> {
+            AppendSpendRequest(
+                previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                recordBundle = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_RESULT),
+                pallasOpenEnvelopes = syntheticArchive("test.PallasOpenEnvelopes"),
+                currentNote = sampleNote(seed = 0x42),
+                outputProofCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                previousLineageVerifierRecord = sampleVerifierRecord(),
+            )
+        }
     }
 
     private data class ProofFixture(

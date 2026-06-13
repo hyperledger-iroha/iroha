@@ -67,7 +67,7 @@ class VerifierRecordRef(
     init {
         requirePortableId(verifierKeyId, "verifierKeyId")
         require(recordArchiveBytes.isNotEmpty()) { "recordBytes must not be empty" }
-        KagemushaRecursiveSpendRequestCodecs.requirePayloadArchive(
+        KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
             recordArchiveBytes,
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD,
             "recordBytes",
@@ -139,6 +139,11 @@ class InitSpendRequest @JvmOverloads constructor(
         require(lineageProvingKeyArchiveBytes.isNotEmpty()) {
             "lineageProvingKeyArchive must not be empty"
         }
+        KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            recordBundleArchive,
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE,
+            "recordBundle",
+        )
         requireValidNestedArchive(pallasOpenEnvelopesArchive, "pallasOpenEnvelopes")
         requireValidNestedArchive(lineageProvingKeyArchiveBytes, "lineageProvingKeyArchive")
     }
@@ -185,6 +190,11 @@ class AppendSpendRequest @JvmOverloads constructor(
         lineageProvingKeyArchiveBytes?.let {
             requireValidNestedArchive(it, "lineageProvingKeyArchive")
         }
+        KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            recordBundleArchive,
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE,
+            "recordBundle",
+        )
 
         val previousSummary = KagemushaRecursiveSpendRequestCodecs.decodeBundle(previousBundleArchive)
         val normalizedOutput =
@@ -248,6 +258,7 @@ class VerifySpendRequest @JvmOverloads constructor(
 
     init {
         requireNonNegativeHeight(blockHeight)
+        KagemushaRecursiveSpendRequestCodecs.decodeBundle(bundleArchive)
     }
 
     val bundle: ByteArray get() = bundleArchive.copyOf()
@@ -283,8 +294,18 @@ class RedeemSpendRequest @JvmOverloads constructor(
     init {
         requireNonNegativeHeight(blockHeight)
         requireNonBlankUnpadded(recipient, "recipient")
+        KagemushaRecursiveSpendRequestCodecs.decodeBundle(bundleArchive)
+        KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            redeemProofArchive,
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT,
+            "redeemProof",
+        )
         lineageWitnessArchive?.let {
-            requireValidNestedArchive(it, "lineageWitness")
+            KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+                it,
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS,
+                "lineageWitness",
+            )
         }
     }
 

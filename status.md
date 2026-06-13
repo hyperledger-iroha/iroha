@@ -173845,3 +173845,16 @@ Last updated: 2026-06-13
 - Focused validation passed:
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Recursive Spend Request Archive Validation
+
+- Hardened Kotlin/JVM and Java Android recursive-spend request objects so
+  record bundles, previous/current bundles, redeem proof attachments, verifier
+  records, and lineage witnesses reject wrong-schema or non-compact Norito
+  archives during construction instead of waiting for encode or native dispatch.
+- Added adversarial request-constructor coverage for wrong-schema init/append
+  record bundles, verify/redeem bundles, redeem proof attachments, and lineage
+  witnesses.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`

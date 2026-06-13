@@ -409,7 +409,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.verifierKeyId = verifierKeyId;
       this.recordBytes = Arrays.copyOf(Objects.requireNonNull(recordBytes, "recordBytes"), recordBytes.length);
       require(this.recordBytes.length > 0, "recordBytes must not be empty");
-      requirePayloadArchive(this.recordBytes, SCHEMA_VERIFYING_KEY_RECORD, "recordBytes");
+      compactPayloadForRequest(this.recordBytes, SCHEMA_VERIFYING_KEY_RECORD, "recordBytes");
     }
 
     public byte[] recordBytes() {
@@ -483,6 +483,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       require(this.lineageProvingKeyArchive != null,
           "lineageProvingKeyArchive is required for recursive spend init");
       require(this.lineageProvingKeyArchive.length > 0, "lineageProvingKeyArchive must not be empty");
+      compactPayloadForRequest(this.recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle");
       requireValidNestedArchive(this.pallasOpenEnvelopes, "pallasOpenEnvelopes");
       requireValidNestedArchive(this.lineageProvingKeyArchive, "lineageProvingKeyArchive");
     }
@@ -552,6 +553,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       if (this.lineageProvingKeyArchive != null) {
         requireValidNestedArchive(this.lineageProvingKeyArchive, "lineageProvingKeyArchive");
       }
+      compactPayloadForRequest(this.recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle");
 
       final SpendBundleSummary previousSummary = decodeBundle(this.previousBundle);
       final String normalizedOutput =
@@ -615,6 +617,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.lineageVerifierRecord = lineageVerifierRecord;
       this.blockHeight = blockHeight;
       requireNonNegativeHeight(blockHeight);
+      decodeBundle(this.bundle);
     }
 
     public byte[] bundle() {
@@ -680,8 +683,10 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.blockHeight = blockHeight;
       requireNonNegativeHeight(blockHeight);
       requireNonBlankUnpadded(this.recipient, "recipient");
+      decodeBundle(this.bundle);
+      compactPayloadForRequest(this.redeemProof, SCHEMA_PROOF_ATTACHMENT, "redeemProof");
       if (this.lineageWitness != null) {
-        requireValidNestedArchive(this.lineageWitness, "lineageWitness");
+        compactPayloadForRequest(this.lineageWitness, SCHEMA_LINEAGE_WITNESS, "lineageWitness");
       }
     }
 
