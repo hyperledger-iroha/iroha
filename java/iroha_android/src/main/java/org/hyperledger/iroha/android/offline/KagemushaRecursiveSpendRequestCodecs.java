@@ -197,6 +197,24 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   }
 
   public static byte[] buildRecursiveSpendInitRequest(
+      final VerifiedFoldHopEvidence hop,
+      final byte[] pallasOpenEnvelopes,
+      final SpendableNoteDescriptor spendableNote,
+      final KagemushaRecursiveSpendProver.LineageKeyArtifacts lineageKeyArtifacts,
+      final Long blockHeight) {
+    require(hop != null, "hop is required");
+    require(pallasOpenEnvelopes != null, "pallasOpenEnvelopes is required");
+    require(spendableNote != null, "spendableNote is required");
+    return encodeInitRequest(
+        new InitSpendRequest(
+            buildVerifiedFoldRecordBundle(Arrays.asList(hop)),
+            pallasOpenEnvelopes,
+            spendableNote,
+            lineageKeyArtifacts,
+            blockHeight));
+  }
+
+  public static byte[] buildRecursiveSpendInitRequest(
       final byte[] proofOutputArchive,
       final VerifierRecordRef verifierRecord,
       final SpendableNoteDescriptor spendableNote,
@@ -236,6 +254,33 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             previousProofOpenEnvelopes,
             lineageVerifierKey,
             lineageProvingKeyArchive,
+            blockHeight));
+  }
+
+  public static byte[] buildRecursiveSpendAppendRequest(
+      final byte[] previousBundle,
+      final VerifiedFoldHopEvidence hop,
+      final byte[] pallasOpenEnvelopes,
+      final SpendableNoteDescriptor spendableNote,
+      final String outputCircuitId,
+      final VerifierRecordRef previousLineageVerifierRecord,
+      final byte[] previousProofOpenEnvelopes,
+      final KagemushaRecursiveSpendProver.LineageKeyArtifacts lineageKeyArtifacts,
+      final Long blockHeight) {
+    require(previousBundle != null, "previousBundle is required");
+    require(hop != null, "hop is required");
+    require(pallasOpenEnvelopes != null, "pallasOpenEnvelopes is required");
+    require(spendableNote != null, "spendableNote is required");
+    return encodeAppendRequest(
+        new AppendSpendRequest(
+            previousBundle,
+            buildVerifiedFoldRecordBundle(Arrays.asList(hop)),
+            pallasOpenEnvelopes,
+            spendableNote,
+            outputCircuitId,
+            previousLineageVerifierRecord,
+            previousProofOpenEnvelopes,
+            lineageKeyArtifacts,
             blockHeight));
   }
 

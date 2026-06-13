@@ -613,6 +613,29 @@ object KagemushaRecursiveSpendRequestCodecs {
     @JvmStatic
     @JvmOverloads
     fun buildRecursiveSpendInitRequest(
+        hop: VerifiedFoldHopEvidence?,
+        pallasOpenEnvelopes: ByteArray?,
+        spendableNote: SpendableNoteDescriptor?,
+        lineageKeyArtifacts: KagemushaRecursiveSpendProver.LineageKeyArtifacts,
+        blockHeight: Long? = null,
+    ): ByteArray {
+        require(hop != null) { "hop is required" }
+        require(pallasOpenEnvelopes != null) { "pallasOpenEnvelopes is required" }
+        require(spendableNote != null) { "spendableNote is required" }
+        return encodeInitRequest(
+            InitSpendRequest(
+                recordBundle = buildVerifiedFoldRecordBundle(listOf(hop)),
+                pallasOpenEnvelopes = pallasOpenEnvelopes,
+                currentNote = spendableNote,
+                lineageKeyArtifacts = lineageKeyArtifacts,
+                blockHeight = blockHeight,
+            ),
+        )
+    }
+
+    @JvmStatic
+    @JvmOverloads
+    fun buildRecursiveSpendInitRequest(
         proofOutputArchive: ByteArray?,
         verifierRecord: VerifierRecordRef?,
         spendableNote: SpendableNoteDescriptor?,
@@ -657,6 +680,37 @@ object KagemushaRecursiveSpendRequestCodecs {
                 previousProofOpenEnvelopes = previousProofOpenEnvelopes,
                 lineageVerifierKey = lineageVerifierKey,
                 lineageProvingKeyArchive = lineageProvingKeyArchive,
+                blockHeight = blockHeight,
+            ),
+        )
+    }
+
+    @JvmStatic
+    fun buildRecursiveSpendAppendRequest(
+        previousBundle: ByteArray?,
+        hop: VerifiedFoldHopEvidence?,
+        pallasOpenEnvelopes: ByteArray?,
+        spendableNote: SpendableNoteDescriptor?,
+        outputCircuitId: String?,
+        previousLineageVerifierRecord: VerifierRecordRef?,
+        previousProofOpenEnvelopes: ByteArray?,
+        lineageKeyArtifacts: KagemushaRecursiveSpendProver.LineageKeyArtifacts?,
+        blockHeight: Long?,
+    ): ByteArray {
+        require(previousBundle != null) { "previousBundle is required" }
+        require(hop != null) { "hop is required" }
+        require(pallasOpenEnvelopes != null) { "pallasOpenEnvelopes is required" }
+        require(spendableNote != null) { "spendableNote is required" }
+        return encodeAppendRequest(
+            AppendSpendRequest(
+                previousBundle = previousBundle,
+                recordBundle = buildVerifiedFoldRecordBundle(listOf(hop)),
+                pallasOpenEnvelopes = pallasOpenEnvelopes,
+                currentNote = spendableNote,
+                outputProofCircuitId = outputCircuitId,
+                previousLineageVerifierRecord = previousLineageVerifierRecord,
+                previousProofOpenEnvelopes = previousProofOpenEnvelopes,
+                lineageKeyArtifacts = lineageKeyArtifacts,
                 blockHeight = blockHeight,
             ),
         )

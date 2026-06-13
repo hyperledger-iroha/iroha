@@ -1461,8 +1461,7 @@ public final class KagemushaRecursiveSpendProverTest {
             evidence,
             pallasOpenEnvelopes,
             sampleNote(),
-            initLineageArtifacts.verifierKey,
-            initLineageArtifacts.provingKeyArchive,
+            initLineageArtifacts.typed,
             11L);
     assertArchiveSchema(initRequest, KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST);
     final List<byte[]> initFields =
@@ -1495,6 +1494,20 @@ public final class KagemushaRecursiveSpendProverTest {
         compactPayload(recordBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE),
         appendFields.get(1));
     assert Arrays.equals(pallasOpenEnvelopes, readBytesVecPayload(appendFields.get(2)));
+
+    final SampleLineageArtifacts appendLineageArtifacts = sampleAppendLineageArtifacts((byte) 0x5d);
+    final byte[] lineageAppendRequest =
+        KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+            previousBundle,
+            evidence,
+            pallasOpenEnvelopes,
+            sampleNote((byte) 0x72),
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            sampleVerifierRecord(),
+            pallasOpenEnvelopeVectorArchive(),
+            appendLineageArtifacts.typed,
+            13L);
+    assertArchiveSchema(lineageAppendRequest, KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST);
   }
 
   private static void typedEvidenceHelpersRejectAdversarialHopBindings() {

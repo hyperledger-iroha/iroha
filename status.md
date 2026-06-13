@@ -2,6 +2,21 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Recursive lineage artifact helper overloads
+
+- Added Kotlin/JVM and Android Java high-level
+  `buildRecursiveSpendInitRequest` and lineage-append helper overloads that
+  accept validated `LineageKeyArtifacts` packages directly.
+- Positive helper coverage now builds init requests from init-profile artifacts
+  and reserved-lineage append requests from append-profile artifacts, keeping
+  wallet flow assembly on the typed artifact path instead of raw byte pairs.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest,org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check -- kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+
 ## 2026-06-13 Recursive lineage artifact typed request API
 
 - Added Kotlin/JVM and Android Java recursive-spend request constructors that

@@ -422,8 +422,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             hop = evidence,
             pallasOpenEnvelopes = pallasOpenEnvelopes,
             spendableNote = sampleNote(),
-            lineageVerifierKey = initLineageArtifacts.verifierKey,
-            lineageProvingKeyArchive = initLineageArtifacts.provingKeyArchive,
+            lineageKeyArtifacts = initLineageArtifacts.typed,
             blockHeight = 11L,
         )
         assertArchiveSchema(init, KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST)
@@ -434,8 +433,9 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         )
         assertContentEquals(pallasOpenEnvelopes, readBytesVecPayload(initFields[1]))
 
+        val previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")
         val append = KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
-            previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+            previousBundle = previousBundle,
             hop = evidence,
             pallasOpenEnvelopes = pallasOpenEnvelopes,
             spendableNote = sampleNote(seed = 0x71),
@@ -447,7 +447,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         val appendFields = requestFields(append, KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST)
         assertContentEquals(
             compactPayload(
-                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                previousBundle,
                 KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
             ),
             appendFields[0],
@@ -457,6 +457,20 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             appendFields[1],
         )
         assertContentEquals(pallasOpenEnvelopes, readBytesVecPayload(appendFields[2]))
+
+        val appendLineageArtifacts = sampleAppendLineageArtifacts(seed = 0x5d)
+        val lineageAppend = KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+            previousBundle = previousBundle,
+            hop = evidence,
+            pallasOpenEnvelopes = pallasOpenEnvelopes,
+            spendableNote = sampleNote(seed = 0x72),
+            outputCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            previousLineageVerifierRecord = sampleVerifierRecord(),
+            previousProofOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+            lineageKeyArtifacts = appendLineageArtifacts.typed,
+            blockHeight = 13L,
+        )
+        assertArchiveSchema(lineageAppend, KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST)
     }
 
     @Test
