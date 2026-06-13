@@ -312,7 +312,8 @@ fn sign_payload(
     let private_key = PrivateKey::from_hex(Algorithm::Ed25519, &cleaned)?;
     let key_pair: KeyPair = private_key.clone().into();
 
-    let signature = SignatureOf::new(key_pair.private_key(), payload);
+    let signature = SignatureOf::try_new(key_pair.private_key(), payload)
+        .map_err(|err| format!("failed to sign RANS table payload: {err}"))?;
     let signature_raw: Signature = signature.clone().into();
     let signature_bytes = signature_raw
         .payload()
@@ -882,7 +883,8 @@ mod tests {
     }
 
     fn write_ed25519_key(seed: [u8; 32]) -> NamedTempFile {
-        let key_pair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+            .expect("generate checked RANS table fixture keypair");
         let (_, private_key) = key_pair.into_parts();
         let (_, secret_bytes) = private_key.to_bytes();
         let mut file = NamedTempFile::new().expect("private key temp file");

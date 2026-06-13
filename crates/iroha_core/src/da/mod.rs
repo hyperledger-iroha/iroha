@@ -348,8 +348,8 @@ pub fn enforce_lane_proof_policy(
 /// Filter DA pin intents using the configured lane catalog.
 ///
 /// Returns `(kept, rejected)` where `kept` contains intents that passed validation
-/// and `rejected` lists the reasons for each dropped intent. Validation is soft:
-/// callers are expected to log and continue rather than aborting block assembly.
+/// and `rejected` lists every validation failure. Callers decide whether
+/// rejected local spool entries are fatal or can be dropped for their workflow.
 pub fn sanitize_pin_intents(
     intents: impl IntoIterator<Item = iroha_data_model::da::pin_intent::DaPinIntent>,
     lane_config: &LaneConfig,

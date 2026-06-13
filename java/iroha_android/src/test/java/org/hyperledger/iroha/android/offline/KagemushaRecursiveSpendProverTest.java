@@ -10,6 +10,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.address.AccountAddress;
@@ -1608,8 +1609,8 @@ public final class KagemushaRecursiveSpendProverTest {
     final IllegalArgumentException pallasError =
         captureIllegalArgument(
             () -> KagemushaRecursiveSpendRequestCodecs.buildPallasOpenEnvelopesArchive(
-                Arrays.asList(new byte[] {1})));
-    assert pallasError.getMessage().contains("cannot be derived");
+                Collections.emptyList()));
+    assert pallasError.getMessage().contains("hops");
 
     final IllegalArgumentException bundleError =
         captureIllegalArgument(
@@ -1708,6 +1709,16 @@ public final class KagemushaRecursiveSpendProverTest {
           () ->
               new KagemushaRecursiveSpendRequestCodecs.SpendableNoteDescriptor(
                   repeat((byte) 0x04, 32), repeat((byte) 0x05, 32), amount));
+      assertThrows(
+          () ->
+              new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                  sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                  sampleRecipient(),
+                  amount,
+                  syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                  null,
+                  null,
+                  null));
     }
 
     final SampleLineageArtifacts initLineageArtifacts = sampleInitLineageArtifacts((byte) 0x6a);

@@ -478,9 +478,9 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         val verifierRecord = sampleVerifierRecord()
 
         val pallasError = assertFailsWith<IllegalArgumentException> {
-            KagemushaRecursiveSpendRequestCodecs.buildPallasOpenEnvelopesArchive(listOf(byteArrayOf(1)))
+            KagemushaRecursiveSpendRequestCodecs.buildPallasOpenEnvelopesArchive(emptyList())
         }
-        assertTrue(pallasError.message.orEmpty().contains("cannot be derived"))
+        assertTrue(pallasError.message.orEmpty().contains("hops"))
 
         val bundleError = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.buildVerifiedFoldRecordBundle(
@@ -602,6 +602,14 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         for (amount in listOf("", "0", "01", "-1", "+1", "1.0", "1e3", U128_MAX_PLUS_ONE)) {
             assertFailsWith<IllegalArgumentException> {
                 SpendableNoteDescriptor(ByteArray(32) { 4 }, ByteArray(32) { 5 }, amount)
+            }
+            assertFailsWith<IllegalArgumentException> {
+                RedeemSpendRequest(
+                    bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    recipient = sampleRecipient(),
+                    publicAmount = amount,
+                    redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                )
             }
         }
     }

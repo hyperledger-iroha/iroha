@@ -2354,49 +2354,57 @@ def test_live_evidence_rejects_source_event_duplicate_log_index_aliases():
         raise AssertionError("source event with duplicate log-index aliases was accepted")
 
 
-def test_live_evidence_redacts_source_event_topic_parser_typeerror(monkeypatch):
+def test_live_evidence_redacts_source_event_topic_parser_failures(monkeypatch):
     module = load_live_module()
     original_parse_exact_hex32 = module._parse_exact_hex32
 
-    def fail_source_event_topic(value, *, label):
-        if label == "source-event log topic0":
-            raise TypeError("secret-token source-event log topic0 parser detail")
-        return original_parse_exact_hex32(value, label=label)
+    for exception_type in (TypeError, ValueError):
 
-    monkeypatch.setattr(module, "_parse_exact_hex32", fail_source_event_topic)
+        def fail_source_event_topic(value, *, label, exception_type=exception_type):
+            if label == "source-event log topic0":
+                raise exception_type(
+                    "secret-token source-event log topic0 parser detail"
+                )
+            return original_parse_exact_hex32(value, label=label)
 
-    try:
-        module._source_event_transaction_summary(
-            {
-                "id": TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
-                "receipt": {"result": "SUCCESS"},
-                "log": [
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "_parse_exact_hex32", fail_source_event_topic)
+            try:
+                module._source_event_transaction_summary(
                     {
-                        "address": TRON_TEST_BRIDGE20.hex(),
-                        "topics": [
-                            module.TRON_SOURCE_EVENT_TOPIC.hex(),
-                            TRON_SOURCE_EVENT_DIGEST_VECTOR,
+                        "id": TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+                        "receipt": {"result": "SUCCESS"},
+                        "log": [
+                            {
+                                "address": TRON_TEST_BRIDGE20.hex(),
+                                "topics": [
+                                    module.TRON_SOURCE_EVENT_TOPIC.hex(),
+                                    TRON_SOURCE_EVENT_DIGEST_VECTOR,
+                                ],
+                                "data": "",
+                            }
                         ],
-                        "data": "",
-                    }
-                ],
-            },
-            transaction_id=bytes.fromhex(TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR),
-            source_bridge_address20=TRON_TEST_BRIDGE20,
-            source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
-        )
-    except RuntimeError as exc:
-        message = str(exc)
-    else:
-        raise AssertionError("source event topic parser TypeError was accepted")
+                    },
+                    transaction_id=bytes.fromhex(
+                        TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                    ),
+                    source_bridge_address20=TRON_TEST_BRIDGE20,
+                    source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                )
+            except RuntimeError as exc:
+                message = str(exc)
+            else:
+                raise AssertionError(
+                    "source event topic parser failure was accepted"
+                )
 
-    assert (
-        "source-event transaction log did not contain the expected "
-        "SccpSourceEvent(bytes32) event"
-    ) in message
-    assert "secret-token" not in message
-    assert "parser detail" not in message
-    assert "TypeError" not in message
+        assert (
+            "source-event transaction log did not contain the expected "
+            "SccpSourceEvent(bytes32) event"
+        ) in message
+        assert "secret-token" not in message
+        assert "parser detail" not in message
+        assert exception_type.__name__ not in message
 
 
 def test_live_evidence_rejects_source_event_info_conflicting_txid_aliases():
@@ -6808,28 +6816,38 @@ def test_live_evidence_redacts_metadata_parser_exception_causes(monkeypatch):
         raise AssertionError("secret-bearing metadata bytecode was accepted")
 
     function_selector = module.evidence.TRON_SOURCE_MESSAGE_CALL_ABI.decode("ascii")
-    with monkeypatch.context() as patch:
-        def fail_hex_blob(_value, *, label, nonzero=True):
-            raise TypeError(f"secret-token {label} bytecode parser detail")
+    for exception_type in (TypeError, ValueError):
 
-        patch.setattr(module, "_parse_exact_hex_blob", fail_hex_blob)
-        try:
-            module._metadata_runtime_bytecode(
-                {"bytecode": "0xignored"},
-                label="destination verifier",
-            )
-        except RuntimeError as exc:
-            message = str(exc)
-            assert message == (
-                "/wallet/getcontract returned malformed destination verifier bytecode"
-            )
-            assert "secret-token" not in message
-            assert "parser detail" not in message
-            assert "TypeError" not in message
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError("secret-bearing metadata bytecode parser was accepted")
+        def fail_hex_blob(
+            _value,
+            *,
+            label,
+            nonzero=True,
+            exception_type=exception_type,
+        ):
+            raise exception_type(f"secret-token {label} bytecode parser detail")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "_parse_exact_hex_blob", fail_hex_blob)
+            try:
+                module._metadata_runtime_bytecode(
+                    {"bytecode": "0xignored"},
+                    label="destination verifier",
+                )
+            except RuntimeError as exc:
+                message = str(exc)
+                assert message == (
+                    "/wallet/getcontract returned malformed destination verifier bytecode"
+                )
+                assert "secret-token" not in message
+                assert "parser detail" not in message
+                assert exception_type.__name__ not in message
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "secret-bearing metadata bytecode parser was accepted"
+                )
 
     for exception_type in (TypeError, ValueError):
 
@@ -7886,42 +7904,52 @@ def test_live_evidence_rejects_route_canary_hash_mismatch():
         raise AssertionError("mismatched route canary transaction hash was accepted")
 
 
-def test_live_evidence_redacts_route_canary_topic_parser_typeerror(monkeypatch):
+def test_live_evidence_redacts_route_canary_topic_parser_failures(monkeypatch):
     module = load_live_module()
     original_parse_exact_hex32 = module._parse_exact_hex32
 
-    def fail_route_canary_topic(value, *, label):
-        if label == "route-canary log topic0":
-            raise TypeError("secret-token route-canary log topic0 parser detail")
-        return original_parse_exact_hex32(value, label=label)
+    for exception_type in (TypeError, ValueError):
 
-    monkeypatch.setattr(module, "_parse_exact_hex32", fail_route_canary_topic)
+        def fail_route_canary_topic(value, *, label, exception_type=exception_type):
+            if label == "route-canary log topic0":
+                raise exception_type(
+                    "secret-token route-canary log topic0 parser detail"
+                )
+            return original_parse_exact_hex32(value, label=label)
 
-    try:
-        summary = module._route_canary_message_proof_event_summary(
-            {
-                "address": TRON_TEST_BRIDGE20.hex(),
-                "topics": [
-                    module.TRON_MESSAGE_PROOF_ACCEPTED_TOPIC.hex(),
-                    "dd" * 32,
-                    "00" * 32,
-                ],
-                "data": "",
-            },
-            log_index=0,
-            transaction_id=bytes.fromhex(TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR),
-            route_allowlist_hash=bytes.fromhex(TRON_ROUTE_ALLOWLIST_HASH_VECTOR),
-            verifier_address20=TRON_TEST_BRIDGE20,
-            expected_source_domain=0,
-            expected_destination_binding_hash=bytes.fromhex("11" * 32),
-            expected_verifier_backend_hash=bytes.fromhex("22" * 32),
-            expected_proof_family_hash=bytes.fromhex("33" * 32),
-            expected_network_id=bytes.fromhex("44" * 32),
-        )
-    except TypeError as exc:
-        raise AssertionError("route canary topic parser TypeError leaked") from exc
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "_parse_exact_hex32", fail_route_canary_topic)
+            try:
+                summary = module._route_canary_message_proof_event_summary(
+                    {
+                        "address": TRON_TEST_BRIDGE20.hex(),
+                        "topics": [
+                            module.TRON_MESSAGE_PROOF_ACCEPTED_TOPIC.hex(),
+                            "dd" * 32,
+                            "00" * 32,
+                        ],
+                        "data": "",
+                    },
+                    log_index=0,
+                    transaction_id=bytes.fromhex(
+                        TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+                    ),
+                    route_allowlist_hash=bytes.fromhex(
+                        TRON_ROUTE_ALLOWLIST_HASH_VECTOR
+                    ),
+                    verifier_address20=TRON_TEST_BRIDGE20,
+                    expected_source_domain=0,
+                    expected_destination_binding_hash=bytes.fromhex("11" * 32),
+                    expected_verifier_backend_hash=bytes.fromhex("22" * 32),
+                    expected_proof_family_hash=bytes.fromhex("33" * 32),
+                    expected_network_id=bytes.fromhex("44" * 32),
+                )
+            except exception_type as exc:
+                raise AssertionError(
+                    "route canary topic parser failure leaked"
+                ) from exc
 
-    assert summary is None
+        assert summary is None
 
 
 def test_live_evidence_rejects_route_canary_destination_binding_mismatch():

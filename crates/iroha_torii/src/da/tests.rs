@@ -4,11 +4,11 @@ use core::convert::TryInto;
 use std::{
     cell::Cell,
     fs,
-    io::Write,
+    io::{ErrorKind, Write},
     num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, LazyLock},
+    sync::{Arc, Barrier, LazyLock},
     time::Duration,
 };
 
@@ -20,7 +20,7 @@ use iroha_config::parameters::actual::{
     DaTaikaiAnchor, LaneConfig as ConfigLaneConfig, TelemetryProfile,
 };
 use iroha_core::{da::LaneEpoch, telemetry::Telemetry};
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature, SignatureOf};
 use iroha_data_model::{
     Encode,
     account::AccountId,
@@ -68,7 +68,8 @@ use crate::da::taikai::taikai_ingest;
 use crate::da::taikai::taikai_ingest::{AnchorSender, collect_pending_uploads, process_batch};
 use crate::da::taikai::{
     TAIKAI_ANCHOR_REQUEST_PREFIX, TAIKAI_ANCHOR_REQUEST_SUFFIX, TAIKAI_ANCHOR_SENTINEL_PREFIX,
-    TAIKAI_ANCHOR_SENTINEL_SUFFIX, TAIKAI_SPOOL_SUBDIR,
+    TAIKAI_ANCHOR_SENTINEL_SUFFIX, TAIKAI_SPOOL_SUBDIR, TAIKAI_TRM_LINEAGE_PREFIX,
+    TAIKAI_TRM_LINEAGE_SUFFIX,
 };
 use crate::da::{
     DaReceiptLog, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpooler, ReplayCursorStore,
@@ -232,7 +233,7 @@ fn load_pdp_commitment_from_spool_locates_ticket() {
 }
 
 #[test]
-fn load_manifest_from_spool_ignores_malformed_ticket_match() {
+fn load_manifest_from_spool_rejects_malformed_ticket_match() {
     let dir = tempdir().expect("dir");
     let ticket = StorageTicketId::new([0x77; 32]);
     let ticket_hex = hex::encode(ticket.as_bytes());
@@ -242,9 +243,36 @@ fn load_manifest_from_spool_ignores_malformed_ticket_match() {
     fs::write(&path, b"manifest-bytes").expect("manifest file");
 
     let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
-        .expect_err("malformed filename should not match");
+        .expect_err("malformed filename should fail closed");
 
-    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string()
+            .contains("malformed spool artifact filename"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn load_manifest_from_spool_rejects_manifest_shaped_directory() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x77; 32]);
+    let path = dir.path().join(spool_artifact_file_name(
+        "manifest-",
+        &ticket,
+        2,
+        [0x44; 32],
+    ));
+    fs::create_dir(path).expect("create manifest-shaped directory");
+
+    let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
+        .expect_err("manifest-shaped directory must fail closed");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("is not a regular file"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -345,12 +373,158 @@ fn load_pdp_commitment_from_spool_rejects_duplicate_ticket_matches() {
 }
 
 #[test]
+fn load_pdp_commitment_from_spool_rejects_malformed_ticket_match() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x99; 32]);
+    let ticket_hex = hex::encode(ticket.as_bytes());
+    let path = dir.path().join(format!(
+        "pdp-commitment-00000001-0000000000000001-0000000000000002-{ticket_hex}-deadbeef.norito"
+    ));
+    fs::write(path, b"commitment").expect("commitment file");
+
+    let err = persistence::load_pdp_commitment_from_spool(dir.path(), &ticket)
+        .expect_err("malformed filename should fail closed");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string()
+            .contains("malformed spool artifact filename"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn load_pdp_commitment_from_spool_rejects_commitment_shaped_directory() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x99; 32]);
+    let path = dir.path().join(spool_artifact_file_name(
+        "pdp-commitment-",
+        &ticket,
+        2,
+        [0x55; 32],
+    ));
+    fs::create_dir(path).expect("create PDP-shaped directory");
+
+    let err = persistence::load_pdp_commitment_from_spool(dir.path(), &ticket)
+        .expect_err("PDP-shaped directory must fail closed");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("is not a regular file"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn load_pdp_commitment_from_spool_rejects_invalid_body() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x99; 32]);
+    let path = dir.path().join(spool_artifact_file_name(
+        "pdp-commitment-",
+        &ticket,
+        2,
+        [0x55; 32],
+    ));
+    let mut commitment = sample_pdp_commitment_for_tests();
+    commitment.manifest_digest = [0; 32];
+    fs::write(
+        &path,
+        encode_pdp_commitment_bytes(&commitment).expect("encode commitment"),
+    )
+    .expect("commitment file");
+
+    let err = persistence::load_pdp_commitment_from_spool(dir.path(), &ticket)
+        .expect_err("invalid PDP body must fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
 fn pdp_commitment_header_value_matches_base64_payload() {
     let commitment = sample_pdp_commitment_for_tests();
     let bytes = encode_pdp_commitment_bytes(&commitment).expect("encode commitment");
     let header_value = pdp_commitment_header_value(&bytes).expect("header value");
     let expected = BASE64.encode(bytes);
     assert_eq!(header_value.to_str().expect("utf8 header"), expected);
+}
+
+#[test]
+fn manifest_response_pdp_header_is_optional_when_missing() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x91; 32]);
+    let response =
+        utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
+
+    let response = attach_pdp_commitment_header_from_spool(
+        dir.path(),
+        &ticket,
+        response,
+        ResponseFormat::Json,
+    )
+    .expect("missing PDP commitment should remain optional");
+
+    assert!(
+        !response
+            .headers()
+            .contains_key(HeaderName::from_static(HEADER_SORA_PDP_COMMITMENT)),
+        "missing PDP commitment must not attach a header"
+    );
+}
+
+#[test]
+fn manifest_response_attaches_pdp_commitment_header() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x92; 32]);
+    let commitment = sample_pdp_commitment_for_tests();
+    let bytes = encode_pdp_commitment_bytes(&commitment).expect("encode commitment");
+    let path = dir.path().join(spool_artifact_file_name(
+        "pdp-commitment-",
+        &ticket,
+        2,
+        [0x57; 32],
+    ));
+    fs::write(&path, &bytes).expect("commitment file");
+    let response =
+        utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
+
+    let response = attach_pdp_commitment_header_from_spool(
+        dir.path(),
+        &ticket,
+        response,
+        ResponseFormat::Json,
+    )
+    .expect("valid PDP commitment should attach");
+
+    let header = response
+        .headers()
+        .get(HeaderName::from_static(HEADER_SORA_PDP_COMMITMENT))
+        .expect("PDP commitment header");
+    assert_eq!(header.to_str().expect("header utf8"), BASE64.encode(bytes));
+}
+
+#[test]
+fn manifest_response_rejects_corrupt_pdp_commitment_sidecar() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x93; 32]);
+    let path = dir.path().join(spool_artifact_file_name(
+        "pdp-commitment-",
+        &ticket,
+        2,
+        [0x58; 32],
+    ));
+    fs::write(&path, b"not a PDP commitment").expect("commitment file");
+    let response =
+        utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
+
+    let err = attach_pdp_commitment_header_from_spool(
+        dir.path(),
+        &ticket,
+        response,
+        ResponseFormat::Json,
+    )
+    .expect_err("corrupt PDP commitment should fail manifest response");
+    let response = axum::response::IntoResponse::into_response(err);
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 fn taikai_metadata() -> ExtraMetadata {
@@ -1263,6 +1437,51 @@ fn taikai_artifacts_persist_idempotent() {
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 
+#[test]
+fn taikai_artifact_persistence_converges_under_same_process_writers() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().to_path_buf();
+    let lane_id = LaneId::new(3);
+    let epoch = 7;
+    let sequence = 11;
+    let storage_ticket = StorageTicketId::new([0x11; 32]);
+    let fingerprint = ReplayFingerprint::from_hash(blake3::hash(b"fingerprint"));
+    let barrier = Arc::new(Barrier::new(4));
+
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let spool_dir = spool_dir.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                taikai_ingest::persist_envelope(
+                    &spool_dir,
+                    lane_id,
+                    epoch,
+                    sequence,
+                    &storage_ticket,
+                    &fingerprint,
+                    b"envelope",
+                )
+                .expect("concurrent Taikai artifact persist")
+                .expect("artifact path")
+            })
+        })
+        .collect();
+
+    let paths: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("writer thread"))
+        .collect();
+    let first = paths.first().expect("at least one writer");
+    assert!(paths.iter().all(|path| path == first));
+    assert_eq!(fs::read(first).expect("read Taikai envelope"), b"envelope");
+    assert!(
+        temp_artifact_names(&dir.path().join(TAIKAI_SPOOL_SUBDIR)).is_empty(),
+        "concurrent Taikai install should not leave temp artifacts"
+    );
+}
+
 #[derive(Default)]
 struct MockAnchorSender {
     calls: AsyncMutex<Vec<(Url, String, Option<String>)>>,
@@ -1282,6 +1501,30 @@ impl AnchorSender for MockAnchorSender {
             .push((endpoint.clone(), body, api_token.map(str::to_owned)));
         Ok(())
     }
+}
+
+async fn write_minimal_taikai_anchor_artifacts(spool_dir: &Path, base_id: &str) {
+    async_fs::create_dir_all(spool_dir)
+        .await
+        .expect("create spool");
+    async_fs::write(
+        spool_dir.join(format!("taikai-envelope-{base_id}.norito")),
+        b"envelope-bytes",
+    )
+    .await
+    .expect("write envelope");
+    async_fs::write(
+        spool_dir.join(format!("taikai-indexes-{base_id}.json")),
+        b"{}",
+    )
+    .await
+    .expect("write indexes");
+    async_fs::write(
+        spool_dir.join(format!("taikai-ssm-{base_id}.norito")),
+        b"ssm-bytes",
+    )
+    .await
+    .expect("write ssm");
 }
 
 #[tokio::test]
@@ -1405,7 +1648,7 @@ async fn taikai_anchor_processing_generates_payload_and_sentinel() {
 }
 
 #[tokio::test]
-async fn taikai_anchor_collection_skips_malformed_base_id() {
+async fn taikai_anchor_collection_rejects_malformed_base_id() {
     let dir = tempdir().expect("tempdir");
     let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
     async_fs::create_dir_all(&spool_dir)
@@ -1432,13 +1675,160 @@ async fn taikai_anchor_collection_skips_malformed_base_id() {
     .await
     .expect("write ssm");
 
-    let pending = collect_pending_uploads(&spool_dir)
-        .await
-        .expect("collect pending");
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("malformed base id must reject anchor collection"),
+        Err(err) => err,
+    };
 
     assert!(
-        pending.is_empty(),
-        "malformed base id must not produce an anchor upload"
+        err.contains("malformed spool artifact id"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(base_id),
+        "error should identify malformed base id: {err}"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_collection_rejects_missing_required_artifacts() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    async_fs::create_dir_all(&spool_dir)
+        .await
+        .expect("create spool");
+    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    async_fs::write(
+        spool_dir.join(format!("taikai-envelope-{base_id}.norito")),
+        b"envelope-bytes",
+    )
+    .await
+    .expect("write envelope");
+
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("missing required companion artifact must reject anchor collection"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.contains("failed to read Taikai indexes JSON"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(base_id),
+        "error should identify affected base id: {err}"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_collection_rejects_corrupt_indexes_json() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    async_fs::write(
+        spool_dir.join(format!("taikai-indexes-{base_id}.json")),
+        b"{not-json",
+    )
+    .await
+    .expect("write corrupt indexes");
+
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("corrupt indexes JSON must reject anchor collection"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.contains("failed to parse Taikai indexes JSON"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(base_id),
+        "error should identify affected base id: {err}"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_collection_rejects_corrupt_lineage_hint() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    async_fs::write(
+        spool_dir.join(format!("taikai-lineage-{base_id}.json")),
+        b"{not-json",
+    )
+    .await
+    .expect("write corrupt lineage");
+
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("corrupt lineage hint must reject anchor collection"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.contains("failed to parse Taikai lineage hint JSON"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(base_id),
+        "error should identify affected base id: {err}"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_collection_rejects_blocked_request_capture() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let request_capture = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
+    ));
+    async_fs::create_dir(&request_capture)
+        .await
+        .expect("block request capture path");
+
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("blocked request capture must reject anchor collection"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.contains("failed to persist Taikai anchor request payload"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(&request_capture.display().to_string()),
+        "error should identify blocked request capture path: {err}"
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_collection_rejects_mismatched_request_capture() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let base_id = "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    let request_capture = spool_dir.join(format!(
+        "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
+    ));
+    async_fs::write(&request_capture, b"stale-different-body")
+        .await
+        .expect("write stale request capture");
+
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("mismatched request capture must reject anchor collection"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.contains("different contents"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(&request_capture.display().to_string()),
+        "error should identify mismatched request capture path: {err}"
     );
 }
 
@@ -1449,24 +1839,138 @@ fn taikai_trm_lineage_guard_rejects_overlapping_windows() {
     let mut manifest = sample_trm_manifest();
     manifest.segment_window = TaikaiSegmentWindow::new(0, 15);
     let alias = manifest.alias_binding.clone();
+    let first_digest = trm_digest_hex(0xAA);
     {
         let mut guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
             .expect("guard")
             .expect("enabled");
-        guard.validate(&manifest, "deadbeef").expect("valid");
+        guard.validate(&manifest, &first_digest).expect("valid");
         guard
-            .commit(manifest.segment_window, "deadbeef")
+            .commit(manifest.segment_window, &first_digest)
             .expect("commit");
     }
 
     let mut overlap = manifest.clone();
     overlap.segment_window = TaikaiSegmentWindow::new(10, 20);
+    let overlap_digest = trm_digest_hex(0xBB);
     let guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
         .expect("guard")
         .expect("enabled");
     guard
-        .validate(&overlap, "feedbead")
+        .validate(&overlap, &overlap_digest)
         .expect_err("must reject overlapping manifest windows");
+}
+
+fn trm_digest_hex(byte: u8) -> String {
+    hex::encode([byte; 32])
+}
+
+fn taikai_lineage_state_path(spool_dir: &Path) -> PathBuf {
+    fs::read_dir(spool_dir.join(TAIKAI_SPOOL_SUBDIR))
+        .expect("read taikai spool")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(TAIKAI_TRM_LINEAGE_PREFIX)
+                        && name.ends_with(TAIKAI_TRM_LINEAGE_SUFFIX)
+                })
+        })
+        .expect("lineage state path")
+}
+
+fn mutate_taikai_lineage_state(spool_dir: &Path, mutate: impl FnOnce(&mut Value)) {
+    let path = taikai_lineage_state_path(spool_dir);
+    let contents = fs::read_to_string(&path).expect("read lineage state");
+    let mut value: Value = json::from_str(&contents).expect("decode lineage state");
+    mutate(&mut value);
+    fs::write(
+        &path,
+        json::to_string(&value).expect("encode mutated lineage state"),
+    )
+    .expect("write mutated lineage state");
+}
+
+fn assert_mutated_lineage_state_rejected(mutate: impl FnOnce(&mut Value), expected_message: &str) {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path();
+    let mut manifest = sample_trm_manifest();
+    manifest.segment_window = TaikaiSegmentWindow::new(0, 8);
+    let alias = manifest.alias_binding.clone();
+    let digest = trm_digest_hex(0xAB);
+    {
+        let mut guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+            .expect("guard")
+            .expect("enabled");
+        guard.validate(&manifest, &digest).expect("valid");
+        guard
+            .commit(manifest.segment_window, &digest)
+            .expect("commit");
+    }
+    mutate_taikai_lineage_state(spool_dir, mutate);
+
+    let err = match taikai_ingest::TrmLineageGuard::new(spool_dir, &alias) {
+        Ok(_) => panic!("mutated lineage state should be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        err.1.contains(expected_message),
+        "unexpected error: {:?}",
+        err
+    );
+}
+
+#[test]
+fn taikai_trm_lineage_guard_rejects_unsupported_state_version() {
+    assert_mutated_lineage_state_rejected(
+        |value| {
+            value
+                .as_object_mut()
+                .expect("lineage object")
+                .insert("version".into(), Value::from(2));
+        },
+        "unsupported Taikai routing manifest lineage record version",
+    );
+}
+
+#[test]
+fn taikai_trm_lineage_guard_rejects_alias_mismatch() {
+    assert_mutated_lineage_state_rejected(
+        |value| {
+            value
+                .as_object_mut()
+                .expect("lineage object")
+                .insert("alias_name".into(), Value::from("other-alias"));
+        },
+        "belongs to alias",
+    );
+}
+
+#[test]
+fn taikai_trm_lineage_guard_rejects_invalid_manifest_digest() {
+    assert_mutated_lineage_state_rejected(
+        |value| {
+            value
+                .as_object_mut()
+                .expect("lineage object")
+                .insert("manifest_digest_hex".into(), Value::from("deadbeef"));
+        },
+        "manifest_digest_hex must be 32-byte hex",
+    );
+}
+
+#[test]
+fn taikai_trm_lineage_guard_rejects_inverted_window() {
+    assert_mutated_lineage_state_rejected(
+        |value| {
+            let map = value.as_object_mut().expect("lineage object");
+            map.insert("window_start_sequence".into(), Value::from(20));
+            map.insert("window_end_sequence".into(), Value::from(10));
+        },
+        "window_start_sequence exceeds window_end_sequence",
+    );
 }
 
 #[test]
@@ -1480,11 +1984,12 @@ fn taikai_trm_lineage_hint_contains_previous_digest() {
     let epoch = 42;
     let storage_ticket = StorageTicketId::new([0xAA; 32]);
     let fingerprint = ReplayFingerprint::from_hash(blake3_hash(b"lineage-hint"));
+    let first_digest = trm_digest_hex(0xA1);
     {
         let mut guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
             .expect("guard")
             .expect("enabled");
-        guard.validate(&manifest, "aaaa1111").expect("valid");
+        guard.validate(&manifest, &first_digest).expect("valid");
         guard
             .persist_lineage_hint(lane_id, epoch, 1, &storage_ticket, &fingerprint)
             .expect("persist hint");
@@ -1500,17 +2005,18 @@ fn taikai_trm_lineage_hint_contains_previous_digest() {
                 .is_some_and(Value::is_null)
         );
         guard
-            .commit(manifest.segment_window, "aaaa1111")
+            .commit(manifest.segment_window, &first_digest)
             .expect("commit");
     }
 
     let mut next_manifest = manifest.clone();
     next_manifest.segment_window = TaikaiSegmentWindow::new(9, 16);
+    let next_digest = trm_digest_hex(0xB2);
     {
         let mut guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
             .expect("guard")
             .expect("enabled");
-        guard.validate(&next_manifest, "bbbb2222").expect("valid");
+        guard.validate(&next_manifest, &next_digest).expect("valid");
         guard
             .persist_lineage_hint(lane_id, epoch, 2, &storage_ticket, &fingerprint)
             .expect("persist hint");
@@ -1524,10 +2030,10 @@ fn taikai_trm_lineage_hint_contains_previous_digest() {
             value
                 .get("previous_manifest_digest_hex")
                 .and_then(Value::as_str),
-            Some("aaaa1111")
+            Some(first_digest.as_str())
         );
         guard
-            .commit(next_manifest.segment_window, "bbbb2222")
+            .commit(next_manifest.segment_window, &next_digest)
             .expect("commit");
     }
 }
@@ -2549,6 +3055,129 @@ fn persist_da_pin_intent_writes_file() {
     assert_eq!(decoded.owner, Some(ALICE_ID.clone()));
 }
 
+fn assert_invalid_input<T>(result: std::io::Result<T>, label: &str) {
+    let err = match result {
+        Ok(_) => panic!("{label} unexpectedly accepted invalid writer inputs"),
+        Err(err) => err,
+    };
+    assert_eq!(
+        err.kind(),
+        ErrorKind::InvalidInput,
+        "{label} should reject invalid writer inputs: {err}"
+    );
+}
+
+#[test]
+fn persist_spool_artifacts_reject_body_tuple_mismatches() {
+    let temp_dir = tempdir().expect("temp dir");
+    let manifest_dir = temp_dir.path();
+    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let request = context.request;
+    let manifest = context.artifacts;
+    let pdp_commitment = sample_pdp_commitment_for_tests();
+    let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
+    let record = DaCommitmentRecord::new(
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        request.client_blob_id.clone(),
+        ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
+        DaProofScheme::MerkleSha256,
+        Hash::prehashed(*manifest.chunk_root.as_bytes()),
+        None,
+        Some(Hash::new(&pdp_bytes)),
+        request.retention_policy.clone(),
+        manifest.storage_ticket,
+        Signature::from_bytes(&[0x44; 64]),
+    );
+
+    assert_invalid_input(
+        persistence::persist_manifest_for_sorafs(
+            manifest_dir,
+            &manifest.encoded,
+            LaneId::new(request.lane_id.as_u32().saturating_add(1)),
+            request.epoch,
+            request.sequence,
+            &manifest.storage_ticket,
+            &manifest.fingerprint,
+        ),
+        "manifest lane mismatch",
+    );
+
+    let mut invalid_pdp = pdp_commitment.clone();
+    invalid_pdp.manifest_digest = [0; 32];
+    assert_invalid_input(
+        persistence::persist_pdp_commitment(
+            manifest_dir,
+            &invalid_pdp,
+            request.lane_id,
+            request.epoch,
+            request.sequence,
+            &manifest.storage_ticket,
+            &manifest.fingerprint,
+        ),
+        "invalid PDP commitment body",
+    );
+
+    assert_invalid_input(
+        persistence::persist_da_commitment_record(
+            manifest_dir,
+            &record,
+            request.lane_id,
+            request.epoch,
+            request.sequence.saturating_add(1),
+            &manifest.storage_ticket,
+            &manifest.fingerprint,
+        ),
+        "commitment sequence mismatch",
+    );
+
+    let mut other_pdp = pdp_commitment.clone();
+    other_pdp.sealed_at = other_pdp.sealed_at.saturating_add(1);
+    let other_pdp_bytes = encode_pdp_commitment_bytes(&other_pdp).expect("encode other PDP");
+    assert_invalid_input(
+        persistence::persist_da_commitment_schedule_entry(
+            manifest_dir,
+            &record,
+            &other_pdp_bytes,
+            request.lane_id,
+            request.epoch,
+            request.sequence,
+            &manifest.storage_ticket,
+            &manifest.fingerprint,
+        ),
+        "schedule PDP digest mismatch",
+    );
+
+    let intent = DaPinIntent::new(
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        manifest.storage_ticket,
+        ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
+    );
+    assert_invalid_input(
+        persistence::persist_da_pin_intent(
+            manifest_dir,
+            &intent,
+            request.lane_id,
+            request.epoch,
+            request.sequence.saturating_add(1),
+            &manifest.storage_ticket,
+            &manifest.fingerprint,
+        ),
+        "pin-intent sequence mismatch",
+    );
+
+    assert!(
+        fs::read_dir(manifest_dir)
+            .expect("read spool dir")
+            .next()
+            .is_none(),
+        "rejected writer inputs must not leave spool artifacts"
+    );
+}
+
 #[test]
 fn persist_spool_artifacts_reject_existing_mismatched_targets() {
     let temp_dir = tempdir().expect("temp dir");
@@ -2785,6 +3414,18 @@ fn receipt_file_count(dir: &Path) -> usize {
         .count()
 }
 
+fn temp_artifact_names(dir: &Path) -> Vec<String> {
+    if !dir.exists() {
+        return Vec::new();
+    }
+    fs::read_dir(dir)
+        .expect("read artifact directory")
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_str().map(ToOwned::to_owned))
+        .filter(|name| name.contains(".tmp-"))
+        .collect()
+}
+
 #[test]
 fn persist_da_receipt_writes_and_is_idempotent() {
     let temp_dir = tempdir().expect("temp dir");
@@ -2815,7 +3456,45 @@ fn persist_da_receipt_writes_and_is_idempotent() {
 }
 
 #[test]
-fn load_da_receipts_skips_unsupported_versions() {
+fn persist_da_receipt_converges_under_same_process_writers() {
+    let temp_dir = tempdir().expect("temp dir");
+    let manifest_dir = temp_dir.path().to_path_buf();
+    let signer = KeyPair::random();
+    let lane_id = LaneId::new(3);
+    let receipt = Arc::new(test_receipt(&signer, lane_id, 5, 7, 0xAA));
+    let fingerprint = Arc::new(test_fingerprint(0xCC));
+    let barrier = Arc::new(Barrier::new(4));
+
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let manifest_dir = manifest_dir.clone();
+            let receipt = Arc::clone(&receipt);
+            let fingerprint = Arc::clone(&fingerprint);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                persistence::persist_da_receipt(&manifest_dir, &receipt, 7, &fingerprint)
+                    .expect("concurrent receipt persist")
+                    .expect("receipt path")
+            })
+        })
+        .collect();
+
+    let paths: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("writer thread"))
+        .collect();
+    let first = paths.first().expect("at least one writer");
+    assert!(paths.iter().all(|path| path == first));
+    assert_eq!(receipt_file_count(&manifest_dir), 1);
+    assert!(
+        temp_artifact_names(&manifest_dir).is_empty(),
+        "concurrent receipt install should not leave temp artifacts"
+    );
+}
+
+#[test]
+fn load_da_receipts_rejects_unsupported_versions() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
     let signer = KeyPair::random();
@@ -2830,12 +3509,13 @@ fn load_da_receipts_skips_unsupported_versions() {
     let path = manifest_dir.join(receipt_spool_file_name(&receipt, 7, [0xBB; 32]));
     fs::write(&path, bytes).expect("write receipt");
 
-    let loaded = persistence::load_da_receipts(manifest_dir).expect("load receipts");
-    assert!(loaded.is_empty());
+    let err = persistence::load_da_receipts(manifest_dir)
+        .expect_err("unsupported receipt versions must reject the receipt load");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 
 #[test]
-fn load_da_receipts_skips_filename_body_mismatch() {
+fn load_da_receipts_rejects_filename_body_mismatch() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
     let signer = KeyPair::random();
@@ -2850,12 +3530,13 @@ fn load_da_receipts_skips_filename_body_mismatch() {
     let path = manifest_dir.join(receipt_spool_file_name(&receipt, 8, [0xBC; 32]));
     fs::write(&path, bytes).expect("write receipt");
 
-    let loaded = persistence::load_da_receipts(manifest_dir).expect("load receipts");
-    assert!(loaded.is_empty());
+    let err = persistence::load_da_receipts(manifest_dir)
+        .expect_err("filename/body mismatches must reject the receipt load");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 
 #[test]
-fn load_da_receipts_skips_filename_ticket_mismatch() {
+fn load_da_receipts_rejects_filename_ticket_mismatch() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
     let signer = KeyPair::random();
@@ -2872,8 +3553,60 @@ fn load_da_receipts_skips_filename_ticket_mismatch() {
     let path = manifest_dir.join(receipt_spool_file_name(&filename_receipt, 7, [0xBD; 32]));
     fs::write(&path, bytes).expect("write receipt");
 
-    let loaded = persistence::load_da_receipts(manifest_dir).expect("load receipts");
-    assert!(loaded.is_empty());
+    let err = persistence::load_da_receipts(manifest_dir)
+        .expect_err("filename/body ticket mismatches must reject the receipt load");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn load_da_receipts_rejects_receipt_shaped_directory() {
+    let temp_dir = tempdir().expect("temp dir");
+    let manifest_dir = temp_dir.path();
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xAE);
+    let path = manifest_dir.join(receipt_spool_file_name(&receipt, 7, [0xBE; 32]));
+    fs::create_dir(&path).expect("create receipt-shaped directory");
+
+    let err = persistence::load_da_receipts(manifest_dir)
+        .expect_err("receipt-shaped directory must reject receipt loading");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("failed to load DA receipt"),
+        "unexpected receipt load error: {err}"
+    );
+}
+
+#[test]
+fn load_da_receipts_rejects_same_manifest_duplicate_with_different_receipt() {
+    let temp_dir = tempdir().expect("temp dir");
+    let manifest_dir = temp_dir.path();
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xAF);
+    let mut conflicting = test_receipt(&signer, LaneId::new(3), 5, 7, 0xB0);
+    conflicting.manifest_hash = receipt.manifest_hash;
+    let unsigned = persistence::unsigned_receipt_bytes(&conflicting, 7).expect("unsigned bytes");
+    conflicting.operator_signature = Signature::new(signer.private_key(), &unsigned);
+
+    for (receipt, fingerprint) in [(&receipt, [0xC0; 32]), (&conflicting, [0xC1; 32])] {
+        let stored = persistence::StoredDaReceipt {
+            version: persistence::STORED_RECEIPT_VERSION,
+            sequence: 7,
+            receipt: receipt.clone(),
+        };
+        let bytes = to_bytes(&stored).expect("encode receipt");
+        let path = manifest_dir.join(receipt_spool_file_name(receipt, 7, fingerprint));
+        fs::write(path, bytes).expect("write duplicate receipt");
+    }
+
+    let err = persistence::load_da_receipts(manifest_dir)
+        .expect_err("conflicting duplicate receipts must reject the receipt load");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("conflicting duplicate DA receipt"),
+        "unexpected receipt load error: {err}"
+    );
 }
 
 #[test]
@@ -2934,6 +3667,140 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
         receipt_file_count(temp_dir.path()),
         1,
         "stale receipt must not be written before validation"
+    );
+}
+
+#[test]
+fn da_receipt_log_in_memory_append_fails_closed() {
+    let lane_epoch = LaneEpoch::new(LaneId::new(4), 10);
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let signer = KeyPair::random();
+    let log = DaReceiptLog::in_memory(Arc::clone(&cursor_store), signer.public_key().clone());
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xA1);
+
+    let err = log
+        .append(lane_epoch, 1, receipt, test_fingerprint(0xA1))
+        .expect_err("in-memory receipt logs must not acknowledge DA ingest appends");
+
+    assert!(
+        format!("{err:?}").contains("not durable"),
+        "unexpected in-memory append error: {err:?}"
+    );
+    assert!(
+        log.receipts_for(lane_epoch).is_empty(),
+        "failed in-memory append must not update receipt-log memory"
+    );
+}
+
+#[test]
+fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
+    let temp_dir = tempdir().expect("temp dir");
+    let spool_dir = temp_dir.path();
+    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let request = context.request;
+    let manifest = context.artifacts;
+    let canonical = normalize_payload(&request).expect("normalize payload");
+    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let metadata =
+        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
+    let rent_policy = DaRentPolicyV1::default();
+    let retry_manifest = resolve_manifest(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &metadata,
+        &request.retention_policy,
+        1_701_001_111,
+        &rent_policy,
+    )
+    .expect("retry manifest");
+    assert_eq!(retry_manifest.storage_ticket, manifest.storage_ticket);
+    assert_eq!(retry_manifest.fingerprint, manifest.fingerprint);
+    assert_ne!(
+        retry_manifest.manifest_hash, manifest.manifest_hash,
+        "retry timestamp should change the timestamped manifest hash"
+    );
+
+    persistence::persist_manifest_for_sorafs(
+        spool_dir,
+        &manifest.encoded,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist manifest")
+    .expect("manifest path");
+    let pdp_commitment = compute_pdp_commitment(
+        &manifest.manifest_hash,
+        &manifest.manifest,
+        &chunk_store,
+        1_701_000_999,
+    )
+    .expect("PDP commitment");
+    let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode PDP commitment");
+    persistence::persist_pdp_commitment(
+        spool_dir,
+        &pdp_commitment,
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+    )
+    .expect("persist PDP")
+    .expect("PDP path");
+
+    let signer = KeyPair::random();
+    let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
+    let receipt = build_receipt(
+        &signer,
+        &request,
+        1_701_000_999,
+        manifest.blob_hash,
+        manifest.chunk_root,
+        manifest.manifest_hash,
+        manifest.storage_ticket,
+        pdp_bytes.clone(),
+        manifest.manifest.rent_quote,
+        stripe_layout_from_manifest(&manifest.manifest),
+    )
+    .expect("build receipt");
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let log = DaReceiptLog::open(
+        spool_dir.to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    )
+    .expect("open receipt log");
+    assert!(matches!(
+        log.append(
+            lane_epoch,
+            request.sequence,
+            receipt.clone(),
+            manifest.fingerprint
+        )
+        .expect("append receipt"),
+        ReceiptInsertOutcome::Stored { .. }
+    ));
+
+    let duplicate = load_duplicate_da_artifacts(
+        &log,
+        spool_dir,
+        lane_epoch,
+        request.sequence,
+        &retry_manifest.storage_ticket,
+        retry_manifest.fingerprint,
+    )
+    .expect("load duplicate artifacts");
+
+    assert_eq!(duplicate.receipt, receipt);
+    assert_eq!(duplicate.pdp_commitment_bytes, pdp_bytes);
+    assert_eq!(
+        receipt_file_count(spool_dir),
+        1,
+        "duplicate artifact recovery must not write another receipt"
     );
 }
 
@@ -3035,7 +3902,51 @@ fn da_receipt_log_reloads_from_disk() {
 }
 
 #[test]
-fn da_receipt_log_skips_sequence_rebound_signature_on_open() {
+fn da_receipt_log_rejects_same_manifest_duplicate_with_different_receipt_on_open() {
+    let temp_dir = tempdir().expect("temp dir");
+    let lane_epoch = LaneEpoch::new(LaneId::new(6), 16);
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x91);
+    let mut conflicting = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x92);
+    conflicting.manifest_hash = receipt.manifest_hash;
+    let unsigned = persistence::unsigned_receipt_bytes(&conflicting, 1).expect("unsigned bytes");
+    conflicting.operator_signature = Signature::new(signer.private_key(), &unsigned);
+
+    for (receipt, fingerprint) in [(&receipt, [0xA1; 32]), (&conflicting, [0xA2; 32])] {
+        let stored = persistence::StoredDaReceipt {
+            version: persistence::STORED_RECEIPT_VERSION,
+            sequence: 1,
+            receipt: receipt.clone(),
+        };
+        let bytes = to_bytes(&stored).expect("encode receipt");
+        let path = temp_dir
+            .path()
+            .join(receipt_spool_file_name(receipt, 1, fingerprint));
+        fs::write(path, bytes).expect("write duplicate receipt");
+    }
+
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let err = match DaReceiptLog::open(
+        temp_dir.path().to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    ) {
+        Ok(_) => panic!("conflicting duplicate receipt must reject receipt-log recovery"),
+        Err(err) => err,
+    };
+
+    assert!(
+        format!("{err:?}").contains("conflicting duplicate receipt"),
+        "unexpected receipt-log recovery error: {err:?}"
+    );
+    assert!(
+        cursor_store.highest_sequences().is_empty(),
+        "conflicting duplicate receipts must not seed replay cursors"
+    );
+}
+
+#[test]
+fn da_receipt_log_rejects_sequence_rebound_signature_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 13);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
@@ -3052,14 +3963,19 @@ fn da_receipt_log_skips_sequence_rebound_signature_on_open() {
         .join(receipt_spool_file_name(&receipt, 2, [0xCC; 32]));
     fs::write(&path, bytes).expect("write rebound receipt");
 
-    let log = DaReceiptLog::open(
+    let err = match DaReceiptLog::open(
         temp_dir.path().to_path_buf(),
         Arc::clone(&cursor_store),
         signer.public_key().clone(),
-    )
-    .expect("open log");
+    ) {
+        Ok(_) => panic!("sequence-rebound receipt must reject receipt-log recovery"),
+        Err(err) => err,
+    };
 
-    assert!(log.receipts_for(lane_epoch).is_empty());
+    assert!(
+        format!("{err:?}").contains("failed to verify durable DA receipt"),
+        "unexpected receipt-log recovery error: {err:?}"
+    );
     assert!(
         cursor_store.highest_sequences().is_empty(),
         "sequence-rebound receipt must not seed replay cursors"
@@ -3067,7 +3983,7 @@ fn da_receipt_log_skips_sequence_rebound_signature_on_open() {
 }
 
 #[test]
-fn da_receipt_log_skips_invalid_entries_on_open() {
+fn da_receipt_log_rejects_invalid_entries_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let signer = KeyPair::random();
     let corrupt_receipt = test_receipt(&signer, LaneId::new(1), 1, 1, 0xAA);
@@ -3077,19 +3993,53 @@ fn da_receipt_log_skips_invalid_entries_on_open() {
     fs::write(&bad_path, b"corrupt").expect("write corrupt receipt");
 
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let log = DaReceiptLog::open(
+    let err = match DaReceiptLog::open(
         temp_dir.path().to_path_buf(),
         Arc::clone(&cursor_store),
         signer.public_key().clone(),
-    )
-    .expect("open log");
+    ) {
+        Ok(_) => panic!("corrupt receipt must reject receipt-log recovery"),
+        Err(err) => err,
+    };
 
-    let lane_epoch = LaneEpoch::new(LaneId::new(1), 1);
-    assert!(log.receipts_for(lane_epoch).is_empty());
+    assert!(
+        format!("{err:?}").contains("failed to load durable DA receipt"),
+        "unexpected receipt-log recovery error: {err:?}"
+    );
 }
 
 #[test]
-fn da_receipt_log_skips_filename_body_mismatch_on_open() {
+fn da_receipt_log_rejects_receipt_shaped_directory_on_open() {
+    let temp_dir = tempdir().expect("temp dir");
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, LaneId::new(1), 1, 1, 0xAB);
+    let path = temp_dir
+        .path()
+        .join(receipt_spool_file_name(&receipt, 1, [0xDE; 32]));
+    fs::create_dir(&path).expect("create receipt-shaped directory");
+
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let err = match DaReceiptLog::open(
+        temp_dir.path().to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    ) {
+        Ok(_) => panic!("receipt-shaped directory must reject receipt-log recovery"),
+        Err(err) => err,
+    };
+
+    assert!(
+        format!("{err:?}").contains("is not a regular file"),
+        "unexpected receipt-log recovery error: {err:?}"
+    );
+    assert!(
+        cursor_store.highest_sequences().is_empty(),
+        "receipt-shaped directories must not seed replay cursors"
+    );
+}
+
+#[test]
+fn da_receipt_log_rejects_filename_body_mismatch_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 12);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
@@ -3106,19 +4056,24 @@ fn da_receipt_log_skips_filename_body_mismatch_on_open() {
         .join(receipt_spool_file_name(&receipt, 2, [0xDE; 32]));
     fs::write(&mismatched_path, bytes).expect("write mismatched receipt");
 
-    let log = DaReceiptLog::open(
+    let err = match DaReceiptLog::open(
         temp_dir.path().to_path_buf(),
         Arc::clone(&cursor_store),
         signer.public_key().clone(),
-    )
-    .expect("open log");
+    ) {
+        Ok(_) => panic!("filename/body mismatch must reject receipt-log recovery"),
+        Err(err) => err,
+    };
 
-    assert!(log.receipts_for(lane_epoch).is_empty());
+    assert!(
+        format!("{err:?}").contains("failed to load durable DA receipt"),
+        "unexpected receipt-log recovery error: {err:?}"
+    );
     assert!(cursor_store.highest_sequences().is_empty());
 }
 
 #[test]
-fn da_receipt_log_skips_filename_ticket_mismatch_on_open() {
+fn da_receipt_log_rejects_filename_ticket_mismatch_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 14);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
@@ -3138,15 +4093,56 @@ fn da_receipt_log_skips_filename_ticket_mismatch_on_open() {
             .join(receipt_spool_file_name(&filename_receipt, 1, [0xDF; 32]));
     fs::write(&mismatched_path, bytes).expect("write mismatched receipt");
 
-    let log = DaReceiptLog::open(
+    let err = match DaReceiptLog::open(
         temp_dir.path().to_path_buf(),
         Arc::clone(&cursor_store),
         signer.public_key().clone(),
-    )
-    .expect("open log");
+    ) {
+        Ok(_) => panic!("filename/body ticket mismatch must reject receipt-log recovery"),
+        Err(err) => err,
+    };
 
-    assert!(log.receipts_for(lane_epoch).is_empty());
+    assert!(
+        format!("{err:?}").contains("failed to load durable DA receipt"),
+        "unexpected receipt-log recovery error: {err:?}"
+    );
     assert!(cursor_store.highest_sequences().is_empty());
+}
+
+#[test]
+fn da_receipt_log_rejects_replay_cursor_seed_failures_on_open() {
+    let receipt_dir = tempdir().expect("receipt dir");
+    let cursor_dir = tempdir().expect("cursor dir");
+    let lane_epoch = LaneEpoch::new(LaneId::new(6), 15);
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x8B);
+    persistence::persist_da_receipt(receipt_dir.path(), &receipt, 1, &test_fingerprint(0x8B))
+        .expect("persist receipt")
+        .expect("receipt path");
+
+    let cursor_store =
+        Arc::new(ReplayCursorStore::empty(cursor_dir.path().to_path_buf()).expect("cursor store"));
+    let main_path = replay_cursor_main_path(cursor_dir.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    fs::create_dir(&tmp_path).expect("block replay cursor temp file");
+
+    let err = match DaReceiptLog::open(
+        receipt_dir.path().to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    ) {
+        Ok(_) => panic!("cursor seed failures must reject receipt-log recovery"),
+        Err(err) => err,
+    };
+
+    assert!(
+        format!("{err:?}").contains("failed to seed receipt cursor from disk"),
+        "unexpected cursor seed error: {err:?}"
+    );
+    assert!(
+        cursor_store.highest_sequences().is_empty(),
+        "failed cursor seeding must roll back cursor memory"
+    );
 }
 
 #[test]
@@ -3163,6 +4159,310 @@ fn replay_cursor_store_persists_sequences() {
     assert_eq!(entries.len(), 1);
     entries.sort_by_key(|(lane_epoch, _)| lane_epoch.lane_id.as_u32());
     assert_eq!(entries[0], (lane_epoch, 42));
+}
+
+#[test]
+fn replay_cursor_store_persists_first_zero_sequence() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().to_path_buf();
+    let store = ReplayCursorStore::open(path.clone()).expect("open store");
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    store.record(lane_epoch, 0).expect("record zero");
+    drop(store);
+
+    let reopened = ReplayCursorStore::open(path).expect("reopen store");
+    assert_replay_cursor_sequences(&reopened, &[(lane_epoch, 0)]);
+}
+
+#[test]
+fn replay_cursor_store_retries_after_persist_failure() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().to_path_buf();
+    let main_path = replay_cursor_main_path(temp.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    let store = ReplayCursorStore::open(path.clone()).expect("open store");
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    fs::create_dir(&tmp_path).expect("block temp snapshot path");
+
+    let err = store
+        .record(lane_epoch, 42)
+        .expect_err("blocked temp path should fail snapshot persistence");
+    assert!(
+        format!("{err:?}").contains("failed to create DA replay snapshot temp file"),
+        "unexpected error: {err:?}"
+    );
+    assert_replay_cursor_sequences(&store, &[]);
+
+    fs::remove_dir(&tmp_path).expect("unblock temp snapshot path");
+    store.record(lane_epoch, 42).expect("retry record");
+    drop(store);
+
+    let reopened = ReplayCursorStore::open(path).expect("reopen store");
+    assert_replay_cursor_sequences(&reopened, &[(lane_epoch, 42)]);
+}
+
+fn replay_cursor_main_path(dir: &Path) -> PathBuf {
+    dir.join("replay_cursors.norito.json")
+}
+
+fn replay_cursor_snapshot_bytes(entries: &[(LaneEpoch, u64)]) -> Vec<u8> {
+    let temp = tempdir().expect("snapshot tempdir");
+    let store = ReplayCursorStore::open(temp.path().to_path_buf()).expect("open snapshot store");
+    for (lane_epoch, sequence) in entries {
+        store.record(*lane_epoch, *sequence).expect("record cursor");
+    }
+    fs::read(replay_cursor_main_path(temp.path())).expect("read cursor snapshot")
+}
+
+fn replay_cursor_snapshot_value(entries: &[(LaneEpoch, u64)]) -> Value {
+    json::from_slice(&replay_cursor_snapshot_bytes(entries)).expect("decode cursor snapshot")
+}
+
+fn replay_cursor_snapshot_bytes_with_version(
+    entries: &[(LaneEpoch, u64)],
+    version: i32,
+) -> Vec<u8> {
+    let mut value = replay_cursor_snapshot_value(entries);
+    if let Value::Object(map) = &mut value {
+        map.insert("version".into(), Value::from(version));
+    } else {
+        panic!("cursor snapshot must be an object");
+    }
+    json::to_vec(&value).expect("encode cursor snapshot")
+}
+
+fn replay_cursor_snapshot_bytes_with_duplicate_entry(entries: &[(LaneEpoch, u64)]) -> Vec<u8> {
+    let mut value = replay_cursor_snapshot_value(entries);
+    if let Value::Object(map) = &mut value {
+        let entries = map
+            .get_mut("entries")
+            .expect("cursor snapshot entries must exist");
+        if let Value::Array(entries) = entries {
+            let duplicate = entries
+                .first()
+                .expect("cursor snapshot entry must exist")
+                .clone();
+            entries.push(duplicate);
+        } else {
+            panic!("cursor snapshot entries must be an array");
+        }
+    } else {
+        panic!("cursor snapshot must be an object");
+    }
+    json::to_vec(&value).expect("encode cursor snapshot")
+}
+
+fn assert_replay_cursor_sequences(store: &ReplayCursorStore, expected: &[(LaneEpoch, u64)]) {
+    let mut actual = store.highest_sequences();
+    actual.sort_by_key(|(lane_epoch, _)| (lane_epoch.lane_id.as_u32(), lane_epoch.epoch));
+    let mut expected = expected.to_vec();
+    expected.sort_by_key(|(lane_epoch, _)| (lane_epoch.lane_id.as_u32(), lane_epoch.epoch));
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn replay_cursor_store_open_promotes_temp_snapshot() {
+    let temp = tempdir().expect("tempdir");
+    let main_path = replay_cursor_main_path(temp.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    fs::write(&tmp_path, replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]))
+        .expect("write temp snapshot");
+
+    let store = ReplayCursorStore::open(temp.path().to_path_buf()).expect("open store");
+
+    assert!(main_path.exists(), "temp snapshot should be promoted");
+    assert!(
+        !tmp_path.exists(),
+        "promoted temp snapshot should be removed"
+    );
+    assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
+}
+
+#[test]
+fn replay_cursor_store_open_promotes_newer_temp_snapshot() {
+    let temp = tempdir().expect("tempdir");
+    let main_path = replay_cursor_main_path(temp.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    fs::write(
+        &main_path,
+        replay_cursor_snapshot_bytes(&[(lane_epoch, 41)]),
+    )
+    .expect("write main snapshot");
+    fs::write(&tmp_path, replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]))
+        .expect("write temp snapshot");
+
+    let store = ReplayCursorStore::open(temp.path().to_path_buf()).expect("open store");
+
+    assert!(main_path.exists(), "newer temp should be promoted");
+    assert!(!tmp_path.exists(), "newer temp should be consumed");
+    assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
+}
+
+#[test]
+fn replay_cursor_store_open_removes_corrupt_temp_snapshot() {
+    let temp = tempdir().expect("tempdir");
+    let main_path = replay_cursor_main_path(temp.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    fs::write(
+        &main_path,
+        replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]),
+    )
+    .expect("write main snapshot");
+    fs::write(&tmp_path, b"corrupt").expect("write corrupt temp snapshot");
+
+    let store = ReplayCursorStore::open(temp.path().to_path_buf()).expect("open store");
+
+    assert!(
+        !tmp_path.exists(),
+        "corrupt temp snapshot should be removed"
+    );
+    assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
+}
+
+#[test]
+fn replay_cursor_store_open_rejects_unremovable_corrupt_temp_snapshot() {
+    let temp = tempdir().expect("tempdir");
+    let main_path = replay_cursor_main_path(temp.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    fs::write(
+        &main_path,
+        replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]),
+    )
+    .expect("write main snapshot");
+    fs::create_dir(&tmp_path).expect("block corrupt temp snapshot cleanup");
+
+    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+        Ok(_) => panic!("unremovable corrupt temp snapshot should reject recovery"),
+        Err(err) => err,
+    };
+
+    assert!(
+        format!("{err:?}").contains("failed to remove DA replay cursor temp snapshot"),
+        "unexpected error: {err:?}"
+    );
+    assert!(
+        tmp_path.exists(),
+        "failed cleanup should leave temp path visible for operator repair"
+    );
+}
+
+#[test]
+fn replay_cursor_store_open_rejects_orphan_corrupt_temp_snapshot() {
+    let temp = tempdir().expect("tempdir");
+    let main_path = replay_cursor_main_path(temp.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    fs::write(&tmp_path, b"corrupt").expect("write corrupt temp snapshot");
+
+    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+        Ok(_) => panic!("orphan corrupt temp snapshot should be rejected"),
+        Err(err) => err,
+    };
+
+    assert!(
+        format!("{err:?}").contains("failed to decode DA replay snapshot"),
+        "unexpected error: {err:?}"
+    );
+    assert!(
+        tmp_path.exists(),
+        "orphan corrupt temp snapshot should remain for operator inspection"
+    );
+    assert!(
+        !main_path.exists(),
+        "corrupt temp snapshot must not be promoted into the main cursor path"
+    );
+}
+
+#[test]
+fn replay_cursor_store_open_rejects_duplicate_main_snapshot() {
+    let temp = tempdir().expect("tempdir");
+    let main_path = replay_cursor_main_path(temp.path());
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    fs::write(
+        &main_path,
+        replay_cursor_snapshot_bytes_with_duplicate_entry(&[(lane_epoch, 42)]),
+    )
+    .expect("write duplicate main snapshot");
+
+    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+        Ok(_) => panic!("duplicate main snapshot should be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        format!("{err:?}").contains("duplicate DA replay cursor entry"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn replay_cursor_store_open_recovers_temp_when_main_version_unsupported() {
+    let temp = tempdir().expect("tempdir");
+    let main_path = replay_cursor_main_path(temp.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    fs::write(
+        &main_path,
+        replay_cursor_snapshot_bytes_with_version(&[(lane_epoch, 41)], 2),
+    )
+    .expect("write unsupported main snapshot");
+    fs::write(&tmp_path, replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]))
+        .expect("write recoverable temp snapshot");
+
+    let store = ReplayCursorStore::open(temp.path().to_path_buf()).expect("recover from temp");
+
+    assert!(main_path.exists(), "valid temp should be promoted");
+    assert!(!tmp_path.exists(), "promoted temp should be consumed");
+    assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
+}
+
+#[test]
+fn replay_cursor_store_open_rejects_unpromotable_temp_snapshot() {
+    let temp = tempdir().expect("tempdir");
+    let main_path = replay_cursor_main_path(temp.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    fs::create_dir(&main_path).expect("block main snapshot path");
+    fs::write(&tmp_path, replay_cursor_snapshot_bytes(&[(lane_epoch, 42)]))
+        .expect("write temp snapshot");
+
+    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+        Ok(_) => panic!("unpromotable temp snapshot should be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        format!("{err:?}").contains("failed to promote DA replay cursor temp snapshot"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn replay_cursor_store_open_discards_conflicting_temp_snapshot() {
+    let temp = tempdir().expect("tempdir");
+    let main_path = replay_cursor_main_path(temp.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    let lane_a = LaneEpoch::new(LaneId::new(2), 9);
+    let lane_b = LaneEpoch::new(LaneId::new(3), 9);
+    fs::write(
+        &main_path,
+        replay_cursor_snapshot_bytes(&[(lane_a, 41), (lane_b, 50)]),
+    )
+    .expect("write main snapshot");
+    fs::write(
+        &tmp_path,
+        replay_cursor_snapshot_bytes(&[(lane_a, 42), (lane_b, 49)]),
+    )
+    .expect("write conflicting temp snapshot");
+
+    let store = ReplayCursorStore::open(temp.path().to_path_buf()).expect("open store");
+
+    assert!(
+        !tmp_path.exists(),
+        "conflicting temp snapshot should be removed"
+    );
+    assert_replay_cursor_sequences(&store, &[(lane_a, 41), (lane_b, 50)]);
 }
 
 #[test]

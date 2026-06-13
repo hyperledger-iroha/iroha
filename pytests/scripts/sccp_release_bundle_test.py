@@ -3056,7 +3056,7 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         "generated offline full TOML arguments are invalid",
         'f"/wallet/getcontract returned malformed {label} bytecode"',
         'f"/wallet/getcontract returned malformed {label} contract_address"',
-        "except (argparse.ArgumentTypeError, TypeError, RuntimeError):",
+        "except (argparse.ArgumentTypeError, TypeError, RuntimeError, ValueError):",
         "except (argparse.ArgumentTypeError, TypeError, ValueError):",
         'f"TRON constant call {function_selector} returned non-hex data"',
         "except (RuntimeError, TypeError, ValueError):",
@@ -3502,7 +3502,7 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "def test_live_evidence_redacts_source_event_topic_parser_typeerror",
+            "def test_live_evidence_redacts_source_event_topic_parser_failures",
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
@@ -3510,7 +3510,7 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "def test_live_evidence_redacts_route_canary_topic_parser_typeerror",
+            "def test_live_evidence_redacts_route_canary_topic_parser_failures",
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",

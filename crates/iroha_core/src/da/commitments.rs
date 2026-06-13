@@ -13,7 +13,6 @@ use iroha_data_model::{
     },
     nexus::LaneId,
 };
-use iroha_logger::warn;
 use norito::decode_from_bytes;
 use thiserror::Error;
 
@@ -26,6 +25,15 @@ pub enum DaSpoolError {
     #[error("failed to read DA spool directory `{path}`: {source}")]
     ReadDir {
         /// Path that failed.
+        path: PathBuf,
+        /// Source error from the filesystem.
+        #[source]
+        source: std::io::Error,
+    },
+    /// Failed to read a directory entry while scanning the spool.
+    #[error("failed to read DA spool entry in `{path}`: {source}")]
+    ReadEntry {
+        /// Spool path being scanned.
         path: PathBuf,
         /// Source error from the filesystem.
         #[source]
@@ -83,15 +91,17 @@ pub enum DaSpoolError {
 
 /// Load all DA commitment records from the spool directory.
 ///
-/// Files are filtered by filename (`da-commitment-*.norito`), checked against
-/// their advertised lane/epoch/sequence/ticket tuple, decoded using Norito,
-/// sorted deterministically, and wrapped into a [`DaCommitmentBundle`]. When
-/// the directory is missing or no records are present, this returns `Ok(None)`.
+/// Commitment-record files are filtered by filename (`da-commitment-*.norito`,
+/// excluding `da-commitment-schedule-*` sidecar entries), checked against their
+/// advertised lane/epoch/sequence/ticket tuple, decoded using Norito, sorted
+/// deterministically, and wrapped into a [`DaCommitmentBundle`]. When the
+/// directory is missing or no records are present, this returns `Ok(None)`.
 ///
 /// # Errors
 ///
-/// Returns a [`DaSpoolError`] if the spool directory cannot be read. Individual
-/// commitment files that fail to read or decode are skipped with a warning.
+/// Returns a [`DaSpoolError`] if the spool directory or any matching commitment
+/// file cannot be read, decoded, or matched against its advertised filename
+/// tuple.
 pub fn load_commitment_bundle(
     spool_dir: &Path,
 ) -> Result<Option<DaCommitmentBundle>, DaSpoolError> {
@@ -106,40 +116,20 @@ pub fn load_commitment_bundle(
     })?;
 
     for entry in dir_entries {
-        let entry = match entry {
-            Ok(value) => value,
-            Err(source) => {
-                warn!(?source, "failed to read DA spool entry");
-                continue;
-            }
-        };
+        let entry = entry.map_err(|source| DaSpoolError::ReadEntry {
+            path: spool_dir.to_path_buf(),
+            source,
+        })?;
         let path = entry.path();
-        if !is_da_commitment_file(&path) {
+        if !is_da_commitment_file(&path)? {
             continue;
         }
 
-        let bytes = match std::fs::read(&path) {
-            Ok(buf) => buf,
-            Err(source) => {
-                warn!(
-                    ?source,
-                    path = %path.display(),
-                    "failed to read DA commitment file; skipping"
-                );
-                continue;
-            }
-        };
-
-        match decode_commitment_record(&bytes, &path) {
-            Ok(record) => records.push(record),
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %path.display(),
-                    "failed to decode DA commitment file; skipping"
-                );
-            }
-        }
+        let bytes = std::fs::read(&path).map_err(|source| DaSpoolError::ReadFile {
+            path: path.clone(),
+            source,
+        })?;
+        records.push(decode_commitment_record(&bytes, &path)?);
     }
 
     if records.is_empty() {
@@ -165,10 +155,35 @@ pub fn load_commitment_store(spool_dir: &Path) -> Result<DaCommitmentStore, DaSp
     }
 }
 
-fn is_da_commitment_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("da-commitment-") && name.ends_with(".norito"))
+fn is_da_commitment_file(path: &Path) -> Result<bool, DaSpoolError> {
+    let Some(name) = path.file_name() else {
+        return Ok(false);
+    };
+    if let Some(name) = name.to_str() {
+        return Ok(name.starts_with("da-commitment-")
+            && !name.starts_with("da-commitment-schedule-")
+            && name.ends_with(".norito"));
+    }
+    if non_utf8_artifact_name_matches(name, b"da-commitment-schedule-", b".norito") {
+        return Ok(false);
+    }
+    if non_utf8_artifact_name_matches(name, b"da-commitment-", b".norito") {
+        return Err(malformed_filename(path));
+    }
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn non_utf8_artifact_name_matches(name: &std::ffi::OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    let bytes = name.as_bytes();
+    bytes.starts_with(prefix) && bytes.ends_with(suffix)
+}
+
+#[cfg(not(unix))]
+fn non_utf8_artifact_name_matches(_name: &std::ffi::OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
+    false
 }
 
 #[derive(Clone, Copy)]
@@ -325,6 +340,17 @@ mod tests {
         )
     }
 
+    fn commitment_schedule_file_name(record: &DaCommitmentRecord, fingerprint: [u8; 32]) -> String {
+        format!(
+            "da-commitment-schedule-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
+            lane = record.lane_id.as_u32(),
+            epoch = record.epoch,
+            sequence = record.sequence,
+            ticket = hex::encode(record.storage_ticket.as_ref()),
+            fingerprint = hex::encode(fingerprint)
+        )
+    }
+
     #[test]
     fn returns_none_for_missing_dir() {
         let missing = PathBuf::from("this-path-should-not-exist-da-spool");
@@ -357,6 +383,37 @@ mod tests {
     }
 
     #[test]
+    fn ignores_commitment_schedule_sidecars() {
+        let dir = tempdir().expect("tempdir");
+        let record = sample_record(1, 1);
+        let schedule_path = dir
+            .path()
+            .join(commitment_schedule_file_name(&record, [0x12; 32]));
+        std::fs::write(&schedule_path, b"schedule bytes are not commitment records")
+            .expect("write schedule sidecar");
+
+        assert!(
+            load_commitment_bundle(dir.path())
+                .expect("load schedule-only spool")
+                .is_none(),
+            "schedule-only spools should not look like commitment work"
+        );
+
+        let record_path = dir.path().join(commitment_file_name(&record, [0x13; 32]));
+        std::fs::write(record_path, to_bytes(&record).expect("encode record"))
+            .expect("write commitment record");
+
+        let bundle = load_commitment_bundle(dir.path())
+            .expect("load bundle")
+            .expect("bundle present");
+        assert_eq!(bundle.commitments, vec![record]);
+        assert!(
+            schedule_path.exists(),
+            "sidecar should be left for its owner"
+        );
+    }
+
+    #[test]
     fn commitment_store_builds_from_spool() {
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
@@ -372,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn commitment_bundle_skips_corrupt_entries() {
+    fn commitment_bundle_rejects_corrupt_entries() {
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let bytes = to_bytes(&record).expect("encode record");
@@ -387,15 +444,73 @@ mod tests {
         std::fs::write(valid_path, bytes).expect("write valid");
         std::fs::write(corrupt_path, b"corrupt").expect("write corrupt");
 
-        let bundle = load_commitment_bundle(dir.path())
-            .expect("load bundle")
-            .expect("bundle present");
-        assert_eq!(bundle.commitments.len(), 1);
-        assert_eq!(bundle.commitments[0], record);
+        assert!(
+            matches!(
+                load_commitment_bundle(dir.path()),
+                Err(DaSpoolError::Decode { .. })
+            ),
+            "corrupt commitment artifacts must reject the whole spool load"
+        );
     }
 
     #[test]
-    fn commitment_bundle_skips_malformed_filenames() {
+    fn commitment_bundle_rejects_commitment_shaped_directory() {
+        let dir = tempdir().expect("tempdir");
+        let record = sample_record(1, 1);
+        let path = dir.path().join(commitment_file_name(&record, [0x7a; 32]));
+        std::fs::create_dir(&path).expect("create commitment-shaped directory");
+
+        assert!(
+            matches!(
+                load_commitment_bundle(dir.path()),
+                Err(DaSpoolError::ReadFile { path: observed, .. }) if observed == path
+            ),
+            "commitment-shaped non-files must reject the whole spool load"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commitment_file_matcher_rejects_non_utf8_commitment_shaped_filename() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let schedule_path = PathBuf::from(OsString::from_vec(
+            b"da-commitment-schedule-\xFF.norito".to_vec(),
+        ));
+        assert!(
+            !is_da_commitment_file(&schedule_path).expect("non-UTF8 schedule sidecar is ignored"),
+            "schedule sidecars are owned by the schedule loader, not the commitment bundle loader"
+        );
+
+        let path = PathBuf::from(OsString::from_vec(b"da-commitment-\xFF.norito".to_vec()));
+
+        let err = is_da_commitment_file(&path).expect_err("non-UTF8 shaped artifact rejects");
+        match err {
+            DaSpoolError::MalformedFilename { path: seen } => assert_eq!(seen, path),
+            _ => panic!("expected malformed filename for non-UTF8 DA artifact, got {err:?}"),
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn commitment_bundle_rejects_non_utf8_commitment_shaped_filename() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join(PathBuf::from(OsString::from_vec(
+            b"da-commitment-\xFF.norito".to_vec(),
+        )));
+        std::fs::write(&path, b"ignored").expect("write invalid utf8 filename");
+
+        let err = load_commitment_bundle(dir.path()).expect_err("non-UTF8 DA artifact rejects");
+        match err {
+            DaSpoolError::MalformedFilename { path: seen } => assert_eq!(seen, path),
+            _ => panic!("expected malformed filename for non-UTF8 DA artifact, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn commitment_bundle_rejects_malformed_filenames() {
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let bytes = to_bytes(&record).expect("encode record");
@@ -406,14 +521,16 @@ mod tests {
         std::fs::write(malformed_path, bytes).expect("write malformed filename record");
 
         assert!(
-            load_commitment_bundle(dir.path())
-                .expect("load bundle")
-                .is_none()
+            matches!(
+                load_commitment_bundle(dir.path()),
+                Err(DaSpoolError::MalformedFilename { .. })
+            ),
+            "malformed commitment filenames must reject the whole spool load"
         );
     }
 
     #[test]
-    fn commitment_bundle_skips_filename_tuple_mismatches() {
+    fn commitment_bundle_rejects_filename_tuple_mismatches() {
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let bytes = to_bytes(&record).expect("encode record");
@@ -424,14 +541,16 @@ mod tests {
         std::fs::write(mismatch_path, bytes).expect("write mismatch record");
 
         assert!(
-            load_commitment_bundle(dir.path())
-                .expect("load bundle")
-                .is_none()
+            matches!(
+                load_commitment_bundle(dir.path()),
+                Err(DaSpoolError::FilenameMismatch { .. })
+            ),
+            "commitment filename/body tuple mismatches must reject the whole spool load"
         );
     }
 
     #[test]
-    fn commitment_bundle_skips_filename_ticket_mismatches() {
+    fn commitment_bundle_rejects_filename_ticket_mismatches() {
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let bytes = to_bytes(&record).expect("encode record");
@@ -442,9 +561,11 @@ mod tests {
         std::fs::write(mismatch_path, bytes).expect("write ticket mismatch record");
 
         assert!(
-            load_commitment_bundle(dir.path())
-                .expect("load bundle")
-                .is_none()
+            matches!(
+                load_commitment_bundle(dir.path()),
+                Err(DaSpoolError::FilenameMismatch { .. })
+            ),
+            "commitment filename/body ticket mismatches must reject the whole spool load"
         );
     }
 }

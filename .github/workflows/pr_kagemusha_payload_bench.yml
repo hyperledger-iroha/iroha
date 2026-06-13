@@ -566,6 +566,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-recursive-compact-verifier-availability
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-recursive-compact-shape-classifier
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-recursive-spend-native-output-headers
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-decoder-placeholder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-instruction-wrapper
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-instruction-decoder

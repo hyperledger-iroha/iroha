@@ -224,6 +224,25 @@ int32_t connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bund
     uint8_t** out_proof_bundle_ptr,
     unsigned long* out_proof_bundle_len);
 
+// Build metadata-bound Pallas open envelopes for a Kagemusha verified record bundle.
+// Input: Norito-archive bytes of `KagemushaVerifiedFoldRecordBundle`.
+// Output: Norito-archive bytes of `Vec<OpenVerifyEnvelope>`, one envelope per hop.
+int32_t connect_norito_kagemusha_build_pallas_open_envelopes_archive(
+    const uint8_t* verified_record_bundle_norito_ptr,
+    unsigned long verified_record_bundle_norito_len,
+    uint8_t** out_pallas_open_envelopes_ptr,
+    unsigned long* out_pallas_open_envelopes_len);
+
+// Build the one-envelope Pallas opening archive required for reserved-lineage append
+// over a previous recursive spend bundle.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendBundleV1`.
+// Output: Norito-archive bytes of `Vec<OpenVerifyEnvelope>`.
+int32_t connect_norito_kagemusha_build_previous_proof_open_envelopes_archive(
+    const uint8_t* previous_bundle_norito_ptr,
+    unsigned long previous_bundle_norito_len,
+    uint8_t** out_previous_open_envelopes_ptr,
+    unsigned long* out_previous_open_envelopes_len);
+
 // ABI 7 recursive compact-token prover surface for `kagemusha-recursive-compact-v1`.
 // Input archives are Norito-encoded `KagemushaVerifiedFoldRecordBundle`,
 // ordered Pallas opening envelopes, and

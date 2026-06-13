@@ -15,7 +15,7 @@ use std::{
     fs,
     net::SocketAddr,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -59,8 +59,9 @@ use iroha_data_model::{
             DaCommitmentBundle, DaCommitmentRecord, DaProofPolicy, DaProofPolicyBundle,
             DaProofScheme, KzgCommitment, RetentionClass,
         },
+        ingest::{DaIngestReceipt, DaStripeLayout},
         pin_intent::{DaPinIntent, DaPinIntentBundle},
-        types::{BlobDigest, RetentionPolicy, StorageTicketId},
+        types::{BlobDigest, DaRentQuote, RetentionPolicy, StorageTicketId},
     },
     domain::DomainId,
     identifier::IdentifierPolicyId,
@@ -849,7 +850,7 @@ fn seed_commit_votes_for_block_with_roster(
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         insert_test_vote_with_roster(actor, vote, &roster);
         seeded = seeded.saturating_add(1);
@@ -911,7 +912,7 @@ fn seed_verified_commit_votes_for_block_with_roster(
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         insert_test_vote_with_roster(actor, vote, &roster);
         seeded = seeded.saturating_add(1);
@@ -1023,7 +1024,7 @@ fn seed_remote_commit_votes_for_block(
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
         seeded = seeded.saturating_add(1);
@@ -1092,7 +1093,7 @@ fn seed_cached_remote_commit_votes_for_block(
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         insert_test_vote_with_roster(actor, vote, &roster);
         seeded = seeded.saturating_add(1);
@@ -1244,7 +1245,7 @@ fn commit_qc_with_signers(
     let signatures: Vec<Vec<u8>> = signers
         .iter()
         .map(|keypair| {
-            Signature::new(keypair.private_key(), &preimage)
+            checked_signature(keypair.private_key(), &preimage)
                 .payload()
                 .to_vec()
         })
@@ -2249,6 +2250,132 @@ fn sample_da_record(proof_digest: Option<Hash>) -> DaCommitmentRecord {
     )
 }
 
+fn sample_da_record_for_default_lane(proof_digest: Option<Hash>) -> DaCommitmentRecord {
+    let mut record = sample_da_record(proof_digest);
+    record.lane_id = LaneId::new(0);
+    record
+}
+
+fn sample_da_receipt_for_record(record: &DaCommitmentRecord) -> DaIngestReceipt {
+    DaIngestReceipt {
+        client_blob_id: record.client_blob_id,
+        lane_id: record.lane_id,
+        epoch: record.epoch,
+        blob_hash: BlobDigest::new([0x12; 32]),
+        chunk_root: BlobDigest::new([0x34; 32]),
+        manifest_hash: BlobDigest::new(*record.manifest_hash.as_bytes()),
+        storage_ticket: record.storage_ticket,
+        pdp_commitment: Some(vec![0x56]),
+        stripe_layout: DaStripeLayout::default(),
+        queued_at_unix: 1,
+        rent_quote: DaRentQuote::default(),
+        operator_signature: Signature::from_bytes(&[0x78; 64]),
+    }
+}
+
+fn da_commitment_spool_file_name(record: &DaCommitmentRecord, fingerprint: [u8; 32]) -> String {
+    format!(
+        "da-commitment-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
+        lane = record.lane_id.as_u32(),
+        epoch = record.epoch,
+        sequence = record.sequence,
+        ticket = hex::encode(record.storage_ticket.as_ref()),
+        fingerprint = hex::encode(fingerprint)
+    )
+}
+
+fn da_pin_intent_spool_file_name(intent: &DaPinIntent, fingerprint: [u8; 32]) -> String {
+    format!(
+        "da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
+        lane = intent.lane_id.as_u32(),
+        epoch = intent.epoch,
+        sequence = intent.sequence,
+        ticket = hex::encode(intent.storage_ticket.as_ref()),
+        fingerprint = hex::encode(fingerprint)
+    )
+}
+
+fn da_manifest_spool_file_name(record: &DaCommitmentRecord, fingerprint: [u8; 32]) -> String {
+    format!(
+        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
+        lane = record.lane_id.as_u32(),
+        epoch = record.epoch,
+        sequence = record.sequence,
+        ticket = hex::encode(record.storage_ticket.as_ref()),
+        fingerprint = hex::encode(fingerprint)
+    )
+}
+
+fn da_receipt_spool_file_name(
+    receipt: &DaIngestReceipt,
+    sequence: u64,
+    fingerprint: [u8; 32],
+) -> String {
+    format!(
+        "da-receipt-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
+        lane = receipt.lane_id.as_u32(),
+        epoch = receipt.epoch,
+        ticket = hex::encode(receipt.storage_ticket.as_ref()),
+        fingerprint = hex::encode(fingerprint)
+    )
+}
+
+fn write_da_commitment_spool_file(
+    spool_dir: &Path,
+    record: &DaCommitmentRecord,
+    fingerprint: [u8; 32],
+) -> PathBuf {
+    let path = spool_dir.join(da_commitment_spool_file_name(record, fingerprint));
+    let bytes = to_bytes(record).expect("encode DA commitment");
+    fs::write(&path, bytes).expect("write DA commitment to spool");
+    path
+}
+
+fn write_da_pin_intent_spool_file(
+    spool_dir: &Path,
+    intent: &DaPinIntent,
+    fingerprint: [u8; 32],
+) -> PathBuf {
+    let path = spool_dir.join(da_pin_intent_spool_file_name(intent, fingerprint));
+    let bytes = to_bytes(intent).expect("encode DA pin intent");
+    fs::write(&path, bytes).expect("write DA pin intent to spool");
+    path
+}
+
+fn write_da_manifest_spool_file(
+    spool_dir: &Path,
+    record: &DaCommitmentRecord,
+    content: &[u8],
+    fingerprint: [u8; 32],
+) -> PathBuf {
+    let path = spool_dir.join(da_manifest_spool_file_name(record, fingerprint));
+    fs::write(&path, content).expect("write DA manifest to spool");
+    path
+}
+
+fn write_da_receipt_spool_file(
+    spool_dir: &Path,
+    receipt: &DaIngestReceipt,
+    sequence: u64,
+    fingerprint: [u8; 32],
+) -> PathBuf {
+    let path = spool_dir.join(da_receipt_spool_file_name(receipt, sequence, fingerprint));
+    let bytes = crate::da::receipts::encode_receipt_for_spool_test(sequence, receipt.clone())
+        .expect("encode DA receipt");
+    fs::write(&path, bytes).expect("write DA receipt to spool");
+    path
+}
+
+fn push_sample_transaction(actor: &Actor) {
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push sample transaction");
+}
+
 #[test]
 fn update_pending_mode_flip_sets_and_clears() {
     let mut pending = None;
@@ -2846,7 +2973,7 @@ fn block_with_da_commitment(manifest_hash: ManifestDigest) -> SignedBlock {
     };
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.into_parts();
-    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     SignedBlock::presigned_with_da(block_signature, header, Vec::new(), Some(bundle))
 }
@@ -3699,7 +3826,7 @@ fn resign_qc_with_chain_order_for_actor(
                 .get(idx)
                 .expect("signer present in QC validator set");
             let keypair = keypair_for_peer(key_pairs, peer);
-            Signature::new(keypair.private_key(), &preimage)
+            checked_signature(keypair.private_key(), &preimage)
                 .payload()
                 .to_vec()
         })
@@ -6726,7 +6853,7 @@ async fn merge_committee_accepts_remote_signature() {
     assert_eq!(candidates.len(), 1);
     let candidate = &candidates[0];
     let message_digest = crate::merge::merge_qc_message_digest(&actor.chain_id, candidate);
-    let signature = Signature::new(harness.key_pairs[1].private_key(), message_digest.as_ref());
+    let signature = checked_signature(harness.key_pairs[1].private_key(), message_digest.as_ref());
     let merge_signature = MergeCommitteeSignature {
         epoch_id: candidate.epoch_id,
         view: 0,
@@ -9664,7 +9791,7 @@ async fn block_sync_update_accepts_uncertified_missing_block_when_behind() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -9786,7 +9913,7 @@ async fn block_sync_update_accepts_uncertified_missing_block_in_npos() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -10098,7 +10225,7 @@ async fn block_sync_update_accepts_uncertified_next_height_in_npos_genesis_boots
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -10199,7 +10326,7 @@ async fn block_sync_update_accepts_uncertified_next_height_in_npos_after_bootstr
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -10354,7 +10481,7 @@ async fn block_sync_update_payload_only_frontier_npos_uses_sender_lane_vote_rost
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("sender lane signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -11369,7 +11496,7 @@ async fn assert_permissioned_unverified_roster_stashes_ready_and_deliver<F>(
     };
     let ready_preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
     let ready_signature =
-        Signature::new(actor.common_config.key_pair.private_key(), &ready_preimage);
+        checked_signature(actor.common_config.key_pair.private_key(), &ready_preimage);
     ready.signature = ready_signature.payload().to_vec();
 
     actor
@@ -11406,7 +11533,7 @@ async fn assert_permissioned_unverified_roster_stashes_ready_and_deliver<F>(
     };
     let deliver_preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let deliver_signature = Signature::new(
+    let deliver_signature = checked_signature(
         actor.common_config.key_pair.private_key(),
         &deliver_preimage,
     );
@@ -13872,7 +13999,7 @@ async fn promote_rbc_session_roster_and_retry_flushes_stashed_ready_and_deliver(
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         if stashed_ready.is_none() {
             stashed_ready = Some(ready.clone());
@@ -13906,7 +14033,7 @@ async fn promote_rbc_session_roster_and_retry_flushes_stashed_ready_and_deliver(
     };
     let deliver_preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let deliver_signature = Signature::new(deliver_kp.private_key(), &deliver_preimage);
+    let deliver_signature = checked_signature(deliver_kp.private_key(), &deliver_preimage);
     deliver.signature = deliver_signature.payload().to_vec();
 
     actor
@@ -14601,7 +14728,7 @@ async fn flush_pending_rbc_if_roster_ready_replays_stashed_ready_and_deliver_wit
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         if stashed_ready.is_none() {
             stashed_ready = Some(ready.clone());
@@ -14631,7 +14758,7 @@ async fn flush_pending_rbc_if_roster_ready_replays_stashed_ready_and_deliver_wit
     };
     let deliver_preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let deliver_signature = Signature::new(deliver_kp.private_key(), &deliver_preimage);
+    let deliver_signature = checked_signature(deliver_kp.private_key(), &deliver_preimage);
     deliver.signature = deliver_signature.payload().to_vec();
 
     let stashed_ready = stashed_ready.expect("stashed ready");
@@ -15465,7 +15592,7 @@ async fn block_sync_update_accepts_pre_activation_qc_epoch_after_mode_flip() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -15636,7 +15763,7 @@ async fn block_sync_update_reuses_cached_qc_when_validation_unavailable() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -16069,7 +16196,7 @@ async fn block_sync_update_drops_qc_height_mismatch() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -16300,7 +16427,7 @@ async fn block_sync_update_drops_qc_epoch_mismatch() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -16437,7 +16564,7 @@ async fn block_sync_update_records_commit_qc_from_cached_qc() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -18390,7 +18517,7 @@ async fn block_sync_update_known_block_reuses_cached_block_signers() {
         let idx = signature_topology
             .position(peer.public_key())
             .expect("signer index in topology");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -25743,7 +25870,7 @@ async fn block_sync_update_skips_fetch_when_checkpoint_present() {
         view_change_index: 4,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(1, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
 
@@ -26099,7 +26226,7 @@ async fn block_sync_update_drops_mismatched_commit_votes() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -26221,7 +26348,7 @@ async fn block_sync_caches_qc_before_block_known() {
         view_change_index: view,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
 
@@ -26319,7 +26446,7 @@ async fn block_sync_cache_rejects_qc_epoch_mismatch() {
         view_change_index: view,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
 
@@ -26435,7 +26562,7 @@ async fn block_sync_cache_uses_activation_height_mode_tag() {
         view_change_index: view,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
 
@@ -26516,7 +26643,7 @@ async fn process_precommit_qc_allows_realign_on_missing_parent() {
             view_change_index: view,
             confidential_features: None,
         };
-        let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+        let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
         let block_signature = BlockSignature::new(signer_idx, signature);
         SignedBlock::presigned(block_signature, header, Vec::new())
     };
@@ -26614,7 +26741,7 @@ async fn process_precommit_qc_defers_realign_when_locked_payload_missing() {
         view_change_index: 0,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
     let block_hash = block.hash();
@@ -28005,7 +28132,7 @@ async fn quorum_reschedule_near_quorum_replays_votes_without_hydration_on_repeat
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -29999,7 +30126,7 @@ fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
                 };
                 let preimage = super::vote_preimage(&chain, PERMISSIONED_TAG, &vote);
                 let signature =
-                    Signature::new(actor.common_config.key_pair.private_key(), &preimage);
+                    checked_signature(actor.common_config.key_pair.private_key(), &preimage);
                 vote.bls_sig = signature.payload().to_vec();
                 assert!(
                     !vote.bls_sig.is_empty(),
@@ -49071,7 +49198,7 @@ async fn handle_rbc_ready_drops_on_roster_hash_mismatch() {
     };
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&harness.actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     harness
@@ -49796,7 +49923,7 @@ async fn handle_rbc_ready_when_init_missing_arms_exact_frontier_body_repair() {
     };
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&harness.actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     let _ = take_background_log(&background_log);
@@ -49988,7 +50115,7 @@ async fn handle_rbc_ready_accepts_init_roster_when_derived_missing_permissioned(
     };
     let (_, mode_tag, _prf_seed) = actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -50197,7 +50324,7 @@ async fn handle_rbc_ready_runs_commit_pipeline_when_queue_backlogged() {
     };
     let (_, mode_tag, _) = actor.consensus_context_for_height(height);
     let preimage = super::rbc_ready_preimage(&actor.chain_id, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
     let topology = super::network_topology::Topology::new(roster.clone());
     assert!(
@@ -50328,7 +50455,7 @@ async fn handle_rbc_ready_drops_when_derived_roster_mismatches() {
     };
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&harness.actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     harness
@@ -50452,7 +50579,7 @@ async fn handle_rbc_ready_refreshes_roster_on_unverified_mismatch() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -50561,7 +50688,7 @@ async fn handle_rbc_ready_drops_stale_init_roster_after_derived_refresh() {
     };
     let (_, mode_tag, _prf_seed) = actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -50655,7 +50782,7 @@ async fn handle_rbc_deliver_drops_on_roster_hash_mismatch() {
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let preimage =
         super::rbc_deliver_preimage(&harness.actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     harness
@@ -50763,7 +50890,7 @@ async fn handle_rbc_deliver_refreshes_roster_when_unverified() {
     };
     let preimage =
         super::rbc_deliver_preimage(&harness.actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     harness
@@ -50881,7 +51008,7 @@ async fn handle_rbc_deliver_drops_stale_init_roster_after_derived_refresh() {
     };
     let (_, mode_tag, _prf_seed) = actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -51034,7 +51161,7 @@ async fn handle_rbc_deliver_with_authoritative_payload_still_defers_without_read
         ready_signatures: Vec::new(),
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -51144,7 +51271,7 @@ async fn handle_rbc_deliver_emits_ready_before_deferring_ready_quorum_missing() 
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         ready_signatures.push(crate::sumeragi::consensus::RbcReadySignature {
             sender: ready.sender,
@@ -51170,7 +51297,7 @@ async fn handle_rbc_deliver_emits_ready_before_deferring_ready_quorum_missing() 
         ready_signatures,
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    let signature = checked_signature(deliver_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     let _ = take_background_log(&background_log);
@@ -51273,7 +51400,7 @@ async fn handle_rbc_deliver_rejects_malformed_ready_bundles() {
     let (_, mode_tag, _prf_seed) = actor.consensus_context_for_height(height);
     let resign_deliver = |deliver: &mut crate::sumeragi::consensus::RbcDeliver| {
         let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, deliver);
-        let signature = Signature::new(actor.common_config.key_pair.private_key(), &preimage);
+        let signature = checked_signature(actor.common_config.key_pair.private_key(), &preimage);
         deliver.signature = signature.payload().to_vec();
     };
     let mut cases = Vec::new();
@@ -51400,7 +51527,7 @@ async fn handle_rbc_deliver_drops_when_derived_roster_mismatches() {
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
     let preimage =
         super::rbc_deliver_preimage(&harness.actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     harness
@@ -57943,7 +58070,7 @@ async fn block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         if stashed_ready.is_none() {
             stashed_ready = Some(ready.clone());
@@ -57987,7 +58114,7 @@ async fn block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_
     };
     let deliver_preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let deliver_signature = Signature::new(deliver_kp.private_key(), &deliver_preimage);
+    let deliver_signature = checked_signature(deliver_kp.private_key(), &deliver_preimage);
     deliver.signature = deliver_signature.payload().to_vec();
 
     actor
@@ -59929,7 +60056,7 @@ async fn handle_rbc_ready_rejects_chunk_root_mismatch() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, actor.mode_tag(), &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -60022,7 +60149,7 @@ async fn handle_rbc_ready_rejects_mismatched_session_metadata() {
     };
     let (_, mode_tag, _) = actor.consensus_context_for_height(height);
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -60110,7 +60237,7 @@ async fn handle_rbc_ready_rejects_forged_leader_signature_metadata() {
     };
     let (_, mode_tag, _) = actor.consensus_context_for_height(height);
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -60216,7 +60343,7 @@ async fn handle_rbc_ready_conflict_invalidates_and_clears_pending_deferrals() {
     };
     let (_, mode_tag, _) = actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -60312,7 +60439,7 @@ async fn handle_rbc_ready_sets_expected_chunk_root_when_missing() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&actor.common_config.chain, actor.mode_tag(), &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("ready handled");
@@ -60380,7 +60507,7 @@ async fn handle_rbc_ready_emits_local_ready_after_quorum() {
         };
         let preimage =
             super::rbc_ready_preimage(&actor.common_config.chain, actor.mode_tag(), &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
 
         actor.handle_rbc_ready(ready).expect("ready handled");
@@ -60603,7 +60730,7 @@ async fn handle_rbc_deliver_rejects_chunk_root_mismatch() {
     };
     let preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, actor.mode_tag(), &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -60713,7 +60840,7 @@ async fn handle_rbc_deliver_rejects_mismatched_session_metadata() {
         ready_signatures: Vec::new(),
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    let signature = checked_signature(deliver_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -60832,7 +60959,7 @@ async fn handle_rbc_deliver_rejects_forged_leader_signature_metadata() {
         ready_signatures: Vec::new(),
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    let signature = checked_signature(deliver_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -60989,7 +61116,7 @@ async fn handle_rbc_deliver_without_ready_quorum_defers_for_rbc_only_payload() {
     };
     let (_, mode_tag, _) = actor.consensus_context_for_height(height);
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -61087,7 +61214,7 @@ async fn handle_rbc_deliver_force_quorum_one_still_requires_protocol_quorum_for_
         signature: Vec::new(),
     };
     let ready_preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-    let ready_signature = Signature::new(signer_kp.private_key(), &ready_preimage);
+    let ready_signature = checked_signature(signer_kp.private_key(), &ready_preimage);
     ready.signature = ready_signature.payload().to_vec();
 
     let mut deliver = crate::sumeragi::consensus::RbcDeliver {
@@ -61106,7 +61233,7 @@ async fn handle_rbc_deliver_force_quorum_one_still_requires_protocol_quorum_for_
     };
     let deliver_preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let deliver_signature = Signature::new(signer_kp.private_key(), &deliver_preimage);
+    let deliver_signature = checked_signature(signer_kp.private_key(), &deliver_preimage);
     deliver.signature = deliver_signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -61328,7 +61455,7 @@ async fn handle_rbc_deliver_rejects_missing_chunks_when_local_payload_conflicts_
     };
     let deliver_preimage =
         super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let deliver_signature = Signature::new(deliver_kp.private_key(), &deliver_preimage);
+    let deliver_signature = checked_signature(deliver_kp.private_key(), &deliver_preimage);
     deliver.signature = deliver_signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -61562,7 +61689,7 @@ async fn handle_rbc_deliver_records_payload_bytes_from_complete_rs16_chunks() {
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         assert!(session.record_ready_with_roster_hash(
             ready.sender,
@@ -61660,7 +61787,7 @@ async fn handle_rbc_deliver_records_ready_bundle() {
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         ready_signatures.push(crate::sumeragi::consensus::RbcReadySignature {
             sender: ready.sender,
@@ -61691,7 +61818,7 @@ async fn handle_rbc_deliver_records_ready_bundle() {
         ready_signatures,
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    let signature = checked_signature(deliver_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -61776,7 +61903,7 @@ async fn handle_rbc_deliver_emits_local_ready_after_ready_bundle() {
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         ready_signatures.push(crate::sumeragi::consensus::RbcReadySignature {
             sender: ready.sender,
@@ -61812,7 +61939,7 @@ async fn handle_rbc_deliver_emits_local_ready_after_ready_bundle() {
         ready_signatures,
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    let signature = checked_signature(deliver_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -61905,7 +62032,7 @@ async fn handle_rbc_deliver_relay_ready_bundle_before_deferring() {
             signature: Vec::new(),
         };
         let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
-        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        let signature = checked_signature(signer_kp.private_key(), &preimage);
         ready.signature = signature.payload().to_vec();
         if deliver_signer.is_none() {
             deliver_signer = Some((peer.clone(), sender));
@@ -61939,7 +62066,7 @@ async fn handle_rbc_deliver_relay_ready_bundle_before_deferring() {
         ready_signatures,
     };
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    let signature = checked_signature(deliver_kp.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     actor.handle_rbc_deliver(deliver).expect("deliver handled");
@@ -62038,7 +62165,7 @@ async fn rbc_ready_gossips_to_sampled_peers() {
         harness.actor.mode_tag(),
         &ready,
     );
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
     let sender = ready.sender;
 
@@ -62156,7 +62283,7 @@ async fn rbc_ready_uses_session_roster_after_topology_change() {
         harness.actor.mode_tag(),
         &ready,
     );
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     let roster_b: Vec<_> = roster_a
@@ -62291,7 +62418,7 @@ async fn rbc_session_roster_persists_across_restart_with_roster_change() {
         harness.actor.mode_tag(),
         &ready,
     );
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
     let ready_sender = ready.sender;
 
@@ -62710,7 +62837,7 @@ async fn rbc_deliver_bundle_ready_on_incomplete_delivered_session_refreshes_prog
     deliver.ready_signatures = vec![ready_signature.clone()];
     let (_, mode_tag, _) = actor.consensus_context_for_height(height);
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(actor.common_config.key_pair.private_key(), &preimage);
+    let signature = checked_signature(actor.common_config.key_pair.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
@@ -62830,7 +62957,7 @@ async fn rbc_deliver_bundle_conflicting_ready_invalidates_session_and_clears_pen
     deliver.ready_signatures = vec![ready_signature.clone()];
     let (_, mode_tag, _) = actor.consensus_context_for_height(height);
     let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
-    let signature = Signature::new(actor.common_config.key_pair.private_key(), &preimage);
+    let signature = checked_signature(actor.common_config.key_pair.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
     let total_chunks = session.total_chunks();
     let received_chunks = session.received_chunks();
@@ -63014,7 +63141,7 @@ async fn late_rbc_ready_after_delivery_does_not_refresh_pending_progress_or_reru
     };
     let (_, mode_tag, _) = actor.consensus_context_for_height(key.1);
     let preimage = super::rbc_ready_preimage(&actor.chain_id, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     let check_at = Instant::now();
@@ -63289,7 +63416,7 @@ async fn rbc_ready_reaching_quorum_after_authoritative_delivery_wakes_commit_pip
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&actor.chain_id, mode_tag, &ready);
-    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     let check_at = Instant::now();
@@ -65407,15 +65534,8 @@ fn manifest_guard_rejects_hash_mismatch() {
     let expected_digest = ManifestDigest::new(*blake3_hash(b"expected-manifest").as_bytes());
     record.manifest_hash = expected_digest;
 
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let file_name = format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-deadbeef.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    );
-    let path = dir.path().join(file_name);
-    fs::write(&path, b"mismatched-manifest").expect("write manifest to spool");
+    let path =
+        write_da_manifest_spool_file(dir.path(), &record, b"mismatched-manifest", [0xde; 32]);
 
     let (_, result) =
         super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
@@ -65441,15 +65561,7 @@ fn manifest_guard_accepts_matching_manifest() {
     let content = b"manifest-bytes-for-guard";
     let digest = ManifestDigest::new(*blake3_hash(content).as_bytes());
     record.manifest_hash = digest;
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let file_name = format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-deadbeef.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    );
-    let path = dir.path().join(file_name);
-    fs::write(&path, content).expect("write manifest to spool");
+    write_da_manifest_spool_file(dir.path(), &record, content, [0xdf; 32]);
 
     let (_, result) =
         super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
@@ -65460,19 +65572,167 @@ fn manifest_guard_accepts_matching_manifest() {
 }
 
 #[test]
+fn manifest_guard_ignores_non_production_manifest_filenames() {
+    let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut cache = super::ManifestSpoolCache::default();
+    let content = b"manifest-with-malformed-spool-name";
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(content).as_bytes());
+
+    let lane = record.lane_id.as_u32();
+    let epoch = record.epoch;
+    let sequence = record.sequence;
+    let ticket = hex::encode(record.storage_ticket.as_ref());
+    let full_fingerprint = hex::encode([0xf1; 32]);
+    for name in [
+        format!("manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}.norito"),
+        format!("manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-deadbeef.norito"),
+        format!(
+            "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{full_fingerprint}-extra.norito"
+        ),
+        format!(
+            "manifest-{lane:x}-{epoch:016x}-{sequence:016x}-{ticket}-{full_fingerprint}.norito"
+        ),
+    ] {
+        fs::write(dir.path().join(name), content).expect("write malformed-name manifest");
+    }
+
+    let (_, result) =
+        super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
+    assert!(
+        matches!(result, Err(super::ManifestGuardError::Missing { .. })),
+        "malformed manifest filenames must not satisfy a strict manifest guard"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_spool_file_name_rejects_non_utf8_manifest_shaped_artifact() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt as _};
+
+    let shaped = OsString::from_vec(b"manifest-\xff.norito".to_vec());
+    let err = super::manifest_spool_file_name(shaped.as_os_str())
+        .expect_err("non-UTF8 manifest-shaped artifact should reject cache refresh");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+    let unrelated = OsString::from_vec(b"unrelated-\xff.norito".to_vec());
+    assert!(
+        super::manifest_spool_file_name(unrelated.as_os_str())
+            .expect("unrelated non-UTF8 artifact ignored")
+            .is_none()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_spool_scan_rejects_uninspectable_shaped_artifact() {
+    use std::os::unix::fs::symlink;
+
+    let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0xef; 32]));
+    symlink(dir.path().join("missing-manifest-target"), &path)
+        .expect("create broken manifest artifact symlink");
+
+    let err = match super::scan_manifest_spool(dir.path()) {
+        Ok(_) => panic!("uninspectable manifest-shaped artifact should fail cache scan"),
+        Err(err) => err,
+    };
+
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to read manifest spool metadata")
+            || message.contains("is not a regular file"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn manifest_available_for_commitment_defers_missing_but_errors_on_malformed_artifacts() {
+    let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut cache = super::ManifestSpoolCache::default();
+    let expected_manifest = b"manifest-expected-by-commitment";
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(expected_manifest).as_bytes());
+
+    let (available, _) = super::manifest_available_for_commitment(
+        &mut cache,
+        dir.path(),
+        &record,
+        DaManifestPolicy::Strict,
+    );
+    assert!(
+        matches!(available, Ok(false)),
+        "missing strict manifest should defer the commitment"
+    );
+
+    let unreadable_path = dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0x4d; 32]));
+    fs::create_dir(&unreadable_path).expect("create unreadable manifest artifact");
+    let (available, _) = super::manifest_available_for_commitment(
+        &mut cache,
+        dir.path(),
+        &record,
+        DaManifestPolicy::Strict,
+    );
+    match available {
+        Err(super::ManifestGuardError::Read { path, .. }) => assert_eq!(path, unreadable_path),
+        other => panic!("expected unreadable manifest artifact to fail, got {other:?}"),
+    }
+    fs::remove_dir(&unreadable_path).expect("remove unreadable manifest artifact");
+
+    let audit_dir = tempfile::tempdir().expect("audit tempdir");
+    let audit_unreadable_path = audit_dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0x4f; 32]));
+    fs::create_dir(&audit_unreadable_path).expect("create audit-only unreadable manifest");
+    let mut audit_cache = super::ManifestSpoolCache::default();
+    let (available, _) = super::manifest_available_for_commitment(
+        &mut audit_cache,
+        audit_dir.path(),
+        &record,
+        DaManifestPolicy::AuditOnly,
+    );
+    assert!(
+        matches!(available, Ok(true)),
+        "audit-only unreadable manifests should still allow the commitment"
+    );
+
+    write_da_manifest_spool_file(
+        dir.path(),
+        &record,
+        b"manifest-with-wrong-digest",
+        [0x4e; 32],
+    );
+    let (available, _) = super::manifest_available_for_commitment(
+        &mut cache,
+        dir.path(),
+        &record,
+        DaManifestPolicy::Strict,
+    );
+    assert!(
+        matches!(
+            available,
+            Err(super::ManifestGuardError::HashMismatch { .. })
+        ),
+        "strict manifest hash mismatch should fail proposal assembly"
+    );
+}
+
+#[test]
 fn manifest_guard_prefers_matching_manifest() {
     let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
     let dir = tempfile::tempdir().expect("tempdir");
     let mut cache = super::ManifestSpoolCache::default();
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let prefix = format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-",
-        epoch = record.epoch,
-        sequence = record.sequence
-    );
-    let first_path = dir.path().join(format!("{prefix}aaa.norito"));
-    let second_path = dir.path().join(format!("{prefix}zzz.norito"));
+    let first_path = dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0xaa; 32]));
+    let second_path = dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0xbb; 32]));
     let first_content = b"manifest-lex-first";
     let second_content = b"manifest-lex-second";
 
@@ -65496,15 +65756,7 @@ fn manifest_cache_hits_on_repeated_lookup() {
     let content = b"manifest-cache-hit";
     record.manifest_hash = ManifestDigest::new(*blake3_hash(content).as_bytes());
 
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let file_name = format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-cache.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    );
-    let path = dir.path().join(file_name);
-    fs::write(&path, content).expect("write manifest to spool");
+    write_da_manifest_spool_file(dir.path(), &record, content, [0xca; 32]);
 
     let (outcome, result) =
         super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
@@ -65523,11 +65775,8 @@ fn da_spool_cache_hits_on_repeated_load() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut cache = super::DaSpoolCache::default();
 
-    let bytes = to_bytes(&record).expect("encode commitment");
-    let path = dir
-        .path()
-        .join("da-commitment-00000001-0000000000000001-0000000000000001-cache.norito");
-    fs::write(&path, bytes).expect("write commitment");
+    let path = write_da_commitment_spool_file(dir.path(), &record, [0xca; 32]);
+    assert!(path.exists(), "commitment fixture should be written");
 
     let (bundle, outcome) = cache
         .load_commitment_bundle(dir.path())
@@ -65540,6 +65789,81 @@ fn da_spool_cache_hits_on_repeated_load() {
         .expect("load bundle");
     assert!(bundle.is_some(), "bundle should be loaded from cache");
     assert_eq!(outcome, super::CacheOutcome::Hit);
+}
+
+#[cfg(unix)]
+#[test]
+fn da_spool_stamp_rejects_uninspectable_shaped_artifact() {
+    use std::os::unix::fs::symlink;
+
+    let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir
+        .path()
+        .join(da_commitment_spool_file_name(&record, [0xee; 32]));
+    symlink(dir.path().join("missing-commitment-target"), &path)
+        .expect("create broken DA artifact symlink");
+
+    let err = super::scan_da_spool_stamp(dir.path())
+        .expect_err("uninspectable DA-shaped artifact should fail cache scan");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to read DA spool metadata")
+            || message.contains("is not a regular file"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn da_spool_file_name_ignores_commitment_schedule_sidecars() {
+    assert!(
+        super::da_spool_file_name(std::ffi::OsStr::new(
+            "da-commitment-schedule-00000001-0000000000000001-0000000000000001-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.norito"
+        ))
+        .expect("schedule sidecar classifier")
+        .is_none(),
+        "commitment schedule sidecars should not affect core DA spool caches"
+    );
+    assert!(
+        super::da_spool_file_name(std::ffi::OsStr::new(
+            "da-commitment-00000001-0000000000000001-0000000000000001-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.norito"
+        ))
+        .expect("commitment classifier")
+        .is_some(),
+        "commitment records should still be tracked by core DA spool caches"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn da_spool_file_name_rejects_non_utf8_shaped_artifacts() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt as _};
+
+    for raw in [
+        b"da-commitment-\xff.norito".as_slice(),
+        b"da-pin-intent-\xff.norito".as_slice(),
+        b"da-receipt-\xff.norito".as_slice(),
+    ] {
+        let name = OsString::from_vec(raw.to_vec());
+        let err = super::da_spool_file_name(name.as_os_str())
+            .expect_err("non-UTF8 production-shaped artifact should reject cache refresh");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    let schedule = OsString::from_vec(b"da-commitment-schedule-\xff.norito".to_vec());
+    assert!(
+        super::da_spool_file_name(schedule.as_os_str())
+            .expect("non-UTF8 schedule sidecar ignored")
+            .is_none()
+    );
+
+    let unrelated = OsString::from_vec(b"unrelated-\xff.norito".to_vec());
+    assert!(
+        super::da_spool_file_name(unrelated.as_os_str())
+            .expect("unrelated non-UTF8 artifact ignored")
+            .is_none()
+    );
 }
 
 #[test]
@@ -65618,21 +65942,19 @@ fn manifest_block_guard_rejects_hash_mismatch_on_audit_lane() {
     };
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.into_parts();
-    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), Some(bundle));
 
     let dir = tempfile::tempdir().expect("tempdir");
     let lane_config = lane_config_with_manifest_policy(DaManifestPolicy::AuditOnly);
     let mut cache = super::ManifestSpoolCache::default();
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let path = dir.path().join(format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-bad.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    ));
-    fs::write(&path, b"mismatched-audit-manifest").expect("write mismatched manifest");
+    write_da_manifest_spool_file(
+        dir.path(),
+        &record,
+        b"mismatched-audit-manifest",
+        [0xba; 32],
+    );
 
     let mut cache_outcome = super::CacheOutcome::Hit;
     let err = super::manifests_available_for_block(
@@ -65686,14 +66008,7 @@ fn manifest_block_guard_accepts_matching_manifest() {
     let lane_config = LaneConfigSnapshot::default();
     let mut cache = super::ManifestSpoolCache::default();
 
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let path = dir.path().join(format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-ok.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    ));
-    fs::write(&path, content).expect("write manifest to spool");
+    write_da_manifest_spool_file(dir.path(), &record, content, [0x61; 32]);
 
     let mut cache_outcome = super::CacheOutcome::Hit;
     assert!(
@@ -65751,14 +66066,7 @@ fn manifest_gate_clears_after_manifest_arrives() {
         .and_then(|bundle| bundle.commitments.first())
         .cloned()
         .expect("commitment present");
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let path = dir.path().join(format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-ok.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    ));
-    fs::write(&path, content).expect("write manifest");
+    write_da_manifest_spool_file(dir.path(), &record, content, [0x62; 32]);
 
     let gate = Actor::compute_da_gate_status(
         &mut pending,
@@ -65831,14 +66139,7 @@ fn manifest_gate_recovers_after_spool_error() {
         .and_then(|bundle| bundle.commitments.first())
         .cloned()
         .expect("commitment present");
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let path = spool_dir.path().join(format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-ok.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    ));
-    fs::write(&path, content).expect("write manifest");
+    write_da_manifest_spool_file(spool_dir.path(), &record, content, [0x63; 32]);
 
     let gate = Actor::compute_da_gate_status(
         &mut pending,
@@ -65978,14 +66279,7 @@ fn manifest_gate_reports_manifest_recovery_when_payload_still_missing() {
         .and_then(|bundle| bundle.commitments.first())
         .cloned()
         .expect("commitment present");
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let path = dir.path().join(format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-ok.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    ));
-    fs::write(&path, content).expect("write manifest");
+    write_da_manifest_spool_file(dir.path(), &record, content, [0x64; 32]);
 
     let gate = Actor::compute_da_gate_status(
         &mut pending,
@@ -66091,14 +66385,7 @@ fn manifest_block_guard_allows_after_manifest_arrives() {
         .and_then(|bundle| bundle.commitments.first())
         .cloned()
         .expect("commitment present");
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let path = dir.path().join(format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-late.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    ));
-    std::fs::write(&path, content).expect("write late manifest");
+    write_da_manifest_spool_file(dir.path(), &record, content, [0x65; 32]);
 
     let warnings = super::manifests_available_for_block(
         &mut cache,
@@ -66712,35 +66999,451 @@ async fn init_collector_plan_uses_activation_height_collectors() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn internal_proposal_work_detects_da_commitments() {
-    use iroha_crypto::{Hash, Signature};
-    use iroha_data_model::da::commitment::{DaCommitmentRecord, DaProofScheme, KzgCommitment};
-    use iroha_data_model::da::types::{BlobDigest, RetentionPolicy, StorageTicketId};
-    use iroha_data_model::nexus::LaneId;
-    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
-    use norito::to_bytes;
+async fn assemble_proposal_rejects_unreadable_da_spool() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    push_sample_transaction(actor);
 
+    let broken_spool = actor.subsystems.da_rbc.spool_dir.join("not-a-directory");
+    fs::write(&broken_spool, b"not a directory").expect("write broken spool placeholder");
+    actor.subsystems.da_rbc.spool_dir = broken_spool.clone();
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("unreadable DA spool must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to load DA commitments from spool"),
+        "expected DA commitment spool failure, got {message}"
+    );
+    assert!(
+        message.contains(&broken_spool.display().to_string()),
+        "error should identify the broken spool path: {message}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_corrupt_da_commitment_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x71; 32])));
+    let path = spool_dir.join(da_commitment_spool_file_name(&record, [0x72; 32]));
+    fs::write(&path, b"corrupt commitment").expect("write corrupt DA commitment");
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("corrupt DA commitment must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to load DA commitments from spool"),
+        "expected DA commitment spool failure, got {message}"
+    );
+    assert!(
+        message.contains(&path.display().to_string()),
+        "error should identify the corrupt commitment path: {message}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_invalid_da_commitment_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.da.max_commitments_per_block = 1;
+    actor.config.da.max_proof_openings_per_block = 1;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let manifest = b"manifest-for-zero-ticket-da-commitment";
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x78; 32])));
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(manifest).as_bytes());
+    record.storage_ticket = StorageTicketId::new([0; 32]);
+    write_da_commitment_spool_file(&spool_dir, &record, [0x79; 32]);
+    write_da_manifest_spool_file(&spool_dir, &record, manifest, [0x7A; 32]);
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("invalid DA commitment must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("DA commitment bundle failed validation"),
+        "expected DA commitment validation failure, got {message}"
+    );
+    assert!(
+        message.contains("zeroed storage ticket"),
+        "error should identify the semantic validation failure: {message}"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .da
+            .sealed_commitments
+            .contains(&iroha_data_model::da::commitment::DaCommitmentKey::from_record(&record)),
+        "invalid commitment must not be marked sealed after assembly rejection"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_mismatched_da_manifest_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.da.max_commitments_per_block = 1;
+    actor.config.da.max_proof_openings_per_block = 1;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let expected_manifest = b"manifest-expected-before-sealing";
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x7B; 32])));
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(expected_manifest).as_bytes());
+    write_da_commitment_spool_file(&spool_dir, &record, [0x7C; 32]);
+    write_da_manifest_spool_file(
+        &spool_dir,
+        &record,
+        b"manifest-with-conflicting-digest",
+        [0x7D; 32],
+    );
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("mismatched DA manifest must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("DA manifest guard failed before sealing commitment"),
+        "expected manifest guard failure, got {message}"
+    );
+    assert!(
+        message.contains("manifest hash mismatch"),
+        "error should identify the manifest hash mismatch: {message}"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .da
+            .sealed_commitments
+            .contains(&iroha_data_model::da::commitment::DaCommitmentKey::from_record(&record)),
+        "mismatched manifest must not mark the commitment sealed"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_corrupt_da_pin_intent_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let intent = DaPinIntent::new(
+        LaneId::new(0),
+        1,
+        1,
+        StorageTicketId::new([0x73; 32]),
+        ManifestDigest::new([0x74; 32]),
+    );
+    let path = spool_dir.join(da_pin_intent_spool_file_name(&intent, [0x75; 32]));
+    fs::write(&path, b"corrupt pin intent").expect("write corrupt DA pin intent");
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("corrupt DA pin intent must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to load DA pin intents from spool"),
+        "expected DA pin-intent spool failure, got {message}"
+    );
+    assert!(
+        message.contains(&path.display().to_string()),
+        "error should identify the corrupt pin-intent path: {message}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_invalid_da_pin_intent_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let intent = DaPinIntent::new(
+        LaneId::new(0),
+        1,
+        2,
+        StorageTicketId::new([0x76; 32]),
+        ManifestDigest::new([0; 32]),
+    );
+    write_da_pin_intent_spool_file(&spool_dir, &intent, [0x77; 32]);
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("invalid DA pin intent must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("invalid DA pin intent in spool"),
+        "expected DA pin-intent validation failure, got {message}"
+    );
+    assert!(
+        message.contains(&spool_dir.display().to_string()),
+        "error should identify the pin-intent spool path: {message}"
+    );
+    assert!(
+        message.contains("zeroed pin-intent manifest hash"),
+        "error should identify the semantic validation failure: {message}"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.da.sealed_pin_intents.contains(&(
+            intent.lane_id.as_u32(),
+            intent.epoch,
+            intent.sequence
+        )),
+        "invalid pin intent must not be marked sealed after assembly rejection"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_corrupt_da_receipt_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = true;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x76; 32])));
+    let receipt = sample_da_receipt_for_record(&record);
+    let path = spool_dir.join(da_receipt_spool_file_name(
+        &receipt,
+        record.sequence,
+        [0x77; 32],
+    ));
+    fs::write(&path, b"corrupt receipt").expect("write corrupt DA receipt");
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("corrupt DA receipt must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to decode DA receipt"),
+        "expected DA receipt spool failure, got {message}"
+    );
+    assert!(
+        message.contains(&path.display().to_string()),
+        "error should identify the corrupt receipt path: {message}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_conflicting_da_receipt_evidence() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = true;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x7B; 32])));
+    let receipt_a = sample_da_receipt_for_record(&record);
+    let mut receipt_b = receipt_a.clone();
+    receipt_b.blob_hash = BlobDigest::new([0x7C; 32]);
+    write_da_receipt_spool_file(&spool_dir, &receipt_a, record.sequence, [0x7D; 32]);
+    write_da_receipt_spool_file(&spool_dir, &receipt_b, record.sequence, [0x7E; 32]);
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("conflicting DA receipt evidence must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("receipt evidence conflict"),
+        "expected receipt evidence conflict, got {message}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_unreadable_da_shard_cursor_journal() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.da.max_commitments_per_block = 1;
+    actor.config.da.max_proof_openings_per_block = 1;
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let manifest = b"manifest-for-blocked-shard-cursor-journal";
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x88; 32])));
+    record.kzg_commitment = None;
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(manifest).as_bytes());
+    write_da_commitment_spool_file(&spool_dir, &record, [0x89; 32]);
+    write_da_manifest_spool_file(&spool_dir, &record, manifest, [0x8A; 32]);
+
+    let shard_cursor_path = crate::da::DaShardCursorJournal::journal_path(&spool_dir);
+    fs::create_dir(&shard_cursor_path).expect("block shard cursor journal path with directory");
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("unreadable DA shard cursor journal must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to load DA shard cursor journal"),
+        "expected shard cursor journal load failure, got {message}"
+    );
+    assert!(
+        message.contains(&shard_cursor_path.display().to_string()),
+        "error should identify the blocked journal path: {message}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_detects_da_commitments() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
 
-    let record = DaCommitmentRecord::new(
-        LaneId::new(0),
-        1,
-        1,
-        BlobDigest::new([0x11; 32]),
-        ManifestDigest::new([0x22; 32]),
-        DaProofScheme::MerkleSha256,
-        Hash::prehashed([0x33; 32]),
-        Some(KzgCommitment::new([0x44; 48])),
-        Some(Hash::prehashed([0x55; 32])),
-        RetentionPolicy::default(),
-        StorageTicketId::new([0x66; 32]),
-        Signature::from_bytes(&[0x77; 64]),
-    );
-    let bytes = to_bytes(&record).expect("encode commitment");
-    let path = spool_dir.join("da-commitment-00000000-0000000000000001-0000000000000001.norito");
-    std::fs::write(&path, bytes).expect("write spool commitment");
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x55; 32])));
+    write_da_commitment_spool_file(&spool_dir, &record, [0x78; 32]);
 
     let proposal_height = actor.state.view().height() as u64 + 1;
     let work = actor.internal_proposal_work(proposal_height, None);
@@ -66751,35 +67454,88 @@ async fn internal_proposal_work_detects_da_commitments() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn internal_proposal_work_ignores_committed_da_commitments() {
-    use iroha_crypto::{Hash, Signature};
-    use iroha_data_model::da::commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme};
-    use iroha_data_model::da::types::{BlobDigest, RetentionPolicy, StorageTicketId};
-    use iroha_data_model::nexus::LaneId;
-    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
-    use norito::to_bytes;
-
+async fn internal_proposal_work_treats_commitment_spool_errors_as_work() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
 
-    let record = DaCommitmentRecord::new(
-        LaneId::new(0),
-        1,
-        1,
-        BlobDigest::new([0x91; 32]),
-        ManifestDigest::new([0x92; 32]),
-        DaProofScheme::MerkleSha256,
-        Hash::prehashed([0x93; 32]),
-        None,
-        Some(Hash::prehashed([0x94; 32])),
-        RetentionPolicy::default(),
-        StorageTicketId::new([0x95; 32]),
-        Signature::from_bytes(&[0x96; 64]),
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0xA5; 32])));
+    let path = spool_dir.join(da_commitment_spool_file_name(&record, [0xA6; 32]));
+    fs::write(&path, b"corrupt commitment").expect("write corrupt DA commitment");
+
+    let proposal_height = actor.state.view().height() as u64 + 1;
+    let work = actor.internal_proposal_work(proposal_height, None);
+    assert!(
+        work.da_commitments,
+        "commitment spool errors must keep DA proposal work visible"
     );
-    let bytes = to_bytes(&record).expect("encode commitment");
-    let path = spool_dir.join("da-commitment-00000000-0000000000000001-0000000000000001.norito");
-    std::fs::write(&path, bytes).expect("write spool commitment");
+    assert!(work.has_work());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_detects_da_receipts() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = true;
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x44; 32])));
+    let receipt = sample_da_receipt_for_record(&record);
+    write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x45; 32]);
+
+    let proposal_height = actor.state.view().height() as u64 + 1;
+    let work = actor.internal_proposal_work(proposal_height, None);
+    assert!(
+        work.da_receipts,
+        "pending DA receipts must keep proposal work visible"
+    );
+    assert!(work.has_work());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_treats_receipt_spool_errors_as_work() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = true;
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x46; 32])));
+    let receipt = sample_da_receipt_for_record(&record);
+    let path = spool_dir.join(da_receipt_spool_file_name(
+        &receipt,
+        record.sequence,
+        [0x47; 32],
+    ));
+    fs::write(&path, b"corrupt receipt").expect("write corrupt DA receipt");
+
+    let proposal_height = actor.state.view().height() as u64 + 1;
+    let work = actor.internal_proposal_work(proposal_height, None);
+    assert!(
+        work.da_receipts,
+        "receipt spool errors must keep DA proposal work visible"
+    );
+    assert!(work.has_work());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_ignores_committed_da_commitments() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x94; 32])));
+    record.client_blob_id = BlobDigest::new([0x91; 32]);
+    record.manifest_hash = ManifestDigest::new([0x92; 32]);
+    record.chunk_root = Hash::prehashed([0x93; 32]);
+    record.storage_ticket = StorageTicketId::new([0x95; 32]);
+    record.acknowledgement_sig = Signature::from_bytes(&[0x96; 64]);
+    write_da_commitment_spool_file(&spool_dir, &record, [0x97; 32]);
 
     let _ = actor.state.da_commitments();
     actor
@@ -66800,12 +67556,6 @@ async fn internal_proposal_work_ignores_committed_da_commitments() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn internal_proposal_work_detects_da_pin_intents() {
-    use iroha_data_model::da::pin_intent::DaPinIntent;
-    use iroha_data_model::da::types::StorageTicketId;
-    use iroha_data_model::nexus::LaneId;
-    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
-    use norito::to_bytes;
-
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
@@ -66817,9 +67567,7 @@ async fn internal_proposal_work_detects_da_pin_intents() {
         StorageTicketId::new([0xA1; 32]),
         ManifestDigest::new([0xB1; 32]),
     );
-    let bytes = to_bytes(&intent).expect("encode pin intent");
-    let path = spool_dir.join("da-pin-intent-00000000-0000000000000001-0000000000000001.norito");
-    std::fs::write(&path, bytes).expect("write spool pin intent");
+    write_da_pin_intent_spool_file(&spool_dir, &intent, [0xB2; 32]);
 
     let proposal_height = actor.state.view().height() as u64 + 1;
     let work = actor.internal_proposal_work(proposal_height, None);
@@ -66830,13 +67578,35 @@ async fn internal_proposal_work_detects_da_pin_intents() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_treats_pin_spool_errors_as_work() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let intent = DaPinIntent::new(
+        LaneId::new(0),
+        1,
+        1,
+        StorageTicketId::new([0xA7; 32]),
+        ManifestDigest::new([0xA8; 32]),
+    );
+    let path = spool_dir.join(da_pin_intent_spool_file_name(&intent, [0xA9; 32]));
+    fs::write(&path, b"corrupt pin intent").expect("write corrupt DA pin intent");
+
+    let proposal_height = actor.state.view().height() as u64 + 1;
+    let work = actor.internal_proposal_work(proposal_height, None);
+    assert!(
+        work.da_pin_intents,
+        "pin-intent spool errors must keep DA proposal work visible"
+    );
+    assert!(work.has_work());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn internal_proposal_work_ignores_committed_da_pin_intent_identities() {
-    use iroha_data_model::da::{
-        commitment::DaCommitmentLocation, pin_intent::DaPinIntent, types::StorageTicketId,
-    };
-    use iroha_data_model::nexus::LaneId;
-    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
-    use norito::to_bytes;
+    use iroha_data_model::da::commitment::DaCommitmentLocation;
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -66873,14 +67643,7 @@ async fn internal_proposal_work_ignores_committed_da_pin_intent_identities() {
         committed.manifest_hash,
     );
     for intent in [duplicate_ticket, duplicate_manifest] {
-        let bytes = to_bytes(&intent).expect("encode pin intent");
-        let path = spool_dir.join(format!(
-            "da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}.norito",
-            lane = intent.lane_id.as_u32(),
-            epoch = intent.epoch,
-            sequence = intent.sequence,
-        ));
-        std::fs::write(&path, bytes).expect("write spool pin intent");
+        write_da_pin_intent_spool_file(&spool_dir, &intent, [0xE1; 32]);
     }
 
     let proposal_height = actor.state.view().height() as u64 + 1;
@@ -69408,7 +70171,10 @@ fn block_sync_selection_prefers_matching_validator_checkpoint_history() {
     let state = state_with_peers_and_keys(&roster, &keypairs);
     let block_header = BlockHeader::new(NonZeroU64::new(7).unwrap(), None, None, None, 0, 0);
     let block_hash = block_header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig.clone(), block_header, Vec::new());
     let chain = state.chain_id.clone();
     let topology = super::network_topology::Topology::new(roster.clone());
@@ -69481,7 +70247,10 @@ fn block_sync_selection_prefers_matching_commit_qc_history() {
     let state = state_with_peers_and_keys(std::slice::from_ref(me_peer.id()), &keypairs);
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD0; Hash::LENGTH]));
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0_u32).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, 1);
@@ -69600,7 +70369,7 @@ fn block_sync_selection_prefers_paired_hints() {
     let block = SignedBlock::presigned(
         BlockSignature::new(
             0,
-            SignatureOf::from_hash(me_kp.private_key(), block_header.hash()),
+            checked_signature_of_hash(me_kp.private_key(), block_header.hash()),
         ),
         block_header,
         Vec::new(),
@@ -69663,8 +70432,10 @@ fn block_sync_selection_uses_persisted_commit_roster_snapshot() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_signature =
-        BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_signature = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_signature.clone(), header, Vec::new());
     let signers_bitmap = vec![0b0000_0001];
     let topology = super::network_topology::Topology::new(roster.clone());
@@ -69788,7 +70559,10 @@ fn block_sync_update_uses_journal_roster() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig.clone(), header, Vec::new());
     let roster = vec![me_peer.id().clone()];
     let mut signers = BTreeSet::new();
@@ -69932,7 +70706,10 @@ fn block_sync_update_includes_commit_qc_from_history() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig.clone(), header, Vec::new());
     let roster = vec![me_peer.id().clone()];
     let mut signers = BTreeSet::new();
@@ -70045,7 +70822,10 @@ fn block_sync_update_includes_commit_qc_from_precommit_signers() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig, header, Vec::new());
     let roster = vec![me_peer.id().clone()];
     let mut signers = BTreeSet::new();
@@ -70140,7 +70920,10 @@ fn block_sync_selection_falls_back_to_exact_precommit_signer_history() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig, header, Vec::new());
     let roster = vec![me_peer.id().clone()];
     let signers = BTreeSet::from([ValidatorIndex::try_from(0_u32).expect("signer index fits")]);
@@ -70268,7 +71051,7 @@ fn block_sync_selection_rejects_precommit_signer_history_without_commit_quorum()
     let block_hash = header.hash();
     let block_sig = BlockSignature::new(
         0,
-        SignatureOf::from_hash(keypairs[0].private_key(), block_hash),
+        checked_signature_of_hash(keypairs[0].private_key(), block_hash),
     );
     let block = SignedBlock::presigned(block_sig, header, Vec::new());
     let signers: BTreeSet<_> = [0_u32, 1_u32]
@@ -70349,7 +71132,10 @@ fn block_sync_update_includes_checkpoint_from_history() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig.clone(), header, Vec::new());
     let roster = vec![me_peer.id().clone()];
     let chain = state.chain_id.clone();
@@ -70461,7 +71247,7 @@ fn block_sync_update_canonicalizes_signature_indices_for_roster() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let signature = SignatureOf::from_hash(kp_b.private_key(), block_hash);
+    let signature = checked_signature_of_hash(kp_b.private_key(), block_hash);
     let block_sig = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_sig, header, Vec::new());
 
@@ -70550,7 +71336,7 @@ fn block_sync_update_uses_activation_height_mode_tag() {
         view_change_index: view,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
 
@@ -70622,7 +71408,8 @@ fn block_sync_update_uses_active_roster_for_checkpoint() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(kp_a.private_key(), block_hash));
+    let block_sig =
+        BlockSignature::new(0, checked_signature_of_hash(kp_a.private_key(), block_hash));
     let block = SignedBlock::presigned(block_sig, header, Vec::new());
 
     let selection = select_block_sync_roster(
@@ -70680,7 +71467,7 @@ fn block_sync_selection_npos_uncertified_falls_back_when_live_keys_filter_empty(
     let header = BlockHeader::new(nonzero!(9_u64), None, None, None, 0, 0);
     let block_hash = header.hash();
     let block = SignedBlock::presigned(
-        BlockSignature::new(0, SignatureOf::from_hash(kp_a.private_key(), block_hash)),
+        BlockSignature::new(0, checked_signature_of_hash(kp_a.private_key(), block_hash)),
         header,
         Vec::new(),
     );
@@ -70748,7 +71535,10 @@ fn block_sync_update_uses_history_after_restart_like_path() {
         confidential_features: None,
     };
     let block_hash = header.hash();
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(
+        0,
+        checked_signature_of_hash(me_kp.private_key(), block_hash),
+    );
     let block = SignedBlock::presigned(block_sig.clone(), header, Vec::new());
     let roster = vec![me_peer.id().clone()];
     let mut signers = BTreeSet::new();
@@ -70919,7 +71709,10 @@ fn block_sync_roster_rejects_invalid_hint_roster() {
     let header = BlockHeader::new(nonzero!(9_u64), None, None, None, 0, 0);
     let block_hash = header.hash();
     let block = SignedBlock::presigned(
-        BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash)),
+        BlockSignature::new(
+            0,
+            checked_signature_of_hash(me_kp.private_key(), block_hash),
+        ),
         header,
         Vec::new(),
     );
@@ -71148,7 +71941,7 @@ fn block_sync_roster_selection_uses_persisted_journal() {
     let block = SignedBlock::presigned(
         BlockSignature::new(
             0,
-            SignatureOf::from_hash(me_kp.private_key(), block_header.hash()),
+            checked_signature_of_hash(me_kp.private_key(), block_header.hash()),
         ),
         block_header,
         Vec::new(),
@@ -71279,7 +72072,7 @@ fn block_sync_roster_recovers_from_roster_sidecar_after_cache_reset() {
     let block = SignedBlock::presigned(
         BlockSignature::new(
             0,
-            SignatureOf::from_hash(me_kp.private_key(), block_header.hash()),
+            checked_signature_of_hash(me_kp.private_key(), block_header.hash()),
         ),
         block_header,
         Vec::new(),
@@ -80431,7 +81224,7 @@ fn block_sync_update_includes_persisted_roster_artifacts() {
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
-    let block_sig = BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash));
+    let block_sig = BlockSignature::new(0, checked_signature_of_hash(kp.private_key(), block_hash));
     let roster = vec![me_peer.id().clone()];
     let keypairs = vec![kp.clone()];
     let world = World::default();
@@ -80544,7 +81337,7 @@ fn block_sync_update_omits_roster_artifacts_without_metadata() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let block = SignedBlock::presigned(
-        BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash)),
+        BlockSignature::new(0, checked_signature_of_hash(kp.private_key(), block_hash)),
         header,
         Vec::new(),
     );
@@ -80583,7 +81376,7 @@ fn block_sync_update_certified_builder_skips_uncertified_roster_fallback() {
     let header = BlockHeader::new(nonzero!(9_u64), None, None, None, 0, 0);
     let block_hash = header.hash();
     let block = SignedBlock::presigned(
-        BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash)),
+        BlockSignature::new(0, checked_signature_of_hash(kp.private_key(), block_hash)),
         header,
         Vec::new(),
     );
@@ -123387,7 +124180,7 @@ fn rebuild_qc_from_votes_rejects_signature_from_wrong_peer() {
         .find(|kp| kp.public_key() != expected_peer.public_key())
         .expect("topology has a different key for mismatch test");
     let preimage_b = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote_b);
-    let sig_b = Signature::new(wrong_key.private_key(), &preimage_b);
+    let sig_b = checked_signature(wrong_key.private_key(), &preimage_b);
     let payload = sig_b.payload().to_vec();
     vote_b.bls_sig = payload;
 
@@ -123663,7 +124456,7 @@ fn vote_signature_valid_accepts_signed_vote() {
         bls_sig: Vec::new(),
     };
     let preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
 
     assert!(super::vote_signature_valid(
@@ -123697,7 +124490,7 @@ fn vote_signature_valid_rejects_invalid_bls_signature() {
         bls_sig: Vec::new(),
     };
     let preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     let payload = signature.payload().to_vec();
     let mut bad_payload = payload.clone();
     bad_payload[0] ^= 0xFF;
@@ -132036,7 +132829,7 @@ async fn handle_evidence_uses_subject_height_prf_seed() {
 
     for vote in [&mut vote_a, &mut vote_b] {
         let preimage = super::vote_preimage(&actor.common_config.chain, super::NPOS_TAG, vote);
-        let sig = Signature::new(keypair.private_key(), &preimage);
+        let sig = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = sig.payload().to_vec();
     }
 
@@ -132137,7 +132930,7 @@ async fn handle_evidence_uses_subject_height_mode_tag() {
 
     for vote in [&mut vote_a, &mut vote_b] {
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, vote);
-        let sig = Signature::new(keypair.private_key(), &preimage);
+        let sig = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = sig.payload().to_vec();
     }
 
@@ -132255,7 +133048,7 @@ async fn handle_vote_uses_height_prf_seed() {
     };
     bind_vote_to_actor_chain_order(&mut vote, actor);
     let preimage = super::vote_preimage(&actor.common_config.chain, super::NPOS_TAG, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     let key = vote_log_key_for_vote(&vote);
 
@@ -132450,7 +133243,7 @@ async fn handle_vote_uses_activation_height_mode_tag() {
     };
     bind_vote_to_actor_chain_order(&mut vote, actor);
     let preimage = super::vote_preimage(&actor.common_config.chain, super::NPOS_TAG, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     let key = vote_log_key_for_vote(&vote);
 
@@ -139923,7 +140716,7 @@ async fn fresh_proposal_defers_when_split_same_height_votes_make_new_branch_non_
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -146456,7 +147249,7 @@ async fn commit_pipeline_emits_local_precommit_with_live_roster_when_cached_rost
         view_change_index: view,
         confidential_features: None,
     };
-    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let signature = checked_signature_of_hash(signer_kp.private_key(), header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::new());
     let block_hash = block.hash();
@@ -147628,7 +148421,7 @@ async fn precommit_vote_rejects_newer_conflict_even_when_local_vote_would_comple
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
         seeded = seeded.saturating_add(1);
@@ -149785,7 +150578,7 @@ async fn qc_empty_block_with_time_trigger_is_not_dropped() {
     };
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.into_parts();
-    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     let block = SignedBlock::presigned(block_signature, header, Vec::<SignedTransaction>::new());
 
@@ -152366,7 +153159,7 @@ async fn exact_frontier_block_created_flushes_ready_stashed_before_body() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&actor.chain_id, mode_tag, &ready);
-    let signature = Signature::new(ready_key.private_key(), &preimage);
+    let signature = checked_signature(ready_key.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     actor.handle_rbc_ready(ready).expect("stash ready");
@@ -166034,7 +166827,7 @@ fn derive_block_sync_qc_from_committed_signers() {
     let mut block = BlockBuilder::new(header).build_with_signature(0, leader_kp.private_key());
     for idx in 1..3 {
         let signer_kp = keypair_at_index(&keypairs, &signature_topology, idx);
-        let sig = SignatureOf::from_hash(signer_kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(signer_kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -167174,7 +167967,7 @@ fn tally_qc_against_votes_rejects_wrong_signature_key() {
         &kp_a
     };
     let preimage_b = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote_b);
-    let sig_b = Signature::new(wrong_kp.private_key(), &preimage_b);
+    let sig_b = checked_signature(wrong_kp.private_key(), &preimage_b);
     vote_b.bls_sig = sig_b.payload().to_vec();
     let canonical_roster = super::roster::canonicalize_roster(topology.as_ref().to_vec());
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
@@ -168053,7 +168846,7 @@ fn validate_block_for_voting_recovers_stale_signature_indices() {
     let genesis_hash = seed_genesis_block_for_state(&state);
     let mut block =
         heartbeat_block_for_state(&state, &chain, 2, 0, Some(genesis_hash), &leader_kp, 0);
-    let leader_sig = SignatureOf::from_hash(leader_kp.private_key(), block.hash());
+    let leader_sig = checked_signature_of_hash(leader_kp.private_key(), block.hash());
     block
         .replace_signatures(BTreeSet::from([BlockSignature::new(1, leader_sig)]))
         .expect("replace signatures");
@@ -168887,7 +169680,7 @@ fn validate_qc_against_votes_rejects_signature_from_wrong_signer_key() {
         prf_seed,
     );
     let bad_preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &mismatched_vote);
-    let bad_sig = Signature::new(wrong_kp.private_key(), &bad_preimage);
+    let bad_sig = checked_signature(wrong_kp.private_key(), &bad_preimage);
     mismatched_vote.bls_sig = bad_sig.payload().to_vec();
     vote_log.insert(vote_log_key_for_vote(&mismatched_vote), mismatched_vote);
 
@@ -169010,7 +169803,7 @@ fn validate_qc_against_votes_records_invalid_signature_reason_for_mismatched_sig
         prf_seed,
     );
     let bad_preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &mismatched_vote);
-    let bad_sig = Signature::new(wrong_kp.private_key(), &bad_preimage);
+    let bad_sig = checked_signature(wrong_kp.private_key(), &bad_preimage);
     mismatched_vote.bls_sig = bad_sig.payload().to_vec();
     vote_log.insert(vote_log_key_for_vote(&mismatched_vote), mismatched_vote);
 
@@ -169755,7 +170548,7 @@ fn rbc_ready_signature_valid_accepts_signed_frame() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&chain, super::PERMISSIONED_TAG, &ready);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     assert!(super::rbc::rbc_ready_signature_valid(
@@ -169789,7 +170582,7 @@ fn rbc_ready_signature_valid_rejects_domain_and_field_replay() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&chain, super::PERMISSIONED_TAG, &ready);
-    let signature = Signature::new(signer.private_key(), &preimage);
+    let signature = checked_signature(signer.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
 
     assert!(super::rbc::rbc_ready_signature_valid(
@@ -169929,7 +170722,7 @@ fn rbc_ready_signature_valid_rejects_invalid_bls_signature() {
         signature: Vec::new(),
     };
     let preimage = super::rbc_ready_preimage(&chain, super::PERMISSIONED_TAG, &ready);
-    let mut signature = Signature::new(keypair.private_key(), &preimage)
+    let mut signature = checked_signature(keypair.private_key(), &preimage)
         .payload()
         .to_vec();
     signature[0] ^= 0xFF;
@@ -169963,7 +170756,7 @@ fn rbc_deliver_signature_valid_rejects_out_of_range_sender() {
         ready_signatures: Vec::new(),
     };
     let preimage = super::rbc_deliver_preimage(&chain, super::PERMISSIONED_TAG, &deliver);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     // Sender 1 is out of bounds for the topology; validation must fail.
@@ -169996,7 +170789,7 @@ fn rbc_deliver_signature_valid_rejects_invalid_bls_signature() {
         ready_signatures: Vec::new(),
     };
     let preimage = super::rbc_deliver_preimage(&chain, super::PERMISSIONED_TAG, &deliver);
-    let mut signature = Signature::new(keypair.private_key(), &preimage)
+    let mut signature = checked_signature(keypair.private_key(), &preimage)
         .payload()
         .to_vec();
     signature[0] ^= 0xFF;
@@ -170033,7 +170826,7 @@ fn rbc_deliver_signature_valid_rejects_ready_bundle_tamper() {
         }],
     };
     let preimage = super::rbc_deliver_preimage(&chain, super::PERMISSIONED_TAG, &deliver);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     assert!(super::rbc::rbc_deliver_signature_valid(
@@ -170079,7 +170872,7 @@ fn rbc_deliver_signature_valid_rejects_domain_and_field_replay() {
         }],
     };
     let preimage = super::rbc_deliver_preimage(&chain, super::PERMISSIONED_TAG, &deliver);
-    let signature = Signature::new(signer.private_key(), &preimage);
+    let signature = checked_signature(signer.private_key(), &preimage);
     deliver.signature = signature.payload().to_vec();
 
     assert!(super::rbc::rbc_deliver_signature_valid(
@@ -175257,7 +176050,7 @@ fn background_bypass_formal_gate_matrix() {
                 let key_pair = KeyPair::random();
                 let leader_signature = BlockSignature::new(
                     0,
-                    SignatureOf::from_hash(key_pair.private_key(), block_hash),
+                    checked_signature_of_hash(key_pair.private_key(), block_hash),
                 );
                 BlockMessage::RbcInit(crate::sumeragi::consensus::RbcInit {
                     block_hash,
@@ -175889,7 +176682,7 @@ async fn precommit_vote_broadcast_uses_background_queue() {
         super::PERMISSIONED_TAG,
         &vote,
     );
-    let signature = Signature::new(
+    let signature = checked_signature(
         harness.actor.common_config.key_pair.private_key(),
         &preimage,
     );
@@ -175939,7 +176732,7 @@ async fn qc_vote_post_bypasses_background_queue() {
         super::PERMISSIONED_TAG,
         &vote,
     );
-    let signature = Signature::new(
+    let signature = checked_signature(
         harness.actor.common_config.key_pair.private_key(),
         &preimage,
     );
@@ -176205,7 +176998,7 @@ async fn background_posts_dispatch_inline_when_worker_disabled() {
         super::PERMISSIONED_TAG,
         &vote,
     );
-    let signature = Signature::new(
+    let signature = checked_signature(
         harness.actor.common_config.key_pair.private_key(),
         &preimage,
     );
@@ -176874,7 +177667,7 @@ fn signed_vrf_commit_for_tests(
         .expect("signing peer in topology");
     let (_, mode_tag, _) = actor.consensus_context_for_height(actor.committed_height_snapshot());
     let preimage = vrf_commit_preimage(&actor.common_config.chain, mode_tag, &commit);
-    let signature = Signature::new(
+    let signature = checked_signature(
         keypair_for_peer(key_pairs, signing_peer).private_key(),
         &preimage,
     );
@@ -177528,7 +178321,7 @@ async fn external_vrf_reveal_broadcasts_after_acceptance() {
     let (consensus_mode, mode_tag, _) = harness.actor.consensus_context_for_height(5);
     assert_eq!(consensus_mode, ConsensusMode::Npos);
     let preimage = vrf_reveal_preimage(&harness.actor.common_config.chain, mode_tag, &reveal_msg);
-    let signature = Signature::new(
+    let signature = checked_signature(
         keypair_for_peer(&harness.key_pairs, &signer_peer).private_key(),
         &preimage,
     );
@@ -177631,7 +178424,7 @@ async fn on_block_message_handles_vrf_reveal_before_commit_catchup_finalizes_epo
     let (consensus_mode, mode_tag, _) = actor.consensus_context_for_height(2);
     assert_eq!(consensus_mode, ConsensusMode::Npos);
     let preimage = vrf_reveal_preimage(&actor.common_config.chain, mode_tag, &reveal_msg);
-    let signature = Signature::new(
+    let signature = checked_signature(
         keypair_for_peer(&harness.key_pairs, &signer_peer).private_key(),
         &preimage,
     );
@@ -179386,7 +180179,7 @@ fn empty_block_for_actor(
     };
     let key_pair = actor.common_config.key_pair.clone();
     let (_, private_key) = key_pair.into_parts();
-    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     SignedBlock::presigned(block_signature, header, Vec::<SignedTransaction>::new())
 }
@@ -182741,7 +183534,7 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_validation_inflight(
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -183431,7 +184224,7 @@ async fn reschedule_defers_near_commit_quorum_while_rbc_chunks_arrive() {
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -183551,7 +184344,7 @@ async fn reschedule_defers_near_commit_quorum_while_block_queue_backlogged() {
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -183671,7 +184464,7 @@ async fn reschedule_defers_near_commit_quorum_with_recent_progress_without_backl
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -183859,7 +184652,7 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -183975,7 +184768,7 @@ async fn reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog()
         };
         bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = checked_signature(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         actor.handle_vote(vote);
     }
@@ -184423,7 +185216,7 @@ async fn reschedule_ignores_vote_backed_quorum_timeout_rbc_queue_backlog() {
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -184537,7 +185330,7 @@ async fn reschedule_skips_vote_backed_quorum_timeout_while_progress_is_recent() 
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -184631,7 +185424,7 @@ async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_heigh
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -184780,7 +185573,7 @@ async fn reschedule_preemptively_retransmits_single_vote_frontier_once_fast_wind
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -184915,7 +185708,7 @@ async fn reschedule_single_vote_frontier_retransmits_before_full_quorum_timeout(
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -185061,7 +185854,7 @@ async fn reschedule_vote_backed_frontier_retransmits_block_created_to_missing_vo
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
     let local_peer = actor.common_config.peer.id().clone();
@@ -185224,7 +186017,7 @@ async fn reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_w
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -185392,7 +186185,7 @@ async fn reschedule_skips_vote_backed_retransmit_while_same_height_rbc_sender_ac
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -185926,7 +186719,7 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogge
     };
     bind_vote_to_signature_topology_chain_order(&mut vote, actor, &signature_topology);
     let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = checked_signature(keypair.private_key(), &preimage);
     vote.bls_sig = signature.payload().to_vec();
     actor.handle_vote(vote);
 
@@ -190558,7 +191351,7 @@ fn empty_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> S
     };
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.into_parts();
-    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     SignedBlock::presigned(block_signature, header, Vec::<SignedTransaction>::new())
 }
@@ -190795,7 +191588,7 @@ fn block_with_txs(
     };
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.into_parts();
-    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     SignedBlock::presigned(block_signature, header, txs)
 }
@@ -190986,7 +191779,7 @@ fn add_commit_quorum_signatures_for_actor(
             .iter()
             .find(|key_pair| key_pair.public_key() == peer.public_key())
             .expect("signer keypair exists in harness");
-        let signature = SignatureOf::from_hash(key_pair.private_key(), block.header().hash());
+        let signature = checked_signature_of_hash(key_pair.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(idx_u64, signature))
             .expect("signature added");
@@ -191003,7 +191796,7 @@ fn block_payload_bytes_ignores_results_and_extra_signatures() {
 
     let extra_key = KeyPair::random();
     let (_, extra_private) = extra_key.into_parts();
-    let extra_sig = SignatureOf::from_hash(&extra_private, block.header().hash());
+    let extra_sig = checked_signature_of_hash(&extra_private, block.header().hash());
     block
         .add_signature(BlockSignature::new(1, extra_sig))
         .expect("add signature");
@@ -191033,7 +191826,7 @@ fn block_payload_bytes_ignores_missing_leader_signature() {
 
     let extra_key = KeyPair::random();
     let (_, extra_private) = extra_key.into_parts();
-    let extra_sig = SignatureOf::from_hash(&extra_private, block.header().hash());
+    let extra_sig = checked_signature_of_hash(&extra_private, block.header().hash());
     let mut signatures = BTreeSet::new();
     signatures.insert(BlockSignature::new(1, extra_sig));
     block
@@ -191205,7 +191998,7 @@ fn payload_canonical_stale_header_block(tx: SignedTransaction, seed: u8) -> Sign
         &payload_canonical_previous_roster_evidence(seed),
     )));
     header.set_npos_effects_hash(Some(HashOf::new(&payload_canonical_npos_effects(seed))));
-    let signature = SignatureOf::from_hash(ALICE_KEYPAIR.private_key(), header.hash());
+    let signature = checked_signature_of_hash(ALICE_KEYPAIR.private_key(), header.hash());
     let payload = BlockPayload {
         header,
         transactions: vec![tx.clone()],
@@ -191247,7 +192040,7 @@ fn block_payload_bytes_matches_canonicalization_formal_gate() {
         .expect("test block entrypoint hash should match payload");
 
     let extra_key = KeyPair::random();
-    let extra_signature = SignatureOf::from_hash(extra_key.private_key(), base.header().hash());
+    let extra_signature = checked_signature_of_hash(extra_key.private_key(), base.header().hash());
     let mut extra_signature_block = base.clone();
     extra_signature_block
         .add_signature(BlockSignature::new(1, extra_signature))
@@ -191255,7 +192048,7 @@ fn block_payload_bytes_matches_canonicalization_formal_gate() {
 
     let replacement_key = KeyPair::random();
     let replacement_signature =
-        SignatureOf::from_hash(replacement_key.private_key(), base.header().hash());
+        checked_signature_of_hash(replacement_key.private_key(), base.header().hash());
     let mut missing_leader_signature = base.clone();
     missing_leader_signature
         .replace_signatures(BTreeSet::from([BlockSignature::new(
@@ -192419,7 +193212,7 @@ async fn block_sync_update_accepts_stale_view_when_missing_block_requested() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits"),
@@ -195097,7 +195890,7 @@ async fn block_sync_update_drops_stale_view_without_missing_request() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits"),
@@ -195206,7 +195999,7 @@ async fn block_sync_update_accepts_stale_view_with_commit_qc() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits"),
@@ -195463,7 +196256,7 @@ async fn block_sync_update_accepts_stale_view_with_commit_votes() {
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair");
-        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits"),
@@ -195581,7 +196374,7 @@ async fn block_sync_update_same_height_conflict_with_block_quorum_stays_passive_
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair");
-        let sig = SignatureOf::from_hash(kp.private_key(), conflicting_block.header().hash());
+        let sig = checked_signature_of_hash(kp.private_key(), conflicting_block.header().hash());
         conflicting_block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits"),

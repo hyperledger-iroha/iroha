@@ -180,8 +180,11 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         #endif
     }
 
-    func testPrivacyCapabilitiesRemainFailClosedWithBridgeAvailable() {
-        let capabilities = PrivacyNativeBridge.privacyCapabilities(bridgeAvailable: true)
+    func testPrivacyCapabilitiesFailClosedWithMalformedNativeArchive() {
+        let capabilities = PrivacyNativeBridge.privacyCapabilities(
+            fromArchive: privacyNoritoFrameWithPayload(0x42),
+            bridgeAvailable: true
+        )
 
         XCTAssertTrue(capabilities.swiftSdkAvailable)
         XCTAssertTrue(capabilities.bridgeAvailable)
@@ -197,7 +200,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     }
 
     func testPrivacyCapabilitiesReturnValueCopies() {
-        let capabilities = PrivacyNativeBridge.privacyCapabilities(bridgeAvailable: true)
+        let capabilities = PrivacyNativeBridge.privacyCapabilities(
+            fromArchive: privacyNoritoFrameWithPayload(0x42),
+            bridgeAvailable: true
+        )
         var requiredGates = capabilities.productionGate.requiredGates
         requiredGates.append("tampered")
         var missing = capabilities.productionGate.missing
@@ -205,7 +211,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         var auditReferences = capabilities.productionGate.auditReferences
         auditReferences.append("https://audit.example/forged-signoff")
 
-        let fresh = PrivacyNativeBridge.privacyCapabilities(bridgeAvailable: true)
+        let fresh = PrivacyNativeBridge.privacyCapabilities(
+            fromArchive: privacyNoritoFrameWithPayload(0x42),
+            bridgeAvailable: true
+        )
 
         XCTAssertFalse(fresh.productionGate.missing.contains("tampered"))
         XCTAssertFalse(fresh.productionGate.requiredGates.contains("tampered"))
@@ -217,6 +226,86 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertEqual(fresh.productionGate.requiredGates, PrivacyProductionGate.requiredGateKeys)
         XCTAssertEqual(fresh.productionGate.missing, PrivacyProductionGate.missingReasons)
         XCTAssertEqual(fresh.productionGate.auditReferences, [])
+    }
+
+    func testProductionReadyCapabilitiesRequireExactNativeGateEvidence() {
+        let capabilities = PrivacyNativeBridge.privacyCapabilities(
+            fromArchive: nativeCapabilitiesArchive(
+                nativeCapability("confidential-transfer-v2", ready: true),
+                nativeCapability("unshield", ready: true)
+            ),
+            bridgeAvailable: true
+        )
+
+        XCTAssertTrue(capabilities.productionReady)
+        XCTAssertTrue(capabilities.productionGate.ready)
+        XCTAssertTrue(capabilities.productionGate.realProving)
+        XCTAssertTrue(capabilities.productionGate.externalAudit)
+        XCTAssertEqual(capabilities.productionGate.missing, [])
+        XCTAssertEqual(capabilities.productionGate.auditReferences.count, 19)
+    }
+
+    func testForgedProductionReadyCapabilityRowsFailClosed() {
+        let cases: [(String, (inout NativeCapabilityFixture) -> Void)] = [
+            ("empty required gates", { row in
+                row.productionGate.requiredGates = []
+            }),
+            ("missing gate status", { row in
+                row.productionGate.gates.removeLast()
+            }),
+            ("unpassed gate status", { row in
+                row.productionGate.gates[0].passed = false
+            }),
+            ("nonempty missing reasons", { row in
+                row.productionGate.missing = ["external audit omitted"]
+            }),
+            ("missing audit references", { row in
+                row.productionGate.auditReferences = []
+            }),
+            ("single audit reference", { row in
+                row.productionGate.auditReferences = ["chain_id:boi-privacy-4peer-chain"]
+            }),
+            ("duplicate audit reference", { row in
+                row.productionGate.auditReferences = Self.productionAuditReferences()
+                row.productionGate.auditReferences[18] = row.productionGate.auditReferences[17]
+            }),
+            ("bad audit hash", { row in
+                row.productionGate.auditReferences = Self.productionAuditReferences()
+                row.productionGate.auditReferences[2] =
+                    "review_artifact_hash:sha256:not-a-hex-digest"
+            }),
+            ("uppercase audit signature", { row in
+                row.productionGate.auditReferences = Self.productionAuditReferences()
+                row.productionGate.auditReferences[3] =
+                    "review_artifact_signature:ed25519:\(String(repeating: "B", count: 128))"
+            }),
+            ("mock localnet marker", { row in
+                row.productionGate.auditReferences = Self.productionAuditReferences()
+                row.productionGate.auditReferences[6] =
+                    "localnet_run_id:mock-privacy-4peer-localnet-2026-06-13"
+            }),
+            ("planned entrypoint", { row in
+                row.plannedEntrypoints = ["buildFuturePrivacyProofV2"]
+            }),
+            ("production ready mismatch", { row in
+                row.productionReady = false
+            })
+        ]
+
+        for (caseName, mutate) in cases {
+            var row = nativeCapability("confidential-transfer-v2", ready: true)
+            mutate(&row)
+            let capabilities = PrivacyNativeBridge.privacyCapabilities(
+                fromArchive: nativeCapabilitiesArchive(
+                    row,
+                    nativeCapability("unshield", ready: true)
+                ),
+                bridgeAvailable: true
+            )
+
+            assertFailClosedProductionGate(capabilities)
+            XCTAssertFalse(capabilities.productionReady, caseName)
+        }
     }
 
     func testRejectsEmptyRequestArchivesBeforeBridgeCall() {
@@ -1077,6 +1166,203 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         }
     }
 
+    private struct NativeGateStatusFixture {
+        var key: String
+        var passed: Bool
+    }
+
+    private struct NativeProductionGateFixture {
+        var version: String
+        var ready: Bool
+        var gates: [NativeGateStatusFixture]
+        var requiredGates: [String]
+        var missing: [String]
+        var auditReferences: [String]
+    }
+
+    private struct NativeCapabilityFixture {
+        var algorithmId: String
+        var proofFamily: String
+        var backendFamily: String
+        var sdkEntrypoints: [String]
+        var plannedEntrypoints: [String]
+        var productionReady: Bool
+        var productionGate: NativeProductionGateFixture
+    }
+
+    private func nativeCapabilitiesArchive(
+        _ rows: NativeCapabilityFixture...
+    ) -> Data {
+        let flags = NoritoHeader.compactLen
+        var payload = Data()
+        appendUInt32LE(PrivacyNativeBridge.ffiVersionV1, to: &payload)
+        payload.append(encodedNativeString(PrivacyProductionGate.version, flags: flags))
+        payload.append(
+            encodedNativeSequence(rows, flags: flags, encodeElement: encodedNativeCapability)
+        )
+        return privacyNoritoFrame(0x50, payload: payload, flags: flags)
+    }
+
+    private func nativeCapability(
+        _ algorithmId: String,
+        ready: Bool
+    ) -> NativeCapabilityFixture {
+        NativeCapabilityFixture(
+            algorithmId: algorithmId,
+            proofFamily: "halo2-ipa",
+            backendFamily: "halo2-ipa",
+            sdkEntrypoints: ["buildConfidentialTransferProofV2"],
+            plannedEntrypoints: [],
+            productionReady: ready,
+            productionGate: NativeProductionGateFixture(
+                version: PrivacyProductionGate.version,
+                ready: ready,
+                gates: PrivacyProductionGate.requiredGateKeys.map {
+                    NativeGateStatusFixture(key: $0, passed: ready)
+                },
+                requiredGates: PrivacyProductionGate.requiredGateKeys,
+                missing: ready ? [] : PrivacyProductionGate.missingReasons,
+                auditReferences: ready ? Self.productionAuditReferences() : []
+            )
+        )
+    }
+
+    private func encodedNativeCapability(_ row: NativeCapabilityFixture) -> Data {
+        let flags = NoritoHeader.compactLen
+        var payload = Data()
+        payload.append(encodedNativeString(row.algorithmId, flags: flags))
+        payload.append(encodedNativeString(row.proofFamily, flags: flags))
+        payload.append(encodedNativeString(row.backendFamily, flags: flags))
+        payload.append(
+            encodedNativeSequence(row.sdkEntrypoints, flags: flags) {
+                encodedNativeString($0, flags: flags)
+            }
+        )
+        payload.append(
+            encodedNativeSequence(row.plannedEntrypoints, flags: flags) {
+                encodedNativeString($0, flags: flags)
+            }
+        )
+        payload.append(row.productionReady ? UInt8(1) : UInt8(0))
+        payload.append(encodedNativeProductionGate(row.productionGate))
+        return payload
+    }
+
+    private func encodedNativeProductionGate(_ gate: NativeProductionGateFixture) -> Data {
+        let flags = NoritoHeader.compactLen
+        var payload = Data()
+        payload.append(encodedNativeString(gate.version, flags: flags))
+        payload.append(gate.ready ? UInt8(1) : UInt8(0))
+        payload.append(
+            encodedNativeSequence(gate.gates, flags: flags, encodeElement: encodedNativeGateStatus)
+        )
+        payload.append(
+            encodedNativeSequence(gate.requiredGates, flags: flags) {
+                encodedNativeString($0, flags: flags)
+            }
+        )
+        payload.append(
+            encodedNativeSequence(gate.missing, flags: flags) {
+                encodedNativeString($0, flags: flags)
+            }
+        )
+        payload.append(
+            encodedNativeSequence(gate.auditReferences, flags: flags) {
+                encodedNativeString($0, flags: flags)
+            }
+        )
+        return payload
+    }
+
+    private func encodedNativeGateStatus(_ status: NativeGateStatusFixture) -> Data {
+        let flags = NoritoHeader.compactLen
+        var payload = Data()
+        payload.append(encodedNativeString(status.key, flags: flags))
+        payload.append(status.passed ? UInt8(1) : UInt8(0))
+        return payload
+    }
+
+    private func encodedNativeString(_ value: String, flags: UInt8) -> Data {
+        let bytes = Data(value.utf8)
+        var payload = Data()
+        appendLength(UInt64(bytes.count), compact: (flags & NoritoHeader.compactLen) != 0, to: &payload)
+        payload.append(bytes)
+        return payload
+    }
+
+    private func encodedNativeSequence<T>(
+        _ values: [T],
+        flags: UInt8,
+        encodeElement: (T) -> Data
+    ) -> Data {
+        var payload = Data()
+        appendUInt64LE(UInt64(values.count), to: &payload)
+        for value in values {
+            let elementPayload = encodeElement(value)
+            appendLength(
+                UInt64(elementPayload.count),
+                compact: (flags & NoritoHeader.compactLen) != 0,
+                to: &payload
+            )
+            payload.append(elementPayload)
+        }
+        return payload
+    }
+
+    private func appendLength(_ value: UInt64, compact: Bool, to data: inout Data) {
+        if compact {
+            appendVarint(value, to: &data)
+        } else {
+            appendUInt64LE(value, to: &data)
+        }
+    }
+
+    private func appendVarint(_ rawValue: UInt64, to data: inout Data) {
+        var value = rawValue
+        while value >= 0x80 {
+            data.append(UInt8((value & 0x7F) | 0x80))
+            value >>= 7
+        }
+        data.append(UInt8(value))
+    }
+
+    private func appendUInt32LE(_ value: UInt32, to data: inout Data) {
+        data.append(contentsOf: withUnsafeBytes(of: value.littleEndian, Array.init))
+    }
+
+    private func appendUInt64LE(_ value: UInt64, to data: inout Data) {
+        data.append(contentsOf: withUnsafeBytes(of: value.littleEndian, Array.init))
+    }
+
+    private static func productionAuditReferences() -> [String] {
+        [
+            "chain_id:boi-privacy-4peer-chain",
+            "reviewer:security-reviewer",
+            "review_artifact_hash:\(productionHash(1))",
+            "review_artifact_signature:ed25519:\(String(repeating: "b", count: 128))",
+            "fuzz_artifact_hash:\(productionHash(2))",
+            "performance_artifact_hash:\(productionHash(3))",
+            "localnet_run_id:boi-privacy-4peer-localnet-2026-06-13",
+            "localnet_smoke_tx_hash:\(productionHash(4))",
+            "localnet_replay_rejection_hash:\(productionHash(5))",
+            "localnet_restart_replay_rejection_hash:\(productionHash(6))",
+            "localnet_state_recovery_hash:\(productionHash(7))",
+            "localnet_lifecycle_shield_tx_hash:\(productionHash(8))",
+            "localnet_lifecycle_hop_proof_hash:\(productionHash(9))",
+            "localnet_lifecycle_recursive_init_hash:\(productionHash(10))",
+            "localnet_lifecycle_recursive_init_verify_hash:\(productionHash(11))",
+            "localnet_lifecycle_recursive_append_hash:\(productionHash(12))",
+            "localnet_lifecycle_recursive_append_verify_hash:\(productionHash(13))",
+            "localnet_lifecycle_unshield_proof_hash:\(productionHash(14))",
+            "localnet_lifecycle_redeem_tx_hash:\(productionHash(15))"
+        ]
+    }
+
+    private static func productionHash(_ value: Int) -> String {
+        let hex = String(value, radix: 16)
+        return "sha256:\(String(repeating: "0", count: max(0, 64 - hex.count)))\(hex)"
+    }
+
     private func privacyNoritoFrame(_ schemaByte: UInt8) -> Data {
         var frame = [UInt8](repeating: 0, count: 40)
         frame[0] = 0x4E
@@ -1087,6 +1373,24 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             frame[index] = schemaByte
         }
         return Data(frame)
+    }
+
+    private func privacyNoritoFrame(
+        _ schemaByte: UInt8,
+        payload: Data,
+        flags: UInt8
+    ) -> Data {
+        let header = NoritoHeader(
+            schema: [UInt8](repeating: schemaByte, count: 16),
+            compression: .none,
+            length: UInt64(payload.count),
+            checksum: crc64ECMA(payload),
+            flags: flags
+        )
+        var frame = Data()
+        frame.append(header.encode())
+        frame.append(payload)
+        return frame
     }
 
     private func privacyNoritoFrameWithPayload(_ schemaByte: UInt8) -> Data {

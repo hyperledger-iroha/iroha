@@ -758,6 +758,24 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun redeemSpend(request: RedeemSpendRequest): ByteArray =
             redeemSpend(KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(request))
 
+        @JvmStatic
+        fun buildPallasOpenEnvelopesArchive(recordBundleArchive: ByteArray?): ByteArray =
+            callArchive(
+                "build Pallas open envelopes",
+                "recordBundleArchive",
+                recordBundleArchive,
+                ::nativeBuildPallasOpenEnvelopesArchive,
+            )
+
+        @JvmStatic
+        fun buildPreviousProofOpenEnvelopesArchive(previousBundleArchive: ByteArray?): ByteArray =
+            callArchive(
+                "build previous proof open envelopes",
+                "previousBundleArchive",
+                previousBundleArchive,
+                ::nativeBuildPreviousProofOpenEnvelopesArchive,
+            )
+
         private fun call(
             label: String,
             requestArchive: ByteArray?,
@@ -866,6 +884,13 @@ class KagemushaRecursiveSpendProver private constructor() {
                 nativeLineageWitnessAppendResult(probe, probe, probe)
             } && available
             available = expectIllegalArgumentProbe { nativeRedeemSpend(probe) } && available
+            available =
+                expectIllegalArgumentProbe { nativeBuildPallasOpenEnvelopesArchive(probe) } &&
+                    available
+            available =
+                expectIllegalArgumentProbe {
+                    nativeBuildPreviousProofOpenEnvelopesArchive(probe)
+                } && available
             return available
         }
 
@@ -945,6 +970,14 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         private external fun nativeRedeemSpend(requestArchive: ByteArray): ByteArray?
+
+        private external fun nativeBuildPallasOpenEnvelopesArchive(
+            recordBundleArchive: ByteArray,
+        ): ByteArray?
+
+        private external fun nativeBuildPreviousProofOpenEnvelopesArchive(
+            previousBundleArchive: ByteArray,
+        ): ByteArray?
     }
 
     /** Portable Reserved-lineage verifier/proving key artifact package. */

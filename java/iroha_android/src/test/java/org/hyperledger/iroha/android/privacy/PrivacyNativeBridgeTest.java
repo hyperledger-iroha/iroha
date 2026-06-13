@@ -1,8 +1,15 @@
 package org.hyperledger.iroha.android.privacy;
 
+import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.TypeAdapter;
+
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public final class PrivacyNativeBridgeTest {
 
@@ -11,6 +18,8 @@ public final class PrivacyNativeBridgeTest {
   public static void main(final String[] args) {
     exposesStableFailClosedErrorCodes();
     reportsFailClosedPrivacyCapabilities();
+    productionReadyCapabilitiesRequireExactNativeGateEvidence();
+    forgedProductionReadyCapabilityRowsFailClosed();
     rejectsEmptyRequestsBeforeNativeDispatch();
     rejectsInvalidProofRequestComponentsBeforeNativeDispatch();
     typedConfidentialWitnessBuildersEncodeNativeReadyRequests();
@@ -73,6 +82,71 @@ public final class PrivacyNativeBridgeTest {
     assert fresh.missingProductionGates().equals(bridgeAvailable.missingProductionGates());
     assert fresh.requiredProductionGates().equals(bridgeAvailable.requiredProductionGates());
     assert fresh.auditReferences().equals(bridgeAvailable.auditReferences());
+  }
+
+  private static void productionReadyCapabilitiesRequireExactNativeGateEvidence() {
+    final PrivacyNativeBridge.PrivacyCapabilities capabilities =
+        PrivacyNativeBridge.privacyCapabilitiesFromArchive(
+            nativeCapabilitiesArchive(
+                nativeCapability("confidential-transfer-v2", true),
+                nativeCapability("unshield", true)),
+            true);
+
+    assert capabilities.isProductionReady();
+    assert capabilities.hasRealProving();
+    assert capabilities.hasExternalAudit();
+    assert capabilities.missingProductionGates().isEmpty();
+    assert capabilities.auditReferences().size() == 19;
+  }
+
+  private static void forgedProductionReadyCapabilityRowsFailClosed() {
+    assertForgedReadyRowFailsClosed("empty required gates", row -> {
+      productionGate(row).put("required_gates", Collections.emptyList());
+    });
+    assertForgedReadyRowFailsClosed("missing gate status", row -> {
+      final List<Map<String, Object>> gates = gateStatuses(row);
+      productionGate(row).put("gates", gates.subList(0, gates.size() - 1));
+    });
+    assertForgedReadyRowFailsClosed("unpassed gate status", row -> {
+      gateStatuses(row).get(0).put("passed", false);
+    });
+    assertForgedReadyRowFailsClosed("nonempty missing reasons", row -> {
+      productionGate(row).put("missing", Collections.singletonList("external audit omitted"));
+    });
+    assertForgedReadyRowFailsClosed("missing audit references", row -> {
+      productionGate(row).put("audit_references", Collections.emptyList());
+    });
+    assertForgedReadyRowFailsClosed("single audit reference", row -> {
+      productionGate(row).put(
+          "audit_references",
+          Collections.singletonList("chain_id:boi-privacy-4peer-chain"));
+    });
+    assertForgedReadyRowFailsClosed("duplicate audit reference", row -> {
+      final List<String> refs = new ArrayList<>(productionAuditReferences());
+      refs.set(18, refs.get(17));
+      productionGate(row).put("audit_references", refs);
+    });
+    assertForgedReadyRowFailsClosed("bad audit hash", row -> {
+      final List<String> refs = new ArrayList<>(productionAuditReferences());
+      refs.set(2, "review_artifact_hash:sha256:not-a-hex-digest");
+      productionGate(row).put("audit_references", refs);
+    });
+    assertForgedReadyRowFailsClosed("uppercase audit signature", row -> {
+      final List<String> refs = new ArrayList<>(productionAuditReferences());
+      refs.set(3, "review_artifact_signature:ed25519:" + repeatedChar('B', 128));
+      productionGate(row).put("audit_references", refs);
+    });
+    assertForgedReadyRowFailsClosed("mock localnet marker", row -> {
+      final List<String> refs = new ArrayList<>(productionAuditReferences());
+      refs.set(6, "localnet_run_id:mock-privacy-4peer-localnet-2026-06-13");
+      productionGate(row).put("audit_references", refs);
+    });
+    assertForgedReadyRowFailsClosed("planned entrypoint", row -> {
+      row.put("planned_entrypoints", Collections.singletonList("buildFuturePrivacyProofV2"));
+    });
+    assertForgedReadyRowFailsClosed("production ready mismatch", row -> {
+      row.put("production_ready", false);
+    });
   }
 
   private static void assertFailClosedProductionGate(
@@ -1103,6 +1177,158 @@ public final class PrivacyNativeBridgeTest {
       privacyNoritoFrameWithSchemaOverride(0x52, 6, 0x42),
       privacyNoritoFrameWithSchemaOverride(0x52, 21, 0x56)
     };
+  }
+
+  private interface RowMutation {
+    void apply(Map<String, Object> row);
+  }
+
+  private static void assertForgedReadyRowFailsClosed(
+      final String label, final RowMutation mutation) {
+    final Map<String, Object> row = nativeCapability("confidential-transfer-v2", true);
+    mutation.apply(row);
+    final PrivacyNativeBridge.PrivacyCapabilities capabilities =
+        PrivacyNativeBridge.privacyCapabilitiesFromArchive(
+            nativeCapabilitiesArchive(row, nativeCapability("unshield", true)),
+            true);
+    assertFailClosedProductionGate(capabilities);
+    assert !capabilities.isProductionReady() : label;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> productionGate(final Map<String, Object> row) {
+    return (Map<String, Object>) row.get("production_gate");
+  }
+
+  @SuppressWarnings("unchecked")
+  private static List<Map<String, Object>> gateStatuses(final Map<String, Object> row) {
+    return (List<Map<String, Object>>) productionGate(row).get("gates");
+  }
+
+  @SafeVarargs
+  private static byte[] nativeCapabilitiesArchive(final Map<String, Object>... rows) {
+    final Map<String, Object> capabilities = new LinkedHashMap<>();
+    capabilities.put("version", (long) PrivacyNativeBridge.PRIVACY_FFI_VERSION_V1);
+    capabilities.put("gate_version", PrivacyNativeBridge.PRODUCTION_GATE_VERSION);
+    capabilities.put("algorithms", Arrays.asList(rows));
+    final byte[] archive = NoritoCodec.encode(
+        capabilities,
+        "connect_norito_bridge::PrivacyCapabilitiesV1",
+        nativeCapabilitiesAdapter());
+    Arrays.fill(archive, 6, 22, (byte) 0x50);
+    return archive;
+  }
+
+  private static Map<String, Object> nativeCapability(
+      final String algorithmId, final boolean ready) {
+    final Map<String, Object> row = new LinkedHashMap<>();
+    row.put("algorithm_id", algorithmId);
+    row.put("proof_family", "halo2-ipa");
+    row.put("backend_family", "halo2-ipa");
+    row.put("sdk_entrypoints", Collections.singletonList("buildConfidentialTransferProofV2"));
+    row.put("planned_entrypoints", Collections.emptyList());
+    row.put("production_ready", ready);
+    row.put("production_gate", nativeProductionGate(ready));
+    return row;
+  }
+
+  private static Map<String, Object> nativeProductionGate(final boolean ready) {
+    final Map<String, Object> gate = new LinkedHashMap<>();
+    gate.put("version", PrivacyNativeBridge.PRODUCTION_GATE_VERSION);
+    gate.put("ready", ready);
+    gate.put("gates", nativeGateStatuses(ready));
+    gate.put("required_gates", expectedProductionGateRequiredKeys());
+    gate.put("missing", ready ? Collections.emptyList() : expectedProductionGateMissingReasons());
+    gate.put("audit_references", ready ? productionAuditReferences() : Collections.emptyList());
+    return gate;
+  }
+
+  private static List<Map<String, Object>> nativeGateStatuses(final boolean ready) {
+    final List<Map<String, Object>> statuses = new ArrayList<>();
+    for (final String key : expectedProductionGateRequiredKeys()) {
+      final Map<String, Object> status = new LinkedHashMap<>();
+      status.put("key", key);
+      status.put("passed", ready);
+      statuses.add(status);
+    }
+    return statuses;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static TypeAdapter<Object> nativeCapabilitiesAdapter() {
+    final TypeAdapter<Object> gateStatusAdapter =
+        NoritoAdapters.struct(
+            Arrays.asList(
+                NoritoAdapters.field("key", NoritoAdapters.stringAdapter()),
+                NoritoAdapters.field("passed", NoritoAdapters.boolAdapter())));
+    final TypeAdapter<Object> gateAdapter =
+        NoritoAdapters.struct(
+            Arrays.asList(
+                NoritoAdapters.field("version", NoritoAdapters.stringAdapter()),
+                NoritoAdapters.field("ready", NoritoAdapters.boolAdapter()),
+                NoritoAdapters.field("gates", NoritoAdapters.sequence(gateStatusAdapter)),
+                NoritoAdapters.field(
+                    "required_gates",
+                    NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                NoritoAdapters.field(
+                    "missing",
+                    NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                NoritoAdapters.field(
+                    "audit_references",
+                    NoritoAdapters.sequence(NoritoAdapters.stringAdapter()))));
+    final TypeAdapter<Object> capabilityAdapter =
+        NoritoAdapters.struct(
+            Arrays.asList(
+                NoritoAdapters.field("algorithm_id", NoritoAdapters.stringAdapter()),
+                NoritoAdapters.field("proof_family", NoritoAdapters.stringAdapter()),
+                NoritoAdapters.field("backend_family", NoritoAdapters.stringAdapter()),
+                NoritoAdapters.field(
+                    "sdk_entrypoints",
+                    NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                NoritoAdapters.field(
+                    "planned_entrypoints",
+                    NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                NoritoAdapters.field("production_ready", NoritoAdapters.boolAdapter()),
+                NoritoAdapters.field("production_gate", gateAdapter)));
+    return NoritoAdapters.struct(
+        Arrays.asList(
+            NoritoAdapters.field("version", NoritoAdapters.uint(32)),
+            NoritoAdapters.field("gate_version", NoritoAdapters.stringAdapter()),
+            NoritoAdapters.field("algorithms", NoritoAdapters.sequence(capabilityAdapter))));
+  }
+
+  private static List<String> productionAuditReferences() {
+    return Arrays.asList(
+        "chain_id:boi-privacy-4peer-chain",
+        "reviewer:security-reviewer",
+        "review_artifact_hash:" + productionHash(1),
+        "review_artifact_signature:ed25519:" + repeatedChar('b', 128),
+        "fuzz_artifact_hash:" + productionHash(2),
+        "performance_artifact_hash:" + productionHash(3),
+        "localnet_run_id:boi-privacy-4peer-localnet-2026-06-13",
+        "localnet_smoke_tx_hash:" + productionHash(4),
+        "localnet_replay_rejection_hash:" + productionHash(5),
+        "localnet_restart_replay_rejection_hash:" + productionHash(6),
+        "localnet_state_recovery_hash:" + productionHash(7),
+        "localnet_lifecycle_shield_tx_hash:" + productionHash(8),
+        "localnet_lifecycle_hop_proof_hash:" + productionHash(9),
+        "localnet_lifecycle_recursive_init_hash:" + productionHash(10),
+        "localnet_lifecycle_recursive_init_verify_hash:" + productionHash(11),
+        "localnet_lifecycle_recursive_append_hash:" + productionHash(12),
+        "localnet_lifecycle_recursive_append_verify_hash:" + productionHash(13),
+        "localnet_lifecycle_unshield_proof_hash:" + productionHash(14),
+        "localnet_lifecycle_redeem_tx_hash:" + productionHash(15));
+  }
+
+  private static String productionHash(final int value) {
+    final String hex = Integer.toHexString(value);
+    return "sha256:" + repeatedChar('0', 64 - hex.length()) + hex;
+  }
+
+  private static String repeatedChar(final char value, final int count) {
+    final char[] chars = new char[count];
+    Arrays.fill(chars, value);
+    return new String(chars);
   }
 
   private static PrivacyConfidentialWitness.WitnessV1 sampleTransferWitness() {

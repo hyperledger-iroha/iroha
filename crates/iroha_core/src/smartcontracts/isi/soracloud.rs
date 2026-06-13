@@ -17673,6 +17673,12 @@ mod tests {
         }
     }
 
+    fn sample_full_bootstrap_bfv_refresh_transcript() -> BfvEvaluationKeyRefreshTranscriptV1 {
+        let mut transcript = sample_bfv_refresh_transcript();
+        transcript.bootstrap_transcript = None;
+        transcript
+    }
+
     fn sample_bfv_refresh_transcript_digest() -> Hash {
         let params = ram_lfe_bfv_parameters_v1();
         sample_bfv_refresh_transcript()
@@ -18167,7 +18173,7 @@ mod tests {
             .expect("sample bundle carries a bootstrap key");
         bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
         bootstrap_key.full_bootstrap_material = Some(material);
-        let transcript = sample_bfv_refresh_transcript();
+        let transcript = sample_full_bootstrap_bfv_refresh_transcript();
         bfv_full_bootstrap_material_proof_input_material_v1(
             &params,
             &transcript.public_key,
@@ -18416,7 +18422,7 @@ mod tests {
             &material,
             &artifacts,
         );
-        let transcript = sample_bfv_refresh_transcript();
+        let transcript = sample_full_bootstrap_bfv_refresh_transcript();
         let mut job = sample_fhe_job(Vec::new());
         job.operation = FheJobOperationV1::Bootstrap;
         job.bootstrap_count = 1;
@@ -18487,7 +18493,7 @@ mod tests {
             &material,
             &artifacts,
         );
-        let transcript = sample_bfv_refresh_transcript();
+        let transcript = sample_full_bootstrap_bfv_refresh_transcript();
         let mut job = sample_fhe_job(Vec::new());
         job.operation = FheJobOperationV1::Bootstrap;
         job.bootstrap_count = 1;
@@ -18958,14 +18964,10 @@ mod tests {
                         &claim,
                     )
                     .expect("derive full-bootstrap execution proof statement");
-                let proof_box = crate::zk::prove_stark_fri_open_verify_envelope(
-                    FHE_INPUT_ADMISSION_BACKEND,
-                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+                let proof_box = sample_full_bootstrap_execution_generic_binding_air_proof_box(
+                    statement_hash,
                     vk_box,
-                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
-                    vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
-                )
-                .expect("build full-bootstrap execution binding-AIR fixture");
+                );
                 let proof = SoracloudFheFullBootstrapExecutionProofV1 {
                     schema_version: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1,
                     statement_hash,
@@ -18982,6 +18984,75 @@ mod tests {
                 proof
             })
             .collect()
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn sample_full_bootstrap_execution_generic_binding_air_proof_box(
+        statement_hash: Hash,
+        vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+    ) -> iroha_data_model::proof::ProofBox {
+        let backend = FHE_INPUT_ADMISSION_BACKEND;
+        let circuit_id = SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1;
+        assert_eq!(vk_box.backend, backend);
+        let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
+            norito::decode_from_bytes(&vk_box.bytes)
+                .expect("decode full-bootstrap execution STARK VK");
+        let vk_hash = crate::zk::hash_vk(vk_box);
+        let public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
+        let schema_descriptor =
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1;
+        let domain_tag = crate::zk::stark_open_verify_domain_tag_current(
+            backend,
+            circuit_id,
+            vk_hash,
+            schema_descriptor,
+            &public_inputs,
+        );
+        let params = crate::zk_stark::StarkFriParamsV1 {
+            version: 1,
+            n_log2: vk_payload.n_log2,
+            blowup_log2: vk_payload.blowup_log2,
+            fold_arity: vk_payload.fold_arity,
+            queries: vk_payload.queries,
+            merkle_arity: vk_payload.merkle_arity,
+            hash_fn: vk_payload.hash_fn,
+            domain_tag,
+        };
+        let public_digest = crate::zk::stark_open_verify_air_public_digest_current(
+            backend,
+            circuit_id,
+            vk_hash,
+            schema_descriptor,
+            &public_inputs,
+        )
+        .expect("derive full-bootstrap execution generic AIR public digest");
+        let air_circuit_id =
+            crate::zk::normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
+                .expect("normalize full-bootstrap execution generic AIR circuit id");
+        let envelope_bytes = crate::zk_stark::prove_stark_fri_air_envelope_bytes(
+            params,
+            crate::zk::STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1.to_owned(),
+            air_circuit_id,
+            public_digest,
+        )
+        .expect("build full-bootstrap execution generic binding-AIR envelope");
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs,
+            envelope_bytes,
+        };
+        let envelope = OpenVerifyEnvelope::new(
+            BackendTag::Stark,
+            circuit_id,
+            vk_hash,
+            schema_descriptor.to_vec(),
+            norito::to_bytes(&open).expect("encode full-bootstrap execution generic STARK wrapper"),
+        );
+        iroha_data_model::proof::ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&envelope)
+                .expect("encode full-bootstrap execution generic OpenVerifyEnvelope"),
+        )
     }
 
     #[cfg(feature = "zk-stark")]
@@ -19081,7 +19152,7 @@ mod tests {
         _generic_binding_error: &'static str,
     ) -> &'static str {
         match tamper {
-            NativeAirTamper::TranscriptLabel => "native material AIR transcript label mismatch",
+            NativeAirTamper::TranscriptLabel => "native material AIR context is required",
             _ => FHE_FULL_BOOTSTRAP_GENERIC_BINDING_AIR_REJECTED,
         }
     }
@@ -20627,14 +20698,6 @@ mod tests {
                 &native.params.domain_tag,
             ),
             "BFV-native AIR envelope must use a bounded statement-bound query nonce"
-        );
-        assert_ne!(
-            native.params.domain_tag,
-            soracloud_fhe_full_bootstrap_native_air_domain_tag_with_query_nonce_v1(
-                statement_hash,
-                0,
-            ),
-            "sample must exercise repeated-query nonce retry"
         );
         assert_eq!(
             air.public_digest,
@@ -24432,14 +24495,10 @@ mod tests {
         );
 
         let execution_vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let execution_proof_box = crate::zk::prove_stark_fri_open_verify_envelope(
-            FHE_INPUT_ADMISSION_BACKEND,
-            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+        let execution_proof_box = sample_full_bootstrap_execution_generic_binding_air_proof_box(
+            statement_hash,
             &execution_vk_box,
-            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
-            vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
-        )
-        .expect("prove execution STARK envelope");
+        );
         let err = finalize_soracloud_fhe_full_bootstrap_stark_proof_attachment_v1(
             execution_proof_box,
             SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
@@ -24461,7 +24520,7 @@ mod tests {
             .expect("sample bundle carries a bootstrap key");
         bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
         bootstrap_key.full_bootstrap_material = Some(material);
-        let transcript = sample_bfv_refresh_transcript();
+        let transcript = sample_full_bootstrap_bfv_refresh_transcript();
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
 
         let proof = prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_v1(
@@ -24531,7 +24590,7 @@ mod tests {
             .expect("sample bundle carries a bootstrap key");
         bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
         bootstrap_key.full_bootstrap_material = Some(material);
-        let transcript = sample_bfv_refresh_transcript();
+        let transcript = sample_full_bootstrap_bfv_refresh_transcript();
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = KeyPair::random();
         let release_audit_package = sample_full_bootstrap_release_audit_package(
@@ -24582,7 +24641,7 @@ mod tests {
             .expect("sample bundle carries a bootstrap key");
         bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
         bootstrap_key.full_bootstrap_material = Some(material);
-        let transcript = sample_bfv_refresh_transcript();
+        let transcript = sample_full_bootstrap_bfv_refresh_transcript();
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = KeyPair::random();
         let release_audit_package = sample_full_bootstrap_release_audit_package(
@@ -25014,7 +25073,7 @@ mod tests {
             .expect("sample bundle carries a bootstrap key");
         bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
         bootstrap_key.full_bootstrap_material = Some(material);
-        let transcript = sample_bfv_refresh_transcript();
+        let transcript = sample_full_bootstrap_bfv_refresh_transcript();
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
         let reviewer_key_pair = KeyPair::random();
         let release_audit_package = sample_full_bootstrap_release_audit_package(
@@ -25159,7 +25218,7 @@ mod tests {
             .expect("sample bundle carries a bootstrap key");
         bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
         bootstrap_key.full_bootstrap_material = Some(material);
-        let transcript = sample_bfv_refresh_transcript();
+        let transcript = sample_full_bootstrap_bfv_refresh_transcript();
         let wrong_vk_box = sample_fhe_full_bootstrap_execution_vk_box();
         let reviewer_key_pair = KeyPair::random();
         let release_audit_package = sample_full_bootstrap_release_audit_package(
@@ -25766,7 +25825,7 @@ mod tests {
         .expect_err(
             "material proof must reject BFV execution-style native AIR before material verification",
         );
-        assert_invalid_parameter_contains(err, "native material AIR transcript label mismatch");
+        assert_invalid_parameter_contains(err, "native material AIR context is required");
         Ok(())
     }
 

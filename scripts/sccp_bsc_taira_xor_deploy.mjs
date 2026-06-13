@@ -171,7 +171,12 @@ export const SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES = 512 * 1024 * 1024;
 
 const DESTINATION_BINDING_LABEL = "iroha:sccp:evm-destination-binding:v1";
 const SECRET_KEY_PATTERN =
-  /(?:private[_-]?key|mnemonic|recovery[_-]?phrase|seed[_-]?phrase|secret)/iu;
+  /(?:private[_-]?key|mnemonic|recovery[_-]?phrase|seed[_-]?phrase|secret|password|api[_-]?(?:key|token)|access[_-]?token|auth[_-]?token|bearer(?:[_-]?token)?|session[_-]?token|refresh[_-]?token)/iu;
+const SECRET_ASSIGNMENT_PATTERN =
+  /(?:private[_-]?key|mnemonic|recovery[_-]?phrase|seed[_-]?phrase|secret|password|api[_-]?(?:key|token)|access[_-]?token|auth[_-]?token|bearer(?:[_-]?token)?|session[_-]?token|refresh[_-]?token)\s*[:=]\s*("[^"]*"|'[^']*'|<[^>]+>|\S+)/giu;
+const BEARER_TOKEN_TEXT_PATTERN = /\bbearer\s+[A-Za-z0-9._~+/=-]{12,}\b/iu;
+const REDACTED_SECRET_ASSIGNMENT_VALUE_PATTERN =
+  /^(?:redacted|<redacted>|\*{3,}|runtime[-_ ]?only|<runtime[-_ ]?only>|operator[-_ ]?provided|<operator[-_ ]?provided>|replace[_-]with[_-][A-Z0-9_ -]+)$/iu;
 const PRIVATE_KEY_PEM_PATTERN =
   /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/iu;
 const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
@@ -372,7 +377,7 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs compile [--out ${DEFAULT_ARTIFACTS_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs deploy --bsc-network testnet|mainnet --verifier <verifier-key.json> --broadcast true --confirm-network ${ROUTE_ID}:testnet|${ROUTE_ID}:mainnet [--confirm-mainnet true] [--private-key-env ${DEFAULT_PRIVATE_KEY_ENV}] [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs evidence --bsc-network testnet|mainnet --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
-	  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT} --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
@@ -555,6 +560,14 @@ export function bscProductionRequirements(options = {}) {
           "Selected BSC RPC endpoint used for deployment and contract readback.",
       }),
       productionRequirementInput({
+        id: `${profile.key}-bsc-deployment-evidence`,
+        kind: "file",
+        placeholder: deploymentEvidenceOut,
+        requiredBy: ["route-manifest"],
+        description:
+          "BSC deployment evidence generated from live contract deployment and readback for the selected network.",
+      }),
+      productionRequirementInput({
         id: "production-route-manifest",
         kind: "file",
         placeholder: routeManifestOut,
@@ -571,13 +584,37 @@ export function bscProductionRequirements(options = {}) {
           "Compiled TAIRA burn-record IVM contract artifact used by the BSC route manifest.",
       }),
       productionRequirementInput({
+        id: "canonical-settlement-asset-definition-id",
+        kind: "asset-definition-id",
+        placeholder: "<canonical-asset-definition-id>",
+        requiredBy: ["route-manifest"],
+        description:
+          "Canonical Base58 XOR settlement asset definition id used by the BSC route manifest.",
+      }),
+      productionRequirementInput({
         id: "post-deploy-live-evidence",
         kind: "hashes-and-urls",
         placeholder:
-          "--source-bridge-config-hash/--source-event-transaction-id/--route-canary-evidence-hash/--route-canary-transaction-id/--offline-full-toml-sha256",
+          "--source-bridge-config-hash/--source-event-transaction-id/--route-canary-evidence-hash/--route-canary-transaction-id",
         requiredBy: ["route-manifest"],
         description:
-          "Live post-deploy source-event, route-canary, and merged full-config evidence for production-ready route manifests.",
+          "Live post-deploy source-event and route-canary evidence for production-ready route manifests.",
+      }),
+      productionRequirementInput({
+        id: "deployed-taira-base-config",
+        kind: "file",
+        placeholder: "<deployed-taira-config.toml>",
+        requiredBy: ["route-config"],
+        description:
+          "Deployed TAIRA peer config used to render the merged route config and generated offline full-TOML evidence.",
+      }),
+      productionRequirementInput({
+        id: "offline-full-toml-evidence",
+        kind: "file",
+        placeholder: fullConfigEvidenceOut,
+        requiredBy: ["route-manifest"],
+        description:
+          "Generated offline full-TOML evidence artifact consumed by the final production route manifest.",
       }),
       productionRequirementInput({
         id: "native-prover-artifact-root",
@@ -1894,6 +1931,17 @@ function secretLikeTextReason(value, pathName) {
   if (PRIVATE_KEY_PEM_PATTERN.test(normalized)) {
     return `${pathName} must not contain private key material.`;
   }
+  for (const match of normalized.matchAll(SECRET_ASSIGNMENT_PATTERN)) {
+    const assignmentValue = String(match[1] ?? "")
+      .trim()
+      .replace(/^['"]|['"]$/gu, "");
+    if (!REDACTED_SECRET_ASSIGNMENT_VALUE_PATTERN.test(assignmentValue)) {
+      return `${pathName} must not contain private key, token, or secret material.`;
+    }
+  }
+  if (BEARER_TOKEN_TEXT_PATTERN.test(normalized)) {
+    return `${pathName} must not contain private key, token, or secret material.`;
+  }
   const words = normalized.split(" ");
   if (
     RECOVERY_PHRASE_WORD_COUNTS.has(words.length) &&
@@ -1934,7 +1982,7 @@ export function unsafeSecretReason(
   seen.add(value);
   for (const [key, child] of Object.entries(value)) {
     if (SECRET_KEY_PATTERN.test(key)) {
-      return `${pathName}.${key} must not contain private key material.`;
+      return `${pathName}.${key} must not contain private key, token, or secret material.`;
     }
     const reason = unsafeSecretReason(child, `${pathName}.${key}`, seen);
     if (reason) {
@@ -4207,6 +4255,11 @@ export async function buildBscTairaXorRouteManifestDraft({
   const normalizedOfflineFullTomlEvidence = offlineFullTomlEvidence
     ? normalizeBscOfflineFullTomlEvidence(offlineFullTomlEvidence, profile)
     : null;
+  if (productionReady && !normalizedOfflineFullTomlEvidence) {
+    throw new Error(
+      "production-ready BSC route manifests require --offline-full-toml-evidence generated by route-config.",
+    );
+  }
   const routeOptions = mergeBscOfflineFullTomlEvidenceOptions(
     options,
     normalizedOfflineFullTomlEvidence,

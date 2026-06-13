@@ -3229,7 +3229,7 @@ def _source_event_transaction_summary(
         try:
             topic0 = _parse_exact_hex32(topics[0], label="source-event log topic0")
             topic1 = _parse_exact_hex32(topics[1], label="source-event log topic1")
-        except (argparse.ArgumentTypeError, TypeError, RuntimeError):
+        except (argparse.ArgumentTypeError, TypeError, RuntimeError, ValueError):
             continue
         data = log.get("data", "")
         if not isinstance(data, str):
@@ -3547,7 +3547,7 @@ def _route_canary_message_proof_event_summary(
         return None
     try:
         topic0 = _parse_exact_hex32(topics[0], label="route-canary log topic0")
-    except (argparse.ArgumentTypeError, TypeError, RuntimeError):
+    except (argparse.ArgumentTypeError, TypeError, RuntimeError, ValueError):
         return None
     if log_address != verifier_address20 or topic0 != TRON_MESSAGE_PROOF_ACCEPTED_TOPIC:
         return None
@@ -4396,7 +4396,7 @@ def _metadata_runtime_bytecode(metadata: dict[str, Any], *, label: str) -> bytes
             bytecode,
             label=f"{label} bytecode",
         )
-    except (argparse.ArgumentTypeError, TypeError, RuntimeError):
+    except (argparse.ArgumentTypeError, TypeError, RuntimeError, ValueError):
         raise RuntimeError(
             f"/wallet/getcontract returned malformed {label} bytecode"
         ) from None

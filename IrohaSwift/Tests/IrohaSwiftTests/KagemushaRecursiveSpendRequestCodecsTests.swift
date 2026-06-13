@@ -172,6 +172,16 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                     amount: amount
                 )
             )
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendRedeemRequest(
+                    bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+                    recipient: Self.sampleRecipient(),
+                    publicAmount: amount,
+                    redeemProof: Self.syntheticArchive(
+                        schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
+                    )
+                )
+            )
         }
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendableNoteDescriptor(

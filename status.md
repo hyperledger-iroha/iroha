@@ -529,6 +529,468 @@ Last updated: 2026-06-13
     (`16` passed, `2398` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-offline-v2-signing CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --no-deps -- -D warnings`
 
+## 2026-06-13 DA/RBC Cursor and Temp Recovery Hardening
+
+- Made Torii DA replay cursor recording transactional with respect to snapshot
+  persistence: if a temp-file write, sync, rename, or directory sync fails, the
+  in-memory sequence floor is rolled back so a retry of the same sequence still
+  attempts durable persistence instead of being swallowed as a duplicate.
+- Tightened Torii DA replay cursor snapshot decoding so unsupported snapshot
+  versions and duplicate `(lane, epoch)` entries fail closed. If the main
+  snapshot is invalid but a valid temp snapshot exists, restart recovery still
+  promotes the temp snapshot.
+- Tightened Torii DA replay cursor restart recovery so an orphan temp snapshot
+  that cannot be decoded is treated as invalid durable recovery state instead
+  of being discarded into an empty cursor floor.
+- Made Torii DA replay cursor temp promotion fail closed when the temp snapshot
+  cannot be renamed into place or the replay directory cannot be synced, so
+  restart no longer seeds memory from a floor that failed to become durable.
+- Applied the same fail-closed temp promotion rule to the core DA shard cursor
+  journal. Restart recovery now returns a write error when a temp journal cannot
+  be promoted durably instead of loading the temp cursor state only in memory.
+- Hardened core DA shard cursor journal restart recovery so orphan corrupt temp
+  journals fail closed and remain visible for operator repair, and valid main
+  journals cannot silently recover past an unremovable bad temp path.
+- Hardened core DA shard cursor journal decoding so duplicate `(shard, lane)`
+  entries are rejected as invalid persisted state instead of being normalized by
+  picking the newest cursor tuple.
+- Hardened RBC chunk-store temp session recovery so both direct session loads
+  and scan-based store loads return an I/O error when a temp snapshot cannot be
+  promoted durably, instead of accepting temp-only recovered session state.
+- Hardened RBC chunk-store recovery classification so non-UTF-8 raw filenames
+  that still match the session or temp-session snapshot shape enter the normal
+  decode/key-validation path instead of being skipped as unrelated files.
+- Hardened RBC chunk-store full-scan recovery so session-shaped non-file
+  artifacts fail recovery consistently with direct session loads instead of
+  being silently ignored.
+- Hardened RBC chunk-store full-scan recovery so session-shaped main and temp
+  files that cannot be read fail recovery consistently with direct session
+  loads instead of being logged and skipped.
+- Hardened RBC status temp-store recovery so read-only persisted snapshot
+  inspection returns an empty snapshot on unpromotable temp files and runtime
+  `Handle::configure` marks persistence unavailable instead of seeding
+  temp-only status state. Corrupt main stores and orphan corrupt temp stores
+  now fail recovery without deleting the evidence, while valid main stores can
+  discard corrupt temp stores only when cleanup succeeds; unreadable temp paths
+  fail runtime configure instead of being ignored.
+- Hardened RBC status persisted snapshot decoding so duplicate
+  `(block_hash, height, view)` session keys are dropped instead of being
+  normalized by last-writer-wins map insertion.
+- Hardened Taikai TRM lineage state recovery so persisted state must declare
+  version `1`, match the requested alias namespace/name, carry a 32-byte
+  manifest digest encoded as hex, use a non-inverted window, and include an
+  update timestamp before it can influence the next TRM hint.
+- Hardened Taikai TRM lineage state writes by syncing the temporary file before
+  rename and syncing the parent directory after promotion, so a successful
+  lineage update no longer depends on temp-only filesystem state.
+- Hardened Torii DA spool artifact installation for manifests, PDP
+  commitments, commitment records, schedule entries, pin intents, and receipts
+  so temp files use a process-local unique suffix, are fully written and
+  `sync_all`ed before hard-link install, and the destination directory is
+  synced after the link becomes visible.
+- Hardened Torii durable DA receipt-log recovery and receipt listing so
+  receipt-shaped files with invalid Norito, unsupported versions,
+  filename/body mismatches, or invalid operator signatures reject recovery/load
+  instead of being skipped. Receipt-log open now also fails closed if seeding
+  the replay cursor from recovered receipts cannot be persisted.
+- Applied the same unique-temp, synced-write, and post-link directory sync path
+  to Taikai envelope/index/SSM/TRM artifact installation, including the TRM
+  lineage state temp writer.
+- Hardened Taikai anchor request-capture handling so an existing capture must
+  be a file with matching payload bytes, and collection fails closed if the
+  governance/audit request payload cannot be recorded before upload.
+- Hardened core DA receipt spool cleanup observability: stale-receipt pruning
+  now returns a structured report for scanned, removed, invalid, read-failed,
+  entry-failed, remove-failed, and unreadable-spool cases, and the proposal path
+  logs filesystem cleanup failures without turning non-consensus stale-file
+  cleanup into a block-assembly abort.
+- Hardened DA proposal assembly to fail closed when commitment or pin-intent
+  spool loading fails, and when the DA shard cursor journal cannot be loaded,
+  advanced, or persisted before sealing a DA commitment bundle.
+- Hardened core DA commitment and pin-intent spool loading further so any
+  matching production-shaped artifact that fails directory-entry read, file
+  read, Norito decode, or filename/body tuple validation rejects the whole spool
+  load instead of silently sealing a partial proposal bundle.
+- Hardened core DA receipt spool loading the same way: any matching
+  production-shaped receipt file that fails directory-entry read, file read,
+  Norito decode, version validation, or filename/body tuple validation now
+  rejects the whole receipt load instead of being skipped.
+- Hardened core DA commitment, pin-intent, and receipt spool loaders so
+  production-shaped raw filenames that are not valid UTF-8 are treated as
+  malformed artifacts instead of being skipped; stale receipt cleanup now
+  reports those shaped filenames as invalid cleanup inputs without aborting
+  proposal assembly.
+- Fixed core DA commitment spool filtering so Torii-owned
+  `da-commitment-schedule-*` sidecars in the shared spool directory are ignored
+  by the commitment-record bundle loader instead of being rejected as malformed
+  commitment records.
+- Hardened the Sumeragi DA spool cache stamp scanner so production-shaped
+  non-UTF-8 commitment, pin-intent, and receipt filenames fail cache refresh
+  instead of being skipped and leaving stale cached loader results in place.
+  Commitment-schedule sidecars are now ignored consistently by both the cache
+  scanner and the commitment-record loader.
+- Hardened the Sumeragi DA spool cache stamp scanner so uninspectable or
+  non-regular production-shaped commitment, pin-intent, or receipt artifacts
+  fail cache refresh instead of being omitted from the stamp and leaving stale
+  cached loader results in place.
+- Hardened the Sumeragi manifest spool cache scanner so production-shaped raw
+  `manifest-*.norito` filenames that are not valid UTF-8 fail manifest guard
+  cache refresh instead of being skipped as if they were unrelated files.
+- Hardened the Sumeragi manifest spool cache scanner so uninspectable or
+  non-regular production-shaped manifest artifacts fail manifest guard cache
+  refresh instead of being omitted from the stamp and leaving stale manifest
+  lookup results in place.
+- Hardened DA proposal preflight so commitment, receipt, and pin-intent spool
+  loader/planner errors keep DA work visible to an otherwise idle leader,
+  forcing proposal assembly to surface the fail-closed error instead of
+  suppressing the corrupt artifact as "no work".
+- Hardened the core DA manifest spool guard so `manifest-*` files must carry
+  the full production lane/epoch/sequence/ticket/fingerprint filename tuple
+  before they can satisfy a strict manifest guard.
+- Hardened DA proposal assembly so strict-lane manifest scan/read failures and
+  manifest hash mismatches abort proposal assembly before commitment sealing,
+  while still treating a missing strict manifest as deferred work and preserving
+  audit-only missing/unreadable-manifest warning semantics.
+- Hardened proposal-side Nexus/DA routing refresh so transaction, route, and
+  routing-plan vector length drift fails closed before DA sidecars,
+  native-AMX receipts, or execution context assembly can consume inconsistent
+  routing evidence.
+- Added adversarial replay cursor coverage for blocked temp snapshot paths,
+  duplicate main snapshot entries, valid-temp recovery from an unsupported main
+  snapshot version, orphan corrupt temp snapshots, and unpromotable temp
+  snapshots.
+- Added adversarial shard cursor journal coverage for unpromotable temp
+  journals, orphan corrupt temp journals, unremovable bad temp paths beside a
+  valid main journal, and duplicate persisted entries.
+- Added adversarial RBC chunk-store coverage for unpromotable temp sessions in
+  both direct recovery and full store scan recovery.
+- Added adversarial RBC status coverage for unpromotable temp stores through
+  both the public read-only snapshot helper and runtime configure path,
+  corrupt main stores, orphan corrupt temp stores, corrupt temp cleanup after
+  selecting a valid main store, and unreadable temp paths alongside duplicate
+  persisted session keys while preserving unrelated valid entries.
+- Added adversarial Taikai TRM lineage coverage for unsupported persisted
+  versions, alias mismatches, malformed manifest digests, and inverted windows.
+- Hardened Taikai anchor collection so production-shaped envelope artifacts
+  fail closed on malformed artifact ids, missing required index/SSM companions,
+  corrupt required index JSON, and corrupt optional lineage hints instead of
+  being logged and skipped.
+- Hardened Torii DA manifest/PDP spool lookup so production-shaped
+  `manifest-*.norito` and `pdp-commitment-*.norito` entries with malformed
+  lane/epoch/sequence/ticket/fingerprint filename tuples or non-file paths fail
+  closed instead of being ignored as missing artifacts.
+- Hardened Torii DA manifest fetch responses so a missing PDP commitment
+  remains optional, but malformed, duplicate, unreadable, or invalid matching
+  PDP commitment sidecars now return an internal error instead of serving the
+  manifest without the commitment header.
+- Hardened Torii DA manifest/PDP lookup, receipt listing, durable receipt-log
+  recovery, and Taikai envelope collection so production-shaped raw filenames
+  that are not valid UTF-8 fail closed instead of being skipped before body,
+  signature, or companion-artifact validation.
+- Hardened durable DA receipt-log recovery so receipt-shaped non-file entries
+  fail closed and cannot be skipped before Norito decode, signature
+  verification, or replay-cursor seeding.
+- Hardened durable DA receipt listing and receipt-log recovery so duplicate
+  `(lane, epoch, sequence)` files must carry byte-equivalent signed receipt
+  evidence; matching only on manifest hash now fails closed as conflicting
+  durable state.
+- Hardened core DA receipt proposal planning with the same receipt-evidence
+  rule, so duplicate `(lane, epoch, sequence)` receipts with matching
+  manifest/ticket but different receipt bodies reject block assembly instead of
+  being silently collapsed.
+- Hardened DA proposal assembly for decoded pin-intent spool entries so
+  semantic validation failures reject the proposal before any partial bundle is
+  sealed; stale already-sealed or committed identities remain soft-dropped.
+- Added actor-level adversarial DA commitment proposal coverage proving decoded
+  semantic-invalid commitment spool entries fail validation before sealing.
+- Added actor-level DA receipt proposal coverage for duplicate signed receipt
+  evidence conflicts, with test spool fixtures now encoded through the
+  production receipt wrapper schema.
+- Added core DA spool-loader coverage proving commitment, pin-intent, and
+  receipt-shaped directories are hard read failures instead of empty work.
+- Hardened the in-memory DA commitment projection so duplicate committed
+  manifest or storage-ticket identities are rejected from query indexes just
+  like duplicate `(lane, epoch, sequence)` keys while raw block bundles remain
+  available for proof/hash reconstruction.
+- Hardened the in-memory confidential-compute DA projection so duplicate
+  manifest or storage-ticket identities are rejected like duplicate
+  `(lane, epoch, sequence)` keys, keeping malformed committed bundles from
+  polluting lane and block receipt views.
+- Added adversarial Taikai anchor collection coverage for blocked request
+  capture paths, stale request-capture files with mismatched payload bytes,
+  malformed artifact ids, missing required companions, corrupt index JSON, and
+  corrupt lineage hints.
+- Added adversarial Torii DA manifest/PDP lookup coverage for malformed
+  ticket-bearing filenames and artifact-shaped directories alongside duplicate,
+  body-mismatch, and invalid-body checks.
+- Added Torii manifest-response coverage proving missing PDP sidecars remain
+  optional, valid PDP sidecars attach the `sora-pdp-commitment` header, and
+  corrupt matching PDP sidecars reject the response.
+- Added same-process concurrent writer coverage for DA receipt and Taikai
+  envelope artifact persistence, verifying exact-byte idempotent convergence
+  and no leftover temp artifacts.
+- Added durable receipt listing and receipt-log recovery coverage for corrupt
+  entries, sequence-rebound signatures, filename/body mismatches,
+  filename/ticket mismatches, receipt-shaped directories, same-manifest
+  conflicting duplicate receipts, and replay-cursor seed persistence failures.
+- Hardened DA replay-cursor startup so stale, conflicting, or corrupt temp
+  snapshots that should be discarded now fail recovery when cleanup fails,
+  keeping leftover temp artifacts visible for operator repair instead of
+  silently affecting later restarts.
+- Added receipt-prune coverage for successful stale removal, filename/body
+  mismatch preservation, receipt-shaped read failures, and non-directory spool
+  paths.
+- Added actor-level proposal assembly regressions for unreadable DA spool state
+  and unreadable shard cursor journal state, and updated DA spool cache/proposal
+  work fixtures to use production lane/epoch/sequence/ticket/fingerprint
+  filenames.
+- Added adversarial commitment and pin-intent spool coverage for corrupt,
+  malformed, and filename/body-mismatched artifacts, including actor-level
+  proposal assembly regressions that prove corrupt individual artifacts abort
+  block assembly even when the external transaction queue is empty.
+- Added adversarial receipt spool coverage for corrupt, unsupported-version,
+  malformed, and filename/body-mismatched artifacts, plus preflight regressions
+  for pending receipts and corrupt receipt files with an empty external
+  transaction queue.
+- Added helper-level non-UTF-8 shaped-artifact regressions for core DA
+  commitment, pin-intent, and receipt filename matchers so the fail-closed raw
+  filename branch is covered on Unix filesystems that cannot create those names
+  on disk.
+- Added core DA commitment spool coverage proving commitment-schedule sidecars
+  are ignored even when their bytes are not valid commitment records.
+- Added Sumeragi DA spool cache classifier coverage for commitment-schedule
+  sidecars, non-UTF-8 production-shaped artifact names, and unrelated
+  non-UTF-8 files, plus broken-symlink shaped artifacts whose metadata cannot
+  be read.
+- Added Sumeragi manifest spool cache classifier coverage for non-UTF-8
+  production-shaped manifest names while preserving the existing behavior that
+  malformed UTF-8 manifest names are treated as non-production and surface as
+  missing manifests. Added broken-symlink manifest artifact coverage for
+  metadata-read failures during cache scans.
+- Added helper-level RBC chunk-store coverage for non-UTF-8 session and
+  temp-session snapshot names, preserving ignore behavior for unrelated
+  non-UTF-8 files.
+- Added RBC chunk-store full-scan coverage proving session-shaped directories
+  reject recovery instead of being skipped.
+- Added RBC chunk-store full-scan coverage proving unreadable session-shaped
+  main and temp files reject recovery instead of being skipped.
+- Added adversarial manifest guard coverage proving matching manifest bytes
+  under missing, short, extra-field, or width-mismatched filename tuples are
+  ignored and still surface as missing manifests on strict lanes.
+- Added helper- and actor-level manifest proposal regressions proving missing
+  strict manifests defer, unreadable matching manifest artifacts and hash
+  mismatches fail, and mismatched manifests cannot be filtered away before
+  sealing.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib shard_cursor -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store -- --nocapture`
+  - `cargo test -p iroha_core --lib scan_entries_rejects_unreadable -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_status -- --nocapture`
+  - `cargo test -p iroha_core --lib commitments -- --nocapture`
+  - `cargo test -p iroha_core --lib commitment_store -- --nocapture`
+  - `cargo test -p iroha_core --lib confidential_store -- --nocapture`
+  - `cargo test -p iroha_core --lib pin_intents -- --nocapture`
+  - `cargo test -p iroha_core --lib prune_spool -- --nocapture`
+  - `cargo test -p iroha_core --lib receipts -- --nocapture`
+  - `cargo test -p iroha_core --lib shaped_directory -- --nocapture`
+  - `cargo test -p iroha_core --lib plan_committable_receipts -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_unreadable_da_spool -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_unreadable_da_shard_cursor_journal -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_corrupt_da -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_invalid_da_commitment_file -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_conflicting_da_receipt_evidence -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_corrupt_da_pin_intent_file -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_invalid_da_pin_intent_file -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_guard -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_available_for_commitment -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_spool_file_name -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_block_guard -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_gate -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_mismatched_da_manifest_file -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests internal_proposal_work -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests da_spool_cache_hits_on_repeated_load -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests da_spool_stamp_rejects_uninspectable_shaped_artifact -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests da_spool_file_name -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_spool_scan_rejects_uninspectable_shaped_artifact -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_proposal_routing_from_state -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_collection -- --nocapture`
+  - `cargo test -p iroha_torii artifact_file_name --lib -- --nocapture`
+  - `cargo test -p iroha_torii taikai_envelope_file_name --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii load_manifest_from_spool -- --nocapture`
+  - `cargo test -p iroha_torii load_pdp_commitment_from_spool -- --nocapture`
+  - `cargo test -p iroha_torii manifest_response_ -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_rejects -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store_open_rejects_orphan_corrupt_temp_snapshot -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store_open_rejects_unremovable_corrupt_temp_snapshot -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_trm_lineage --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_collection --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_processing_generates_payload_and_sentinel --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii converges_under_same_process_writers --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii persist_ --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_ --features app_api -- --nocapture`
+  - `cargo fmt --all --check`
+
+## 2026-06-13 Core zk-stark fixture failure fixes
+
+- Aligned Soracloud BFV full-bootstrap test fixtures with the current
+  exact-lift policy by using full-bootstrap refresh transcripts without
+  deterministic zero-refresh bootstrap seeds, refreshing the shared operation
+  vector digests, and constructing reserved-circuit generic binding-AIR
+  fixtures without routing through the production BFV prover guard.
+- Updated IVM STARK batch verification to accept heap-backed TLVs and spill
+  host-produced TLVs when needed, then moved the registry-bound STARK test to
+  the production FRI verifier-key floor.
+- Adjusted stale test expectations for IVM execution circuit rejection, DA
+  unknown-lane validation, and BLS deterministic test seeds.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib full_bootstrap_ -- --nocapture`
+    (`112` passed, `5193` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib soracloud_bfv_operation_vectors -- --nocapture`
+    (`2` passed, `1` ignored, `5302` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows -- --nocapture`
+    (`1` passed, `5304` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib overlay_stark_prover_rejects_circuit_mismatch -- --nocapture`
+    (`1` passed, `5304` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib zk_verify_batch_accepts_stark_registry_bound_envelope -- --nocapture`
+    (`1` passed, `5304` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib da_commitment_unknown_lane_fails_before_cursor_telemetry -- --nocapture`
+    (`1` passed, `5304` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib vote_verify_uses_multi_message_batch_for_distinct_preimages -- --nocapture`
+    (`1` passed, `5304` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fix-failures CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark,telemetry --lib soracloud_fhe_full_bootstrap_stark_proof_finalizer_binds_circuit_and_hashes -- --nocapture`
+    (`1` passed, `5304` filtered out)
+  - `cargo fmt --all`
+
+## 2026-06-13 Kagemusha bridge-generated Pallas envelope archives
+
+- Added native bridge builders for current-hop Pallas open-envelope archives
+  from `KagemushaVerifiedFoldRecordBundle` and the one-envelope
+  previous-proof archive required by Reserved-lineage append.
+- Exposed the builders through the C header, Swift public wrappers, and
+  Kotlin/JVM plus Android Java JNI wrappers, and updated typed recursive-spend
+  request codecs so init and append requests can derive required Pallas
+  archives from typed evidence instead of asking SDK callers to fabricate
+  native envelope bytes.
+- Added Rust coverage that verifies generated Pallas openings and feeds them
+  through recursive aggregation and append-opening preflight validation.
+- Kept source parity deterministic in normal worktrees: the SDK parity guard
+  now skips ignored local `dist/NoritoBridge.xcframework` artifacts unless
+  `KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_CHECK_DIST=1` is set. The forced check
+  still fails closed on the stale ignored local XCFramework until release
+  packaging rebuilds `dist/`.
+- Focused validation passed:
+  - `cargo test -p connect_norito_bridge production_ -- --nocapture`
+  - `./gradlew :core-jvm:test --tests '*KagemushaRecursiveSpendRequestCodecsTest*' --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain` from `java/iroha_android`
+  - `bash ci/check_connect_norito_bridge_header.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests` from `IrohaSwift`
+  - `env PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python /tmp/iroha-kagemusha-python-adversarial-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k 'typed_request_codecs_reject_malformed_inputs'`
+
+## 2026-06-13 Kagemusha non-C# typed request adversarial coverage
+
+- Extended Python typed recursive-spend request negative coverage so init,
+  append, verify, and redeem constructors reject boolean, non-integer,
+  negative, and overflowing `block_height` values at the SDK boundary.
+- Added Python, Swift, Kotlin/JVM, and Android Java redeem amount adversarial
+  coverage for empty, zero, padded, signed, fractional, scientific-notation,
+  and `u128 + 1` values before native dispatch.
+- Pinned the new non-C# adversarial markers in the recursive-spend SDK parity
+  guard.
+- Focused validation passed:
+  - `env PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python /tmp/iroha-kagemusha-python-adversarial-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k 'typed_request_codecs_reject_malformed_inputs'`
+  - `/tmp/iroha-kagemusha-python-adversarial-venv/bin/python -m py_compile python/iroha_python/tests/kagemusha_test.py`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `env JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain` from `kotlin`
+  - `javac -sourcepath java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java -d /tmp/iroha-kagemusha-java-sdk-test.yzC0IT java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+  - `java -ea -cp /tmp/iroha-kagemusha-java-sdk-test.yzC0IT org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest`
+  - `env KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt python/iroha_python/tests/kagemusha_test.py ci/check_kagemusha_recursive_spend_sdk_parity.sh roadmap.md status.md`
+
+## 2026-06-13 Kagemusha JS typed request block-height exactness
+
+- Hardened JavaScript typed recursive-spend request codecs so string
+  `blockHeight` inputs must be canonical unsigned decimal `u64` values. Padded
+  strings such as `"01"`, signed strings such as `"+7"` or `"-0"`, trailing
+  whitespace, `u64 + 1` values, and numeric negative zero now reject before
+  Norito request encoding or native dispatch.
+- Added adversarial coverage across init, append, verify, and redeem typed
+  request encoders, and extended the recursive-spend SDK parity guard to pin
+  the JS source parser plus the padded block-height regression inventory.
+- Focused validation passed:
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-13 Kagemusha SDK production-gate exactness
+
+- Hardened Swift, Kotlin/JVM, and Android Java privacy capability aggregation
+  so native Norito capability rows can only mark the SDK production-ready when
+  both audited rows expose the exact production-gate version, required-gate list,
+  per-gate pass state, empty missing/planned fields, and the full ordered
+  audit-reference set.
+- Swift now decodes the native `PrivacyCapabilitiesV1` Norito archive,
+  including compact lengths, delimited/packed sequences, and packed-struct
+  field-bitset layouts, before aggregating the public production-gate snapshot.
+- Added fail-closed validation for forged ready rows with missing or duplicate
+  audit references, malformed SHA-256 or Ed25519 evidence values, mock/local-only
+  evidence markers, non-empty planned entrypoints, missing gate statuses, and
+  mismatched `production_ready` state.
+- Pinned the exact-row aggregation predicates in the recursive-spend SDK parity
+  guard and workflow, with a negative control that rewrites Swift, Kotlin/JVM,
+  and Android Java back to the old version-only row check and requires the guard
+  to reject that drift.
+- Focused validation passed:
+  - `cd IrohaSwift && swift test --filter PrivacyNativeBridgeTests`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --rerun-tasks --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "SDK privacy native availability probes reject adversarial native output archives" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `git diff --check`
+
+## 2026-06-13 C# nested identifier receipt hardening
+
+- Added C# Torii support for the nested identifier resolve receipt envelope
+  shape with top-level `payload` and `attestation` objects while preserving the
+  legacy flat receipt response. Nested signed receipts expose the signed
+  attestation signature, nested proof receipts expose an empty legacy
+  signature, and both keep the original nested payload/attestation JSON for
+  downstream verification.
+- Hardened the C# parser to reject mixed nested/legacy receipt shapes, missing
+  payload or attestation objects, invalid signed/proof attestation combinations,
+  malformed proof base64, non-exact policy/backend/signature fields, and
+  negative or non-integer execution timestamps before callers consume receipt
+  data.
+- Fixed the default native bridge unshield encoder unit test to unwrap the
+  checked `encode_asset_transaction` result, keeping the production
+  transaction-signing error path compile-checked in test builds.
+- Validation passed:
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests|FullyQualifiedName~ToriiIdentifierReceiptTests" --logger "console;verbosity=minimal"`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test -Dandroid.test.mains=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests,org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-identifier-receipt-exactness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-proof-base64-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-kind-exactness-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-proof-base64-exactness-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-signature-exactness-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-policy-id-exactness-guard`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled privacy_production -- --nocapture`
+  - `cargo test -p connect_norito_bridge unshield_encoder_path_preserves_private_change_outputs -- --nocapture`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
 ## 2026-06-13 SCCP EVM source-bridge hex TypeError redaction
 
 - Hardened the ETH and BSC source-bridge fixed-width and runtime-bytecode hex
@@ -5217,12 +5679,21 @@ Last updated: 2026-06-13
     (`2` passed, `254` filtered out; one pre-existing `iroha_crypto` unused-method warning surfaced from the dirty worktree)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-tron-recovery CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp tron_source_verifier_material_requires_deployed_mainnet_profile_hashes --lib -- --nocapture`
     (`1` passed, `255` filtered out)
-
 ## 2026-06-12 Torii DA Replay and Receipt Persistence Hardening
 
 - Fixed DA replay-cache pruning so a restart-primed lane/epoch floor survives
   TTL eviction of cached fingerprints. Replayed sequences at or below the
   persisted cursor now remain stale after the live cache window expires.
+- Hardened Torii DA replay cursor snapshot recovery so completed temp snapshots
+  are promoted when they monotonically advance the main snapshot, temp-only
+  snapshots recover after interrupted writes, and stale, corrupt, or
+  mixed-direction temp snapshots are removed without lowering sequence floors.
+- Fixed Torii DA replay cursor recording for first sequence `0`; a new
+  lane/epoch floor at zero is now persisted and survives restart instead of
+  being mistaken for an already-stored default.
+- Hardened Torii DA replay cursor snapshot writes by syncing the temporary
+  snapshot file before replacement and syncing the parent directory after
+  promotion, reducing crash windows around durable sequence floors.
 - Hardened Torii DA ingest responses so durable receipt-log stale-sequence,
   manifest-conflict, missing-outcome, and spool-write failures fail closed
   instead of returning `202 Accepted` after artifact spool execution.
@@ -5254,16 +5725,35 @@ Last updated: 2026-06-13
   manifest body and verifying the filename lane, epoch, storage ticket, and
   zero-ticket replay fingerprint against the body before returning bytes to
   SoraFS clients.
+- Hardened Torii DA PDP commitment readback further by decoding the matched
+  Norito body and running PDP structural validation before returning bytes to
+  SoraFS clients.
 - Hardened Torii DA spool artifact writers so idempotent target-file collisions
   are accepted only when the existing bytes exactly match the expected
   manifest, PDP commitment, DA commitment, schedule entry, pin intent, or
   receipt payload. Mismatched pre-existing files now return `InvalidData`.
+- Hardened Torii DA spool artifact writers to reject mismatched self-describing
+  bodies before writing: manifest bodies must match lane/epoch/ticket/fingerprint
+  inputs, PDP commitments must pass structural validation, commitment and
+  pin-intent bodies must match the filename tuple inputs, and commitment
+  schedule PDP bytes must structurally validate and hash to the record proof
+  digest.
+- Switched Torii DA artifact installation from overwrite-capable `rename` to a
+  no-clobber hard-link install path with existing-target byte validation,
+  closing the race where a concurrent target file could be overwritten between
+  the idempotence check and final install.
 - Hardened Taikai DA anchor collection so pending `taikai-envelope-*` sidecars
   must use the fixed production lane/epoch/sequence/ticket/fingerprint base id
   before an anchor request body is assembled.
 - Hardened Taikai DA artifact persistence so envelope/index/SSM/TRM target-file
   collisions are idempotent only when existing bytes match exactly; mismatched
   pre-existing Taikai artifacts now return `InvalidData`.
+- Applied the same no-clobber install pattern to Taikai envelope/index/SSM/TRM
+  artifacts so concurrent target creation is validated instead of overwritten.
+- Hardened DA shard cursor journal recovery so completed temp snapshots are
+  promoted only when they monotonically advance the main cursor snapshot, while
+  stale, corrupt, or mixed-direction temp files are removed without regressing
+  any lane.
 - Bound Torii DA operator receipt signatures to the durable sequence wrapper by
   signing a versioned `(sequence, receipt-with-placeholder-signature)` payload.
   Live append and restart rehydration now reject sequence-rebound receipts even
@@ -5283,8 +5773,11 @@ Last updated: 2026-06-13
   - `cargo test -p iroha_core --lib load_receipt_entries -- --nocapture`
   - `cargo test -p iroha_core --lib prune_spool -- --nocapture`
   - `cargo test -p iroha_core --lib receipts -- --nocapture`
+  - `cargo test -p iroha_core --lib shard_cursor -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store --features app_api -- --nocapture`
   - `cargo test -p iroha_torii load_manifest_from_spool --features app_api -- --nocapture`
   - `cargo test -p iroha_torii load_pdp_commitment_from_spool --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii persist_spool_artifacts_reject_body_tuple_mismatches --features app_api -- --nocapture`
   - `cargo test -p iroha_torii persist_spool_artifacts_reject_existing_mismatched_targets --features app_api -- --nocapture`
   - `cargo test -p iroha_torii persist_ --features app_api -- --nocapture`
   - `cargo test -p iroha_torii taikai_anchor_collection_skips_malformed_base_id --features app_api -- --nocapture`
