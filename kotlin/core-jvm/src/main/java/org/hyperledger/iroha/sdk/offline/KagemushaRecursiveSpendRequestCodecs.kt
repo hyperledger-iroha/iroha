@@ -155,7 +155,7 @@ class InitSpendRequest @JvmOverloads constructor(
             field = "pallasOpenEnvelopes",
             maxBytes = KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
         )
-        requireValidNestedArchive(lineageProvingKeyArchiveBytes, "lineageProvingKeyArchive")
+        validateLineageKeyArtifactsForInit(lineageVerifierKeyBytes, lineageProvingKeyArchiveBytes)
     }
 
     val recordBundle: ByteArray get() = recordBundleArchive.copyOf()
@@ -247,6 +247,7 @@ class AppendSpendRequest @JvmOverloads constructor(
             require(lineageProvingKeyArchiveBytes != null && lineageProvingKeyArchiveBytes.isNotEmpty()) {
                 "lineageProvingKeyArchive is required for lineage append output"
             }
+            validateLineageKeyArtifactsForAppend(lineageVerifierKeyBytes, lineageProvingKeyArchiveBytes)
         }
     }
 
@@ -1281,6 +1282,38 @@ private fun requireValidNestedArchive(archive: ByteArray, field: String) {
     }
 }
 
+private fun validateLineageKeyArtifactsForInit(
+    lineageVerifierKey: ByteArray,
+    lineageProvingKeyArchive: ByteArray,
+) {
+    try {
+        KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+            LINEAGE_KEY_ARTIFACT_VALIDATION_OPENING_LEN,
+            KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            lineageVerifierKey,
+            lineageProvingKeyArchive,
+        )
+    } catch (ex: IllegalArgumentException) {
+        throw IllegalArgumentException("lineage key artifacts are invalid for recursive spend init", ex)
+    }
+}
+
+private fun validateLineageKeyArtifactsForAppend(
+    lineageVerifierKey: ByteArray,
+    lineageProvingKeyArchive: ByteArray,
+) {
+    try {
+        KagemushaRecursiveSpendProver.lineageKeyArtifactsForAppend(
+            LINEAGE_KEY_ARTIFACT_VALIDATION_OPENING_LEN,
+            KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            lineageVerifierKey,
+            lineageProvingKeyArchive,
+        )
+    } catch (ex: IllegalArgumentException) {
+        throw IllegalArgumentException("lineage key artifacts are invalid for lineage append output", ex)
+    }
+}
+
 private fun readVerifiedFoldRecordBundleHopCount(payload: ByteArray, flags: Int, field: String): Int {
     val decoder = NoritoDecoder(payload, flags)
     val bundlePayload = readField(decoder) { it.readRemainingBytes() }
@@ -1465,6 +1498,7 @@ private val OPEN_VERIFY_ENVELOPES_SCHEMA_HASH = byteArrayOf(
 )
 
 private const val PALLAS_CURVE_ID = 1
+private const val LINEAGE_KEY_ARTIFACT_VALIDATION_OPENING_LEN = 2
 private const val KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_K = 24
 private const val KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_N = 16_777_216
 private const val KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128

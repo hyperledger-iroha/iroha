@@ -492,7 +492,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
           recordBundleHopCount,
           "pallasOpenEnvelopes",
           KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES);
-      requireValidNestedArchive(this.lineageProvingKeyArchive, "lineageProvingKeyArchive");
+      validateLineageKeyArtifactsForInit(this.lineageVerifierKey, this.lineageProvingKeyArchive);
     }
 
     public byte[] recordBundle() {
@@ -584,6 +584,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             "lineageVerifierKey is required for lineage append output");
         require(lineageProvingKeyArchive != null && lineageProvingKeyArchive.length > 0,
             "lineageProvingKeyArchive is required for lineage append output");
+        validateLineageKeyArtifactsForAppend(lineageVerifierKey, lineageProvingKeyArchive);
       }
     }
 
@@ -1296,6 +1297,32 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         field + " must contain a non-empty Norito payload");
   }
 
+  private static void validateLineageKeyArtifactsForInit(
+      final byte[] lineageVerifierKey, final byte[] lineageProvingKeyArchive) {
+    try {
+      KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+          LINEAGE_KEY_ARTIFACT_VALIDATION_OPENING_LEN,
+          KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+          lineageVerifierKey,
+          lineageProvingKeyArchive);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException("lineage key artifacts are invalid for recursive spend init", ex);
+    }
+  }
+
+  private static void validateLineageKeyArtifactsForAppend(
+      final byte[] lineageVerifierKey, final byte[] lineageProvingKeyArchive) {
+    try {
+      KagemushaRecursiveSpendProver.lineageKeyArtifactsForAppend(
+          LINEAGE_KEY_ARTIFACT_VALIDATION_OPENING_LEN,
+          KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+          lineageVerifierKey,
+          lineageProvingKeyArchive);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException("lineage key artifacts are invalid for lineage append output", ex);
+    }
+  }
+
   private static int readVerifiedFoldRecordBundleHopCount(
       final byte[] payload, final int flags, final String field) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
@@ -1473,6 +1500,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       };
 
   private static final int PALLAS_CURVE_ID = 1;
+  private static final int LINEAGE_KEY_ARTIFACT_VALIDATION_OPENING_LEN = 2;
   private static final int KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_K = 24;
   private static final int KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_N =
       1 << KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_K;
