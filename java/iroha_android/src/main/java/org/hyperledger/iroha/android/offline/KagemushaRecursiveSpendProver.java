@@ -726,6 +726,22 @@ public final class KagemushaRecursiveSpendProver {
     return redeemSpend(KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(request));
   }
 
+  public static byte[] buildPallasOpenEnvelopesArchive(final byte[] recordBundleArchive) {
+    return callArchive(
+        "build Pallas open envelopes",
+        "recordBundleArchive",
+        recordBundleArchive,
+        KagemushaRecursiveSpendProver::nativeBuildPallasOpenEnvelopesArchive);
+  }
+
+  public static byte[] buildPreviousProofOpenEnvelopesArchive(final byte[] previousBundleArchive) {
+    return callArchive(
+        "build previous proof open envelopes",
+        "previousBundleArchive",
+        previousBundleArchive,
+        KagemushaRecursiveSpendProver::nativeBuildPreviousProofOpenEnvelopesArchive);
+  }
+
   private static byte[] call(final String label, final byte[] requestArchive, final NativeCall call) {
     return callArchive(label, "requestArchive", requestArchive, call);
   }
@@ -838,6 +854,9 @@ public final class KagemushaRecursiveSpendProver {
         expectIllegalArgumentProbe(
         () -> nativeLineageWitnessAppendResult(probe, probe, probe));
     available &= expectIllegalArgumentProbe(() -> nativeRedeemSpend(probe));
+    available &= expectIllegalArgumentProbe(() -> nativeBuildPallasOpenEnvelopesArchive(probe));
+    available &=
+        expectIllegalArgumentProbe(() -> nativeBuildPreviousProofOpenEnvelopesArchive(probe));
     return available;
   }
 
@@ -935,6 +954,11 @@ public final class KagemushaRecursiveSpendProver {
   private static native byte[] nativeVerifySpend(byte[] requestArchive);
 
   private static native byte[] nativeRedeemSpend(byte[] requestArchive);
+
+  private static native byte[] nativeBuildPallasOpenEnvelopesArchive(byte[] recordBundleArchive);
+
+  private static native byte[] nativeBuildPreviousProofOpenEnvelopesArchive(
+      byte[] previousBundleArchive);
 
   /** Portable Reserved-lineage verifier/proving key artifact package. */
   public static final class LineageKeyArtifacts {

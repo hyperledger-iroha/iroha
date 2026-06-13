@@ -115,10 +115,9 @@ mod signature_tests {
 
     #[test]
     fn query_request_try_sign_matches_compatibility_sign() {
-        let key_pair = iroha_crypto::KeyPair::try_random_with_algorithm(
-            iroha_crypto::Algorithm::Ed25519,
-        )
-        .expect("generate checked query signing fixture keypair");
+        let key_pair =
+            iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+                .expect("generate checked query signing fixture keypair");
         let make_payload = || {
             let authority = AccountId::new(key_pair.public_key().clone());
             let cursor = ForwardCursor {

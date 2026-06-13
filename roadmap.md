@@ -270,8 +270,13 @@ and completed history lives in [`status.md`](./status.md).
   `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>` count matches the record-bundle
   fold-step count, previous-proof open-envelope archives with the same exact
   native schema and exactly one Pallas envelope with nonzero verifier metadata,
-  malformed/trailing archive rejection, and nonnegative block-height guards
+  native bridge C/JNI builders for both archive shapes, release-package
+  validation with a rebuilt `dist/NoritoBridge.xcframework` and
+  `KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_CHECK_DIST=1`, malformed/trailing
+  archive rejection, and nonnegative block-height guards
   pinned in the focused JVM SDK runner and parity inventory. Kotlin/JVM and
+  Android Java request tests must also keep malformed redeem `publicAmount`
+  values rejected at construction before native dispatch. Kotlin/JVM and
   Android Java now also expose typed
   `RegisterZkAsset`, `Shield`, and `Unshield` builders plus native
   signed-transaction wrappers that preserve private change outputs and return
@@ -301,6 +306,8 @@ and completed history lives in [`status.md`](./status.md).
   wallet/redeem/QR helpers, signing-algorithm discriminants,
   verifier-backend labels, Torii verifier-key request/event validation, and
   Offline Cash/Kagemusha ABI-7 support files. The
+  Swift typed recursive-spend request tests must keep malformed redeem
+  `publicAmount` values rejected before native dispatch. The
   payload-bench workflow path inventory and JavaScript parity meta-test must
   stay in lockstep with that expanded Swift parse surface.
 - Kagemusha Python SDK validation must keep the focused Python 3.11 runner on
@@ -319,6 +326,10 @@ and completed history lives in [`status.md`](./status.md).
   the public Python wrapper. Python crypto tests and the JavaScript parity
   meta-test must pin empty/padded labels across key generation, key loading,
   multihash, sign, verify, key-pair construction, and direct `_crypto` calls.
+  Python typed recursive-spend request constructors must keep adversarial
+  coverage for non-integer, boolean, negative, and overflowing `block_height`
+  values across init, append, verify, and redeem, plus malformed redeem
+  `public_amount` values before native dispatch.
   Python Torii
   identifier receipt helpers must keep
   `encode_identifier_resolution_receipt_payload`,

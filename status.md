@@ -2,6 +2,53 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Kagemusha bridge-generated Pallas envelope archives
+
+- Added native bridge builders for current-hop Pallas open-envelope archives
+  from `KagemushaVerifiedFoldRecordBundle` and the one-envelope
+  previous-proof archive required by Reserved-lineage append.
+- Exposed the builders through the C header plus Kotlin/JVM and Android Java
+  JNI wrappers, and updated typed recursive-spend request codecs so init and
+  append requests can derive required Pallas archives from typed evidence
+  instead of asking SDK callers to fabricate native envelope bytes.
+- Added Rust coverage that verifies generated Pallas openings and feeds them
+  through recursive aggregation and append-opening preflight validation.
+- Kept source parity deterministic in normal worktrees: the SDK parity guard
+  now skips ignored local `dist/NoritoBridge.xcframework` artifacts unless
+  `KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_CHECK_DIST=1` is set. The forced check
+  still fails closed on the stale ignored local XCFramework until release
+  packaging rebuilds `dist/`.
+- Focused validation passed:
+  - `cargo test -p connect_norito_bridge production_ -- --nocapture`
+  - `./gradlew :core-jvm:test --tests '*KagemushaRecursiveSpendRequestCodecsTest*' --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain` from `java/iroha_android`
+  - `bash ci/check_connect_norito_bridge_header.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests` from `IrohaSwift`
+  - `env PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python /tmp/iroha-kagemusha-python-adversarial-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k 'typed_request_codecs_reject_malformed_inputs'`
+
+## 2026-06-13 Kagemusha non-C# typed request adversarial coverage
+
+- Extended Python typed recursive-spend request negative coverage so init,
+  append, verify, and redeem constructors reject boolean, non-integer,
+  negative, and overflowing `block_height` values at the SDK boundary.
+- Added Python, Swift, Kotlin/JVM, and Android Java redeem amount adversarial
+  coverage for empty, zero, padded, signed, fractional, scientific-notation,
+  and `u128 + 1` values before native dispatch.
+- Pinned the new non-C# adversarial markers in the recursive-spend SDK parity
+  guard.
+- Focused validation passed:
+  - `env PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python /tmp/iroha-kagemusha-python-adversarial-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k 'typed_request_codecs_reject_malformed_inputs'`
+  - `/tmp/iroha-kagemusha-python-adversarial-venv/bin/python -m py_compile python/iroha_python/tests/kagemusha_test.py`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `env JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain` from `kotlin`
+  - `javac -sourcepath java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java -d /tmp/iroha-kagemusha-java-sdk-test.yzC0IT java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+  - `java -ea -cp /tmp/iroha-kagemusha-java-sdk-test.yzC0IT org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest`
+  - `env KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt python/iroha_python/tests/kagemusha_test.py ci/check_kagemusha_recursive_spend_sdk_parity.sh roadmap.md status.md`
+
 ## 2026-06-13 Kagemusha JS typed request block-height exactness
 
 - Hardened JavaScript typed recursive-spend request codecs so string

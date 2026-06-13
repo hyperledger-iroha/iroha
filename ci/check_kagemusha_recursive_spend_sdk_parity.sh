@@ -44,6 +44,11 @@ REQUIRED_RECORD_BACKED_KAGEMUSHA_C_SYMBOLS = (
     "connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes",
 )
 
+REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_C_SYMBOLS = (
+    "connect_norito_kagemusha_build_pallas_open_envelopes_archive",
+    "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive",
+)
+
 REQUIRED_JS_NATIVE_METHODS = (
     "kagemushaRecursiveSpendInit",
     "kagemushaRecursiveSpendAppend",
@@ -2254,6 +2259,40 @@ def check_c_bridge(texts, errors):
         "C header record-backed Kagemusha prover declarations",
         errors,
     )
+    rust_pallas_builder_exports = names_from_matches(
+        rust,
+        r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+        r"(connect_norito_kagemusha_build_(?:pallas_open_envelopes|previous_proof_open_envelopes)_archive)\s*\(",
+    )
+    header_pallas_builder_exports = names_from_matches(
+        header,
+        r"int32_t\s+"
+        r"(connect_norito_kagemusha_build_(?:pallas_open_envelopes|previous_proof_open_envelopes)_archive)\s*\(",
+    )
+    require_same_set(
+        rust_pallas_builder_exports,
+        REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_C_SYMBOLS,
+        "Rust C Kagemusha Pallas open-envelope builder exports",
+        errors,
+    )
+    require_same_set(
+        header_pallas_builder_exports,
+        REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_C_SYMBOLS,
+        "C header Kagemusha Pallas open-envelope builder declarations",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/connect_norito_bridge/include/connect_norito_bridge.h",
+        (
+            "Build metadata-bound Pallas open envelopes",
+            "one envelope per hop",
+            "Build the one-envelope Pallas opening archive required for reserved-lineage append",
+            "KagemushaRecursiveSpendBundleV1",
+        ),
+        "C header Kagemusha Pallas open-envelope builder contract",
+        errors,
+    )
     require(
         re.search(
             r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_bridge_abi_version\s*\(',
@@ -3357,6 +3396,30 @@ def check_recursive_compact_surface(texts, errors):
             "blockHeight must not be null",
         ),
         "Android Java recursive compact verifier tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+        (
+            "RedeemSpendRequest(",
+            "publicAmount = amount",
+            "U128_MAX_PLUS_ONE",
+            "KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT",
+        ),
+        "Kotlin typed recursive spend public amount tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        (
+            "new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(",
+            "sampleRecipient(),\n                  amount,",
+            "340282366920938463463374607431768211456",
+            "KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT",
+        ),
+        "Android Java typed recursive spend public amount tests",
         errors,
     )
 
@@ -5168,6 +5231,10 @@ def check_python(texts, errors):
             "KagemushaRecursiveSpendRedeemRequest",
             "previous_lineage_verifier_record",
             "previous_proof_open_envelopes",
+            "invalid_block_heights",
+            "block_height_request_builders",
+            "invalid_public_amounts",
+            "1 << 64",
             "alice@wonderland",
             "str(1 << 128)",
             "native.calls[-1]",
@@ -5600,6 +5667,9 @@ def check_swift(texts, errors):
             "KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult",
             "lineageVerifierKey: nil",
             "u128MaxPlusOne",
+            "KagemushaRecursiveSpendRedeemRequest(",
+            "publicAmount: amount",
+            "proofAttachmentWireName",
             "previousProofOpenEnvelopes",
             "readFixedArrayPayload",
             "optionSomePayload",
@@ -16734,13 +16804,35 @@ print("recursive Kagemusha ABI-6/ABI-7 SDK parity is consistent")
 PY
 
 if [[ -z "$MODE" && "$(uname -s)" == "Darwin" ]]; then
+  CHECK_DIST="${KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_CHECK_DIST:-auto}"
   BRIDGE_ROOT="$ROOT_DIR/dist/NoritoBridge.xcframework"
+  case "$CHECK_DIST" in
+    1|true|TRUE|yes|YES)
+      ;;
+    0|false|FALSE|no|NO)
+      echo "Skipping NoritoBridge XCFramework recursive Kagemusha symbol check"
+      exit 0
+      ;;
+    auto|"")
+      if [[ -d "$BRIDGE_ROOT" ]]; then
+        echo "Skipping ignored NoritoBridge XCFramework symbol check; set KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_CHECK_DIST=1 to validate dist artifacts"
+      fi
+      exit 0
+      ;;
+    *)
+      echo "[-] Unknown KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_CHECK_DIST value: $CHECK_DIST" >&2
+      exit 1
+      ;;
+  esac
+
   if [[ -d "$BRIDGE_ROOT" ]]; then
     REQUIRED_BRIDGE_SYMBOLS=(
       "connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes"
       "connect_norito_kagemusha_verify_recursive_compact_payment_token"
       "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle"
       "connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection"
+      "connect_norito_kagemusha_build_pallas_open_envelopes_archive"
+      "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive"
     )
     BRIDGE_LIBS=(
       "$BRIDGE_ROOT/ios-arm64/libNoritoBridge.a"
@@ -16763,5 +16855,8 @@ if [[ -z "$MODE" && "$(uname -s)" == "Darwin" ]]; then
       done
     done
     echo "NoritoBridge XCFramework recursive Kagemusha symbols are present"
+  else
+    echo "[-] NoritoBridge artifact missing directory: $BRIDGE_ROOT" >&2
+    exit 1
   fi
 fi
