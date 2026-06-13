@@ -775,7 +775,8 @@ mod tests {
     fn block_signature_getters_and_roundtrip() {
         let keypair = KeyPair::random();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let signature = SignatureOf::from_hash(keypair.private_key(), header.hash());
+        let signature = SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+            .expect("checked block-header fixture signature");
         let block_signature = BlockSignature::new(42, signature.clone());
         assert_eq!(block_signature.index(), 42);
         assert_eq!(block_signature.signature(), &signature);
@@ -840,7 +841,8 @@ mod tests {
         }
         let keypair = KeyPair::random();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let signature = SignatureOf::from_hash(keypair.private_key(), header.hash());
+        let signature = SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+            .expect("checked block-header diagnostic fixture signature");
         let bs = BlockSignature::new(42, signature.clone());
 
         // Bare codec bytes and decode
@@ -871,7 +873,8 @@ mod tests {
     fn block_signature_btreeset_roundtrip() {
         let keypair = KeyPair::random();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let signature = SignatureOf::from_hash(keypair.private_key(), header.hash());
+        let signature = SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+            .expect("checked block-header btreeset fixture signature");
         let block_signature = BlockSignature::new(7, signature);
 
         let mut set = std::collections::BTreeSet::new();

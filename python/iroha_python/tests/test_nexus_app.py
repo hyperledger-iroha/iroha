@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -26,6 +27,39 @@ FIXTURE = json.loads(
 FIXTURE_PAYLOAD = bytes.fromhex(FIXTURE["expected"]["payload_bytes_hex"])
 FIXTURE_PUBLIC_KEY = bytes.fromhex(FIXTURE["connect"]["approval_frame"]["signing_public_key_hex"])
 FIXTURE_SIGNATURE = bytes.fromhex(FIXTURE["expected"]["wallet_signature_hex"])
+UNSUPPORTED_SIGNATURE_ALGORITHMS = (
+    "secp256k1",
+    "",
+    " ",
+    " Ed25519",
+    "Ed25519 ",
+    "\tEd25519",
+    "Ed25519\n",
+    "ed25519 ",
+    " ed25519",
+    "\ted25519",
+    "ed25519\u00a0",
+    "0 ",
+    " 0",
+    "\t0",
+    "00",
+    "\uff10",
+    "ED25519",
+    "Ed25519",
+    "ed\t25519",
+    "ed\00025519",
+    "ed\u001f25519",
+    "ed\u007f25519",
+    "\u00a0Ed25519",
+    "Ed25519\u00a0",
+    "ed\u200b25519",
+    "\u0435d25519",
+    "ed\uff0d25519",
+    0,
+    False,
+    b"ed25519",
+    ["ed25519"],
+)
 
 
 class FakeConnect:
@@ -213,14 +247,7 @@ def test_nexus_app_runs_wallet_transfer_flow():
 
 @pytest.mark.parametrize(
     "algorithm",
-    [
-        "secp256k1",
-        "ed\t25519",
-        "ed\u200b25519",
-        "\u0435d25519",
-        "ed\uff0d25519",
-        " ED25519 ",
-    ],
+    UNSUPPORTED_SIGNATURE_ALGORITHMS,
 )
 def test_nexus_app_rejects_unsupported_signature_algorithm(algorithm):
     client = NexusAppClient(
@@ -249,6 +276,77 @@ def test_nexus_app_rejects_unsupported_signature_algorithm(algorithm):
         )
 
     assert excinfo.value.code == "unsupported_signature_algorithm"
+
+
+@pytest.mark.parametrize(
+    "algorithm",
+    UNSUPPORTED_SIGNATURE_ALGORITHMS,
+)
+def test_nexus_app_rejects_unsupported_signable_signature_algorithm(algorithm):
+    client = NexusAppClient(
+        NexusAppConfig(
+            chain_id="test-chain",
+            authority="account-i105",
+            signing_public_key=bytes([1]) * 32,
+        ),
+        transaction_codec=FakeCodec(
+            b"payload", b"signed", "c" * 64, expected_authority="account-i105"
+        ),
+    )
+    draft = client.build_transfer_draft(
+        NexusTransferInput(
+            source_asset_id="asset#account-i105",
+            quantity=1,
+            destination_account_id="destination-i105",
+        )
+    )
+    signable = replace(draft.signable, signature_algorithm=algorithm)
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.finalize_and_submit(
+            signable,
+            {"algorithm": "ed25519", "signature": bytes([7]) * 64},
+            wait=False,
+        )
+
+    assert excinfo.value.code == "unsupported_signature_algorithm"
+
+
+def test_nexus_app_accepts_exact_zero_signature_algorithm_alias():
+    torii = FakeTorii(submit_hash_hex="c" * 64)
+    client = NexusAppClient(
+        NexusAppConfig(
+            chain_id="test-chain",
+            authority="account-i105",
+            signing_public_key=FIXTURE_PUBLIC_KEY,
+        ),
+        transaction_codec=FakeCodec(
+            FIXTURE_PAYLOAD,
+            b"signed",
+            "c" * 64,
+            expected_authority="account-i105",
+            expected_signature=FIXTURE_SIGNATURE,
+            expected_signing_public_key=FIXTURE_PUBLIC_KEY,
+        ),
+        torii_client=torii,
+    )
+    draft = client.build_transfer_draft(
+        NexusTransferInput(
+            source_asset_id="asset#account-i105",
+            quantity=1,
+            destination_account_id="destination-i105",
+        )
+    )
+
+    receipt = client.finalize_and_submit(
+        replace(draft.signable, signature_algorithm="0"),
+        {"algorithm": "0", "signature": FIXTURE_SIGNATURE},
+        wait=False,
+    )
+
+    assert receipt.signed_transaction == b"signed"
+    assert receipt.signed_transaction_hash_hex == "c" * 64
+    assert torii.submitted == [b"signed"]
 
 
 def test_nexus_app_rejects_missing_approval_fields():

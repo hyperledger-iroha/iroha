@@ -212,8 +212,24 @@ def _resolve_signing_public_key(authority: str, explicit: Optional[BytesLike]) -
 
 
 def _normalize_algorithm(algorithm: Any) -> str:
-    normalized = "ed25519" if algorithm is None else str(algorithm).lower()
-    if any(ord(ch) < 0x20 or ord(ch) > 0x7E for ch in normalized) or normalized not in {
+    if algorithm is None:
+        return "ed25519"
+    if not isinstance(algorithm, str):
+        raise NexusAppError(
+            "unsupported_signature_algorithm",
+            f"unsupported signature algorithm {algorithm}",
+        )
+    if not algorithm or any(ord(ch) < 0x20 or ord(ch) > 0x7E for ch in algorithm):
+        raise NexusAppError(
+            "unsupported_signature_algorithm",
+            f"unsupported signature algorithm {algorithm}",
+        )
+    if algorithm != algorithm.strip():
+        raise NexusAppError(
+            "unsupported_signature_algorithm",
+            f"unsupported signature algorithm {algorithm}",
+        )
+    if algorithm not in {
         "ed25519",
         "0",
     }:

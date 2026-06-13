@@ -9,10 +9,10 @@ object AccountAliasJsonParser {
     fun parseResolution(payload: ByteArray): AccountAliasResolution {
         val root = expectObject(parse(payload, "account alias resolution"), "account alias resolution")
         return AccountAliasResolution(
-            requiredString(root["alias"], "account alias resolution.alias"),
-            requiredString(root["account_id"], "account alias resolution.account_id"),
+            requiredExactString(root["alias"], "account alias resolution.alias"),
+            requiredExactString(root["account_id"], "account alias resolution.account_id"),
             if (root.containsKey("index")) asOptionalLong(root["index"], "account alias resolution.index") else null,
-            optionalString(root["source"]),
+            optionalExactString(root["source"], "account alias resolution.source"),
         )
     }
 
@@ -33,6 +33,18 @@ object AccountAliasJsonParser {
         val string = optionalString(value)
         check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
         return string.trim()
+    }
+
+    private fun requiredExactString(value: Any?, path: String): String {
+        val string = optionalString(value)
+        check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
+        check(string.trim() == string) { "$path must not contain surrounding whitespace" }
+        return string
+    }
+
+    private fun optionalExactString(value: Any?, path: String): String? {
+        if (value == null) return null
+        return requiredExactString(value, path)
     }
 
     private fun optionalString(value: Any?): String? {

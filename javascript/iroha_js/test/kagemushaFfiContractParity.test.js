@@ -1982,6 +1982,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
         "native.kagemushaRecursiveSpendCompactPaymentTokenFromBundle(",
         "native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(",
         "native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
+        "Object.is(blockHeight, -0)",
         "/\\b(?:archive|Norito|probe)\\b/i.test(error.message)",
         "toOwnedKagemushaArchiveBuffer",
         'const compactToken = toOwnedKagemushaArchiveBuffer(',
@@ -3062,10 +3063,22 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-timestamp-raw",
     "--negative-control-compact-key-evidence-filename",
     "--negative-control-compact-key-closed-schema",
+    "--negative-control-android-signed-evidence-summary-identity-fields",
+    "--negative-control-android-device-lab-zero-sha256-placeholders",
+    "--negative-control-android-device-lab-source-zero-sha256-placeholders",
+    "--negative-control-android-device-lab-raw-puller-blank-serial",
+    "--negative-control-android-device-lab-raw-puller-entry-cap",
+    "--negative-control-android-device-lab-raw-puller-private-permissions",
+    "--negative-control-android-device-lab-slot-assembler-source-identity-fallback",
     "--negative-control-release-bundle-evidence-inventory-schema",
     "--negative-control-release-bundle-evidence-inventory-keysets",
     "--negative-control-release-bundle-section-schema",
     "--negative-control-release-bundle-android-manifest-schema",
+    "--negative-control-release-bundle-android-signed-evidence-identity",
+    "--negative-control-release-bundle-android-slot-summary-identity",
+    "--negative-control-release-bundle-android-signed-evidence-identity-drift",
+    "--negative-control-release-bundle-android-slot-identity-drift",
+    "--negative-control-release-bundle-manifest-android-signed-evidence-identity-binding",
   ];
 
   assertWorkflowRunsNegativeControlModes(
@@ -3155,6 +3168,61 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "ABI-7 compact key evidence closed schema",
     ],
     [
+      "--negative-control-android-signed-evidence-summary-identity-fields",
+      /device_lab\.infer_kagemusha_device_family[\s\S]*?device_lab\.accept_any_kagemusha_device_family/u,
+      "Android signed-evidence readiness summary identity binding",
+    ],
+    [
+      "--negative-control-android-device-lab-zero-sha256-placeholders",
+      /== "0" \* 64[\s\S]*?__disabled_zero_sha256_placeholder_gate__/u,
+      "Android device-lab zero SHA-256 placeholder evidence",
+    ],
+    [
+      "--negative-control-android-device-lab-source-zero-sha256-placeholders",
+      /kagemusha_android_device_lab_slot\.py[\s\S]*?kagemusha_pull_android_device_lab_raw_slot\.py[\s\S]*?__disabled_zero_sha256_placeholder_gate__/u,
+      "Android device-lab source zero SHA-256 placeholder evidence",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-blank-serial",
+      /if args\.serial is not None:[\s\S]*?if args\.serial:/u,
+      "Android raw puller blank serial gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-entry-cap",
+      /entry_count \+= 1[\s\S]*?entry_count \+= 0/u,
+      "Android raw puller tar entry cap",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-private-permissions",
+      /os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(output\.fileno\(\), 0o600\)[\s\S]*?output\.fileno\(\)/u,
+      "Android raw puller private extracted-artifact permissions",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-source-identity-fallback",
+      /identity_hints=identity_hints[\s\S]*?identity_hints=\{\}/u,
+      "Android device-lab slot assembler source identity fallback",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-blank-source-identity",
+      /errors\.append\(f"\{label\} \{key\} must be a non-empty string"\)\\n        return None'[\s\S]*?'if value == "":\\n        return None/u,
+      "Android device-lab slot assembler blank source identity",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-blank-identity-override",
+      /errors\.append\(f"\{key\} must be a non-empty string"\)\\n        return None'[\s\S]*?'if override == "":\\n        return None/u,
+      "Android device-lab slot assembler blank identity override",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-source-identity-conflict",
+      /if hints\[key\] != value:[\s\S]*?if False and hints\[key\] != value:/u,
+      "Android device-lab slot assembler source identity conflict",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-override-source-identity-binding",
+      /if value is not None and hint_value is not None and value != hint_value:[\s\S]*?if False and value is not None and hint_value is not None and value != hint_value:/u,
+      "Android device-lab slot assembler override source identity binding",
+    ],
+    [
       "--negative-control-release-bundle-evidence-inventory-schema",
       /_check_release_bundle_evidence_inventory_shape\(evidence\)[\s\S]*?blockers\.extend\(\[\]\)/u,
       "Kagemusha release bundle evidence inventory schema",
@@ -3175,9 +3243,87 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha release bundle Android manifest schema",
     ],
     [
+      "--negative-control-release-bundle-android-signed-evidence-identity",
+      /device_lab\.infer_kagemusha_device_family[\s\S]*?device_lab\.accept_any_kagemusha_device_family/u,
+      "Kagemusha release bundle Android signed-evidence identity binding",
+    ],
+    [
+      "--negative-control-release-bundle-android-slot-summary-identity",
+      /kagemusha_release_summary_android_slots_device_identity[\s\S]*?android_slots_device_identity_disabled/u,
+      "Kagemusha release bundle Android slot summary identity binding",
+    ],
+    [
+      "--negative-control-release-bundle-android-signed-evidence-identity-drift",
+      /kagemusha_release_summary_android_signed_evidence_identity_drift[\s\S]*?android_signed_evidence_identity_drift_disabled/u,
+      "Kagemusha release bundle Android signed-evidence identity drift",
+    ],
+    [
+      "--negative-control-release-bundle-android-slot-identity-drift",
+      /kagemusha_release_summary_android_slots_identity_drift[\s\S]*?android_slots_identity_drift_disabled/u,
+      "Kagemusha release bundle Android slot identity drift",
+    ],
+    [
+      "--negative-control-release-bundle-manifest-android-signed-evidence-identity-binding",
+      /kagemusha_release_bundle_manifest_android_signed_evidence_identity_binding[\s\S]*?android_manifest_signed_evidence_identity_binding_disabled/u,
+      "Kagemusha release bundle manifest Android signed-evidence identity binding",
+    ],
+    [
       "--negative-control-release-bundle-compact-generator-log-inventory",
       /"compact_key_generator_log"[\s\S]*?"compactKeyGeneratorLogDisabled"/u,
       "Kagemusha release bundle compact generator log inventory",
+    ],
+  ];
+  for (const [mode, mutationPattern, label] of branchSpecs) {
+    const branch = readinessBranch(mode);
+    assert.match(branch, /run_negative_control\(/u, `${label} negative control must use the shared runner`);
+    assert.match(branch, mutationPattern, `${label} negative control must mutate the guarded source text`);
+  }
+});
+
+test("Kagemusha staged finalizer negative controls pin execution-report log binding", () => {
+  const readiness = source("ci/check_kagemusha_production_readiness.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const expectedModes = [
+    "--negative-control-lineage-proof-finalizer-execution-log-sha256",
+    "--negative-control-compact-key-finalizer-execution-log-sha256",
+    "--negative-control-compact-key-finalizer-execution-elapsed-binding",
+  ];
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_production_readiness.sh",
+    expectedModes,
+    "Kagemusha staged finalizer execution-report guard",
+  );
+  for (const mode of expectedModes) {
+    assert.ok(
+      readiness.includes(`ci/check_kagemusha_production_readiness.sh ${mode}`),
+      `production readiness workflow requirements must include ${mode}`,
+    );
+    assert.ok(readiness.includes(`if mode == "${mode}":`), `production readiness guard must implement ${mode}`);
+  }
+
+  const readinessBranch = (mode) => {
+    const start = readiness.indexOf(`if mode == "${mode}":`);
+    assert.notEqual(start, -1, `missing readiness branch ${mode}`);
+    const end = readiness.indexOf("\nif mode ==", start + 1);
+    return readiness.slice(start, end === -1 ? readiness.length : end);
+  };
+  const branchSpecs = [
+    [
+      "--negative-control-lineage-proof-finalizer-execution-log-sha256",
+      /log_sha256 must match staged log SHA-256[\s\S]*?log_sha256 may drift from staged log SHA-256/u,
+      "Reserved-lineage finalizer execution-report log binding",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-execution-log-sha256",
+      /generator_log_sha256 must match staged generator log SHA-256[\s\S]*?generator_log_sha256 may drift from staged generator log SHA-256/u,
+      "ABI-7 compact finalizer execution-report log binding",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-execution-elapsed-binding",
+      /elapsed_seconds must match staged run report[\s\S]*?elapsed_seconds may drift from staged run report/u,
+      "ABI-7 compact finalizer execution-report elapsed binding",
     ],
   ];
   for (const [mode, mutationPattern, label] of branchSpecs) {
@@ -4402,6 +4548,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-kagemusha-instruction-transaction-builder",
     "--negative-control-python-lineage-key-package-binding",
     "--negative-control-csharp-lineage-key-package-binding",
+    "--negative-control-csharp-lineage-cid1-exactness",
+    "--negative-control-csharp-canonical-request-exactness",
+    "--negative-control-csharp-identifier-receipt-exactness",
+    "--negative-control-csharp-transaction-builder-exactness",
+    "--negative-control-csharp-transaction-encoding-exactness",
     "--negative-control-swift-lineage-key-package-binding",
     "--negative-control-csharp-lineage-witness-availability-probe",
     "--negative-control-csharp-lineage-witness-append-availability-probe",
@@ -4451,6 +4602,20 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-compact-projection-block-height-validation",
     "--negative-control-python-recursive-spend-compact-projection-root-export",
     "--negative-control-jvm-compact-projection-unsigned-block-height",
+    "--negative-control-jvm-claim-identifier-account-binding-test",
+    "--negative-control-jvm-claim-identifier-account-exactness",
+    "--negative-control-jvm-identifier-claim-record-exactness",
+    "--negative-control-js-swift-identifier-claim-record-exactness",
+    "--negative-control-ram-lfe-response-exactness",
+    "--negative-control-ram-lfe-program-policy-exactness",
+    "--negative-control-identifier-policy-proof-verifier-exactness",
+    "--negative-control-identifier-policy-metadata-exactness",
+    "--negative-control-account-alias-resolution-exactness",
+    "--negative-control-multisig-resolved-account-exactness",
+    "--negative-control-android-device-lab-family-fail-closed",
+    "--negative-control-android-device-lab-family-overmatch",
+    "--negative-control-android-device-lab-family-override-binding",
+    "--negative-control-android-device-lab-assembler-identity-fields",
     "--negative-control-native-bridge-zero-envelope-pallas-guard",
     "--negative-control-kagemusha-abi-probe-bounds",
     "--negative-control-kagemusha-probe-rejection-shape",
@@ -4490,6 +4655,9 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-identifier-receipt-policy-summary-id-exactness-guard",
     "--negative-control-identifier-receipt-program-id-exactness-guard",
     "--negative-control-identifier-receipt-account-id-exactness-guard",
+    "--negative-control-swift-identifier-receipt-account-id-exactness",
+    "--negative-control-native-bridge-identifier-receipt-exactness",
+    "--negative-control-native-bridge-claim-identifier-account-binding",
     "--negative-control-identifier-receipt-hash-exactness-guard",
     "--negative-control-identifier-receipt-timestamp-exactness-guard",
     "--negative-control-identifier-receipt-timestamp-u64-guard",
@@ -4544,6 +4712,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-swift-native-output-headers",
     "--negative-control-swift-native-input-headers",
     "--negative-control-swift-kagemusha-instruction-transaction-builder",
+    "--negative-control-swift-identifier-receipt-account-id-decode-test",
+    "--negative-control-swift-nfc-receive-success-preservation",
+    "--negative-control-swift-nfc-receipt-ack-single-success",
+    "--negative-control-swift-nfc-receipt-ack-read-single-success",
+    "--negative-control-swift-nfc-emulation-progress-after-success",
+    "--negative-control-swift-nfc-send-terminal-success-policy",
     "--negative-control-swift-sdk-version-script",
     "--negative-control-swift-sdk-override-script",
     "--negative-control-swift-sdk-needs-workflow",
@@ -4558,6 +4732,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-sdk-native-bridge-script",
     "--negative-control-csharp-sdk-native-library-evidence-script",
     "--negative-control-csharp-sdk-test-filter-script",
+    "--negative-control-csharp-sdk-verifier-backend-test-filter-script",
     "--negative-control-csharp-sdk-workflow-inventory",
     "--negative-control-csharp-archive-copy",
     "--negative-control-csharp-recursive-compact-verifier-unavailable",
@@ -4605,6 +4780,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /Reject tracked Python bytecode[\s\S]*run:\s+bash ci\/check_no_tracked_python_bytecode\.sh[\s\S]*- name:\s+Kagemusha recursive spend SDK parity\s*\n\s*run:\s+ci\/check_kagemusha_recursive_spend_sdk_parity\.sh/,
     "Kagemusha workflow must reject tracked Python bytecode before SDK parity",
   );
+  assert.match(
+    guard,
+    /testIdentifierReceiptRejectsMalformedProofAttestationBase64DuringDecode[\s\S]*testIdentifierReceiptDecodeRejectsPaddedAccountIdBeforeSignatureVerification[\s\S]*"account_id"[\s\S]*Swift identifier receipt account-id, attestation kind, and malformed proof base64 tests/u,
+    "Kagemusha SDK parity guard must pin the Swift padded account-id receipt decode regression",
+  );
   assertWorkflowIncludesPaths(
     workflow,
     [
@@ -4651,6 +4831,429 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       `Kagemusha workflow must run SDK parity ${mode}`,
     );
   }
+  const swiftIdentifierAccountIdExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-identifier-receipt-account-id-exactness":'),
+    guard.indexOf('if mode == "--negative-control-identifier-receipt-hash-exactness-guard":'),
+  );
+  assert.match(
+    swiftIdentifierAccountIdExactnessBranch,
+    /accountId = rawAccountId[\s\S]*?accountId = trimmedAccountId/u,
+    "Swift identifier receipt account-id exactness negative control must reintroduce whitespace normalization",
+  );
+  assert.match(
+    swiftIdentifierAccountIdExactnessBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift identifier receipt account-id exactness negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftIdentifierAccountIdExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift identifier receipt account-id exactness drift was not detected"\)/u,
+    "Swift identifier receipt account-id exactness negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftIdentifierAccountIdExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift identifier receipt account-id exactness negative control must not unconditionally pass after run_checks",
+  );
+  const nativeBridgeIdentifierReceiptExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-native-bridge-identifier-receipt-exactness":'),
+    guard.indexOf('if mode == "--negative-control-native-bridge-claim-identifier-account-binding":'),
+  );
+  assert.match(
+    nativeBridgeIdentifierReceiptExactnessBranch,
+    /raw\.is_empty\(\) \|\| raw\.trim\(\) != raw[\s\S]*?raw\.trim\(\)\.is_empty/u,
+    "native bridge identifier receipt exactness negative control must reintroduce whitespace normalization",
+  );
+  assert.match(
+    nativeBridgeIdentifierReceiptExactnessBranch,
+    /parse_identifier_receipt_rejects_padded_payload_fields[\s\S]*?parse_identifier_receipt_allows_padded_payload_fields/u,
+    "native bridge identifier receipt exactness negative control must mutate padded payload coverage",
+  );
+  assert.match(
+    guard,
+    /let kind =\\n\s+parse_identifier_exact_str[\s\S]*?vec!\["payload", "opaque_id"\][\s\S]*?vec!\["payload", "uaid"\][\s\S]*?vec!\["payload", "account_id"\][\s\S]*?vec!\["attestation", "kind"\][\s\S]*?Rust native identifier receipt exactness/u,
+    "native bridge identifier receipt exactness guard must pin padded opaque_id, uaid, account_id, and attestation kind coverage",
+  );
+  assert.match(
+    nativeBridgeIdentifierReceiptExactnessBranch,
+    /Rust native identifier receipt exactness[\s\S]*?native bridge identifier receipt exactness drift was not detected/u,
+    "native bridge identifier receipt exactness negative control must only pass after detecting injected drift",
+  );
+  assert.match(
+    guard,
+    /fn validate_identifier_claim_account\([\s\S]*?if &receipt\.payload\.account_id != account[\s\S]*?validate_identifier_claim_account\(&account, &receipt\)\?;[\s\S]*?validate_identifier_claim_account_rejects_mismatched_receipt_account[\s\S]*?Rust native claim identifier account binding/u,
+    "native bridge claim-identifier guard must pin account/receipt account binding before transaction encoding",
+  );
+  const nativeBridgeClaimIdentifierAccountBindingBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-native-bridge-claim-identifier-account-binding":'),
+    guard.indexOf('if mode == "--negative-control-identifier-receipt-hash-exactness-guard":'),
+  );
+  assert.match(
+    nativeBridgeClaimIdentifierAccountBindingBranch,
+    /validate_identifier_claim_account\(&account, &receipt\)\?;\\n[\s\S]*?validate_identifier_claim_account_rejects_mismatched_receipt_account[\s\S]*?validate_identifier_claim_account_allows_mismatched_receipt_account/u,
+    "native bridge claim-identifier negative control must remove account binding and mutate its regression test",
+  );
+  assert.match(
+    nativeBridgeClaimIdentifierAccountBindingBranch,
+    /Rust native claim identifier account binding[\s\S]*?native claim-identifier account binding drift was not detected/u,
+    "native bridge claim-identifier negative control must only pass after detecting injected drift",
+  );
+  assert.match(
+    guard,
+    /claimIdentifierRejectsAccountMismatchBeforeEncoding[\s\S]*?claim identifier rejects account mismatch before encoding[\s\S]*?ClaimIdentifier accountId must match receipt\.accountId[\s\S]*?ClaimIdentifier account binding test/u,
+    "JVM ClaimIdentifier guard must pin Java and Kotlin account-mismatch regression tests",
+  );
+  const jvmClaimIdentifierAccountBindingBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-claim-identifier-account-binding-test":'),
+    guard.indexOf('if mode == "--negative-control-jvm-claim-identifier-account-exactness":'),
+  );
+  assert.match(
+    jvmClaimIdentifierAccountBindingBranch,
+    /claimIdentifierRejectsAccountMismatchBeforeEncoding[\s\S]*?claimIdentifierAllowsAccountMismatchBeforeEncoding[\s\S]*?claim identifier rejects account mismatch before encoding[\s\S]*?claim identifier allows account mismatch before encoding/u,
+    "JVM ClaimIdentifier negative control must mutate Java and Kotlin regression test names",
+  );
+  assert.match(
+    jvmClaimIdentifierAccountBindingBranch,
+    /ClaimIdentifier accountId must match receipt\.accountId[\s\S]*?ClaimIdentifier account mismatch may be checked by core/u,
+    "JVM ClaimIdentifier negative control must remove the explicit mismatch assertion marker",
+  );
+  assert.match(
+    jvmClaimIdentifierAccountBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?JVM ClaimIdentifier account binding drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JVM ClaimIdentifier account binding drift was not detected"\)/u,
+    "JVM ClaimIdentifier negative control must only pass after detecting injected drift",
+  );
+  assert.match(
+    guard,
+    /Android Java ClaimIdentifier account exactness[\s\S]*?Kotlin ClaimIdentifier account exactness[\s\S]*?requireExactNonBlank\(accountId, \\"accountId\\"\)[\s\S]*?requireExactNonBlank\(receipt\.accountId[\s\S]*?padded ClaimIdentifier account must fail before encoding[\s\S]*?accountId must not contain surrounding whitespace/u,
+    "JVM ClaimIdentifier guard must pin exact account text and padded-account rejection",
+  );
+  const jvmClaimIdentifierAccountExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-claim-identifier-account-exactness":'),
+    guard.indexOf('if mode == "--negative-control-jvm-identifier-claim-record-exactness":'),
+  );
+  assert.match(
+    jvmClaimIdentifierAccountExactnessBranch,
+    /requireExactNonBlank\(accountId, \\"accountId\\"\)[\s\S]*?requireNonBlank\(accountId, \\"accountId\\"\)[\s\S]*?requireExactNonBlank\(receipt\.accountId[\s\S]*?requireNonBlank\(receipt\.accountId/u,
+    "JVM ClaimIdentifier account exactness negative control must mutate Java and Kotlin production exact helpers",
+  );
+  assert.match(
+    jvmClaimIdentifierAccountExactnessBranch,
+    /padded ClaimIdentifier account must fail before encoding[\s\S]*?padded ClaimIdentifier account may normalize before encoding[\s\S]*?accountId must not contain surrounding whitespace[\s\S]*?accountId may be trimmed before encoding/u,
+    "JVM ClaimIdentifier account exactness negative control must mutate padded-account regression markers",
+  );
+  assert.match(
+    jvmClaimIdentifierAccountExactnessBranch,
+    /Android Java ClaimIdentifier account exactness[\s\S]*?Kotlin ClaimIdentifier account exactness[\s\S]*?JVM ClaimIdentifier account exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JVM ClaimIdentifier account exactness drift was not detected"\)/u,
+    "JVM ClaimIdentifier account exactness negative control must only pass after detecting injected drift",
+  );
+  assert.match(
+    guard,
+    /requiredExactString\(root\.get\("policy_id"\), "identifier claim record\.policy_id"\)[\s\S]*?Android Java identifier claim record policy-id exactness[\s\S]*?requiredExactString\(root\["policy_id"\], "identifier claim record\.policy_id"\)[\s\S]*?Kotlin identifier claim record policy-id exactness[\s\S]*?identifierClaimRecordParserRejectsNonExactClaimFields[\s\S]*?identifier claim record parser must reject non-exact[\s\S]*?identifier claim record \$label exactness/u,
+    "JVM identifier claim-record guard must pin exact parser fields and Java/Kotlin padded-field tests",
+  );
+  const jvmIdentifierClaimRecordExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-identifier-claim-record-exactness":'),
+    guard.indexOf('if mode == "--negative-control-js-swift-identifier-claim-record-exactness":'),
+  );
+  assert.match(
+    jvmIdentifierClaimRecordExactnessBranch,
+    /requiredExactString\(root\.get\("\{field\}"\), "identifier claim record\.\{field\}"\)[\s\S]*?requiredString\(root\.get\("\{field\}"\), "identifier claim record\.\{field\}"\)[\s\S]*?requiredExactString\(root\["\{field\}"\], "identifier claim record\.\{field\}"\)[\s\S]*?requiredString\(root\["\{field\}"\], "identifier claim record\.\{field\}"\)/u,
+    "JVM identifier claim-record exactness negative control must mutate Java and Kotlin parser exact helpers",
+  );
+  assert.match(
+    jvmIdentifierClaimRecordExactnessBranch,
+    /identifierClaimRecordParserRejectsNonExactClaimFields[\s\S]*?identifierClaimRecordParserAllowsPaddedClaimFields[\s\S]*?identifier claim record parser must reject non-exact[\s\S]*?identifier claim record parser may normalize[\s\S]*?identifier claim record \$label exactness[\s\S]*?identifier claim record \$label may normalize/u,
+    "JVM identifier claim-record exactness negative control must mutate Java and Kotlin padded-field regression markers",
+  );
+  assert.match(
+    jvmIdentifierClaimRecordExactnessBranch,
+    /Android Java identifier claim record policy-id exactness[\s\S]*?Kotlin identifier claim record policy-id exactness[\s\S]*?JVM identifier claim-record exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JVM identifier claim-record exactness drift was not detected"\)/u,
+    "JVM identifier claim-record exactness negative control must only pass after detecting injected drift",
+  );
+  assert.match(
+    guard,
+    /normalizeIdentifierClaimLookupResponse[\s\S]*?identifier claim record exactness[\s\S]*?claimRecordFixture[\s\S]*?getIdentifierClaimByReceiptHash rejects non-exact claim record fields[\s\S]*?debugName: "identifier claim record\.policy_id"[\s\S]*?field: "identifier claim record\.receipt_hash"[\s\S]*?testGetIdentifierClaimByReceiptHashRejectsNonExactClaimFieldsAsync/u,
+    "JS/Swift identifier claim-record guard must pin exact lookup helpers and padded-field tests",
+  );
+  const jsSwiftIdentifierClaimRecordExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-swift-identifier-claim-record-exactness":'),
+    guard.indexOf('if mode == "--negative-control-ram-lfe-response-exactness":'),
+  );
+  assert.match(
+    jsSwiftIdentifierClaimRecordExactnessBranch,
+    /policy_id: requireIdentifierPolicyId\(record\.policy_id[\s\S]*?policy_id: requireNonEmptyString\(record\.policy_id[\s\S]*?opaque_id: requireExactReceiptPrefixedHash\(record\.opaque_id[\s\S]*?opaque_id: normalizeOpaqueLiteral\(record\.opaque_id[\s\S]*?account_id: requireExactAccountId\(record\.account_id[\s\S]*?account_id: ToriiClient\._requireAccountId\(record\.account_id/u,
+    "JS/Swift identifier claim-record negative control must mutate JavaScript source and dist exact helpers",
+  );
+  assert.match(
+    jsSwiftIdentifierClaimRecordExactnessBranch,
+    /getIdentifierClaimByReceiptHash rejects non-exact claim record fields[\s\S]*?getIdentifierClaimByReceiptHash allows normalized claim record fields[\s\S]*?claim record \$\{field\} exactness[\s\S]*?claim record \$\{field\} may normalize/u,
+    "JS/Swift identifier claim-record negative control must mutate JavaScript regression markers",
+  );
+  assert.match(
+    jsSwiftIdentifierClaimRecordExactnessBranch,
+    /ToriiIdentifierReceiptWireValue\.exactPolicyId\([\s\S]*?ToriiIdentifierReceiptWireValue\.normalizedPolicyId\([\s\S]*?ToriiIdentifierReceiptWireValue\.exactAccountId\([\s\S]*?ToriiIdentifierReceiptWireValue\.normalizedPolicyId\(/u,
+    "JS/Swift identifier claim-record negative control must mutate Swift exact decode helpers",
+  );
+  assert.match(
+    jsSwiftIdentifierClaimRecordExactnessBranch,
+    /testGetIdentifierClaimByReceiptHashRejectsNonExactClaimFieldsAsync[\s\S]*?testGetIdentifierClaimByReceiptHashAllowsNormalizedClaimFieldsAsync[\s\S]*?expected non-exact claim record[\s\S]*?expected normalized claim record/u,
+    "JS/Swift identifier claim-record negative control must mutate Swift regression markers",
+  );
+  assert.match(
+    jsSwiftIdentifierClaimRecordExactnessBranch,
+    /JavaScript identifier claim record exactness tests[\s\S]*?Swift identifier receipt account-id, attestation kind, and malformed proof base64 tests[\s\S]*?JS\/Swift identifier claim-record exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JS\/Swift identifier claim-record exactness drift was not detected"\)/u,
+    "JS/Swift identifier claim-record negative control must only pass after detecting injected drift",
+  );
+  assert.match(
+    guard,
+    /RAM-LFE execute response exactness[\s\S]*?RAM-LFE receipt verify response exactness[\s\S]*?JavaScript RAM-LFE response and program-policy exactness tests[\s\S]*?Android Java RAM-LFE execute response opaque-hash exactness[\s\S]*?Kotlin RAM-LFE execute response opaque-hash exactness[\s\S]*?testRamLfeResponseParsersRejectNonExactFieldsAsync/u,
+    "RAM-LFE response exactness guard must pin source and regression markers across non-C# SDKs",
+  );
+  const ramLfeResponseExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-ram-lfe-response-exactness":'),
+    guard.indexOf('if mode == "--negative-control-ram-lfe-program-policy-exactness":'),
+  );
+  assert.match(
+    ramLfeResponseExactnessBranch,
+    /requiredExactString\(root\.get\("program_id"\), "ram-lfe execute response\.program_id"\)[\s\S]*?requiredString\(root\.get\("program_id"\), "ram-lfe execute response\.program_id"\)[\s\S]*?canonicalizeExactHash32\(root\["opaque_hash"\], "ram-lfe execute response\.opaque_hash"\)[\s\S]*?requiredString\(root\["opaque_hash"\], "ram-lfe execute response\.opaque_hash"\)/u,
+    "RAM-LFE response negative control must mutate Java and Kotlin response parsers",
+  );
+  assert.match(
+    ramLfeResponseExactnessBranch,
+    /program_id: requireExactNonEmptyString\(record\.program_id[\s\S]*?program_id: requireNonEmptyString\(record\.program_id[\s\S]*?output_ciphertext: requireExactHexString\([\s\S]*?output_ciphertext: requireHexString\(/u,
+    "RAM-LFE response negative control must mutate JavaScript source and dist exact helpers",
+  );
+  assert.match(
+    ramLfeResponseExactnessBranch,
+    /testRamLfeResponseParsersRejectNonExactFieldsAsync[\s\S]*?testRamLfeResponseParsersAllowNormalizedFieldsAsync[\s\S]*?RAM-LFE response exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: RAM-LFE response exactness drift was not detected"\)/u,
+    "RAM-LFE response negative control must only pass after detecting injected drift",
+  );
+  assert.match(
+    guard,
+    /normalizeRamLfeProgramPolicySummary[\s\S]*?normalizeRamLfeProofVerifierMetadata[\s\S]*?RAM-LFE program policy exactness[\s\S]*?listRamLfeProgramPolicies rejects non-exact policy metadata[\s\S]*?listRamLfeProgramPolicies rejects non-exact proof-verifier metadata[\s\S]*?Swift RAM-LFE program policy exactness[\s\S]*?testRamLfeProgramPolicyParserRejectsNonExactFieldsAsync[\s\S]*?Android Java RAM-LFE program policy program-id exactness[\s\S]*?Kotlin RAM-LFE program policy program-id exactness/u,
+    "RAM-LFE program-policy exactness guard must pin source and regression markers across non-C# SDKs",
+  );
+  const ramLfeProgramPolicyExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-ram-lfe-program-policy-exactness":'),
+    guard.indexOf('if mode == "--negative-control-android-device-lab-family-fail-closed":'),
+  );
+  assert.match(
+    ramLfeProgramPolicyExactnessBranch,
+    /requiredExactString\(\\n\s+item\.get\("program_id"\),\\n\s+"ram-lfe program policy list\.items\[" \+ i \+ "\]\.program_id"\)[\s\S]*?requiredString\(\\n\s+item\.get\("program_id"\),\\n\s+"ram-lfe program policy list\.items\[" \+ i \+ "\]\.program_id"\)[\s\S]*?requiredExactString\(item\["program_id"\], "ram-lfe program policy list\.items\[\$i\]\.program_id"\)[\s\S]*?requiredString\(item\["program_id"\], "ram-lfe program policy list\.items\[\$i\]\.program_id"\)/u,
+    "RAM-LFE program-policy negative control must mutate Java and Kotlin policy parsers",
+  );
+  assert.match(
+    ramLfeProgramPolicyExactnessBranch,
+    /const backend = requireExactNonEmptyString\(record\.backend[\s\S]*?const backend = requireNonEmptyString\(record\.backend[\s\S]*?owner: requireExactAccountId\(record\.owner[\s\S]*?owner: ToriiClient\._requireAccountId\(record\.owner[\s\S]*?result\.input_encryption_public_parameters = requireExactHexString\([\s\S]*?result\.input_encryption_public_parameters = requireHexString\([\s\S]*?result\.proof_verifier = normalizeRamLfeProofVerifierMetadata\([\s\S]*?result\.proof_verifier = record\.proof_verifier;/u,
+    "RAM-LFE program-policy negative control must mutate JavaScript source/dist exact helpers and proof-verifier parsing",
+  );
+  assert.match(
+    ramLfeProgramPolicyExactnessBranch,
+    /listRamLfeProgramPolicies rejects non-exact proof-verifier metadata[\s\S]*?listRamLfeProgramPolicies allows normalized proof-verifier metadata[\s\S]*?RAM-LFE proof verifier \$\{field\} exactness[\s\S]*?RAM-LFE proof verifier \$\{field\} may normalize/u,
+    "RAM-LFE program-policy negative control must mutate JavaScript proof-verifier regression markers",
+  );
+  assert.match(
+    ramLfeProgramPolicyExactnessBranch,
+    /testRamLfeProgramPolicyParserRejectsNonExactFieldsAsync[\s\S]*?testRamLfeProgramPolicyParserAllowsNormalizedFieldsAsync[\s\S]*?RAM-LFE program-policy exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: RAM-LFE program-policy exactness drift was not detected"\)/u,
+    "RAM-LFE program-policy negative control must only pass after detecting injected drift",
+  );
+  assert.match(
+    guard,
+    /normalizeIdentifierPolicySummary[\s\S]*?identifier policy proof-verifier exactness[\s\S]*?listIdentifierPolicies rejects non-exact proof-verifier metadata[\s\S]*?Swift identifier policy proof-verifier metadata tests[\s\S]*?Android Java identifier policy proof-verifier exactness[\s\S]*?Kotlin identifier policy proof-verifier exactness/u,
+    "identifier policy proof-verifier exactness guard must pin source and regression markers across non-C# SDKs",
+  );
+  const identifierPolicyProofVerifierBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-identifier-policy-proof-verifier-exactness":'),
+    guard.indexOf('if mode == "--negative-control-identifier-policy-metadata-exactness":'),
+  );
+  assert.match(
+    identifierPolicyProofVerifierBranch,
+    /requiredExactString\(root\.get\("proof_backend"\), context \+ "\.proof_backend"\)[\s\S]*?requiredString\(root\.get\("proof_backend"\), context \+ "\.proof_backend"\)[\s\S]*?requiredExactString\(root\["proof_backend"\], "\$context\.proof_backend"\)[\s\S]*?requiredString\(root\["proof_backend"\], "\$context\.proof_backend"\)/u,
+    "identifier policy proof-verifier negative control must mutate Java and Kotlin parser exactness",
+  );
+  assert.match(
+    identifierPolicyProofVerifierBranch,
+    /result\.proof_verifier = normalizeRamLfeProofVerifierMetadata\([\s\S]*?result\.proof_verifier = record\.proof_verifier;/u,
+    "identifier policy proof-verifier negative control must mutate JavaScript preservation",
+  );
+  assert.match(
+    identifierPolicyProofVerifierBranch,
+    /listIdentifierPolicies rejects non-exact proof-verifier metadata[\s\S]*?listIdentifierPolicies allows normalized proof-verifier metadata[\s\S]*?identifier policy proof verifier \$\{field\} exactness[\s\S]*?identifier policy proof verifier \$\{field\} may normalize[\s\S]*?identifier policy proof-verifier exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: identifier policy proof-verifier exactness drift was not detected"\)/u,
+    "identifier policy proof-verifier negative control must mutate regression markers and only pass after detecting drift",
+  );
+  assert.match(
+    guard,
+    /normalizeIdentifierBfvPublicParameters[\s\S]*?identifier BFV metadata exactness[\s\S]*?normalizeIdentifierPolicySummary[\s\S]*?identifier policy metadata exactness[\s\S]*?listIdentifierPolicies rejects non-exact policy metadata[\s\S]*?Swift identifier policy metadata exactness[\s\S]*?Android Java identifier policy metadata exactness[\s\S]*?Kotlin identifier policy metadata exactness/u,
+    "identifier policy metadata exactness guard must pin source and regression markers across non-C# SDKs",
+  );
+  const identifierPolicyMetadataBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-identifier-policy-metadata-exactness":'),
+    guard.indexOf('if mode == "--negative-control-android-device-lab-family-fail-closed":'),
+  );
+  assert.match(
+    identifierPolicyMetadataBranch,
+    /requiredExactString\(item\.get\("owner"\), "identifier policy list\.items\[" \+ i \+ "\]\.owner"\)[\s\S]*?requiredString\(item\.get\("owner"\), "identifier policy list\.items\[" \+ i \+ "\]\.owner"\)[\s\S]*?requiredExactString\(item\["owner"\], "identifier policy list\.items\[\$i\]\.owner"\)[\s\S]*?requiredString\(item\["owner"\], "identifier policy list\.items\[\$i\]\.owner"\)/u,
+    "identifier policy metadata negative control must mutate Java and Kotlin owner exactness",
+  );
+  assert.match(
+    identifierPolicyMetadataBranch,
+    /norito_length_encoding = requireExactNonEmptyString\([\s\S]*?norito_length_encoding = requireNonEmptyString\([\s\S]*?const normalization = requireExactNonEmptyString\([\s\S]*?const normalization = requireNonEmptyString\([\s\S]*?owner: requireExactAccountId\(record\.owner[\s\S]*?owner: ToriiClient\._requireAccountId\(record\.owner[\s\S]*?result\.input_encryption_public_parameters = requireExactHexString\([\s\S]*?result\.input_encryption_public_parameters = requireHexString\(/u,
+    "identifier policy metadata negative control must mutate JavaScript exact helpers",
+  );
+  assert.match(
+    identifierPolicyMetadataBranch,
+    /testListIdentifierPoliciesRejectsNonExactMetadata[\s\S]*?testListIdentifierPoliciesAllowsNormalizedMetadata/u,
+    "identifier policy metadata negative control must mutate Swift regression markers",
+  );
+  assert.match(
+    identifierPolicyMetadataBranch,
+    /listIdentifierPolicies rejects non-exact policy metadata[\s\S]*?listIdentifierPolicies allows normalized policy metadata/u,
+    "identifier policy metadata negative control must mutate JavaScript policy regression title",
+  );
+  assert.match(
+    identifierPolicyMetadataBranch,
+    /identifier policy metadata \$\{field\} exactness[\s\S]*?identifier policy metadata \$\{field\} may normalize/u,
+    "identifier policy metadata negative control must mutate JavaScript parameterized regression marker",
+  );
+  assert.match(
+    identifierPolicyMetadataBranch,
+    /identifier policy metadata exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: identifier policy metadata exactness drift was not detected"\)/u,
+    "identifier policy metadata negative control must only pass after detecting drift",
+  );
+  assert.match(
+    guard,
+    /normalizeAliasResolutionResponse[\s\S]*?account alias resolution exactness[\s\S]*?JavaScript account alias resolution exactness tests[\s\S]*?Swift account alias resolution exactness[\s\S]*?Android Java account alias resolution alias exactness[\s\S]*?Kotlin account alias resolution alias exactness/u,
+    "account alias resolution exactness guard must pin source and regression markers across non-C# SDKs",
+  );
+  const accountAliasResolutionBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-account-alias-resolution-exactness":'),
+    guard.indexOf('if mode == "--negative-control-android-device-lab-family-fail-closed":'),
+  );
+  assert.match(
+    accountAliasResolutionBranch,
+    /const alias = requireExactNonEmptyString\(record\.alias[\s\S]*?const alias = requireNonEmptyString\(record\.alias[\s\S]*?const rawAccountId = requireExactNonEmptyString\([\s\S]*?const rawAccountId = requireNonEmptyString\([\s\S]*?result\.source = requireExactNonEmptyString\(sourceValue[\s\S]*?result\.source = requireNonEmptyString\(sourceValue/u,
+    "account alias resolution negative control must mutate JavaScript exact helpers",
+  );
+  assert.match(
+    accountAliasResolutionBranch,
+    /requiredExactString\(root\.get\("alias"\), "account alias resolution\.alias"\)[\s\S]*?requiredString\(root\.get\("alias"\), "account alias resolution\.alias"\)[\s\S]*?requiredExactString\(root\["alias"\], "account alias resolution\.alias"\)[\s\S]*?requiredString\(root\["alias"\], "account alias resolution\.alias"\)/u,
+    "account alias resolution negative control must mutate Java and Kotlin alias exactness",
+  );
+  assert.match(
+    accountAliasResolutionBranch,
+    /resolveAlias parses exact payload fields[\s\S]*?resolveAlias normalizes payload fields[\s\S]*?accountAliasParserRejectsNonExactResponseFields[\s\S]*?accountAliasParserAllowsNormalizedResponseFields[\s\S]*?testResolveAccountAliasRejectsNonExactResponseFields[\s\S]*?testResolveAccountAliasAllowsNormalizedResponseFields/u,
+    "account alias resolution negative control must mutate regression markers",
+  );
+  assert.match(
+    accountAliasResolutionBranch,
+    /account alias resolution exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: account alias resolution exactness drift was not detected"\)/u,
+    "account alias resolution negative control must only pass after detecting drift",
+  );
+  assert.match(
+    guard,
+    /normalizeMultisigContractCallResponse[\s\S]*?multisig resolved account exactness[\s\S]*?JavaScript multisig resolved account exactness tests[\s\S]*?Swift multisig resolved account exactness[\s\S]*?Android Java multisig resolved account exactness[\s\S]*?Kotlin multisig resolved account exactness/u,
+    "multisig resolved account exactness guard must pin source and regression markers across non-C# SDKs",
+  );
+  const multisigResolvedAccountBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-multisig-resolved-account-exactness":'),
+    guard.indexOf('if mode == "--negative-control-android-device-lab-family-fail-closed":'),
+  );
+  assert.match(
+    multisigResolvedAccountBranch,
+    /resolved_multisig_account_id: requireExactAccountId\([\s\S]*?resolved_multisig_account_id: ToriiClient\._normalizeAccountId\(/u,
+    "multisig resolved account negative control must mutate JavaScript exact helpers",
+  );
+  assert.match(
+    multisigResolvedAccountBranch,
+    /requiredExactAccountId\(root\.get\("resolved_multisig_account_id"\), "multisig response\.resolved_multisig_account_id"\)[\s\S]*?requiredString\(root\.get\("resolved_multisig_account_id"\), "multisig response\.resolved_multisig_account_id"\)[\s\S]*?requiredExactAccountId\(root\["resolved_multisig_account_id"\], "multisig response\.resolved_multisig_account_id"\)[\s\S]*?requiredString\(root\["resolved_multisig_account_id"\], "multisig response\.resolved_multisig_account_id"\)/u,
+    "multisig resolved account negative control must mutate Java and Kotlin exact helpers",
+  );
+  assert.match(
+    multisigResolvedAccountBranch,
+    /decodeExactToriiAccountId[\s\S]*?decodeNormalizedToriiAccountId[\s\S]*?guard !raw\.contains\("@"\)[\s\S]*?guard raw\.contains\("@"\) \|\| true/u,
+    "multisig resolved account negative control must mutate Swift exact helper markers",
+  );
+  assert.match(
+    multisigResolvedAccountBranch,
+    /multisig response decoders reject non-exact resolved account ids[\s\S]*?multisig response decoders allow normalized resolved account ids[\s\S]*?testMultisigResponsesRejectNonExactResolvedAccountIds[\s\S]*?testMultisigResponsesAllowNormalizedResolvedAccountIds[\s\S]*?padded resolved multisig account id must be rejected[\s\S]*?padded resolved multisig account id may normalize[\s\S]*?testMultisigAccountId[\s\S]*?testNormalizedMultisigAccountId/u,
+    "multisig resolved account negative control must mutate regression markers",
+  );
+  assert.match(
+    multisigResolvedAccountBranch,
+    /multisig resolved account exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: multisig resolved account exactness drift was not detected"\)/u,
+    "multisig resolved account negative control must only pass after detecting drift",
+  );
+  assert.match(
+    guard,
+    /KagemushaDeviceLabArtifactExportTest\.java[\s\S]*?attached device is not in the standard Kagemusha production matrix[\s\S]*?Android device-lab exporter must fail closed after the standard device matrix/u,
+    "SDK parity guard must pin Android device-lab exporter fail-closed family inference",
+  );
+  const androidDeviceLabFamilyBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-android-device-lab-family-fail-closed":'),
+    guard.indexOf('if mode == "--negative-control-android-device-lab-family-overmatch":'),
+  );
+  assert.match(
+    androidDeviceLabFamilyBranch,
+    /attached device is not in the standard Kagemusha production matrix[\s\S]*?return "Google Pixel 6 \/ 6a";/u,
+    "Android device-lab family negative control must reintroduce the Pixel fallback",
+  );
+  assert.match(
+    androidDeviceLabFamilyBranch,
+    /Android device-lab exporter must fail closed[\s\S]*?Android device-lab family fallback drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Android device-lab family fallback drift was not detected"\)/u,
+    "Android device-lab family negative control must only pass after detecting fallback drift",
+  );
+  const androidDeviceLabFamilyOvermatchBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-android-device-lab-family-overmatch":'),
+    guard.indexOf('if mode == "--negative-control-android-device-lab-family-override-binding":'),
+  );
+  assert.match(
+    guard,
+    /scripts\/kagemusha_android_device_lab_slot\.py[\s\S]*?device family must match attached device model\/codename[\s\S]*?model_family is None or codename_family is None[\s\S]*?model_family != codename_family[\s\S]*?test_kagemusha_slot_assembler_rejects_family_override_mismatch[\s\S]*?test_kagemusha_slot_assembler_rejects_conflicting_model_codename[\s\S]*?test_production_metadata_rejects_unknown_model_with_known_codename[\s\S]*?Android slot assembler exact family inference tests/u,
+    "SDK parity guard must pin exact host-side Android family inference, conflict rejection, and override binding tests",
+  );
+  assert.match(
+    androidDeviceLabFamilyOvermatchBranch,
+    /&& isExactDevice\(device, exactDevices\)[\s\S]*?\|\| isExactDevice\(device, exactDevices\)/u,
+    "Android device-lab overmatch negative control must break paired model/device matching",
+  );
+  assert.match(
+    androidDeviceLabFamilyOvermatchBranch,
+    /Android device-lab exporter exact family matching[\s\S]*?Android device-lab family overmatch drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Android device-lab family overmatch drift was not detected"\)/u,
+    "Android device-lab overmatch negative control must only pass after detecting substring drift",
+  );
+  const androidDeviceLabFamilyOverrideBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-android-device-lab-family-override-binding":'),
+    guard.indexOf('if mode == "--negative-control-android-device-lab-assembler-identity-fields":'),
+  );
+  assert.match(
+    androidDeviceLabFamilyOverrideBranch,
+    /if has_device_identity and inferred != family:[\s\S]*?device family must match attached device model\/codename[\s\S]*?""/u,
+    "Android device-lab override negative control must remove the requested-family identity binding",
+  );
+  assert.match(
+    androidDeviceLabFamilyOverrideBranch,
+    /Android slot assembler exact family matching[\s\S]*?Android device-lab family override drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Android device-lab family override drift was not detected"\)/u,
+    "Android device-lab override negative control must only pass after detecting binding drift",
+  );
+  const androidDeviceLabAssemblerIdentityBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-android-device-lab-assembler-identity-fields":'),
+    guard.indexOf('if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":'),
+  );
+  assert.match(
+    guard,
+    /scripts\/kagemusha_android_device_lab_slot\.py[\s\S]*?"device_model": facts\["device_model"\][\s\S]*?test_production_metadata_rejects_slot_family_model_codename_mismatch[\s\S]*?test_production_metadata_rejects_conflicting_model_codename[\s\S]*?Android slot assembler exact family inference tests/u,
+    "SDK parity guard must pin Android assembler signed model/codename fields and identity regression tests",
+  );
+  assert.match(
+    androidDeviceLabAssemblerIdentityBranch,
+    /"device_model": facts\["device_model"\][\s\S]*?"device_model": family/u,
+    "Android device-lab assembler identity negative control must replace signed model fields",
+  );
+  assert.match(
+    androidDeviceLabAssemblerIdentityBranch,
+    /Android slot assembler exact family matching[\s\S]*?Android device-lab assembler identity field drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Android device-lab assembler identity field drift was not detected"\)/u,
+    "Android device-lab assembler identity negative control must only pass after detecting field drift",
+  );
 
   const expectedPrivacyWorkflowPaths = [
     "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
@@ -4825,7 +5428,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const csharpLineageKeyPackageBindingBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-csharp-lineage-key-package-binding":'),
-    guard.indexOf('if mode == "--negative-control-swift-lineage-key-package-binding":'),
+    guard.indexOf('if mode == "--negative-control-csharp-lineage-cid1-exactness":'),
   );
   assert.match(
     csharpLineageKeyPackageBindingBranch,
@@ -4836,6 +5439,126 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     csharpLineageKeyPackageBindingBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "C# lineage key package binding negative control must not unconditionally pass after run_checks",
+  );
+  const csharpLineageCid1ExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-lineage-cid1-exactness":'),
+    guard.indexOf('if mode == "--negative-control-csharp-canonical-request-exactness":'),
+  );
+  assert.match(
+    csharpLineageCid1ExactnessBranch,
+    /Encoding\.UTF8\.GetString\(payload\);[\s\S]*?Encoding\.UTF8\.GetString\(payload\)\.Trim\(\);/u,
+    "C# lineage CID1 exactness negative control must reintroduce whitespace normalization",
+  );
+  assert.match(
+    csharpLineageCid1ExactnessBranch,
+    /whitespaceCidVerifierKey[\s\S]*?normalizedCidVerifierKey/u,
+    "C# lineage CID1 exactness negative control must mutate padded CID1 coverage",
+  );
+  assert.match(
+    csharpLineageCid1ExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: C# lineage CID1 exactness drift was not detected"\)/u,
+    "C# lineage CID1 exactness negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpLineageCid1ExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# lineage CID1 exactness negative control must not unconditionally pass after run_checks",
+  );
+  const csharpCanonicalRequestExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-canonical-request-exactness":'),
+    guard.indexOf('if mode == "--negative-control-csharp-identifier-receipt-exactness":'),
+  );
+  assert.match(
+    csharpCanonicalRequestExactnessBranch,
+    /RequireExactNonBlank\(nonce, nameof\(nonce\)\)[\s\S]*?string\.IsNullOrWhiteSpace\(nonce\) \? GenerateNonce\(\) : nonce/u,
+    "C# canonical request exactness negative control must reintroduce blank nonce generation",
+  );
+  assert.match(
+    csharpCanonicalRequestExactnessBranch,
+    /CanonicalRequestAuthRejectsPaddedAndBlankFields[\s\S]*?CanonicalRequestAuthAllowsPaddedAndBlankFields/u,
+    "C# canonical request exactness negative control must mutate padded/blank auth coverage",
+  );
+  assert.match(
+    csharpCanonicalRequestExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: C# canonical request exactness drift was not detected"\)/u,
+    "C# canonical request exactness negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpCanonicalRequestExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# canonical request exactness negative control must not unconditionally pass after run_checks",
+  );
+  const csharpIdentifierReceiptExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-identifier-receipt-exactness":'),
+    guard.indexOf('if mode == "--negative-control-csharp-transaction-builder-exactness":'),
+  );
+  assert.match(
+    csharpIdentifierReceiptExactnessBranch,
+    /ToriiIdentifierResolveResponseJsonConverter[\s\S]*?ToriiIdentifierResolveResponseUncheckedJsonConverter/u,
+    "C# identifier receipt exactness negative control must remove the checked response converter marker",
+  );
+  assert.match(
+    csharpIdentifierReceiptExactnessBranch,
+    /IdentifierResolveResponseRejectsPaddedReceiptFields[\s\S]*?IdentifierResolveResponseAllowsPaddedReceiptFields/u,
+    "C# identifier receipt exactness negative control must mutate padded receipt coverage",
+  );
+  assert.match(
+    csharpIdentifierReceiptExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: C# identifier receipt exactness drift was not detected"\)/u,
+    "C# identifier receipt exactness negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpIdentifierReceiptExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# identifier receipt exactness negative control must not unconditionally pass after run_checks",
+  );
+  const csharpTransactionBuilderExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-transaction-builder-exactness":'),
+    guard.indexOf('if mode == "--negative-control-csharp-transaction-encoding-exactness":'),
+  );
+  assert.match(
+    csharpTransactionBuilderExactnessBranch,
+    /return value;[\s\S]*?return value\.Trim\(\);/u,
+    "C# transaction builder exactness negative control must reintroduce Trim normalization",
+  );
+  assert.match(
+    csharpTransactionBuilderExactnessBranch,
+    /TransactionBuilderRejectsPaddedTopLevelFields[\s\S]*?TransactionBuilderAllowsPaddedTopLevelFields/u,
+    "C# transaction builder exactness negative control must mutate padded top-level coverage",
+  );
+  assert.match(
+    csharpTransactionBuilderExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: C# transaction builder exactness drift was not detected"\)/u,
+    "C# transaction builder exactness negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpTransactionBuilderExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# transaction builder exactness negative control must not unconditionally pass after run_checks",
+  );
+  const csharpTransactionEncodingExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-transaction-encoding-exactness":'),
+    guard.indexOf('if mode == "--negative-control-swift-lineage-key-package-binding":'),
+  );
+  assert.match(
+    csharpTransactionEncodingExactnessBranch,
+    /RequireExactNonBlank\(chainId, nameof\(chainId\)\)[\s\S]*?chainId\.Trim\(\)/u,
+    "C# transaction encoding exactness negative control must reintroduce chain-id Trim normalization",
+  );
+  assert.match(
+    csharpTransactionEncodingExactnessBranch,
+    /TransactionEncodingContextRejectsPaddedBoundaryFields[\s\S]*?TransactionEncodingContextAllowsPaddedBoundaryFields/u,
+    "C# transaction encoding exactness negative control must mutate padded boundary coverage",
+  );
+  assert.match(
+    csharpTransactionEncodingExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: C# transaction encoding exactness drift was not detected"\)/u,
+    "C# transaction encoding exactness negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpTransactionEncodingExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# transaction encoding exactness negative control must not unconditionally pass after run_checks",
   );
   const swiftLineageKeyPackageBindingBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-lineage-key-package-binding":'),
@@ -5909,7 +6632,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const swiftInstructionTransactionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":'),
-    guard.indexOf('if mode == "--negative-control-swift-sdk-version-script":'),
+    guard.indexOf('if mode == "--negative-control-swift-identifier-receipt-account-id-decode-test":'),
   );
   assert.match(
     swiftInstructionTransactionBranch,
@@ -5930,6 +6653,150 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     swiftInstructionTransactionBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Swift instruction transaction builder negative control must not unconditionally pass after run_checks",
+  );
+  const swiftIdentifierReceiptAccountIdBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-identifier-receipt-account-id-decode-test":'),
+    guard.indexOf('if mode == "--negative-control-swift-nfc-receive-success-preservation":'),
+  );
+  assert.match(
+    swiftIdentifierReceiptAccountIdBranch,
+    /testIdentifierReceiptDecodeRejectsPaddedAccountIdBeforeSignatureVerification[\s\S]*?testIdentifierReceiptDecodeAllowsPaddedAccountIdBeforeSignatureVerification/u,
+    "Swift identifier receipt account-id negative control must mutate the padded account-id decode regression",
+  );
+  assert.match(
+    swiftIdentifierReceiptAccountIdBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift identifier receipt account-id negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftIdentifierReceiptAccountIdBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Swift identifier receipt account-id decode coverage drift was not detected"\s*\)/u,
+    "Swift identifier receipt account-id negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftIdentifierReceiptAccountIdBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift identifier receipt account-id negative control must not unconditionally pass after run_checks",
+  );
+  const swiftNfcReceiveSuccessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-nfc-receive-success-preservation":'),
+    guard.indexOf('if mode == "--negative-control-swift-nfc-receipt-ack-single-success":'),
+  );
+  assert.match(
+    swiftNfcReceiveSuccessBranch,
+    /hasSuccessState: didPublishReceiveSuccess \|\| didComplete[\s\S]*?hasSuccessState: didComplete/u,
+    "Swift NFC receive success preservation negative control must remove the published-success state",
+  );
+  assert.match(
+    swiftNfcReceiveSuccessBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift NFC receive success preservation negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftNfcReceiveSuccessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift NFC receive success preservation drift was not detected"\)/u,
+    "Swift NFC receive success preservation negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftNfcReceiveSuccessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift NFC receive success preservation negative control must not unconditionally pass after run_checks",
+  );
+  const swiftNfcAckSingleSuccessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-nfc-receipt-ack-single-success":'),
+    guard.indexOf('if mode == "--negative-control-swift-nfc-receipt-ack-read-single-success":'),
+  );
+  assert.match(
+    swiftNfcAckSingleSuccessBranch,
+    /let shouldNotifyReceiptAckReady = markReceiptAckReady\(\)[\s\S]*?let shouldNotifyReceiptAckReady = true/u,
+    "Swift NFC receipt ACK single-success negative control must bypass the ACK-ready gate",
+  );
+  assert.match(
+    swiftNfcAckSingleSuccessBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift NFC receipt ACK single-success negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftNfcAckSingleSuccessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift NFC receipt ACK single-success drift was not detected"\)/u,
+    "Swift NFC receipt ACK single-success negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftNfcAckSingleSuccessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift NFC receipt ACK single-success negative control must not unconditionally pass after run_checks",
+  );
+  const swiftNfcAckReadSingleSuccessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-nfc-receipt-ack-read-single-success":'),
+    guard.indexOf('if mode == "--negative-control-swift-nfc-emulation-progress-after-success":'),
+  );
+  assert.match(
+    swiftNfcAckReadSingleSuccessBranch,
+    /shouldPublishReceiveSuccessOnAckRead\([\s\S]*?hasAcceptedPayment: didAcceptPayment[\s\S]*?hasAcceptedPayment: false/u,
+    "Swift NFC receipt ACK-read single-success negative control must bypass the ACK-read accepted-payment gate",
+  );
+  assert.match(
+    swiftNfcAckReadSingleSuccessBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift NFC receipt ACK-read single-success negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftNfcAckReadSingleSuccessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift NFC receipt ACK-read single-success drift was not detected"\)/u,
+    "Swift NFC receipt ACK-read single-success negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftNfcAckReadSingleSuccessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift NFC receipt ACK-read single-success negative control must not unconditionally pass after run_checks",
+  );
+  const swiftNfcEmulationProgressBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-nfc-emulation-progress-after-success":'),
+    guard.indexOf('if mode == "--negative-control-swift-nfc-send-terminal-success-policy":'),
+  );
+  assert.match(
+    swiftNfcEmulationProgressBranch,
+    /hasAcceptedPayment: didAcceptPayment[\s\S]*?hasAcceptedPayment: false/u,
+    "Swift NFC emulation progress-after-success negative control must ignore accepted-payment state",
+  );
+  assert.match(
+    swiftNfcEmulationProgressBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift NFC emulation progress-after-success negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftNfcEmulationProgressBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift NFC emulation progress-after-success drift was not detected"\)/u,
+    "Swift NFC emulation progress-after-success negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftNfcEmulationProgressBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift NFC emulation progress-after-success negative control must not unconditionally pass after run_checks",
+  );
+  const swiftNfcSendTerminalSuccessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-nfc-send-terminal-success-policy":'),
+    guard.indexOf('if mode == "--negative-control-swift-sdk-version-script":'),
+  );
+  assert.match(
+    swiftNfcSendTerminalSuccessBranch,
+    /hasTerminalSuccess: hasTerminalSendSuccess[\s\S]*?hasTerminalSuccess: false/u,
+    "Swift NFC send terminal-success negative control must ignore terminal send-success state",
+  );
+  assert.match(
+    swiftNfcSendTerminalSuccessBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift NFC send terminal-success negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftNfcSendTerminalSuccessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift NFC send terminal-success policy drift was not detected"\)/u,
+    "Swift NFC send terminal-success negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftNfcSendTerminalSuccessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift NFC send terminal-success negative control must not unconditionally pass after run_checks",
   );
   const jsInstructionTransactionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":'),
@@ -6006,6 +6873,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmRunner,
+    /--tests org\.hyperledger\.iroha\.sdk\.offline\.KagemushaRecursiveSpendRequestCodecsTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.offline\.KagemushaRecursiveSpendProverTest/,
+    "Kagemusha JVM SDK runner must exercise typed recursive spend request-codec tests",
+  );
+  assert.match(
+    jvmRunner,
     /--tests org\.hyperledger\.iroha\.sdk\.address\.AccountIdLiteralTest[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.offline\.OfflineCashLifecycleTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.offline\.OfflineCashLifecycleTest[^\n]*org\.hyperledger\.iroha\.android\.address\.AccountIdLiteralTests/,
     "Kagemusha JVM SDK runner must exercise Kotlin and Android account literal and offline cash issuer-key exactness tests",
   );
@@ -6018,6 +6890,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jvmRunner,
     /--tests org\.hyperledger\.iroha\.sdk\.core\.model\.instructions\.VerifyingKeyInstructionBuildersTest[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.core\.model\.zk\.VerifyingKeyBackendTagTest[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.core\.model\.zk\.VerifyingKeyRecordDescriptionTest[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.core\.model\.zk\.VerifyingKeyStatusTest[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.crypto\.SigningAlgorithmTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.model\.instructions\.VerifyingKeyInstructionUtilsTests[\s\S]*--tests org\.hyperledger\.iroha\.android\.crypto\.SigningAlgorithmTests/,
     "Kagemusha JVM SDK runner must exercise Kotlin and Android signing/verifier-key exactness tests",
+  );
+  assert.match(
+    jvmRunner,
+    /--tests org\.hyperledger\.iroha\.sdk\.nexus\.NexusAppClientTest[\s\S]*--tests org\.hyperledger\.iroha\.android\.nexus\.NexusAppClientTest/,
+    "Kagemusha JVM SDK runner must exercise Kotlin and Android Nexus wallet signature-algorithm exactness tests",
   );
   assert.match(
     jvmRunner,
@@ -6042,18 +6919,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   for (const swiftOfflinePath of [
     "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
     "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
+    "IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiCanonicalRequest.swift",
     "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineIssuerPublicKey.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNoteTextTransferContract.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineTransferDiagnostics.swift",
+    "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTextTransferContractTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ToriiCanonicalRequestTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift",
@@ -6079,14 +6960,81 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "Kagemusha C# SDK runner must print host and bridge digest evidence",
   );
   assert.match(
+    csharpRunner,
+    /FullyQualifiedName~KagemushaRecursiveSpendNativeTests[\s\S]*FullyQualifiedName~PrivacyNativeTests[\s\S]*FullyQualifiedName~TransactionBuilderTests[\s\S]*FullyQualifiedName~CanonicalRequestTests[\s\S]*FullyQualifiedName~ToriiClientTests[\s\S]*FullyQualifiedName~SignedQueryBuilderTests[\s\S]*FullyQualifiedName~SignedIterableQueryBuilderTests[\s\S]*FullyQualifiedName~VerifyingKeyBackendTagTests/,
+    "Kagemusha C# SDK runner must exercise canonical request, signed query, and verifier backend exactness tests",
+  );
+  const csharpVerifyingKeyBackendTests = source(
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/VerifyingKeyBackendTagTests.cs",
+  );
+  for (const requiredCsharpVerifierBackendTest of [
+    "ProductionVerifierBackendClassifierMirrorsNativeAllowlist",
+    "ProductionVerifierBackendClassifierRejectsUnsafeLabels",
+    "CatalogAliasesRejectNonAsciiConfusablesBeforeCompaction",
+    "AdversarialPendingAliasSplicesStayUnsupported",
+  ]) {
+    assert.ok(
+      csharpVerifyingKeyBackendTests.includes(requiredCsharpVerifierBackendTest),
+      `Kagemusha C# verifier backend tests must keep ${requiredCsharpVerifierBackendTest}`,
+    );
+  }
+  for (const requiredCsharpVerifierBackendFixture of [
+    '" halo2/ipa"',
+    '"halo2/ipa "',
+    '"stark/fri/sha256-goldilocks "',
+    '"halo2\\uFF0Fipa"',
+    '"halo2/\\u200Bipa"',
+    '"h\\u0430lo2/ipa"',
+    '"halo2/ipa\\0"',
+    '"halo2/ipa:production-ready"',
+    '"stark/fri/S.e.c.u.r.i.t.yReviewPassed"',
+  ]) {
+    assert.ok(
+      csharpVerifyingKeyBackendTests.includes(requiredCsharpVerifierBackendFixture),
+      `Kagemusha C# verifier backend tests must keep fixture ${requiredCsharpVerifierBackendFixture}`,
+    );
+  }
+  const csharpToriiTests = source("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs");
+  for (const requiredCsharpIdentifierReceiptTest of [
+    "ResolveIdentifierAsyncRejectsPaddedSignatureReceiptFields",
+    "ResolveIdentifierAsyncRejectsNonExactPolicyIdBeforeDispatch",
+    "ResolveIdentifierAsyncRejectsNonExactTopLevelPolicyId",
+    "ResolveIdentifierAsyncRejectsNonExactSignaturePayloadPolicyIds",
+    "ResolveIdentifierAsyncAcceptsExactProofAttestationReceipt",
+    "ResolveIdentifierAsyncRejectsNonExactAttestationSelectors",
+    "ResolveIdentifierAsyncAcceptsExactNestedReceiptPayloadFields",
+    "ResolveIdentifierAsyncRejectsNonExactNestedReceiptPayloadFields",
+    "GetIdentifierPoliciesAsyncRejectsNonExactPolicySummaryFields",
+  ]) {
+    assert.ok(
+      csharpToriiTests.includes(requiredCsharpIdentifierReceiptTest),
+      `Kagemusha C# Torii tests must keep ${requiredCsharpIdentifierReceiptTest}`,
+    );
+  }
+  for (const requiredCsharpIdentifierReceiptField of [
+    "identifier resolve response.signature_payload.attestation.proof_b64",
+    "identifier resolve response.signature_payload.payload.policy_id",
+    "identifier resolve response.signature_payload.payload.execution.program_id",
+    "identifier resolve response.signature_payload.payload.account_id",
+    "identifier resolve response.signature_payload.payload.receipt_hash",
+    "identifier resolve response.signature_payload.payload.execution.executed_at_ms",
+    "identifier policies response.items[0].policy_id",
+    "identifier policies response.items[0].resolver_public_key",
+  ]) {
+    assert.ok(
+      csharpToriiTests.includes(requiredCsharpIdentifierReceiptField),
+      `Kagemusha C# Torii tests must keep ${requiredCsharpIdentifierReceiptField}`,
+    );
+  }
+  assert.match(
     pythonRunner,
     /PYTHON_OVERRIDE="\$\{KAGEMUSHA_RECURSIVE_SPEND_PYTHON_BIN:-\}"[\s\S]*resolve_python_311_bin\(\)[\s\S]*python3\.11[\s\S]*PYTHON_BIN="\$\(resolve_python_311_bin\)"/,
     "Kagemusha Python SDK runner must keep the documented Python override variable",
   );
   assert.match(
     pythonRunner,
-    /export VIRTUAL_ENV="\$\{VENV_DIR\}"[\s\S]*export PATH="\$\{VENV_DIR\}\/bin:\$\{PATH\}"[\s\S]*"\$\{VENV_DIR\}\/bin\/python" -m maturin develop --release[\s\S]*tests\/offline_cash_test\.py[\s\S]*tests\/test_address_format\.py/,
-    "Kagemusha Python SDK runner must activate the selected venv before maturin and run offline cash issuer-key exactness tests",
+    /export VIRTUAL_ENV="\$\{VENV_DIR\}"[\s\S]*export PATH="\$\{VENV_DIR\}\/bin:\$\{PATH\}"[\s\S]*"\$\{VENV_DIR\}\/bin\/python" -m maturin develop --release[\s\S]*tests\/test_nexus_app\.py[\s\S]*tests\/offline_cash_test\.py[\s\S]*tests\/test_address_format\.py/,
+    "Kagemusha Python SDK runner must activate the selected venv before maturin and run Nexus wallet signature and offline cash issuer-key exactness tests",
   );
   assert.match(
     pythonRunner,
@@ -6103,6 +7051,33 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /tests\/client_ledger_helpers_test\.py[\s\S]*zk_event_filters_reject_unsupported_backends_before_request[\s\S]*zk_verifying_key_event_filters_reject_malformed_names_before_request[\s\S]*zk_proof_event_filters_reject_malformed_hashes_before_request[\s\S]*zk_raw_event_filters_reject_malformed_privacy_matchers_before_request[\s\S]*zk_raw_event_filters_canonicalize_privacy_matchers_before_request/,
     "Kagemusha Python SDK runner must exercise Torii event-filter verifier/proof exactness tests",
   );
+  const pythonCryptoAlgorithmTests = source("python/iroha_python/tests/crypto_algorithms_test.py");
+  for (const requiredPythonCryptoExactnessTest of [
+    "test_algorithm_labels_reject_empty_strings_across_public_api",
+    "test_algorithm_labels_reject_surrounding_whitespace_across_public_api",
+    "test_algorithm_labels_reject_empty_and_padded_native_inputs",
+    "test_algorithm_labels_reject_control_and_confusable_native_inputs",
+  ]) {
+    assert.ok(
+      pythonCryptoAlgorithmTests.includes(requiredPythonCryptoExactnessTest),
+      `Kagemusha Python crypto tests must keep ${requiredPythonCryptoExactnessTest}`,
+    );
+  }
+  for (const requiredPythonNativeCryptoCall of [
+    "crypto_module._crypto.normalize_crypto_algorithm(label)",
+    "crypto_module._crypto.generate_keypair(label)",
+    "crypto_module._crypto.derive_keypair_from_seed(",
+    "crypto_module._crypto.load_keypair(keypair.private_key, label)",
+    "crypto_module._crypto.public_key_multihash(label, keypair.public_key, False)",
+    "crypto_module._crypto.private_key_multihash(label, keypair.private_key, False)",
+    "crypto_module._crypto.sign(label, keypair.private_key, payload)",
+    "crypto_module._crypto.verify(label, keypair.public_key, payload, signature)",
+  ]) {
+    assert.ok(
+      pythonCryptoAlgorithmTests.includes(requiredPythonNativeCryptoCall),
+      `Kagemusha Python crypto tests must keep direct native exactness call ${requiredPythonNativeCryptoCall}`,
+    );
+  }
   assert.match(
     jsRunner,
     /NODE_OVERRIDE="\$\{KAGEMUSHA_RECURSIVE_SPEND_JS_SDK_NODE_BIN:-\}"[\s\S]*is_node_20_bin\(\)[\s\S]*resolve_node_20_bin\(\)[\s\S]*NODE_BIN="\$\(resolve_node_20_bin\)"/,
@@ -6120,7 +7095,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRunner,
-    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives\|fromAccount rejects control and Unicode-confusable curve algorithm aliases\|offline cash configuration snapshot requires cached issuer key and ABI\|canonical request signing: rejects padded auth fields\|streamEvents rejects unsupported production backend event filters before fetch\|streamEvents rejects malformed verifying key event names before fetch\|streamEvents rejects malformed proof event hashes before fetch\|ZK-ACE verifier-key references reject padded selector metadata\|privacy proof envelopes preserve pending production backend tags\|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations\|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags\|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend\|verifyIdentifierResolutionReceipt matches shared receipt vectors[\s\S]*test\/address\.test\.js[\s\S]*test\/canonicalRequest\.test\.js[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/instructionBuilders\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/offlineCashLifecycle\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/toriiClient\.identifier\.test\.js[\s\S]*test\/toriiClient\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
-    "Kagemusha JavaScript SDK runner must exercise recursive spend, address exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, verifier-key exactness, identifier receipt exactness, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
+    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives\|fromAccount rejects control and Unicode-confusable curve algorithm aliases\|offline cash configuration snapshot requires cached issuer key and ABI\|canonical request signing: rejects padded auth fields\|streamEvents rejects unsupported production backend event filters before fetch\|streamEvents rejects malformed verifying key event names before fetch\|streamEvents rejects malformed proof event hashes before fetch\|ZK-ACE verifier-key references reject padded selector metadata\|privacy proof envelopes preserve pending production backend tags\|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations\|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags\|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend\|verifyIdentifierResolutionReceipt matches shared receipt vectors\|NexusAppClient rejects non-Ed25519 wallet signatures\|NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags[\s\S]*test\/address\.test\.js[\s\S]*test\/canonicalRequest\.test\.js[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/instructionBuilders\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/nexusAppClient\.test\.js[\s\S]*test\/offlineCashLifecycle\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/toriiClient\.identifier\.test\.js[\s\S]*test\/toriiClient\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
+    "Kagemusha JavaScript SDK runner must exercise recursive spend, address exactness, Nexus wallet signature exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, verifier-key exactness, identifier receipt exactness, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
   );
 });

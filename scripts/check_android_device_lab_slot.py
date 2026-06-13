@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import datetime as dt
 import hashlib
 import json
@@ -100,6 +101,36 @@ KAGEMUSHA_STANDARD_DEVICE_MINIMUM_OS: dict[str, str] = {
     "Samsung Galaxy S23": "Android 14",
     "Samsung Galaxy S24": "Android 15",
 }
+KAGEMUSHA_DEVICE_FAMILY_MODEL_RULES: tuple[
+    tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]], ...
+] = (
+    ("Google Pixel 6 / 6a", ("pixel 6", "pixel 6a"), ("oriole", "bluejay"), ()),
+    ("Google Pixel 7 / 7 Pro", ("pixel 7", "pixel 7 pro"), ("panther", "cheetah"), ()),
+    (
+        "Google Pixel 8 / 8a / 8 Pro",
+        ("pixel 8", "pixel 8a", "pixel 8 pro"),
+        ("shiba", "akita", "husky"),
+        (),
+    ),
+    (
+        "Google Pixel Fold / Tablet",
+        ("pixel fold", "pixel tablet"),
+        ("felix", "tangorpro"),
+        (),
+    ),
+    (
+        "Samsung Galaxy S23",
+        (),
+        ("dm1q", "dm2q", "dm3q"),
+        ("sm-s911", "sm-s916", "sm-s918"),
+    ),
+    (
+        "Samsung Galaxy S24",
+        (),
+        ("e1q", "e2q", "e3q"),
+        ("sm-s921", "sm-s926", "sm-s928"),
+    ),
+)
 RAW_TEST_COMMAND_REQUIRED_MARKERS: tuple[str, ...] = (
     ":client-android:assembleRelease",
     ":offline-wallet-android:assembleRelease",
@@ -156,6 +187,8 @@ ABI7_RECURSIVE_COMPACT_MULTI_HOP_PROVER_STATES = {"multi_hop_proof_composed"}
 SIGNED_EVIDENCE_SLOT_STRING_FIELDS: tuple[str, ...] = (
     "slot_id",
     "device_family",
+    "device_model",
+    "device_codename",
     "device_fingerprint",
     "os_build_id",
     "minimum_os",
@@ -231,6 +264,8 @@ SIGNED_EVIDENCE_FIELDS: frozenset[str] = frozenset(
         "schema",
         "slot_id",
         "device_family",
+        "device_model",
+        "device_codename",
         "device_fingerprint",
         "os_build_id",
         "minimum_os",
@@ -938,6 +973,187 @@ def _summary_device_family(report: dict) -> str | None:
     return None
 
 
+KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS: tuple[tuple[str, str], ...] = (
+    (
+        "attestation_certificate_chain_path",
+        "attestation_certificate_chain_sha256",
+    ),
+    ("offline_wallet_apk_path", "offline_wallet_apk_sha256"),
+    ("d2d_payment_transcript_path", "d2d_payment_transcript_sha256"),
+    ("wallet_integrity_transcript_path", "wallet_integrity_transcript_sha256"),
+)
+KAGEMUSHA_SUMMARY_RELEASE_SHA256_FIELDS: tuple[str, ...] = (
+    "signed_evidence_artifact_sha256",
+    "signed_evidence_signer_public_key_sha256",
+    "device_fingerprint_sha256",
+    "attestation_challenge_sha256",
+    *(
+        digest_field
+        for _, digest_field in KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS
+    ),
+)
+KAGEMUSHA_SUMMARY_RELEASE_REDACTED_SLOT_IDS: frozenset[str] = frozenset(
+    {
+        SECRET_PATH_REDACTION,
+        CONTROL_PATH_REDACTION,
+        "<unsafe-slot-name>",
+    }
+)
+
+
+def _summary_release_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and SHA256_HEX_RE.fullmatch(value) is not None
+        and value != "0" * 64
+    )
+
+
+def _summary_release_artifact_path(value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    errors: list[str] = []
+    return (
+        _normalise_safe_relative_path(
+            value,
+            errors,
+            "Kagemusha summary artifact path",
+        )
+        == value
+        and not errors
+    )
+
+
+def _summary_release_timestamp(value: Any) -> bool:
+    if not isinstance(value, str) or SIGNED_AT_UTC_RE.fullmatch(value) is None:
+        return False
+    try:
+        dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return True
+
+
+def _summary_release_slot_id(value: Any) -> str | None:
+    if not isinstance(value, str) or value in KAGEMUSHA_SUMMARY_RELEASE_REDACTED_SLOT_IDS:
+        return None
+    slot_ids, slot_errors = validate_slot_ids([value])
+    if slot_errors or slot_ids != [value]:
+        return None
+    return value
+
+
+def _summary_release_kagemusha(
+    report: dict,
+    trusted_signer_public_key_sha256: frozenset[str] | None = None,
+) -> dict[str, Any] | None:
+    """Return complete release Kagemusha details for safe summary rollups."""
+
+    if report.get("status") != "ok" or _summary_release_slot_id(report.get("slot")) is None:
+        return None
+    kagemusha = _summary_kagemusha(report)
+    if kagemusha.get("required") is not True:
+        return None
+    family = kagemusha.get("device_family")
+    model = kagemusha.get("device_model")
+    codename = kagemusha.get("device_codename")
+    if (
+        not isinstance(family, str)
+        or family not in KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+        or not isinstance(model, str)
+        or not model
+        or model != model.strip()
+        or _contains_control_character(model)
+        or SECRET_RE.search(model)
+        or not isinstance(codename, str)
+        or not codename
+        or codename != codename.strip()
+        or _contains_control_character(codename)
+        or SECRET_RE.search(codename)
+        or infer_kagemusha_device_family(model, codename) != family
+    ):
+        return None
+    abi_version = kagemusha.get("native_bridge_abi_version")
+    if (
+        isinstance(abi_version, bool)
+        or not isinstance(abi_version, int)
+        or abi_version != REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION
+    ):
+        return None
+    if not _summary_release_timestamp(kagemusha.get("signed_at_utc")):
+        return None
+    if any(
+        not _summary_release_sha256(kagemusha.get(field))
+        for field in KAGEMUSHA_SUMMARY_RELEASE_SHA256_FIELDS
+    ):
+        return None
+    signer_public_key_sha256 = kagemusha.get(
+        "signed_evidence_signer_public_key_sha256"
+    )
+    if (
+        trusted_signer_public_key_sha256 is not None
+        and signer_public_key_sha256 not in trusted_signer_public_key_sha256
+    ):
+        return None
+    for path_field, _ in KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS:
+        if not _summary_release_artifact_path(kagemusha.get(path_field)):
+            return None
+    return kagemusha
+
+
+def _summary_release_device_family(
+    report: dict,
+    trusted_signer_public_key_sha256: frozenset[str] | None = None,
+) -> str | None:
+    """Return the device family only for a complete release Kagemusha report."""
+
+    kagemusha = _summary_release_kagemusha(
+        report,
+        trusted_signer_public_key_sha256,
+    )
+    if kagemusha is None:
+        return None
+    family = kagemusha.get("device_family")
+    return family if isinstance(family, str) else None
+
+
+def infer_kagemusha_device_family(
+    model: str | None,
+    codename: str | None,
+) -> str | None:
+    """Infer a standard Kagemusha device family from Android identity fields."""
+
+    model_text = model.lower() if isinstance(model, str) else ""
+    codename_text = codename.lower() if isinstance(codename, str) else ""
+    model_family = _match_kagemusha_device_model_family(model_text)
+    codename_family = _match_kagemusha_device_codename_family(codename_text)
+    if model_family is None or codename_family is None:
+        return None
+    if model_family != codename_family:
+        return None
+    return model_family
+
+
+def _match_kagemusha_device_model_family(model_text: str) -> str | None:
+    for family, exact_models, _codenames, model_prefixes in (
+        KAGEMUSHA_DEVICE_FAMILY_MODEL_RULES
+    ):
+        if model_text in exact_models:
+            return family
+        if any(model_text.startswith(prefix) for prefix in model_prefixes):
+            return family
+    return None
+
+
+def _match_kagemusha_device_codename_family(codename_text: str) -> str | None:
+    for family, _exact_models, codenames, _model_prefixes in (
+        KAGEMUSHA_DEVICE_FAMILY_MODEL_RULES
+    ):
+        if codename_text in codenames:
+            return family
+    return None
+
+
 def _normalise_manifest_path(path_text: str, errors: list[str], line_no: int) -> str | None:
     return _normalise_safe_relative_path(
         path_text,
@@ -1210,7 +1426,7 @@ def parse_sha256_manifest(slot_path: Path) -> tuple[dict[str, str], list[str]]:
             errors.append(f"sha256sum.txt line {line_no}: expected '<sha256> <path>'")
             continue
         digest, path_text = parts
-        if not SHA256_HEX_RE.fullmatch(digest):
+        if not SHA256_HEX_RE.fullmatch(digest) or digest == "0" * 64:
             errors.append(f"sha256sum.txt line {line_no}: non-canonical sha256 digest")
             continue
         relative = _normalise_manifest_path(path_text, errors, line_no)
@@ -2077,8 +2293,13 @@ def _attestation_result_matches_slot_metadata(
 ) -> None:
     expected = metadata.get(key)
     actual = _attestation_result_string(result, key, errors)
-    if key.endswith("_sha256") and actual is not None and not SHA256_HEX_RE.fullmatch(actual):
-        errors.append(f"attestation/result.json {key} must be lowercase sha256 hex")
+    if key.endswith("_sha256") and actual is not None:
+        if not SHA256_HEX_RE.fullmatch(actual):
+            errors.append(f"attestation/result.json {key} must be lowercase sha256 hex")
+        elif actual == "0" * 64:
+            errors.append(
+                f"attestation/result.json {key} must be non-zero lowercase sha256 hex"
+            )
     if isinstance(expected, str) and actual is not None and actual != expected:
         errors.append(f"attestation/result.json {key} must match slot.json {key}")
 
@@ -2206,8 +2427,13 @@ def _attestation_report_matches_slot_metadata(
 ) -> None:
     expected = metadata.get(key)
     actual = _attestation_report_string(report, key, errors)
-    if key.endswith("_sha256") and actual is not None and not SHA256_HEX_RE.fullmatch(actual):
-        errors.append(f"attestation/report.json {key} must be lowercase sha256 hex")
+    if key.endswith("_sha256") and actual is not None:
+        if not SHA256_HEX_RE.fullmatch(actual):
+            errors.append(f"attestation/report.json {key} must be lowercase sha256 hex")
+        elif actual == "0" * 64:
+            errors.append(
+                f"attestation/report.json {key} must be non-zero lowercase sha256 hex"
+            )
     if isinstance(expected, str) and actual is not None and actual != expected:
         errors.append(f"attestation/report.json {key} must match slot.json {key}")
 
@@ -2477,6 +2703,11 @@ def _d2d_transcript_sha256(
     if not isinstance(value, str) or not SHA256_HEX_RE.fullmatch(value):
         errors.append(f"d2d payment transcript {key} must be lowercase sha256 hex")
         return None
+    if value == "0" * 64:
+        errors.append(
+            f"d2d payment transcript {key} must be non-zero lowercase sha256 hex"
+        )
+        return None
     return value
 
 
@@ -2524,6 +2755,11 @@ def _wallet_transcript_sha256(
     value = transcript.get(key)
     if not isinstance(value, str) or not SHA256_HEX_RE.fullmatch(value):
         errors.append(f"wallet integrity transcript {key} must be lowercase sha256 hex")
+        return None
+    if value == "0" * 64:
+        errors.append(
+            f"wallet integrity transcript {key} must be non-zero lowercase sha256 hex"
+        )
         return None
     return value
 
@@ -2876,6 +3112,9 @@ def _require_lowercase_sha256_hex(
     if not isinstance(value, str) or not SHA256_HEX_RE.fullmatch(value):
         errors.append(f"{label} {key} must be lowercase sha256 hex")
         return None
+    if value == "0" * 64:
+        errors.append(f"{label} {key} must be non-zero lowercase sha256 hex")
+        return None
     return value
 
 
@@ -3063,15 +3302,53 @@ def load_trusted_signer_public_keys(
     return trusted, errors
 
 
+def _valid_trusted_signer_public_key_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and SHA256_HEX_RE.fullmatch(value) is not None
+        and value != "0" * 64
+    )
+
+
+def _trusted_signer_public_key_sha256_set(
+    trusted_signer_public_keys: Mapping[Any, Any] | None,
+) -> frozenset[str]:
+    if not isinstance(trusted_signer_public_keys, Mapping):
+        return frozenset()
+    return frozenset(
+        digest
+        for digest in trusted_signer_public_keys
+        if _valid_trusted_signer_public_key_sha256(digest)
+    )
+
+
+def _trusted_signer_digest_sort_key(item: tuple[Any, Any]) -> tuple[int, str, str, int]:
+    digest = item[0]
+    if isinstance(digest, str):
+        return (0, digest, "", 0)
+    digest_type = type(digest)
+    return (1, digest_type.__module__, digest_type.__qualname__, id(digest))
+
+
 def validate_trusted_signer_public_key_map(
-    trusted_signer_public_keys: dict[str, Path] | None,
+    trusted_signer_public_keys: Mapping[Any, Any] | None,
 ) -> list[str]:
     """Reject direct trusted-signer maps with unsafe public-key path strings."""
 
     errors: list[str] = []
-    for digest, public_key_path in sorted((trusted_signer_public_keys or {}).items()):
-        if not isinstance(digest, str) or SHA256_HEX_RE.fullmatch(digest) is None:
-            errors.append("trusted signer public key digest must be lowercase sha256 hex")
+    if trusted_signer_public_keys is None:
+        return errors
+    if not isinstance(trusted_signer_public_keys, Mapping):
+        return ["trusted signer public key map must be a mapping"]
+    for digest, public_key_path in sorted(
+        trusted_signer_public_keys.items(),
+        key=_trusted_signer_digest_sort_key,
+    ):
+        if not _valid_trusted_signer_public_key_sha256(digest):
+            errors.append("trusted signer public key digest must be non-zero lowercase sha256 hex")
+            continue
+        if not isinstance(public_key_path, Path):
+            errors.append("trusted signer public key path must be a pathlib Path")
             continue
         path_text = str(public_key_path)
         if SECRET_RE.search(path_text):
@@ -3276,6 +3553,8 @@ def validate_required_kagemusha_slot_artifact_shapes(
     errors: list[str],
     expected_app_package_name: str | None = None,
     expected_app_package_label: str = "slot.json app_package_name",
+    expected_device_model: str | None = None,
+    expected_device_codename: str | None = None,
 ) -> None:
     """Validate base production slot artifacts before they are signed or accepted."""
 
@@ -3311,6 +3590,8 @@ def validate_required_kagemusha_slot_artifact_shapes(
         errors,
         expected_app_package_name=expected_app_package_name,
         expected_app_package_label=expected_app_package_label,
+        expected_device_model=expected_device_model,
+        expected_device_codename=expected_device_codename,
     )
     _validate_required_status_artifact(slot_path, errors)
     _validate_required_runtime_log_artifact(slot_path, errors)
@@ -3373,6 +3654,8 @@ def _validate_required_telemetry_artifact(
     errors: list[str],
     expected_app_package_name: str | None = None,
     expected_app_package_label: str = "slot.json app_package_name",
+    expected_device_model: str | None = None,
+    expected_device_codename: str | None = None,
 ) -> None:
     telemetry = _load_json(
         slot_path / "telemetry" / "telemetry.json",
@@ -3420,6 +3703,13 @@ def _validate_required_telemetry_artifact(
             "telemetry/telemetry.json app_package_name must match "
             f"{expected_app_package_label}"
         )
+    for key, expected in (
+        ("device_model", expected_device_model),
+        ("device_codename", expected_device_codename),
+    ):
+        value = telemetry_strings.get(key)
+        if expected is not None and value is not None and value != expected:
+            errors.append(f"telemetry/telemetry.json {key} must match slot.json {key}")
 
 
 def _validate_required_status_artifact(slot_path: Path, errors: list[str]) -> None:
@@ -3679,6 +3969,8 @@ def validate_signed_evidence_artifact(
         return details
 
     expected_app_package_name = metadata.get("app_package_name")
+    expected_device_model = metadata.get("device_model")
+    expected_device_codename = metadata.get("device_codename")
     validate_required_kagemusha_slot_artifact_shapes(
         slot_path,
         errors,
@@ -3686,6 +3978,12 @@ def validate_signed_evidence_artifact(
             expected_app_package_name if isinstance(expected_app_package_name, str) else None
         ),
         expected_app_package_label="slot.json app_package_name",
+        expected_device_model=(
+            expected_device_model if isinstance(expected_device_model, str) else None
+        ),
+        expected_device_codename=(
+            expected_device_codename if isinstance(expected_device_codename, str) else None
+        ),
     )
 
     required_paths = _required_signed_evidence_digest_paths(slot_path, errors, metadata)
@@ -3716,6 +4014,12 @@ def validate_signed_evidence_artifact(
             errors.append(
                 "signed evidence artifact artifact_digests"
                 f"[{_display_path(relative)}] must be lowercase sha256 hex"
+            )
+            continue
+        if digest == "0" * 64:
+            errors.append(
+                "signed evidence artifact artifact_digests"
+                f"[{_display_path(relative)}] must be non-zero lowercase sha256 hex"
             )
             continue
         actual_digest, digest_errors = _signed_evidence_artifact_sha256(
@@ -3786,6 +4090,12 @@ def validate_kagemusha_production_metadata(
         details["device_fingerprint_sha256"] = hashlib.sha256(
             device_fingerprint.encode("utf-8")
         ).hexdigest()
+    device_model = _require_non_empty_string(metadata, "device_model", errors)
+    device_codename = _require_non_empty_string(metadata, "device_codename", errors)
+    if device_model is not None:
+        details["device_model"] = device_model
+    if device_codename is not None:
+        details["device_codename"] = device_codename
     _require_non_empty_string(metadata, "os_build_id", errors)
     minimum_os = _require_non_empty_string(metadata, "minimum_os", errors)
     _require_non_empty_string(metadata, "app_package_name", errors)
@@ -3948,6 +4258,16 @@ def validate_kagemusha_production_metadata(
             errors.append(
                 f"slot.json minimum_os for {family} must be {expected_minimum_os}"
             )
+    if family is not None and (
+        device_model is not None or device_codename is not None
+    ):
+        inferred_family = infer_kagemusha_device_family(device_model, device_codename)
+        if inferred_family is None:
+            errors.append(
+                "slot.json device_model/device_codename must identify a standard Kagemusha family"
+            )
+        elif inferred_family != family:
+            errors.append("slot.json device_family must match device_model/device_codename")
 
     security_level = _require_non_empty_string(metadata, "keymint_security_level", errors)
     if security_level is not None and security_level not in STRONGBOX_LEVELS:
@@ -3967,8 +4287,15 @@ def validate_kagemusha_production_metadata(
     )
 
     digest = _require_non_empty_string(metadata, "signed_evidence_artifact_sha256", errors)
-    if digest is not None and not SHA256_HEX_RE.fullmatch(digest):
-        errors.append("slot.json signed_evidence_artifact_sha256 must be lowercase sha256 hex")
+    if digest is not None:
+        if not SHA256_HEX_RE.fullmatch(digest):
+            errors.append("slot.json signed_evidence_artifact_sha256 must be lowercase sha256 hex")
+            digest = None
+        elif digest == "0" * 64:
+            errors.append(
+                "slot.json signed_evidence_artifact_sha256 must be non-zero lowercase sha256 hex"
+            )
+            digest = None
     artifact_relative = _require_non_empty_string(
         metadata, "signed_evidence_artifact_path", errors
     )
@@ -4004,7 +4331,6 @@ def validate_kagemusha_production_metadata(
         elif (
             actual_digest is not None
             and digest is not None
-            and SHA256_HEX_RE.fullmatch(digest)
             and actual_digest != digest
         ):
             errors.append(
@@ -4013,7 +4339,6 @@ def validate_kagemusha_production_metadata(
         elif (
             actual_digest is not None
             and digest is not None
-            and SHA256_HEX_RE.fullmatch(digest)
         ):
             details["signed_evidence_artifact_sha256"] = digest
             signed_evidence_details = validate_signed_evidence_artifact(
@@ -4333,6 +4658,13 @@ def build_summary(
 ) -> dict:
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
     summary_reports = [_summary_safe_report(report) for report in reports]
+    require_complete_kagemusha = (
+        require_kagemusha_production_evidence
+        or require_kagemusha_standard_matrix
+    )
+    trusted_signer_public_key_sha256 = _trusted_signer_public_key_sha256_set(
+        trusted_signer_public_keys
+    )
     summary = {
         "schema_version": 1,
         "generated_at": now.isoformat().replace("+00:00", "Z"),
@@ -4346,9 +4678,17 @@ def build_summary(
             {
                 family
                 for report in summary_reports
-                for family in [_summary_device_family(report)]
-                if report.get("status") == "ok"
-                and family is not None
+                for family in [
+                    (
+                        _summary_release_device_family(
+                            report,
+                            trusted_signer_public_key_sha256,
+                        )
+                        if require_complete_kagemusha
+                        else _summary_device_family(report)
+                    )
+                ]
+                if family is not None
             }
         )
         missing = [
@@ -4363,18 +4703,27 @@ def build_summary(
             "covered_device_families": covered,
             "missing_device_families": missing,
             "duplicate_bindings": kagemusha_duplicate_matrix_bindings(
-                summary_reports
+                summary_reports,
+                require_complete_signed_evidence=require_complete_kagemusha,
+                trusted_signer_public_key_sha256=(
+                    trusted_signer_public_key_sha256
+                    if require_complete_kagemusha
+                    else None
+                ),
             ),
             "trusted_signer_public_key_sha256": sorted(
-                digest
-                for digest in (trusted_signer_public_keys or {})
-                if isinstance(digest, str) and SHA256_HEX_RE.fullmatch(digest)
+                trusted_signer_public_key_sha256
             ),
         }
     return summary
 
 
-def kagemusha_duplicate_matrix_bindings(reports: list[dict]) -> dict[str, list[dict[str, Any]]]:
+def kagemusha_duplicate_matrix_bindings(
+    reports: list[dict],
+    *,
+    require_complete_signed_evidence: bool = False,
+    trusted_signer_public_key_sha256: frozenset[str] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     """Return duplicated physical-device bindings without exposing raw values."""
 
     duplicates: dict[str, list[dict[str, Any]]] = {}
@@ -4384,11 +4733,22 @@ def kagemusha_duplicate_matrix_bindings(reports: list[dict]) -> dict[str, list[d
             if report.get("status") != "ok":
                 continue
             slot = report.get("slot")
-            value = _summary_kagemusha(report).get(field)
+            kagemusha = (
+                _summary_release_kagemusha(
+                    report,
+                    trusted_signer_public_key_sha256,
+                )
+                if require_complete_signed_evidence
+                else _summary_kagemusha(report)
+            )
+            if kagemusha is None:
+                continue
+            value = kagemusha.get(field)
             if (
                 not isinstance(slot, str)
                 or not isinstance(value, str)
                 or not SHA256_HEX_RE.fullmatch(value)
+                or value == "0" * 64
             ):
                 continue
             seen.setdefault(value, []).append(_display_slot_name(slot))
@@ -4831,12 +5191,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[device-lab] {slot_display}: ok")
 
     if args.require_kagemusha_standard_matrix:
+        trusted_signer_public_key_sha256 = _trusted_signer_public_key_sha256_set(
+            trusted_signer_public_keys
+        )
         covered = {
             family
             for report in reports
-            for family in [_summary_device_family(report)]
-            if report.get("status") == "ok"
-            and family is not None
+            for family in [
+                _summary_release_device_family(
+                    report,
+                    trusted_signer_public_key_sha256,
+                )
+            ]
+            if family is not None
         }
         missing = [
             family
@@ -4851,7 +5218,13 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
     if require_kagemusha:
-        duplicate_bindings = kagemusha_duplicate_matrix_bindings(reports)
+        duplicate_bindings = kagemusha_duplicate_matrix_bindings(
+            reports,
+            require_complete_signed_evidence=True,
+            trusted_signer_public_key_sha256=_trusted_signer_public_key_sha256_set(
+                trusted_signer_public_keys
+            ),
+        )
         for field, entries in sorted(duplicate_bindings.items()):
             for entry in entries:
                 failures += 1

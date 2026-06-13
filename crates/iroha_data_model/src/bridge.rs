@@ -835,6 +835,13 @@ mod tests {
         bitmap
     }
 
+    fn checked_commit_vote_signature_payload(keypair: &KeyPair, preimage: &[u8]) -> Vec<u8> {
+        Signature::try_new(keypair.private_key(), preimage)
+            .expect("checked bridge commit-vote signature")
+            .payload()
+            .to_vec()
+    }
+
     fn make_finality_proof_with_signers_and_mode(
         chain_id: &str,
         height: u64,
@@ -889,8 +896,7 @@ mod tests {
         let preimage = commit_vote_preimage(&chain_id.parse().expect("chain id"), &cert_template);
         let mut sig_payloads = Vec::with_capacity(signer_indices.len());
         for &idx in signer_indices {
-            let signature = Signature::new(keys[idx].private_key(), &preimage);
-            sig_payloads.push(signature.payload().to_vec());
+            sig_payloads.push(checked_commit_vote_signature_payload(&keys[idx], &preimage));
         }
         let sig_refs: Vec<&[u8]> = sig_payloads.iter().map(Vec::as_slice).collect();
         let aggregate =
@@ -946,8 +952,22 @@ mod tests {
     ) -> crate::block::BlockSignature {
         crate::block::BlockSignature::new(
             index,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+            SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                .expect("checked bridge block-header signature"),
         )
+    }
+
+    #[test]
+    fn bridge_finality_fixture_checked_signature_verifies_preimage() {
+        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let proof = make_finality_proof("chain-a", 1, 0, &keys);
+        let preimage = commit_vote_preimage(&proof.chain_id, &proof.commit_qc);
+        let signature_payload = checked_commit_vote_signature_payload(&keys[0], &preimage);
+        let signature = Signature::from_bytes(&signature_payload);
+
+        signature
+            .verify(keys[0].public_key(), &preimage)
+            .expect("checked bridge commit-vote signature verifies preimage");
     }
 
     #[test]
@@ -1475,11 +1495,7 @@ mod tests {
         let preimage = commit_vote_preimage(&proof.chain_id, &proof.commit_qc);
         let signatures: Vec<Vec<u8>> = keys
             .iter()
-            .map(|kp| {
-                Signature::new(kp.private_key(), &preimage)
-                    .payload()
-                    .to_vec()
-            })
+            .map(|kp| checked_commit_vote_signature_payload(kp, &preimage))
             .collect();
         let signature_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
         proof.commit_qc.aggregate.bls_aggregate_signature =

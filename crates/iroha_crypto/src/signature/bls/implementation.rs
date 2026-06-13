@@ -13,7 +13,7 @@ use hkdf::HkdfExtract;
 #[cfg(feature = "rand")]
 use rand::rngs::OsRng;
 #[cfg(feature = "rand")]
-use rand_core::TryRngCore;
+use rand_core::TryCryptoRng;
 use sha2::Digest as _;
 use sha2::Sha256;
 use w3f_bls::{
@@ -198,21 +198,33 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
     }
 
     fn try_sign_bytes(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
+        #[cfg(feature = "rand")]
+        {
+            self.try_sign_bytes_with_rng(message, &mut OsRng)
+        }
+        #[cfg(not(feature = "rand"))]
+        {
+            let mut guard = self
+                .try_load_secret()
+                .map_err(|err| Error::Signing(err.to_string()))?;
+            let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
+            Ok(guard.sign_once(&msg).to_bytes())
+        }
+    }
+
+    #[cfg(feature = "rand")]
+    fn try_sign_bytes_with_rng<R>(&self, message: &[u8], rng: &mut R) -> Result<Vec<u8>, Error>
+    where
+        R: TryCryptoRng,
+    {
         let mut guard = self
             .try_load_secret()
             .map_err(|err| Error::Signing(err.to_string()))?;
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
-        #[cfg(feature = "rand")]
-        {
-            let seed = checked_os_entropy("signing key split", BLS_RNG_SEED_LEN)
-                .map_err(|err| Error::Signing(err.to_string()))?;
-            let rng = crate::rng::rng_from_seed_slice(seed.as_slice());
-            Ok(guard.sign(&msg, rng).to_bytes())
-        }
-        #[cfg(not(feature = "rand"))]
-        {
-            Ok(guard.sign_once(&msg).to_bytes())
-        }
+        let seed = checked_entropy_from_rng("signing key split", BLS_RNG_SEED_LEN, rng)
+            .map_err(|err| Error::Signing(err.to_string()))?;
+        let rng = crate::rng::rng_from_seed_slice(seed.as_slice());
+        Ok(guard.sign(&msg, rng).to_bytes())
     }
 
     #[cfg(test)]
@@ -235,10 +247,16 @@ impl<C: BlsConfiguration + ?Sized> zeroize::Zeroize for ManagedSecretKey<C> {
 use crate::{Algorithm, Error, KeyGenOption, ParseError};
 
 #[cfg(feature = "rand")]
-fn checked_os_entropy(context: &str, len: usize) -> Result<Zeroizing<Vec<u8>>, Error> {
+fn checked_entropy_from_rng<R>(
+    context: &str,
+    len: usize,
+    rng: &mut R,
+) -> Result<Zeroizing<Vec<u8>>, Error>
+where
+    R: TryCryptoRng,
+{
     let mut seed = Zeroizing::new(vec![0u8; len]);
-    OsRng
-        .try_fill_bytes(seed.as_mut_slice())
+    rng.try_fill_bytes(seed.as_mut_slice())
         .map_err(|err| Error::KeyGen(format!("BLS OS RNG failed during {context}: {err}")))?;
     ensure_bls_seed_material_not_all_zero(context, seed.as_slice())?;
     Ok(seed)
@@ -291,14 +309,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     ) -> Result<(PublicKey<C::Engine>, ManagedSecretKey<C>), Error> {
         let private_key = match option {
             #[cfg(feature = "rand")]
-            KeyGenOption::Random => {
-                let seed = checked_os_entropy("key generation", C::Engine::SECRET_KEY_SIZE)?;
-                let split_seed = checked_os_entropy("key split", BLS_RNG_SEED_LEN)?;
-                let split_rng = crate::rng::rng_from_seed_slice(split_seed.as_slice());
-                let secret =
-                    SecretKeyVT::<C::Engine>::from_seed(seed.as_slice()).into_split(split_rng);
-                ManagedSecretKey::new(&secret)
-            }
+            KeyGenOption::Random => return Self::random_keypair_from_rng(&mut OsRng),
             KeyGenOption::UseSeed(ref mut seed) => {
                 if bls_seed_material_is_all_zero(seed) {
                     seed.zeroize();
@@ -326,6 +337,24 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             }
             KeyGenOption::FromPrivateKey(key) => key,
         };
+        let public_key = private_key
+            .try_public_key()
+            .map_err(|err| Error::KeyGen(err.to_string()))?;
+        Ok((public_key, private_key))
+    }
+
+    #[cfg(feature = "rand")]
+    pub(super) fn random_keypair_from_rng<R>(
+        rng: &mut R,
+    ) -> Result<(PublicKey<C::Engine>, ManagedSecretKey<C>), Error>
+    where
+        R: TryCryptoRng,
+    {
+        let seed = checked_entropy_from_rng("key generation", C::Engine::SECRET_KEY_SIZE, rng)?;
+        let split_seed = checked_entropy_from_rng("key split", BLS_RNG_SEED_LEN, rng)?;
+        let split_rng = crate::rng::rng_from_seed_slice(split_seed.as_slice());
+        let secret = SecretKeyVT::<C::Engine>::from_seed(seed.as_slice()).into_split(split_rng);
+        let private_key = ManagedSecretKey::new(&secret);
         let public_key = private_key
             .try_public_key()
             .map_err(|err| Error::KeyGen(err.to_string()))?;
@@ -663,8 +692,39 @@ impl<'a, E: EngineBLS> w3f_bls::Signed for &'a MultiMessageBatch<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "rand")]
+    use rand_core::{TryCryptoRng, TryRngCore};
 
     const SEEDED_KEYGEN_COMPAT_SEED: &[u8] = b"iroha-bls-seeded-keygen-compat";
+
+    #[cfg(feature = "rand")]
+    struct FillSequenceTryRng {
+        fills: [u8; 2],
+        next_fill: usize,
+    }
+
+    #[cfg(feature = "rand")]
+    impl TryRngCore for FillSequenceTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.fills[self.next_fill.min(1)]; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.fills[self.next_fill.min(1)]; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            let fill = self.fills[self.next_fill.min(1)];
+            self.next_fill = self.next_fill.saturating_add(1);
+            dest.fill(fill);
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "rand")]
+    impl TryCryptoRng for FillSequenceTryRng {}
 
     fn legacy_seeded_keypair<C: BlsConfiguration>() -> (PublicKey<C::Engine>, ManagedSecretKey<C>) {
         let salt = b"BLS-SIG-KEYGEN-SALT-";
@@ -729,5 +789,45 @@ mod tests {
     fn managed_secret_clone_preserves_bytes() {
         assert_managed_secret_clone_preserves_bytes::<NormalConfiguration>();
         assert_managed_secret_clone_preserves_bytes::<SmallConfiguration>();
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn random_keypair_from_rng_rejects_all_zero_split_seed() {
+        let mut rng = FillSequenceTryRng {
+            fills: [0x42, 0],
+            next_fill: 0,
+        };
+
+        match BlsImpl::<NormalConfiguration>::random_keypair_from_rng(&mut rng) {
+            Err(Error::KeyGen(message)) => {
+                assert!(message.contains("key split"));
+                assert!(message.contains("all zero"));
+            }
+            Err(err) => panic!("expected all-zero split-seed KeyGen error, got {err:?}"),
+            Ok(_) => panic!("all-zero BLS key-split seed material must fail"),
+        }
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn try_sign_bytes_with_rng_rejects_all_zero_split_seed() {
+        let (_public, private) = BlsImpl::<NormalConfiguration>::try_keypair(
+            KeyGenOption::UseSeed(b"iroha-bls-signing-split-seed".to_vec()),
+        )
+        .expect("seeded BLS keypair derives");
+        let mut rng = FillSequenceTryRng {
+            fills: [0, 0],
+            next_fill: 0,
+        };
+
+        match private.try_sign_bytes_with_rng(b"iroha-bls-message", &mut rng) {
+            Err(Error::Signing(message)) => {
+                assert!(message.contains("signing key split"));
+                assert!(message.contains("all zero"));
+            }
+            Err(err) => panic!("expected all-zero signing seed error, got {err:?}"),
+            Ok(_) => panic!("all-zero BLS signing split seed material must fail"),
+        }
     }
 }

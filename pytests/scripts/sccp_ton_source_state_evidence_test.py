@@ -135,6 +135,28 @@ def test_ton_hex_parser_rejects_zero_and_wrong_width():
         raise AssertionError("short TON source-state verifier hash was accepted")
 
 
+def test_ton_source_hex_parser_redacts_parser_causes():
+    """Invalid TON source-state hex inputs must not chain parser payloads."""
+
+    module = load_evidence_module()
+    payload = "secret-token-ton-source-hex"
+
+    try:
+        module.parse_hex_bytes(
+            "0x" + payload + ("a" * (64 - len(payload))),
+            label="source state verifier hash",
+            byte_length=32,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "source state verifier hash must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("invalid TON source-state hex was accepted")
+
+
 def test_ton_source_domain_parser_requires_canonical_ascii_decimal():
     module = load_evidence_module()
 

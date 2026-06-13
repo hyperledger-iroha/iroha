@@ -18,6 +18,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
@@ -39,6 +40,10 @@ import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 class HttpClientTransportTest {
+    private fun testMultisigAccountId(): String =
+        AccountAddress.fromAccount(ByteArray(32) { 0x37.toByte() }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+
     @Test
     fun issueIdentifierClaimReceiptForwardsAccountAliasPathLiteral() {
         val executor = CapturingExecutor()
@@ -288,6 +293,159 @@ class HttpClientTransportTest {
                     + "}"),
             ),
         )
+    }
+
+    @Test
+    fun identifierClaimRecordParserRejectsNonExactClaimFields() {
+        val payload = sampleIdentifierResolutionPayload()
+
+        fun jsonString(value: String): String =
+            "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+        fun claimRecordJson(
+            policyId: String = payload.policyId,
+            opaqueId: String = payload.opaqueId,
+            receiptHash: String = payload.receiptHash,
+            uaid: String = payload.uaid,
+            accountId: String = payload.accountId,
+        ): String =
+            ("{"
+                + "\"policy_id\":" + jsonString(policyId)
+                + ",\"opaque_id\":" + jsonString(opaqueId)
+                + ",\"receipt_hash\":" + jsonString(receiptHash)
+                + ",\"uaid\":" + jsonString(uaid)
+                + ",\"account_id\":" + jsonString(accountId)
+                + ",\"verified_at_ms\":42"
+                + ",\"expires_at_ms\":142"
+                + "}")
+
+        val claim = IdentifierJsonParser.parseClaimRecord(
+            claimRecordJson().toByteArray(StandardCharsets.UTF_8),
+        )
+        assertEquals(payload.policyId, claim.policyId)
+        assertEquals(payload.opaqueId, claim.opaqueId)
+        assertEquals(payload.receiptHash, claim.receiptHash)
+        assertEquals(payload.uaid, claim.uaid)
+        assertEquals(payload.accountId, claim.accountId)
+        assertEquals(42L, claim.verifiedAtMs)
+        assertEquals(142L, claim.expiresAtMs)
+
+        for ((label, json) in listOf(
+            "policy_id" to claimRecordJson(policyId = " ${payload.policyId}"),
+            "opaque_id" to claimRecordJson(opaqueId = "${payload.opaqueId} "),
+            "receipt_hash" to claimRecordJson(receiptHash = " ${payload.receiptHash}"),
+            "uaid" to claimRecordJson(uaid = "${payload.uaid} "),
+            "account_id" to claimRecordJson(accountId = " ${payload.accountId}"),
+        )) {
+            assertFailsWith<IllegalStateException>("identifier claim record $label exactness") {
+                IdentifierJsonParser.parseClaimRecord(json.toByteArray(StandardCharsets.UTF_8))
+            }
+        }
+    }
+
+    @Test
+    fun identifierPolicyParserRejectsNonExactPolicyAndProofVerifierFields() {
+        val canonical =
+            """
+                {
+                  "total": 1,
+                  "items": [
+                    {
+                      "policy_id": "phone#retail",
+                      "owner": "sorau1NpOwner",
+                      "active": true,
+                      "normalization": "phone_e164",
+                      "resolver_public_key": "ed25519:resolver-key",
+                      "backend": "bfv-affine-sha3-256-v1",
+                      "input_encryption": "bfv-v1",
+                      "input_encryption_public_parameters": "ABCD",
+                      "input_encryption_public_parameters_decoded": {
+                        "parameters": {
+                          "polynomial_degree": 64,
+                          "plaintext_modulus": 257,
+                          "ciphertext_modulus": 1099511627776,
+                          "decomposition_base_log": 12
+                        },
+                        "public_key": {
+                          "b": [1, 2, 3],
+                          "a": [4, 5, 6]
+                        },
+                        "max_input_bytes": 32,
+                        "norito_length_encoding": "u64-v1"
+                      },
+                      "proof_verifier": {
+                        "proof_backend": "halo2-ipa",
+                        "circuit_id": "identifier-ram-lfe-v1",
+                        "public_inputs_schema_hash": "${"66".repeat(32)}",
+                        "verifying_key_bytes_b64": "AQID"
+                      },
+                      "note": "retail phone policy"
+                    }
+                  ]
+                }
+            """.trimIndent()
+
+        val response = IdentifierJsonParser.parsePolicyList(canonical.toByteArray(StandardCharsets.UTF_8))
+        val proofVerifier = assertNotNull(response.items.first().proofVerifier)
+        assertEquals("u64-v1", response.items.first().inputEncryptionPublicParametersDecoded?.noritoLengthEncoding)
+        assertEquals("halo2-ipa", proofVerifier.proofBackend)
+        assertEquals("66".repeat(32), proofVerifier.publicInputsSchemaHash)
+
+        val cases = listOf(
+            "identifier policy list.items[0].owner" to canonical.replace(
+                "\"owner\": \"sorau1NpOwner\"",
+                "\"owner\": \" sorau1NpOwner\"",
+            ),
+            "identifier policy list.items[0].normalization" to canonical.replace(
+                "\"normalization\": \"phone_e164\"",
+                "\"normalization\": \"Phone_E164\"",
+            ),
+            "identifier policy list.items[0].backend" to canonical.replace(
+                "\"backend\": \"bfv-affine-sha3-256-v1\"",
+                "\"backend\": \"bfv-affine-sha3-256-v1 \"",
+            ),
+            "identifier policy list.items[0].input_encryption" to canonical.replace(
+                "\"input_encryption\": \"bfv-v1\"",
+                "\"input_encryption\": \"BFV-v1\"",
+            ),
+            "identifier policy list.items[0].input_encryption_public_parameters" to canonical.replace(
+                "\"input_encryption_public_parameters\": \"ABCD\"",
+                "\"input_encryption_public_parameters\": \" ABCD\"",
+            ),
+            "identifier policy list.items[0].input_encryption_public_parameters_decoded.norito_length_encoding" to canonical.replace(
+                "\"norito_length_encoding\": \"u64-v1\"",
+                "\"norito_length_encoding\": \" u64-v1\"",
+            ),
+            "identifier policy list.items[0].note" to canonical.replace(
+                "\"note\": \"retail phone policy\"",
+                "\"note\": \"retail phone policy \"",
+            ),
+            "identifier policy list.items[0].proof_verifier.proof_backend" to canonical.replace(
+                "\"proof_backend\": \"halo2-ipa\"",
+                "\"proof_backend\": \" halo2-ipa\"",
+            ),
+            "identifier policy list.items[0].proof_verifier.circuit_id" to canonical.replace(
+                "\"circuit_id\": \"identifier-ram-lfe-v1\"",
+                "\"circuit_id\": \"identifier-ram-lfe-v1 \"",
+            ),
+            "identifier policy list.items[0].proof_verifier.public_inputs_schema_hash" to canonical.replace(
+                "\"public_inputs_schema_hash\": \"${"66".repeat(32)}\"",
+                "\"public_inputs_schema_hash\": \" ${"66".repeat(32)}\"",
+            ),
+            "identifier policy list.items[0].proof_verifier.verifying_key_bytes_b64" to canonical.replace(
+                "\"verifying_key_bytes_b64\": \"AQID\"",
+                "\"verifying_key_bytes_b64\": \"AQID \"",
+            ),
+        )
+        for ((field, body) in cases) {
+            val error = assertFailsWith<RuntimeException> {
+                IdentifierJsonParser.parsePolicyList(body.toByteArray(StandardCharsets.UTF_8))
+            }
+            assertTrue(
+                error.message?.contains(field) == true,
+                "expected $field failure, got $error",
+            )
+        }
     }
 
     @Test
@@ -775,12 +933,13 @@ class HttpClientTransportTest {
     fun proposeMultisigPostsNativeNoritoInstructionPayloadsAndParsesResponse() {
         val instructionBytes = byteArrayOf(1, 2, 3, 4)
         val proposalId = "aa".repeat(32)
+        val multisigAccountId = testMultisigAccountId()
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
                 {
                   "ok": true,
-                  "resolved_multisig_account_id": "multisig",
+                  "resolved_multisig_account_id": "$multisigAccountId",
                   "submitted": false,
                   "proposal_id": "$proposalId",
                   "instructions_hash": "$proposalId",
@@ -808,7 +967,7 @@ class HttpClientTransportTest {
         ).join()
 
         assertTrue(response.ok)
-        assertEquals("multisig", response.resolvedMultisigAccountId)
+        assertEquals(multisigAccountId, response.resolvedMultisigAccountId)
         assertEquals(false, response.submitted)
         assertEquals(proposalId, response.instructionsHash)
         assertEquals("AQID", response.signingMessageB64)
@@ -897,11 +1056,32 @@ class HttpClientTransportTest {
 
     @Test
     fun multisigResponseParserRejectsMalformedFields() {
+        val multisigAccountId = testMultisigAccountId()
         assertFailsWith<RuntimeException> {
             ContractJsonParser.parseMultisigResponse(
                 """
                     {
                       "ok": false,
+                      "resolved_multisig_account_id": "$multisigAccountId"
+                    }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<RuntimeException> {
+            ContractJsonParser.parseMultisigResponse(
+                """
+                    {
+                      "ok": true,
+                      "resolved_multisig_account_id": "$multisigAccountId "
+                    }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            )
+        }
+        assertFailsWith<RuntimeException> {
+            ContractJsonParser.parseMultisigResponse(
+                """
+                    {
+                      "ok": true,
                       "resolved_multisig_account_id": "multisig"
                     }
                 """.trimIndent().toByteArray(StandardCharsets.UTF_8)
@@ -912,7 +1092,7 @@ class HttpClientTransportTest {
                 """
                     {
                       "ok": true,
-                      "resolved_multisig_account_id": "multisig",
+                      "resolved_multisig_account_id": "$multisigAccountId",
                       "submitted": "false"
                     }
                 """.trimIndent().toByteArray(StandardCharsets.UTF_8)
@@ -923,7 +1103,7 @@ class HttpClientTransportTest {
                 """
                     {
                       "ok": true,
-                      "resolved_multisig_account_id": "multisig",
+                      "resolved_multisig_account_id": "$multisigAccountId",
                       "instructions_hash": "aa"
                     }
                 """.trimIndent().toByteArray(StandardCharsets.UTF_8)
@@ -934,7 +1114,7 @@ class HttpClientTransportTest {
                 """
                     {
                       "ok": true,
-                      "resolved_multisig_account_id": "multisig",
+                      "resolved_multisig_account_id": "$multisigAccountId",
                       "signing_message_b64": "not base64"
                     }
                 """.trimIndent().toByteArray(StandardCharsets.UTF_8)
@@ -945,7 +1125,7 @@ class HttpClientTransportTest {
                 """
                     {
                       "ok": true,
-                      "resolved_multisig_account_id": "multisig",
+                      "resolved_multisig_account_id": "$multisigAccountId",
                       "signing_message_b64": ""
                     }
                 """.trimIndent().toByteArray(StandardCharsets.UTF_8)
@@ -956,7 +1136,7 @@ class HttpClientTransportTest {
                 """
                     {
                       "ok": true,
-                      "resolved_multisig_account_id": "multisig",
+                      "resolved_multisig_account_id": "$multisigAccountId",
                       "creation_time_ms": -1
                     }
                 """.trimIndent().toByteArray(StandardCharsets.UTF_8)
@@ -1024,43 +1204,7 @@ class HttpClientTransportTest {
     fun listRamLfeProgramPoliciesParsesResponse() {
         val executor = StubResponseExecutor(
             statusCode = 200,
-            body = """
-                {
-                  "total": 1,
-                  "items": [
-                    {
-                      "program_id": "identifier_lookup_retail",
-                      "owner": "sorau1NpOwner",
-                      "active": true,
-                      "resolver_public_key": "ed25519:resolver-key",
-                      "backend": "bfv-programmed-sha3-256-v1",
-                      "verification_mode": "signed",
-                      "input_encryption": "bfv-v1",
-                      "input_encryption_public_parameters": "ABCD",
-                      "input_encryption_public_parameters_decoded": {
-                        "parameters": {
-                          "polynomial_degree": 64,
-                          "plaintext_modulus": 257,
-                          "ciphertext_modulus": 1099511627776,
-                          "decomposition_base_log": 12
-                        },
-                        "public_key": {
-                          "b": [1, 2, 3],
-                          "a": [4, 5, 6]
-                        },
-                        "max_input_bytes": 32
-                      },
-                      "note": "retail programmed policy",
-                      "proof_verifier": {
-                        "proof_backend": "halo2-ipa",
-                        "circuit_id": "ram-lfe-v1",
-                        "public_inputs_schema_hash": "${"44".repeat(32)}",
-                        "verifying_key_bytes_b64": "AQID"
-                      }
-                    }
-                  ]
-                }
-            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+            body = ramLfeProgramPoliciesJson().toByteArray(StandardCharsets.UTF_8),
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
@@ -1090,35 +1234,109 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun ramLfeProgramPolicyParserRejectsNonExactFields() {
+        val canonical = ramLfeProgramPoliciesJson()
+        val cases = listOf(
+            "ram-lfe program policy list.items[0].program_id" to canonical.replace(
+                "\"program_id\": \"identifier_lookup_retail\"",
+                "\"program_id\": \" identifier_lookup_retail\"",
+            ),
+            "ram-lfe program policy list.items[0].owner" to canonical.replace(
+                "\"owner\": \"sorau1NpOwner\"",
+                "\"owner\": \"sorau1NpOwner \"",
+            ),
+            "ram-lfe program policy list.items[0].resolver_public_key" to canonical.replace(
+                "\"resolver_public_key\": \"ed25519:resolver-key\"",
+                "\"resolver_public_key\": \" ed25519:resolver-key\"",
+            ),
+            "ram-lfe program policy list.items[0].backend" to canonical.replace(
+                "\"backend\": \"bfv-programmed-sha3-256-v1\"",
+                "\"backend\": \"BFV-programmed-sha3-256-v1\"",
+            ),
+            "ram-lfe program policy list.items[0].verification_mode" to canonical.replace(
+                "\"verification_mode\": \"signed\"",
+                "\"verification_mode\": \" signed\"",
+            ),
+            "ram-lfe program policy list.items[0].input_encryption" to canonical.replace(
+                "\"input_encryption\": \"bfv-v1\"",
+                "\"input_encryption\": \"bfv-v1 \"",
+            ),
+            "ram-lfe program policy list.items[0].input_encryption_public_parameters" to canonical.replace(
+                "\"input_encryption_public_parameters\": \"ABCD\"",
+                "\"input_encryption_public_parameters\": \" ABCD\"",
+            ),
+            "ram-lfe program policy list.items[0].proof_verifier.proof_backend" to canonical.replace(
+                "\"proof_backend\": \"halo2-ipa\"",
+                "\"proof_backend\": \" halo2-ipa\"",
+            ),
+            "ram-lfe program policy list.items[0].proof_verifier.circuit_id" to canonical.replace(
+                "\"circuit_id\": \"ram-lfe-v1\"",
+                "\"circuit_id\": \"ram-lfe-v1 \"",
+            ),
+            "ram-lfe program policy list.items[0].proof_verifier.public_inputs_schema_hash" to canonical.replace(
+                "\"public_inputs_schema_hash\": \"${"44".repeat(32)}\"",
+                "\"public_inputs_schema_hash\": \" ${"44".repeat(32)}\"",
+            ),
+            "ram-lfe program policy list.items[0].proof_verifier.verifying_key_bytes_b64" to canonical.replace(
+                "\"verifying_key_bytes_b64\": \"AQID\"",
+                "\"verifying_key_bytes_b64\": \"AQID \"",
+            ),
+        )
+        for ((field, body) in cases) {
+            val error = assertFailsWith<RuntimeException> {
+                RamLfeJsonParser.parsePolicyList(body.toByteArray(StandardCharsets.UTF_8))
+            }
+            assertTrue(
+                error.message?.contains(field) == true,
+                "expected $field failure, got $error",
+            )
+        }
+    }
+
+    private fun ramLfeProgramPoliciesJson(): String =
+        """
+            {
+              "total": 1,
+              "items": [
+                {
+                  "program_id": "identifier_lookup_retail",
+                  "owner": "sorau1NpOwner",
+                  "active": true,
+                  "resolver_public_key": "ed25519:resolver-key",
+                  "backend": "bfv-programmed-sha3-256-v1",
+                  "verification_mode": "signed",
+                  "input_encryption": "bfv-v1",
+                  "input_encryption_public_parameters": "ABCD",
+                  "input_encryption_public_parameters_decoded": {
+                    "parameters": {
+                      "polynomial_degree": 64,
+                      "plaintext_modulus": 257,
+                      "ciphertext_modulus": 1099511627776,
+                      "decomposition_base_log": 12
+                    },
+                    "public_key": {
+                      "b": [1, 2, 3],
+                      "a": [4, 5, 6]
+                    },
+                    "max_input_bytes": 32
+                  },
+                  "note": "retail programmed policy",
+                  "proof_verifier": {
+                    "proof_backend": "halo2-ipa",
+                    "circuit_id": "ram-lfe-v1",
+                    "public_inputs_schema_hash": "${"44".repeat(32)}",
+                    "verifying_key_bytes_b64": "AQID"
+                  }
+                }
+              ]
+            }
+        """.trimIndent()
+
+    @Test
     fun executeRamLfeProgramParsesResponseAndPostsEncryptedHex() {
         val executor = StubResponseExecutor(
             statusCode = 200,
-            body = """
-                {
-                  "program_id": "identifier_lookup_retail",
-                  "opaque_hash": "opaque-hash-literal",
-                  "receipt_hash": "receipt-hash-literal",
-                  "output_hash": "output-hash-literal",
-                  "associated_data_hash": "associated-data-hash-literal",
-                  "executed_at_ms": 42,
-                  "expires_at_ms": 142,
-                  "backend": "bfv-programmed-sha3-256-v1",
-                  "verification_mode": "signed",
-                  "receipt": {
-                    "payload": {
-                      "program_id": {"name": "identifier_lookup_retail"},
-                      "program_digest": "hash:${"11".repeat(32).uppercase()}#ABCD",
-                      "backend": "bfv-programmed-sha3-256-v1",
-                      "verification_mode": {"mode": "Signed", "value": null},
-                      "output_hash": "hash:${"22".repeat(32).uppercase()}#BCDE",
-                      "associated_data_hash": "hash:${"33".repeat(32).uppercase()}#CDEF",
-                      "executed_at_ms": 42,
-                      "expires_at_ms": 142
-                    },
-                    "signature": "${"aa".repeat(64)}"
-                  }
-                }
-            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+            body = ramLfeExecuteResponseJson().toByteArray(StandardCharsets.UTF_8),
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
@@ -1132,7 +1350,7 @@ class HttpClientTransportTest {
         assertTrue(response.isPresent)
         val execute = response.get()
         assertEquals("identifier_lookup_retail", execute.programId)
-        assertEquals("output-hash-literal", execute.outputHash)
+        assertEquals("44".repeat(32), execute.outputHash)
         assertEquals("signed", execute.verificationMode)
         assertTrue(execute.receipt.containsKey("payload"))
 
@@ -1171,17 +1389,7 @@ class HttpClientTransportTest {
     fun verifyRamLfeReceiptPostsRawReceiptAndParsesResponse() {
         val executor = StubResponseExecutor(
             statusCode = 200,
-            body = """
-                {
-                  "valid": true,
-                  "program_id": "identifier_lookup_retail",
-                  "backend": "bfv-programmed-sha3-256-v1",
-                  "verification_mode": "signed",
-                  "output_hash": "output-hash-literal",
-                  "associated_data_hash": "associated-data-hash-literal",
-                  "output_hash_matches": true
-                }
-            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+            body = ramLfeReceiptVerifyResponseJson().toByteArray(StandardCharsets.UTF_8),
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
@@ -1215,6 +1423,125 @@ class HttpClientTransportTest {
         assertEquals("c0ffee", payload["output_hex"])
         assertTrue(payload["receipt"] is Map<*, *>)
     }
+
+    @Test
+    fun ramLfeResponseParsersRejectNonExactFields() {
+        val canonicalExecute = ramLfeExecuteResponseJson()
+        val executeCases = listOf(
+            "program_id" to canonicalExecute.replace(
+                "\"program_id\": \"identifier_lookup_retail\"",
+                "\"program_id\": \" identifier_lookup_retail\"",
+            ),
+            "opaque_hash" to canonicalExecute.replace(
+                "\"opaque_hash\": \"${"11".repeat(32)}\"",
+                "\"opaque_hash\": \" ${"11".repeat(32)}\"",
+            ),
+            "receipt_hash" to canonicalExecute.replace(
+                "\"receipt_hash\": \"${"22".repeat(32)}\"",
+                "\"receipt_hash\": \"${"22".repeat(32)} \"",
+            ),
+            "output_hash" to canonicalExecute.replace(
+                "\"output_hash\": \"${"44".repeat(32)}\"",
+                "\"output_hash\": \" ${"44".repeat(32)}\"",
+            ),
+            "associated_data_hash" to canonicalExecute.replace(
+                "\"associated_data_hash\": \"${"55".repeat(32)}\"",
+                "\"associated_data_hash\": \"${"55".repeat(32)} \"",
+            ),
+            "backend" to canonicalExecute.replace(
+                "\"backend\": \"bfv-programmed-sha3-256-v1\"",
+                "\"backend\": \" bfv-programmed-sha3-256-v1\"",
+            ),
+            "verification_mode" to canonicalExecute.replace(
+                "\"verification_mode\": \"signed\"",
+                "\"verification_mode\": \"Signed\"",
+            ),
+        )
+        for ((field, body) in executeCases) {
+            val error = assertFailsWith<RuntimeException> {
+                RamLfeJsonParser.parseExecuteResponse(body.toByteArray(StandardCharsets.UTF_8))
+            }
+            assertTrue(
+                error.message?.contains("ram-lfe execute response.$field") == true,
+                "expected ram-lfe execute response.$field failure, got $error",
+            )
+        }
+
+        val canonicalVerify = ramLfeReceiptVerifyResponseJson()
+        val verifyCases = listOf(
+            "program_id" to canonicalVerify.replace(
+                "\"program_id\": \"identifier_lookup_retail\"",
+                "\"program_id\": \"identifier_lookup_retail \"",
+            ),
+            "backend" to canonicalVerify.replace(
+                "\"backend\": \"bfv-programmed-sha3-256-v1\"",
+                "\"backend\": \"BFV-programmed-sha3-256-v1\"",
+            ),
+            "verification_mode" to canonicalVerify.replace(
+                "\"verification_mode\": \"signed\"",
+                "\"verification_mode\": \" signed\"",
+            ),
+            "output_hash" to canonicalVerify.replace(
+                "\"output_hash\": \"${"44".repeat(32)}\"",
+                "\"output_hash\": \"${"44".repeat(32)} \"",
+            ),
+            "associated_data_hash" to canonicalVerify.replace(
+                "\"associated_data_hash\": \"${"55".repeat(32)}\"",
+                "\"associated_data_hash\": \" ${"55".repeat(32)}\"",
+            ),
+        )
+        for ((field, body) in verifyCases) {
+            val error = assertFailsWith<RuntimeException> {
+                RamLfeJsonParser.parseReceiptVerifyResponse(body.toByteArray(StandardCharsets.UTF_8))
+            }
+            assertTrue(
+                error.message?.contains("ram-lfe receipt verify response.$field") == true,
+                "expected ram-lfe receipt verify response.$field failure, got $error",
+            )
+        }
+    }
+
+    private fun ramLfeExecuteResponseJson(): String =
+        """
+            {
+              "program_id": "identifier_lookup_retail",
+              "opaque_hash": "${"11".repeat(32)}",
+              "receipt_hash": "${"22".repeat(32)}",
+              "output_ciphertext": "abcd",
+              "output_hash": "${"44".repeat(32)}",
+              "associated_data_hash": "${"55".repeat(32)}",
+              "executed_at_ms": 42,
+              "expires_at_ms": 142,
+              "backend": "bfv-programmed-sha3-256-v1",
+              "verification_mode": "signed",
+              "receipt": {
+                "payload": {
+                  "program_id": {"name": "identifier_lookup_retail"},
+                  "program_digest": "hash:${"11".repeat(32).uppercase()}#ABCD",
+                  "backend": "bfv-programmed-sha3-256-v1",
+                  "verification_mode": {"mode": "Signed", "value": null},
+                  "output_hash": "hash:${"22".repeat(32).uppercase()}#BCDE",
+                  "associated_data_hash": "hash:${"33".repeat(32).uppercase()}#CDEF",
+                  "executed_at_ms": 42,
+                  "expires_at_ms": 142
+                },
+                "signature": "${"aa".repeat(64)}"
+              }
+            }
+        """.trimIndent()
+
+    private fun ramLfeReceiptVerifyResponseJson(): String =
+        """
+            {
+              "valid": true,
+              "program_id": "identifier_lookup_retail",
+              "backend": "bfv-programmed-sha3-256-v1",
+              "verification_mode": "signed",
+              "output_hash": "${"44".repeat(32)}",
+              "associated_data_hash": "${"55".repeat(32)}",
+              "output_hash_matches": true
+            }
+        """.trimIndent()
 
     @Test
     fun getVpnProfileDeserializesNativeLeaseFields() {
@@ -1634,6 +1961,42 @@ class HttpClientTransportTest {
             transport.resolveAccountAlias("alice@universal").get()
         }
         assertNotNull(error.cause)
+    }
+
+    @Test
+    fun accountAliasParserRejectsNonExactResponseFields() {
+        val canonical =
+            """
+                {
+                  "alias": "alice@universal",
+                  "account_id": "aid:alice-123",
+                  "index": 7,
+                  "source": "directory"
+                }
+            """.trimIndent()
+        val cases = listOf(
+            "account alias resolution.alias" to canonical.replace(
+                "\"alias\": \"alice@universal\"",
+                "\"alias\": \" alice@universal\"",
+            ),
+            "account alias resolution.account_id" to canonical.replace(
+                "\"account_id\": \"aid:alice-123\"",
+                "\"account_id\": \"aid:alice-123 \"",
+            ),
+            "account alias resolution.source" to canonical.replace(
+                "\"source\": \"directory\"",
+                "\"source\": \" directory\"",
+            ),
+        )
+        for ((field, body) in cases) {
+            val error = assertFailsWith<RuntimeException> {
+                AccountAliasJsonParser.parseResolution(body.toByteArray(StandardCharsets.UTF_8))
+            }
+            assertTrue(
+                error.message?.contains(field) == true,
+                "expected $field failure, got $error",
+            )
+        }
     }
 
     @Test

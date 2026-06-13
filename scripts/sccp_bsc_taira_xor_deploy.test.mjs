@@ -136,7 +136,24 @@ const SCALAR_FIELD_ONLY_G1_POINT = Object.freeze([
   "3762041743597375428823600987466094155844250131321505902823128844567717085184",
 ]);
 const SCALAR_FIELD_ONLY_G2_POINT = Object.freeze(["1", "2", "3", "4"]);
-const BURN_RECORD_BYTES = Buffer.from(
+const deterministicBytes = (label, length) => {
+  const chunks = [];
+  let index = 0;
+  while (Buffer.concat(chunks).length < length) {
+    chunks.push(
+      createHash("sha256")
+        .update(`${label}:${index}`)
+        .digest(),
+    );
+    index += 1;
+  }
+  return Buffer.concat(chunks).subarray(0, length);
+};
+const BURN_RECORD_BYTES = deterministicBytes(
+  "bsc taira xor production burn-record artifact",
+  768,
+);
+const FIXTURE_BURN_RECORD_BYTES = Buffer.from(
   "bsc taira xor burn-record artifact fixture for route-config tests",
   "utf8",
 );
@@ -397,6 +414,13 @@ const tairaBurnRecordContract = (overrides = {}) => ({
   },
   ...overrides,
 });
+
+const tairaBurnRecordContractWithBytes = (bytes, overrides = {}) =>
+  tairaBurnRecordContract({
+    artifact_b64: Buffer.from(bytes).toString("base64"),
+    artifact_sha256: `0x${createHash("sha256").update(bytes).digest("hex")}`,
+    ...overrides,
+  });
 
 const productionReadyRouteManifest = (overrides = {}) => {
   const {
@@ -860,6 +884,140 @@ test("BSC route-manifest command builds production-ready manifests only with bou
   );
 });
 
+test("BSC route-manifest command accepts generated offline full TOML evidence", async () => {
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-manifest-full-evidence-"),
+  );
+  const evidencePath = join(dir, "deployment.evidence.json");
+  const contractPath = join(dir, "burn-record.contract.json");
+  const bundlePath = join(dir, "native-prover-bundle.json");
+  const fullTomlEvidencePath = join(dir, "full-config.evidence.json");
+  const out = join(dir, "route.manifest.json");
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    bscNetwork: "testnet",
+    readback: readyReadback(),
+  });
+  const bundle = nativeProverBundleForRollout(routeManifest().destinationRollout);
+  const fullTomlEvidence = {
+    schema: "iroha-sccp-bsc-taira-xor-offline-full-toml-evidence/v1",
+    routeId: "taira_bsc_xor",
+    assetKey: "xor",
+    bscNetwork: "testnet",
+    chain: "bsc-testnet",
+    chainIdHex: "0x61",
+    networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
+    fullTomlReady: true,
+    offlineFullTomlSha256: HASH_88,
+    hashMode:
+      "sha256:merged-full-config-without-post_deploy_offline_full_toml_sha256",
+    hashInputSha256: HASH_88,
+    renderedTomlSha256: HASH_66,
+    postDeployLiveEvidence: {
+      fullTomlReady: true,
+      offlineFullTomlSha256: HASH_88,
+    },
+  };
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(
+    contractPath,
+    `${JSON.stringify(tairaBurnRecordContract(), null, 2)}\n`,
+  );
+  await writeFile(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
+  await writeFile(
+    fullTomlEvidencePath,
+    `${JSON.stringify(fullTomlEvidence, null, 2)}\n`,
+  );
+
+  const result = await main([
+    "route-manifest",
+    "--evidence",
+    evidencePath,
+    "--taira-contract",
+    contractPath,
+    "--settlement-asset-definition-id",
+    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "--native-prover-bundle",
+    bundlePath,
+    "--source-bridge-config-hash",
+    HASH_33,
+    "--source-event-transaction-id",
+    HASH_55,
+    "--source-event-explorer-url",
+    SOURCE_EVENT_EXPLORER_URL,
+    "--route-canary-evidence-hash",
+    HASH_66,
+    "--route-canary-transaction-id",
+    HASH_77,
+    "--route-canary-explorer-url",
+    ROUTE_CANARY_EXPLORER_URL,
+    "--offline-full-toml-evidence",
+    fullTomlEvidencePath,
+    "--production-ready",
+    "true",
+    "--live-readback-checked",
+    "true",
+    "--confirm-testnet",
+    "taira_bsc_xor",
+    "--out",
+    out,
+  ]);
+  const manifest = JSON.parse(await readFile(out, "utf8"));
+
+  assert.equal(result.productionReady, true);
+  assert.equal(result.offlineFullTomlSha256, HASH_88);
+  assert.equal(manifest.postDeployLiveEvidence.fullTomlReady, true);
+  assert.equal(
+    manifest.postDeployLiveEvidence.offlineFullTomlSha256,
+    HASH_88,
+  );
+
+  await assert.rejects(
+    () =>
+      main([
+        "route-manifest",
+        "--evidence",
+        evidencePath,
+        "--taira-contract",
+        contractPath,
+        "--settlement-asset-definition-id",
+        "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+        "--native-prover-bundle",
+        bundlePath,
+        "--source-bridge-config-hash",
+        HASH_33,
+        "--source-event-transaction-id",
+        HASH_55,
+        "--source-event-explorer-url",
+        SOURCE_EVENT_EXPLORER_URL,
+        "--route-canary-evidence-hash",
+        HASH_66,
+        "--route-canary-transaction-id",
+        HASH_77,
+        "--route-canary-explorer-url",
+        ROUTE_CANARY_EXPLORER_URL,
+        "--offline-full-toml-evidence",
+        fullTomlEvidencePath,
+        "--offline-full-toml-sha256",
+        HASH_77,
+        "--production-ready",
+        "true",
+        "--live-readback-checked",
+        "true",
+        "--confirm-testnet",
+        "taira_bsc_xor",
+        "--out",
+        join(dir, "route.bad.manifest.json"),
+      ]),
+    /--offline-full-toml-sha256 disagrees with --offline-full-toml-evidence/u,
+  );
+});
+
 test("BSC route-manifest production readiness rejects missing TOML hash and diagnostic verifier material", async () => {
   const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-manifest-bad-"));
   const evidencePath = join(dir, "deployment.evidence.json");
@@ -972,6 +1130,109 @@ test("BSC route-manifest production readiness rejects missing TOML hash and diag
       ]),
     /diagnostic BSC verifier material/u,
   );
+});
+
+test("BSC route-manifest production readiness rejects placeholder TAIRA burn-record artifacts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-manifest-burn-"));
+  const evidencePath = join(dir, "deployment.evidence.json");
+  const bundlePath = join(dir, "native-prover-bundle.json");
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+  });
+  const bundle = nativeProverBundleForRollout(routeManifest().destinationRollout);
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
+  const readyArgs = [
+    "route-manifest",
+    "--evidence",
+    evidencePath,
+    "--settlement-asset-definition-id",
+    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "--native-prover-bundle",
+    bundlePath,
+    "--source-bridge-config-hash",
+    HASH_33,
+    "--source-event-transaction-id",
+    HASH_55,
+    "--source-event-explorer-url",
+    SOURCE_EVENT_EXPLORER_URL,
+    "--route-canary-evidence-hash",
+    HASH_66,
+    "--route-canary-transaction-id",
+    HASH_77,
+    "--route-canary-explorer-url",
+    ROUTE_CANARY_EXPLORER_URL,
+    "--full-toml-ready",
+    "true",
+    "--offline-full-toml-sha256",
+    hex32("88"),
+    "--production-ready",
+    "true",
+    "--live-readback-checked",
+    "true",
+    "--confirm-testnet",
+    "taira_bsc_xor",
+  ];
+  const adversarialArtifacts = [
+    {
+      name: "short fixture text",
+      bytes: FIXTURE_BURN_RECORD_BYTES,
+      pattern: /burn-record contract artifact.*at least/u,
+    },
+    {
+      name: "diagnostic marker inside binary",
+      bytes: Buffer.concat([
+        Buffer.from("diagnostic burn-record placeholder", "utf8"),
+        deterministicBytes("diagnostic burn record padding", 512),
+      ]),
+      pattern: /placeholder burn-record material.*diagnostic/u,
+    },
+    {
+      name: "repeated byte material",
+      bytes: Buffer.alloc(512, 0xab),
+      pattern: /placeholder burn-record material.*repeated/u,
+    },
+    {
+      name: "arithmetic byte sequence",
+      bytes: Buffer.from(Array.from({ length: 512 }, (_, index) => index & 0xff)),
+      pattern: /placeholder burn-record material.*arithmetic/u,
+    },
+    {
+      name: "dominant byte padding",
+      bytes: Buffer.concat([Buffer.alloc(508, 0), Buffer.from([1, 2, 3, 4])]),
+      pattern: /placeholder burn-record material.*dominates/u,
+    },
+  ];
+
+  for (const artifact of adversarialArtifacts) {
+    const contractPath = join(dir, `${artifact.name.replaceAll(" ", "-")}.json`);
+    await writeFile(
+      contractPath,
+      `${JSON.stringify(
+        tairaBurnRecordContractWithBytes(artifact.bytes),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () =>
+        main([
+          ...readyArgs,
+          "--taira-contract",
+          contractPath,
+          "--out",
+          join(dir, `${artifact.name.replaceAll(" ", "-")}.manifest.json`),
+        ]),
+      artifact.pattern,
+      artifact.name,
+    );
+  }
 });
 
 test("BSC route-manifest command refuses draft manifests in the canonical default output", async () => {
@@ -1656,6 +1917,25 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
       "u",
     ),
   );
+  const snakeCaseSettlementToml = buildBscTairaXorRouteConfigToml(
+    productionReadyManifest(
+      {},
+      {
+        settlement: {
+          contract_address: "bsc-settlement-v1",
+          contract_alias: "taira-bsc-xor",
+        },
+      },
+    ),
+  );
+  assert.match(
+    snakeCaseSettlementToml,
+    /settlement_contract_address = "bsc-settlement-v1"/u,
+  );
+  assert.match(
+    snakeCaseSettlementToml,
+    /settlement_contract_alias = "taira-bsc-xor"/u,
+  );
 
   assert.throws(
     () =>
@@ -1859,6 +2139,25 @@ test("BSC route-config refuses allow-unready for production-ready manifests", ()
   );
 });
 
+test("BSC route-config rejects malformed allow-unready option values", () => {
+  const manifest = productionReadyRouteManifest();
+  for (const value of [" TRUE", "true ", "TRUE", true, false, 1, 0]) {
+    assert.throws(
+      () => buildBscTairaXorRouteConfigToml(manifest, { "allow-unready": value }),
+      /--allow-unready must be true or false/u,
+    );
+    assert.throws(
+      () =>
+        buildMergedBscTairaXorRouteConfigToml(
+          "[zk]\nother_setting = true\n",
+          manifest,
+          { "allow-unready": value },
+        ),
+      /--allow-unready must be true or false/u,
+    );
+  }
+});
+
 test("BSC route-config validates explorer URLs against the selected network", () => {
   const mainnetBindingHash = bscDestinationBindingHash({
     networkId: BSC_MAINNET_NETWORK_ID_HEX,
@@ -1929,6 +2228,41 @@ test("BSC route-config validates explorer URLs against the selected network", ()
       ),
     /BSC mainnet explorer/u,
   );
+});
+
+test("BSC route-config rejects production-ready manifests with placeholder TAIRA burn-record artifacts", () => {
+  const badArtifacts = [
+    {
+      bytes: FIXTURE_BURN_RECORD_BYTES,
+      pattern: /TAIRA burn-record artifact.*at least/u,
+    },
+    {
+      bytes: Buffer.from(Array.from({ length: 512 }, (_, index) => index & 0xff)),
+      pattern: /TAIRA burn-record artifact.*arithmetic/u,
+    },
+    {
+      bytes: Buffer.concat([Buffer.alloc(508, 0), Buffer.from([1, 2, 3, 4])]),
+      pattern: /TAIRA burn-record artifact.*dominates/u,
+    },
+  ];
+
+  for (const artifact of badArtifacts) {
+    const manifest = productionReadyRouteManifest();
+    assert.throws(
+      () =>
+        buildBscTairaXorRouteConfigToml({
+          ...manifest,
+          tairaXorBurnRecord: {
+            ...manifest.tairaXorBurnRecord,
+            contractArtifactB64: Buffer.from(artifact.bytes).toString("base64"),
+            artifactSha256: `0x${createHash("sha256")
+              .update(artifact.bytes)
+              .digest("hex")}`,
+          },
+        }),
+      artifact.pattern,
+    );
+  }
 });
 
 test("BSC route-config requires SDK-valid native prover bundles for production readiness", () => {
@@ -2410,6 +2744,38 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
         "native-prover-self-test": "sample-native-prover-self-test.json",
       }),
     /nativeProverSelfTestArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+  );
+
+  const crossReportCollision = await writeNativeProverFixtureFiles();
+  const crossReportParityPath = join(
+    crossReportCollision.artifactRoot,
+    "cross-sdk-parity.json",
+  );
+  const crossReportSelfTestPath = join(
+    crossReportCollision.artifactRoot,
+    "native-prover-self-test.json",
+  );
+  const crossReportParity = JSON.parse(
+    await readFile(crossReportParityPath, "utf8"),
+  );
+  const crossReportSelfTest = JSON.parse(
+    await readFile(crossReportSelfTestPath, "utf8"),
+  );
+  crossReportSelfTest.source_proof_hash =
+    crossReportParity.source_proof_hash;
+  for (const sdkResult of Object.values(crossReportSelfTest.sdk_results)) {
+    sdkResult.source_proof_hash = crossReportParity.source_proof_hash;
+  }
+  await writeFile(
+    crossReportSelfTestPath,
+    `${JSON.stringify(crossReportSelfTest, null, 2)}\n`,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(
+        crossReportCollision.options,
+      ),
+    /nativeProverReports hashes must be role-separated: nativeProverSelfTest\.sourceProofHash matches crossSdkFixtureParity\.sourceProofHash/u,
   );
 
   const oversizedProofPath = join(
@@ -2899,6 +3265,14 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
     ],
     [{ counterpartyDomain: 1 }, /counterpartyDomain/u],
     [{ verifierTarget: "TronContract" }, /verifierTarget/u],
+    [{ productionReady: "true" }, /productionReady must be true or false/u],
+    [{ productionReady: 1 }, /productionReady must be true or false/u],
+    [{ disabledReason: " disabled" }, /disabledReason.*canonical string/u],
+    [{ disabledReason: 1 }, /disabledReason.*canonical string/u],
+    [
+      { disabledReason: "disabled", disabled_reason: "different" },
+      /disabledReason aliases disagree/u,
+    ],
     [
       { bscTokenAddress: BSC_TOKEN_ADDRESS.toUpperCase() },
       /token address.*canonical lowercase hex/u,
@@ -3085,6 +3459,40 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       /Base58|alias/u,
     ],
     [
+      { settlement: { contractAddress: " contract-v1" } },
+      /settlement\.contractAddress.*canonical string/u,
+    ],
+    [
+      { settlement: { contractAddress: 1 } },
+      /settlement\.contractAddress.*canonical string/u,
+    ],
+    [
+      {
+        settlement: {
+          contractAddress: "contract-v1",
+          contract_address: "contract-v2",
+        },
+      },
+      /settlement\.contractAddress aliases disagree/u,
+    ],
+    [
+      { settlement: { contractAlias: " taira-bsc-xor" } },
+      /settlement\.contractAlias.*canonical string/u,
+    ],
+    [
+      { settlement: { contractAlias: 1 } },
+      /settlement\.contractAlias.*canonical string/u,
+    ],
+    [
+      {
+        settlement: {
+          contractAlias: "taira-bsc-xor",
+          contract_alias: "taira-bsc-xor-v2",
+        },
+      },
+      /settlement\.contractAlias aliases disagree/u,
+    ],
+    [
       { sourceBridgeAddress: BSC_BRIDGE_ADDRESS },
       /BSC source bridge address must not use multiple aliases in route manifest/u,
     ],
@@ -3095,6 +3503,14 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
     [
       { postDeployLiveEvidence: { full_toml_ready: true } },
       /fullTomlReady must not use multiple aliases in route manifest postDeployLiveEvidence/u,
+    ],
+    [
+      { postDeployLiveEvidence: { fullTomlReady: "true" } },
+      /postDeployLiveEvidence\.fullTomlReady\.fullTomlReady must be boolean/u,
+    ],
+    [
+      { postDeployLiveEvidence: { fullTomlReady: 1 } },
+      /postDeployLiveEvidence\.fullTomlReady\.fullTomlReady must be boolean/u,
     ],
     [
       { postDeployLiveEvidence: { source_bridge_config_hash: HASH_77 } },
@@ -3244,6 +3660,124 @@ test("BSC route-config command reports the exact merged full-config hash", async
   assert.match(toml, /\[\[zk\.sccp_route_manifests\]\]/u);
 });
 
+test("BSC route-config command writes non-self-referential offline full TOML evidence", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-evidence-"));
+  const manifestPath = join(dir, "manifest.json");
+  const baseConfigPath = join(dir, "base.toml");
+  const out = join(dir, "full-config.toml");
+  const evidenceOut = join(dir, "full-config.evidence.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(productionReadyRouteManifest(), null, 2)}\n`,
+  );
+  await writeFile(
+    baseConfigPath,
+    [
+      "[network]",
+      'address = "127.0.0.1:1337"',
+      'operator_marker = "base-config-marker-must-not-leak"',
+      "",
+      "[torii]",
+      'address = "127.0.0.1:8080"',
+      "",
+    ].join("\n"),
+  );
+
+  const result = await main([
+    "route-config",
+    "--manifest",
+    manifestPath,
+    "--base-config",
+    baseConfigPath,
+    "--out",
+    out,
+    "--write-offline-full-toml-evidence",
+    evidenceOut,
+  ]);
+  const toml = await readFile(out, "utf8");
+  const renderedHash = sha256Hex(Buffer.from(toml, "utf8"));
+  const canonicalToml = `${toml
+    .split(/\r?\n/u)
+    .filter(
+      (line) =>
+        !/^\s*post_deploy_offline_full_toml_sha256\s*=/u.test(line),
+    )
+    .join("\n")
+    .replace(/\s*$/u, "")}\n`;
+  const expectedOfflineHash = sha256Hex(Buffer.from(canonicalToml, "utf8"));
+  const evidence = JSON.parse(await readFile(evidenceOut, "utf8"));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.renderedTomlSha256, renderedHash);
+  assert.equal(result.offlineFullTomlSha256, expectedOfflineHash);
+  assert.notEqual(result.offlineFullTomlSha256, result.renderedTomlSha256);
+  assert.equal(result.wroteOfflineFullTomlEvidence, evidenceOut);
+  assert.equal(
+    result.offlineFullTomlHashMode,
+    "sha256:merged-full-config-without-post_deploy_offline_full_toml_sha256",
+  );
+  assert.equal(evidence.fullTomlReady, true);
+  assert.equal(evidence.renderedTomlSha256, renderedHash);
+  assert.equal(evidence.hashInputSha256, expectedOfflineHash);
+  assert.equal(evidence.offlineFullTomlSha256, expectedOfflineHash);
+  assert.equal(
+    evidence.postDeployLiveEvidence.offlineFullTomlSha256,
+    expectedOfflineHash,
+  );
+  assert.equal(
+    JSON.stringify(evidence).includes("base-config-marker-must-not-leak"),
+    false,
+  );
+
+  const finalManifestPath = join(dir, "manifest.final.json");
+  const finalOut = join(dir, "full-config.final.toml");
+  await writeFile(
+    finalManifestPath,
+    `${JSON.stringify(
+      productionReadyRouteManifest({
+        postDeployLiveEvidence: { offlineFullTomlSha256: expectedOfflineHash },
+      }),
+      null,
+      2,
+    )}\n`,
+  );
+  const finalResult = await main([
+    "route-config",
+    "--manifest",
+    finalManifestPath,
+    "--base-config",
+    baseConfigPath,
+    "--out",
+    finalOut,
+    "--write-offline-full-toml-evidence",
+    join(dir, "full-config.final.evidence.json"),
+  ]);
+
+  assert.equal(finalResult.offlineFullTomlSha256, expectedOfflineHash);
+});
+
+test("BSC route-config command refuses offline full TOML evidence without full config mode", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-no-base-"));
+  const manifestPath = join(dir, "manifest.json");
+  await writeFile(manifestPath, `${JSON.stringify(routeManifest(), null, 2)}\n`);
+
+  await assert.rejects(
+    () =>
+      main([
+        "route-config",
+        "--manifest",
+        manifestPath,
+        "--out",
+        join(dir, "route.toml"),
+        "--allow-unready",
+        "true",
+        "--write-offline-full-toml-evidence",
+        join(dir, "full-config.evidence.json"),
+      ]),
+    /--write-offline-full-toml-evidence requires --base-config/u,
+  );
+});
+
 test("BSC route-config command refuses draft manifests in the canonical default output", async () => {
   const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-default-"));
   const manifestPath = join(dir, "manifest.json");
@@ -3354,6 +3888,102 @@ test("BSC deploy command refuses to broadcast without explicit testnet confirmat
       ]),
     /confirm-testnet/u,
   );
+});
+
+test("BSC deploy command rejects malformed boolean switches before network use", async () => {
+  for (const value of [" TRUE", "true ", "TRUE", "1", "yes", "on", "false "]) {
+    await assert.rejects(
+      () =>
+        main([
+          "deploy",
+          "--verifier",
+          "missing-verifier.json",
+          "--broadcast",
+          value,
+        ]),
+      /--broadcast must be true or false/u,
+    );
+  }
+
+  await assert.rejects(
+    () =>
+      main([
+        "deploy",
+        "--bsc-network",
+        "mainnet",
+        "--verifier",
+        "missing-verifier.json",
+        "--broadcast",
+        "true",
+        "--confirm-network",
+        "taira_bsc_xor:mainnet",
+        "--confirm-mainnet",
+        " TRUE",
+      ]),
+    /--confirm-mainnet must be true or false/u,
+  );
+
+  const dir = await mkdtemp(join(tmpdir(), "bsc-deploy-boolean-"));
+  const diagnosticVerifierFile = join(dir, "diagnostic-verifier.json");
+  await writeFile(
+    diagnosticVerifierFile,
+    JSON.stringify(
+      verifierMaterial({
+        schema: "iroha-sccp-bsc-testnet-diagnostic-verifier-key/v1",
+        warning: "Generated diagnostic BSC testnet verifier material.",
+        verifierKeyHash: DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
+      }),
+    ),
+    "utf8",
+  );
+  await assert.rejects(
+    () =>
+      main([
+        "deploy",
+        "--verifier",
+        diagnosticVerifierFile,
+        "--broadcast",
+        "true",
+        "--confirm-testnet",
+        "taira_bsc_xor",
+        "--allow-diagnostic-verifier",
+        " TRUE",
+      ]),
+    /--allow-diagnostic-verifier must be true or false/u,
+  );
+
+  const envName = "SCCP_BSC_TEST_DEPLOYER_PRIVATE_KEY";
+  const previous = process.env[envName];
+  const verifierFile = join(dir, "verifier.json");
+  await writeFile(verifierFile, JSON.stringify(verifierMaterial()), "utf8");
+  try {
+    process.env[envName] = `0x${"11".repeat(32)}`;
+    await assert.rejects(
+      () =>
+        main([
+          "deploy",
+          "--verifier",
+          verifierFile,
+          "--broadcast",
+          "true",
+          "--confirm-testnet",
+          "taira_bsc_xor",
+          "--private-key-env",
+          envName,
+          "--rpc-url",
+          "http://127.0.0.1:8545",
+          "--allow-local-rpc",
+          " TRUE",
+        ]),
+      /--allow-local-rpc must be true or false/u,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env[envName];
+    } else {
+      process.env[envName] = previous;
+    }
+  }
 });
 
 test("BSC deploy command rejects missing signer and unsafe local RPC before network use", async () => {
@@ -3486,7 +4116,7 @@ test("BSC production requirements expose network-specific public handoff inputs"
     "--route-canary-transaction-id <0x...>",
     "--route-canary-explorer-url <url>",
     "--full-toml-ready true",
-    "--offline-full-toml-sha256 <0x...>",
+    "--offline-full-toml-evidence artifacts/sccp-bsc/taira-bsc-xor-route.full-taira-config.evidence.json",
     "--production-ready true",
     "--live-readback-checked true",
     "--confirm-testnet taira_bsc_xor",

@@ -395,12 +395,16 @@ public sealed class SignedIterableQueryBuilder
 
     private static string NormalizeRequiredValue(string value, string paramName)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (string.IsNullOrEmpty(value))
         {
-            throw new ArgumentException("Value cannot be null or whitespace.", paramName);
+            throw new ArgumentException("Value cannot be null or empty.", paramName);
+        }
+        if (value != value.Trim() || value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Value must not contain surrounding whitespace or control characters.", paramName);
         }
 
-        return value.Trim();
+        return value;
     }
 
     private static byte[] EncodeSingleFieldStruct(byte[] field)

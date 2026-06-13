@@ -1425,6 +1425,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-filter-script",
     ),
     (
+        "C# SDK verifier backend test filter negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-verifier-backend-test-filter-script",
+    ),
+    (
         "C# SDK workflow inventory negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-workflow-inventory",
     ),
@@ -8530,9 +8534,20 @@ def check_csharp(texts, errors):
         "Kagemusha C# SDK script must expose the native bridge on Windows loader path",
         errors,
     )
+    expected_csharp_filter = (
+        '--filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests'
+        "|FullyQualifiedName~PrivacyNativeTests"
+        "|FullyQualifiedName~TransactionBuilderTests"
+        "|FullyQualifiedName~CanonicalRequestTests"
+        "|FullyQualifiedName~ToriiClientTests"
+        "|FullyQualifiedName~SignedQueryBuilderTests"
+        "|FullyQualifiedName~SignedIterableQueryBuilderTests"
+        "|FullyQualifiedName~VerifyingKeyBackendTagTests"
+        '|FullyQualifiedName~ToriiIdentifierReceiptTests"'
+    )
     require(
-        '--filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests|FullyQualifiedName~PrivacyNativeTests|FullyQualifiedName~TransactionBuilderTests|FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiIdentifierReceiptTests"' in script,
-        "Kagemusha C# SDK script must run recursive spend, privacy native, transaction builder, canonical request, and identifier receipt tests",
+        expected_csharp_filter in script,
+        "Kagemusha C# SDK script must run recursive spend, privacy native, transaction builder, canonical request, Torii, signed query, verifier backend, and identifier receipt tests",
         errors,
     )
     require_contains(
@@ -8936,8 +8951,8 @@ def check_csharp(texts, errors):
         (
             "Value must not contain surrounding whitespace.",
             "return value;",
-            "metadata[NormalizeRequiredValue(key, nameof(key))]",
-            "metadata[NormalizeRequiredValue(key, nameof(values))]",
+            "metadata[RequireExactNonBlank(key, nameof(key))]",
+            "replacement[RequireExactNonBlank(key, nameof(values))]",
         ),
         "C# transaction builder top-level exactness",
         errors,
@@ -12109,6 +12124,25 @@ if mode == "--negative-control-csharp-sdk-test-filter-script":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: C# SDK test filter drift was not detected")
+
+if mode == "--negative-control-csharp-sdk-verifier-backend-test-filter-script":
+    target = CSHARP_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "|FullyQualifiedName~VerifyingKeyBackendTagTests",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate C# SDK verifier backend test filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected C# SDK verifier backend test filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# SDK verifier backend test filter drift was not detected")
 
 if mode == "--negative-control-csharp-sdk-workflow-inventory":
     target = WORKFLOW_PATH

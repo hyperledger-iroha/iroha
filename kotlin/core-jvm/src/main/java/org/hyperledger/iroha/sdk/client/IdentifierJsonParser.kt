@@ -17,22 +17,22 @@ object IdentifierJsonParser {
             items.add(
                 IdentifierPolicySummary(
                     requiredExactString(item["policy_id"], "identifier policy list.items[$i].policy_id"),
-                    requiredString(item["owner"], "identifier policy list.items[$i].owner"),
+                    requiredExactString(item["owner"], "identifier policy list.items[$i].owner"),
                     item["active"] == true,
                     IdentifierNormalization.fromWireValue(
-                        requiredString(item["normalization"], "identifier policy list.items[$i].normalization")
+                        requiredExactLowercaseString(item["normalization"], "identifier policy list.items[$i].normalization")
                     ),
                     requiredExactString(item["resolver_public_key"], "identifier policy list.items[$i].resolver_public_key"),
-                    requiredString(item["backend"], "identifier policy list.items[$i].backend"),
-                    optionalString(item["input_encryption"]),
-                    optionalString(item["input_encryption_public_parameters"]),
+                    requiredExactLowercaseString(item["backend"], "identifier policy list.items[$i].backend"),
+                    optionalExactLowercaseString(item["input_encryption"], "identifier policy list.items[$i].input_encryption"),
+                    optionalExactHexString(item["input_encryption_public_parameters"], "identifier policy list.items[$i].input_encryption_public_parameters"),
                     if (item["input_encryption_public_parameters_decoded"] == null) null
                     else parseBfvPublicParameters(
                         expectObject(item["input_encryption_public_parameters_decoded"],
                             "identifier policy list.items[$i].input_encryption_public_parameters_decoded"),
                         "identifier policy list.items[$i].input_encryption_public_parameters_decoded"
                     ),
-                    optionalString(item["note"]),
+                    optionalExactString(item["note"], "identifier policy list.items[$i].note"),
                     if (item["proof_verifier"] == null) null
                     else parseProofVerifier(
                         expectObject(item["proof_verifier"], "identifier policy list.items[$i].proof_verifier"),
@@ -68,11 +68,11 @@ object IdentifierJsonParser {
     fun parseClaimRecord(payload: ByteArray): IdentifierClaimRecord {
         val root = expectObject(parse(payload, "identifier claim record"), "identifier claim record")
         return IdentifierClaimRecord(
-            requiredString(root["policy_id"], "identifier claim record.policy_id"),
-            canonicalizeOpaque(requiredString(root["opaque_id"], "identifier claim record.opaque_id"), "identifier claim record.opaque_id"),
-            canonicalizeHex32(requiredString(root["receipt_hash"], "identifier claim record.receipt_hash"), "identifier claim record.receipt_hash"),
-            UaidLiteral.canonicalize(requiredString(root["uaid"], "identifier claim record.uaid"), "identifier claim record.uaid"),
-            requiredString(root["account_id"], "identifier claim record.account_id"),
+            requiredExactString(root["policy_id"], "identifier claim record.policy_id"),
+            canonicalizeOpaque(requiredExactString(root["opaque_id"], "identifier claim record.opaque_id"), "identifier claim record.opaque_id"),
+            canonicalizeHex32(requiredExactString(root["receipt_hash"], "identifier claim record.receipt_hash"), "identifier claim record.receipt_hash"),
+            UaidLiteral.canonicalize(requiredExactString(root["uaid"], "identifier claim record.uaid"), "identifier claim record.uaid"),
+            requiredExactString(root["account_id"], "identifier claim record.account_id"),
             asLong(root["verified_at_ms"], "identifier claim record.verified_at_ms"),
             if (root.containsKey("expires_at_ms")) asOptionalLong(root["expires_at_ms"], "identifier claim record.expires_at_ms") else null
         )
@@ -91,11 +91,10 @@ object IdentifierJsonParser {
         return value as Map<String, Any?>
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun asArrayOrEmpty(value: Any?, path: String): List<Any?> {
         if (value == null) return emptyList()
         check(value is List<*>) { "$path must be a JSON array" }
-        return value as List<Any?>
+        return value
     }
 
     private fun requiredString(value: Any?, path: String): String {
@@ -113,8 +112,30 @@ object IdentifierJsonParser {
 
     private fun requiredExactLowercaseString(value: Any?, path: String): String {
         val string = requiredExactString(value, path)
-        check(string == string.lowercase()) { "$path must be an exact lowercase RAM-LFE tag" }
+        check(string == string.lowercase()) { "$path must be an exact lowercase wire value" }
         return string
+    }
+
+    private fun optionalExactString(value: Any?, path: String): String? {
+        if (value == null) return null
+        return requiredExactString(value, path)
+    }
+
+    private fun optionalExactLowercaseString(value: Any?, path: String): String? {
+        val string = optionalExactString(value, path) ?: return null
+        check(string == string.lowercase()) { "$path must be an exact lowercase wire value" }
+        return string
+    }
+
+    private fun optionalExactHexString(value: Any?, path: String): String? {
+        var hex = optionalExactString(value, path) ?: return null
+        if (hex.startsWith("0x") || hex.startsWith("0X")) {
+            hex = hex.substring(2)
+        }
+        check(hex.isNotEmpty() && hex.length % 2 == 0 && hex.matches(Regex("(?i)[0-9a-f]+"))) {
+            "$path must contain an even number of hex characters"
+        }
+        return hex
     }
 
     private fun optionalString(value: Any?): String? {
@@ -134,7 +155,7 @@ object IdentifierJsonParser {
 
     private fun asUnsignedLong(value: Any?, path: String): Long {
         val parsed = asLong(value, path)
-        require(parsed >= 0L) { "$path must be a non-negative u64" }
+        check(parsed >= 0L) { "$path must be a non-negative u64" }
         return parsed
     }
 
@@ -145,9 +166,9 @@ object IdentifierJsonParser {
 
     private fun canonicalizeOpaque(value: String, context: String): String {
         val literal = value
-        require(literal.isNotEmpty()) { "$context must not be blank" }
+        check(literal.isNotEmpty()) { "$context must not be blank" }
         val hexPortion = if (literal.lowercase().startsWith("opaque:")) literal.substring("opaque:".length) else literal
-        require(hexPortion.length == 64 && hexPortion.matches(Regex("(?i)[0-9a-f]{64}"))) {
+        check(hexPortion.length == 64 && hexPortion.matches(Regex("(?i)[0-9a-f]{64}"))) {
             "$context must contain 64 hex characters"
         }
         return "opaque:${hexPortion.lowercase()}"
@@ -155,7 +176,7 @@ object IdentifierJsonParser {
 
     private fun canonicalizeHex32(value: String, context: String): String {
         var body = value
-        require(body.isNotEmpty()) { "$context must not be blank" }
+        check(body.isNotEmpty()) { "$context must not be blank" }
         if (body.lowercase().startsWith("hash:")) {
             body = body.substring("hash:".length)
         }
@@ -166,7 +187,7 @@ object IdentifierJsonParser {
         if (body.startsWith("0x") || body.startsWith("0X")) {
             body = body.substring(2)
         }
-        require(body.length == 64 && body.matches(Regex("(?i)[0-9a-f]{64}"))) {
+        check(body.length == 64 && body.matches(Regex("(?i)[0-9a-f]{64}"))) {
             "$context must contain 64 hex characters"
         }
         return body.lowercase()
@@ -174,11 +195,11 @@ object IdentifierJsonParser {
 
     private fun canonicalizeHex(value: String, context: String): String {
         var trimmed = value.trim()
-        require(trimmed.isNotEmpty()) { "$context must not be blank" }
+        check(trimmed.isNotEmpty()) { "$context must not be blank" }
         if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
             trimmed = trimmed.substring(2)
         }
-        require(trimmed.length % 2 == 0 && trimmed.matches(Regex("(?i)[0-9a-f]+"))) {
+        check(trimmed.length % 2 == 0 && trimmed.matches(Regex("(?i)[0-9a-f]+"))) {
             "$context must contain an even number of hex characters"
         }
         return trimmed.lowercase()
@@ -199,16 +220,16 @@ object IdentifierJsonParser {
                 asLongList(publicKey["a"], "$context.public_key.a")
             ),
             JsonNumbers.asInt(root["max_input_bytes"], "$context.max_input_bytes"),
-            root["norito_length_encoding"] as? String
+            optionalExactString(root["norito_length_encoding"], "$context.norito_length_encoding")
         )
     }
 
     private fun parseProofVerifier(root: Map<String, Any?>, context: String): RamLfeProofVerifierMetadata =
         RamLfeProofVerifierMetadata(
-            requiredString(root["proof_backend"], "$context.proof_backend"),
-            requiredString(root["circuit_id"], "$context.circuit_id"),
-            canonicalizeHex32(requiredString(root["public_inputs_schema_hash"], "$context.public_inputs_schema_hash"), "$context.public_inputs_schema_hash"),
-            requiredString(root["verifying_key_bytes_b64"], "$context.verifying_key_bytes_b64")
+            requiredExactString(root["proof_backend"], "$context.proof_backend"),
+            requiredExactString(root["circuit_id"], "$context.circuit_id"),
+            canonicalizeHex32(requiredExactString(root["public_inputs_schema_hash"], "$context.public_inputs_schema_hash"), "$context.public_inputs_schema_hash"),
+            requiredExactString(root["verifying_key_bytes_b64"], "$context.verifying_key_bytes_b64")
         )
 
     private fun parseResolutionPayload(root: Map<String, Any?>, context: String): IdentifierResolutionPayload {

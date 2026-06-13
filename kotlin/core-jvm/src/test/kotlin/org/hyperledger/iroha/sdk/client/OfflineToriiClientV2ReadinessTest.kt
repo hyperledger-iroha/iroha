@@ -149,6 +149,10 @@ class OfflineToriiClientV2ReadinessTest {
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer",
         aliasReadinessBody(compactCircuit = "\"\"") to
             "offline_kagemusha_recursive_compact_circuit_id must be an exact non-empty string",
+        aliasReadinessBody(abi7Circuit = "7") to
+            "offline_kagemusha_abi7_circuit_id must be a string",
+        aliasReadinessBody(abi7Artifacts = "\"true\"") to
+            "offline_kagemusha_abi7_artifacts must be a boolean",
         aliasReadinessBody(compactArtifacts = "\"true\"") to
             "offline_kagemusha_recursive_compact_artifacts_available must be a boolean",
     )

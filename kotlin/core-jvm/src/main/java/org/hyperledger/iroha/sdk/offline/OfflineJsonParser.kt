@@ -66,20 +66,56 @@ object OfflineJsonParser {
     }
 
     private fun kagemushaRecursiveCompactCircuitId(obj: Map<String, Any>): String? {
-        return matchingOptionalStringAlias(
-            obj,
-            "offline_kagemusha_abi7_circuit_id",
-            "offline_kagemusha_recursive_compact_circuit_id",
-        )
+        val hasAbi7 = obj.containsKey("offline_kagemusha_abi7_circuit_id")
+        val hasCompact = obj.containsKey("offline_kagemusha_recursive_compact_circuit_id")
+        val abi7 = if (hasAbi7) {
+            asOptionalString(obj["offline_kagemusha_abi7_circuit_id"])
+            asPresentAliasString(
+                obj["offline_kagemusha_abi7_circuit_id"],
+                "offline_kagemusha_abi7_circuit_id",
+            )
+        } else {
+            null
+        }
+        val compact = if (hasCompact) {
+            asPresentAliasString(
+                obj["offline_kagemusha_recursive_compact_circuit_id"],
+                "offline_kagemusha_recursive_compact_circuit_id",
+            )
+        } else {
+            null
+        }
+        if (hasAbi7 && hasCompact) {
+            check(abi7 == compact) {
+                "offline_kagemusha_abi7_circuit_id and offline_kagemusha_recursive_compact_circuit_id must match"
+            }
+        }
+        return abi7 ?: compact
     }
 
     private fun kagemushaRecursiveCompactArtifactsAvailable(obj: Map<String, Any>): Boolean {
-        return matchingOptionalBooleanAlias(
-            obj,
-            "offline_kagemusha_abi7_artifacts",
-            "offline_kagemusha_recursive_compact_artifacts_available",
-            false,
-        )
+        val hasAbi7 = obj.containsKey("offline_kagemusha_abi7_artifacts")
+        val hasCompact = obj.containsKey("offline_kagemusha_recursive_compact_artifacts_available")
+        val abi7 = asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false)
+        val abi7Value = if (hasAbi7) {
+            asBoolean(obj["offline_kagemusha_abi7_artifacts"], "offline_kagemusha_abi7_artifacts")
+        } else {
+            null
+        }
+        val compact = if (hasCompact) {
+            asBoolean(
+                obj["offline_kagemusha_recursive_compact_artifacts_available"],
+                "offline_kagemusha_recursive_compact_artifacts_available",
+            )
+        } else {
+            null
+        }
+        if (hasAbi7 && hasCompact) {
+            check(abi7Value == compact) {
+                "offline_kagemusha_abi7_artifacts and offline_kagemusha_recursive_compact_artifacts_available must match"
+            }
+        }
+        return if (abi7Value != null) abi7 else compact ?: false
     }
 
     /** Returns a canonical JSON string for the provided payload (keys sorted). */

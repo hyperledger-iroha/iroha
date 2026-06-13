@@ -122,9 +122,20 @@ impl Sm2KeyPair {
     }
 
     /// Sign `message` using deterministic SM2 DSA and return the canonical r∥s bytes.
+    ///
+    /// # Errors
+    /// Returns [`CryptoError::Signing`] if the stored private key or
+    /// distinguishing identifier can no longer be rebuilt into an SM2 signing
+    /// key.
+    pub fn try_sign(&self, message: &[u8]) -> Result<[u8; Sm2Signature::LENGTH], CryptoError> {
+        Ok(self.private.try_sign(message)?.to_bytes())
+    }
+
+    /// Sign `message` using deterministic SM2 DSA and return the canonical r∥s bytes.
     #[must_use]
     pub fn sign(&self, message: &[u8]) -> [u8; Sm2Signature::LENGTH] {
-        self.private.sign(message).to_bytes()
+        self.try_sign(message)
+            .expect("validated SM2 key pair should sign messages")
     }
 
     /// Verify `signature` against `message` with this key pair.
@@ -291,5 +302,18 @@ mod tests {
         keypair
             .verify(message, &signature)
             .expect("signature verifies");
+    }
+
+    #[test]
+    fn try_sign_matches_compatibility_sign_and_verifies() {
+        let keypair =
+            Sm2KeyPair::from_seed(b"sdk-sm2-checked-signing").expect("seeded SM2 key pair");
+        let message = b"sdk checked sm2 signing";
+        let checked = keypair.try_sign(message).expect("checked SM2 signature");
+
+        assert_eq!(checked, keypair.sign(message));
+        keypair
+            .verify(message, &checked)
+            .expect("checked signature verifies");
     }
 }

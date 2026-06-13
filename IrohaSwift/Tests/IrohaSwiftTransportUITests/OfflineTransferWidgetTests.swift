@@ -8,6 +8,10 @@ import IrohaSwiftTransferUI
 @preconcurrency import Network
 #endif
 
+#if canImport(MultipeerConnectivity)
+@preconcurrency import MultipeerConnectivity
+#endif
+
 final class OfflineTransferWidgetTests: XCTestCase {
     func testNfcConfigurationBuildsCustomSelectAidApdu() throws {
         let aid = Data([0xF0, 0x50, 0x4B, 0x45, 0x50, 0x4B, 0x52, 0x4E, 0x46, 0x43, 0x01])
@@ -20,6 +24,55 @@ final class OfflineTransferWidgetTests: XCTestCase {
             OfflineNoteNfcApduProtocol.parseCommand(configuration.selectAidAPDUData(), aid: aid),
             .select
         )
+    }
+
+    func testNfcConfigurationBuildsCustomSelectAidApduFromHex() throws {
+        let configuration = try IrohaOfflineNfcConfiguration(
+            applicationIdentifierHex: " f0504b45504b524e464301 ",
+            cardSessionRuntimeEnabled: true,
+            allowsDebugForcedCardSessionAvailability: true,
+            ackWaitSeconds: 12,
+            ackPollIntervalNanoseconds: 10,
+            apduTimeoutSeconds: 3,
+            maxPreparedPaymentSessionRestarts: 2,
+            maxInitialExchangeRetries: 1
+        )
+
+        XCTAssertTrue(configuration.hasValidApplicationIdentifier)
+        XCTAssertEqual(configuration.applicationIdentifierHex, "F0504B45504B524E464301")
+        XCTAssertEqual(configuration.cardSessionRuntimeEnabled, true)
+        XCTAssertEqual(configuration.allowsDebugForcedCardSessionAvailability, true)
+        XCTAssertEqual(configuration.ackWaitSeconds, 12)
+        XCTAssertEqual(configuration.ackPollIntervalNanoseconds, 10)
+        XCTAssertEqual(configuration.apduTimeoutSeconds, 3)
+        XCTAssertEqual(configuration.maxPreparedPaymentSessionRestarts, 2)
+        XCTAssertEqual(configuration.maxInitialExchangeRetries, 1)
+        XCTAssertEqual(
+            OfflineNoteNfcApduProtocol.parseCommand(
+                configuration.selectAidAPDUData(),
+                aid: configuration.applicationIdentifier
+            ),
+            .select
+        )
+    }
+
+    func testNfcConfigurationRejectsMalformedHexAidBeforeRuntimeUse() {
+        let invalidHexValues = [
+            "",
+            " ",
+            "F0",
+            "F0504B45",
+            "F0504B45504B524E4643010",
+            String(repeating: "F0", count: OfflineNoteNfcApduProtocol.maxAidBytes + 1),
+            "F0504B45504B524E46430Z",
+        ]
+
+        for hexValue in invalidHexValues {
+            XCTAssertThrowsError(
+                try IrohaOfflineNfcConfiguration(applicationIdentifierHex: hexValue),
+                hexValue
+            )
+        }
     }
 
     func testNfcConfigurationRejectsInvalidAidBeforeRuntimeUse() async {
@@ -382,7 +435,15 @@ final class OfflineTransferWidgetTests: XCTestCase {
             "receipt_ack_wait",
             "receipt_ack_waiting",
             "write_payload_commit_begin_extra",
+            "write_payload_commit_begin\toffset=0",
+            "write_payload_commit_begin\noffset=0",
+            "write_payload_commit_begin\u{00A0}offset=0",
+            "write_payload_commit_begin\u{200B}offset=0",
             "receipt_ack_received_tampered",
+            "receipt_ack_received\tbytes=128",
+            "receipt_ack_received\nbytes=128",
+            "receipt_ack_received\u{00A0}bytes=128",
+            "receipt_ack_received\u{200B}bytes=128",
         ]
 
         for progress in preCommitOrNoisyProgress {
@@ -390,6 +451,69 @@ final class OfflineTransferWidgetTests: XCTestCase {
                 IrohaOfflineNfcDeliveryProgressPolicy.mayHaveReachedReceiver(progress: progress),
                 progress
             )
+        }
+    }
+
+    func testNfcSendProgressPolicyClassifiesKnownEventsAndRejectsSpoofedEvents() {
+        let expectedStages: [(String, IrohaOfflineNfcSendProgressStage)] = [
+            ("session_active", .scannerActive),
+            ("session_active detail=value", .scannerActive),
+            ("restart_polling", .scannerActive),
+            ("detected_tags count=1", .receiverDetected),
+            ("connect_succeeded", .receiverConnected),
+            ("select_aid_ok", .receiverCardSelected),
+            ("read_payload kind=receiveRequest bytes=128", .receiverRequestRead),
+            ("create_payment_token", .preparingPayment),
+            ("write_payload kind=paymentToken bytes=512", .sendingPayment),
+            ("write_payload_commit_begin", .confirmingReceiverAcceptedTransfer),
+            ("write_payload_committed", .confirmingReceiverAcceptedTransfer),
+            ("receipt_ack_wait_begin timeout_seconds=45", .waitingForReceiverConfirmation),
+            ("receipt_ack_received bytes=128", .receiverConfirmationReceived),
+            ("receipt_ack_already_available bytes=128", .receiverConfirmationReceived),
+        ]
+
+        for (progress, stage) in expectedStages {
+            XCTAssertEqual(IrohaOfflineNfcSendProgressPolicy.stage(for: progress), stage, progress)
+        }
+
+        let spoofedProgress = [
+            "",
+            " session_active",
+            "xsession_active",
+            "session_active_extra",
+            "restart_polling_extra",
+            "detected_tags_extra count=1",
+            "connect_succeeded_extra",
+            "select_aid_ok_extra",
+            "read_payload_tampered kind=receiveRequest",
+            "create_payment_token_extra",
+            "create_payment_token\tbytes=128",
+            "create_payment_token\nbytes=128",
+            "create_payment_token\u{00A0}bytes=128",
+            "create_payment_token\u{200B}bytes=128",
+            "write_payload_commit",
+            "write_payload_commit_begin_extra",
+            "write_payload_committed_extra",
+            "write_payload_committed\tbytes=128",
+            "write_payload_committed\nbytes=128",
+            "write_payload_committed\u{00A0}bytes=128",
+            "write_payload_committed\u{200B}bytes=128",
+            "receipt_ack_wait",
+            "receipt_ack_wait_begin_extra",
+            "receipt_ack_received_tampered",
+            "receipt_ack_received\tbytes=128",
+            "receipt_ack_received\nbytes=128",
+            "receipt_ack_received\u{00A0}bytes=128",
+            "receipt_ack_received\u{200B}bytes=128",
+            "receipt_ack_already_available_extra",
+            "receipt_ack_already_available\tbytes=128",
+            "receipt_ack_already_available\nbytes=128",
+            "receipt_ack_already_available\u{00A0}bytes=128",
+            "receipt_ack_already_available\u{200B}bytes=128",
+        ]
+
+        for progress in spoofedProgress {
+            XCTAssertEqual(IrohaOfflineNfcSendProgressPolicy.stage(for: progress), .inProgress, progress)
         }
     }
 
@@ -423,6 +547,170 @@ final class OfflineTransferWidgetTests: XCTestCase {
         receiverState.reset()
         XCTAssertFalse(receiverState.reserveReceiverPayment(didFinish: true))
         XCTAssertTrue(receiverState.reserveReceiverPayment(didFinish: false))
+    }
+
+    func testNearbyMessageExchangeStateOwnsTypedRoleMessageAcceptance() throws {
+        let challenge = try OfflineNoteNearbyPairingChallenge(assetName: "nearby_pairing_bird")
+        let receiveEnvelope = IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+            messageKind: .receiveRequest,
+            textKind: .receiveRequest,
+            payload: "iroha:offline:request:v1:receiver",
+            pairingChallenge: challenge
+        )
+        let paymentEnvelope = IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+            messageKind: .payment,
+            textKind: .paymentToken,
+            payload: "iroha:offline:payment:v1:sender",
+            pairingChallenge: nil
+        )
+        let ackEnvelope = IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+            messageKind: .receiptAck,
+            textKind: .receiptAck,
+            payload: "iroha:offline:ack:v1:receiver",
+            pairingChallenge: nil
+        )
+
+        let senderState = IrohaOfflineNearbyMessageExchangeState()
+        let receiveRequest = try XCTUnwrap(
+            try senderState.reserveSenderReceiveRequest(from: receiveEnvelope, didFinish: false)
+        )
+        XCTAssertEqual(
+            receiveRequest,
+            IrohaOfflineNearbySenderReceiveRequest(
+                payload: receiveEnvelope.payload,
+                pairingChallenge: challenge
+            )
+        )
+        XCTAssertNil(try senderState.reserveSenderReceiveRequest(from: receiveEnvelope, didFinish: false))
+        assertNearbyInvalid(
+            try senderState.takeSenderReceiptAck(from: ackEnvelope, didFinish: false)
+        )
+
+        senderState.queueSenderPaymentPayload(paymentEnvelope.payload)
+        let receiptAck = try senderState.takeSenderReceiptAck(from: ackEnvelope, didFinish: false)
+        XCTAssertEqual(
+            receiptAck,
+            IrohaOfflineNearbySenderReceiptAck(
+                paymentPayload: paymentEnvelope.payload,
+                receiptAck: ackEnvelope.payload
+            )
+        )
+        assertNearbyInvalid(
+            try senderState.takeSenderReceiptAck(from: ackEnvelope, didFinish: false)
+        )
+
+        let receiverState = IrohaOfflineNearbyMessageExchangeState()
+        let payment = try XCTUnwrap(
+            try receiverState.reserveReceiverPayment(from: paymentEnvelope, didFinish: false)
+        )
+        XCTAssertEqual(payment, IrohaOfflineNearbyReceiverPayment(payload: paymentEnvelope.payload))
+        XCTAssertNil(try receiverState.reserveReceiverPayment(from: paymentEnvelope, didFinish: false))
+        receiverState.reset()
+        XCTAssertNil(try receiverState.reserveReceiverPayment(from: paymentEnvelope, didFinish: true))
+    }
+
+    func testNearbyMessageExchangeStateRejectsAdversarialRoleMessageShapes() throws {
+        let challenge = try OfflineNoteNearbyPairingChallenge(assetName: "nearby_pairing_mask")
+        let validReceiveEnvelope = IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+            messageKind: .receiveRequest,
+            textKind: .receiveRequest,
+            payload: "iroha:offline:request:v1:valid",
+            pairingChallenge: challenge
+        )
+        let validPaymentEnvelope = IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+            messageKind: .payment,
+            textKind: .paymentToken,
+            payload: "iroha:offline:payment:v1:valid",
+            pairingChallenge: nil
+        )
+        let validAckEnvelope = IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+            messageKind: .receiptAck,
+            textKind: .receiptAck,
+            payload: "iroha:offline:ack:v1:valid",
+            pairingChallenge: nil
+        )
+        let rejectedEnvelope = IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+            messageKind: .rejected,
+            textKind: nil,
+            payload: OfflineNoteTransferHandoff.nearbyRejectedPayload,
+            pairingChallenge: nil
+        )
+
+        let senderReceiveState = IrohaOfflineNearbyMessageExchangeState()
+        for envelope in [
+            IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+                messageKind: .receiveRequest,
+                textKind: .paymentToken,
+                payload: "wrong-text-kind",
+                pairingChallenge: challenge
+            ),
+            IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+                messageKind: .receiveRequest,
+                textKind: .receiveRequest,
+                payload: "missing-pairing",
+                pairingChallenge: nil
+            ),
+            validPaymentEnvelope,
+            validAckEnvelope,
+            rejectedEnvelope,
+        ] {
+            assertNearbyInvalid(
+                try senderReceiveState.reserveSenderReceiveRequest(from: envelope, didFinish: false)
+            )
+        }
+        XCTAssertNotNil(try senderReceiveState.reserveSenderReceiveRequest(from: validReceiveEnvelope, didFinish: false))
+
+        let senderAckState = IrohaOfflineNearbyMessageExchangeState()
+        senderAckState.queueSenderPaymentPayload(validPaymentEnvelope.payload)
+        for envelope in [
+            IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+                messageKind: .receiptAck,
+                textKind: .paymentToken,
+                payload: "wrong-text-kind",
+                pairingChallenge: nil
+            ),
+            IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+                messageKind: .receiptAck,
+                textKind: .receiptAck,
+                payload: "extra-pairing",
+                pairingChallenge: challenge
+            ),
+            validPaymentEnvelope,
+            validReceiveEnvelope,
+            rejectedEnvelope,
+        ] {
+            assertNearbyInvalid(
+                try senderAckState.takeSenderReceiptAck(from: envelope, didFinish: false)
+            )
+        }
+        XCTAssertEqual(
+            try senderAckState.takeSenderReceiptAck(from: validAckEnvelope, didFinish: false).paymentPayload,
+            validPaymentEnvelope.payload
+        )
+
+        let receiverState = IrohaOfflineNearbyMessageExchangeState()
+        for envelope in [
+            IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+                messageKind: .payment,
+                textKind: .receiptAck,
+                payload: "wrong-text-kind",
+                pairingChallenge: nil
+            ),
+            IrohaOfflineNearbyTextEnvelopeCodec.DecodedEnvelope(
+                messageKind: .payment,
+                textKind: .paymentToken,
+                payload: "extra-pairing",
+                pairingChallenge: challenge
+            ),
+            validReceiveEnvelope,
+            validAckEnvelope,
+            rejectedEnvelope,
+        ] {
+            assertNearbyInvalid(
+                try receiverState.reserveReceiverPayment(from: envelope, didFinish: false)
+            )
+        }
+        XCTAssertNotNil(try receiverState.reserveReceiverPayment(from: validPaymentEnvelope, didFinish: false))
     }
 
     func testNearbyMessageExchangeStateAllowsOnlyOneConcurrentReservationPerPhase() {
@@ -532,6 +820,35 @@ final class OfflineTransferWidgetTests: XCTestCase {
         XCTAssertFalse(code.contains("iroha:offline:"))
     }
 
+    func testNfcDiagnosticsRedactAidLogLabels() {
+        let aid = "F0504B45504B524E464301"
+        let label = IrohaOfflineNfcDiagnosticsPolicy.aidLogLabel(aid)
+        let expectedHash = IrohaOfflineTransferDiagnosticPolicy.redactedIdentifier(
+            aid,
+            prefixLength: 8
+        )
+
+        XCTAssertTrue(label.contains("aid_present=true"))
+        XCTAssertTrue(label.contains("aid_sha256=\(expectedHash)"))
+        XCTAssertTrue(label.contains("aid_len=22"))
+        XCTAssertFalse(label.contains(aid))
+        XCTAssertEqual(IrohaOfflineNfcDiagnosticsPolicy.aidLogLabel(nil), "aid_present=false")
+        XCTAssertEqual(IrohaOfflineNfcDiagnosticsPolicy.aidLogLabel(" \n\t "), "aid_present=false")
+    }
+
+    func testNfcReaderProgressSourceDoesNotInterpolateRawAidValues() throws {
+        let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let sourceURL = packageRoot
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("IrohaSwiftMobileTransports")
+            .appendingPathComponent("OfflineNfcMobileTransports.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(source.contains(#"aid=\("#))
+        XCTAssertFalse(source.contains(#"selected_aid=\("#))
+        XCTAssertTrue(source.contains("IrohaOfflineNfcDiagnosticsPolicy.aidLogLabel"))
+    }
+
     func testNearbyErrorsExposeOnlyStableTechnicalCodes() {
         let sensitiveNeedles = [
             "iroha:offline:",
@@ -562,6 +879,10 @@ final class OfflineTransferWidgetTests: XCTestCase {
 
     func testNearbyDiagnosticsRedactPeerLabelsAndNSErrorDescriptions() {
         let peerName = "bokolo-sensitive-peer-name"
+        let peerKey = OfflineNoteNearbyPeerSelection.peerKey(
+            displayName: peerName,
+            selectionHash: 12345
+        )
         let peerLabel = IrohaOfflineNearbyDiagnosticsPolicy.peerLabel(
             displayName: peerName,
             selectionHash: 12345
@@ -569,7 +890,9 @@ final class OfflineTransferWidgetTests: XCTestCase {
 
         XCTAssertTrue(peerLabel.hasPrefix("peer_hash="))
         XCTAssertFalse(peerLabel.contains(peerName))
+        XCTAssertFalse(peerLabel.contains(peerKey))
         XCTAssertFalse(peerLabel.contains("12345"))
+        XCTAssertTrue(peerKey.hasPrefix("\(peerName.utf8.count):"))
 
         let rawError = NSError(
             domain: "NearbySensitiveDomain",
@@ -593,6 +916,74 @@ final class OfflineTransferWidgetTests: XCTestCase {
             IrohaOfflineNearbyDiagnosticsPolicy.errorCode(CancellationError()),
             IrohaOfflineNearbyExchangeError.cancelled.technicalCode
         )
+    }
+
+    func testNearbyDiagnosticsCentralizePeerIdentityAndSessionStateNames() {
+        let adversarialPeerName = "receiver#account@example.test\n\u{202E}/payment-token"
+        let identity = IrohaOfflineNearbyDiagnosticsPolicy.peerIdentity(
+            displayName: adversarialPeerName,
+            selectionHash: -9876
+        )
+        let expectedKey = OfflineNoteNearbyPeerSelection.peerKey(
+            displayName: adversarialPeerName,
+            selectionHash: -9876
+        )
+
+        XCTAssertEqual(identity.selectionKey, expectedKey)
+        XCTAssertTrue(identity.selectionKey.hasPrefix("\(adversarialPeerName.utf8.count):"))
+        XCTAssertTrue(identity.selectionKey.hasSuffix("#-9876"))
+        XCTAssertEqual(
+            IrohaOfflineNearbyDiagnosticsPolicy.peerSelectionKey(
+                displayName: adversarialPeerName,
+                selectionHash: -9876
+            ),
+            expectedKey
+        )
+        XCTAssertEqual(
+            IrohaOfflineNearbyDiagnosticsPolicy.peerLabel(
+                displayName: adversarialPeerName,
+                selectionHash: -9876
+            ),
+            identity.logLabel
+        )
+        XCTAssertEqual(
+            IrohaOfflineNearbyDiagnosticsPolicy.peerLabel(peerKey: expectedKey),
+            identity.logLabel
+        )
+        XCTAssertTrue(identity.logLabel.hasPrefix("peer_hash="))
+        XCTAssertEqual(identity.logLabel.count, "peer_hash=".count + 12)
+
+        for leaked in [
+            "receiver",
+            "account@example.test",
+            "payment-token",
+            "\n",
+            "\u{202E}",
+            "-9876",
+            expectedKey,
+        ] {
+            XCTAssertFalse(identity.logLabel.contains(leaked), "peer log label leaked \(leaked)")
+        }
+
+        XCTAssertEqual(IrohaOfflineNearbyDiagnosticsPolicy.notConnectedSessionStateName, "not_connected")
+        XCTAssertEqual(IrohaOfflineNearbyDiagnosticsPolicy.connectingSessionStateName, "connecting")
+        XCTAssertEqual(IrohaOfflineNearbyDiagnosticsPolicy.connectedSessionStateName, "connected")
+        XCTAssertEqual(IrohaOfflineNearbyDiagnosticsPolicy.unknownSessionStateName, "unknown")
+
+#if canImport(MultipeerConnectivity)
+        XCTAssertEqual(
+            IrohaOfflineNearbyDiagnosticsPolicy.sessionStateName(.notConnected),
+            IrohaOfflineNearbyDiagnosticsPolicy.notConnectedSessionStateName
+        )
+        XCTAssertEqual(
+            IrohaOfflineNearbyDiagnosticsPolicy.sessionStateName(.connecting),
+            IrohaOfflineNearbyDiagnosticsPolicy.connectingSessionStateName
+        )
+        XCTAssertEqual(
+            IrohaOfflineNearbyDiagnosticsPolicy.sessionStateName(.connected),
+            IrohaOfflineNearbyDiagnosticsPolicy.connectedSessionStateName
+        )
+#endif
     }
 
     func testNearbyPairingDecisionContractCoversAllOutcomes() {
@@ -636,6 +1027,119 @@ final class OfflineTransferWidgetTests: XCTestCase {
                 hasAcceptedPayment: true
             )
         )
+
+        XCTAssertTrue(
+            IrohaOfflineNfcReceiveCompletionPolicy.shouldApplyEmulationStartedProgress(
+                activeSessionMatches: true,
+                isReceiving: true,
+                hasAcceptedPayment: false
+            )
+        )
+        XCTAssertFalse(
+            IrohaOfflineNfcReceiveCompletionPolicy.shouldApplyEmulationStartedProgress(
+                activeSessionMatches: false,
+                isReceiving: true,
+                hasAcceptedPayment: false
+            )
+        )
+        XCTAssertFalse(
+            IrohaOfflineNfcReceiveCompletionPolicy.shouldApplyEmulationStartedProgress(
+                activeSessionMatches: true,
+                isReceiving: false,
+                hasAcceptedPayment: false
+            )
+        )
+        XCTAssertFalse(
+            IrohaOfflineNfcReceiveCompletionPolicy.shouldApplyEmulationStartedProgress(
+                activeSessionMatches: true,
+                isReceiving: true,
+                hasAcceptedPayment: true
+            )
+        )
+
+        XCTAssertTrue(
+            IrohaOfflineNfcReceiveCompletionPolicy.shouldPreserveAcceptedPaymentSuccessOnInvalidation(
+                hasAcceptedPayment: true,
+                hasSuccessState: true
+            )
+        )
+        XCTAssertFalse(
+            IrohaOfflineNfcReceiveCompletionPolicy.shouldPreserveAcceptedPaymentSuccessOnInvalidation(
+                hasAcceptedPayment: false,
+                hasSuccessState: true
+            )
+        )
+        XCTAssertFalse(
+            IrohaOfflineNfcReceiveCompletionPolicy.shouldPreserveAcceptedPaymentSuccessOnInvalidation(
+                hasAcceptedPayment: true,
+                hasSuccessState: false
+            )
+        )
+    }
+
+    func testDeviceTransferSendCompletionPolicyPreservesOnlyTerminalSuccess() {
+        for hasSuccessState in [false, true] {
+            for hasReceiptAckPayload in [false, true] {
+                for hasReceiptAckVerifiedEvent in [false, true] {
+                    for hasSendTransferSucceededEvent in [false, true] {
+                        let hasTerminalSuccess = IrohaOfflineDeviceTransferSendCompletionPolicy
+                            .hasTerminalSuccess(
+                                hasSuccessState: hasSuccessState,
+                                hasReceiptAckPayload: hasReceiptAckPayload,
+                                hasReceiptAckVerifiedEvent: hasReceiptAckVerifiedEvent,
+                                hasSendTransferSucceededEvent: hasSendTransferSucceededEvent
+                            )
+                        XCTAssertEqual(
+                            hasTerminalSuccess,
+                            hasSuccessState && (
+                                hasReceiptAckPayload
+                                    || hasReceiptAckVerifiedEvent
+                                    || hasSendTransferSucceededEvent
+                            )
+                        )
+                        XCTAssertEqual(
+                            IrohaOfflineDeviceTransferSendCompletionPolicy.shouldApplyProgress(
+                                isTransferring: true,
+                                hasTerminalSuccess: hasTerminalSuccess
+                            ),
+                            !hasTerminalSuccess
+                        )
+                        XCTAssertFalse(
+                            IrohaOfflineDeviceTransferSendCompletionPolicy.shouldApplyProgress(
+                                isTransferring: false,
+                                hasTerminalSuccess: hasTerminalSuccess
+                            )
+                        )
+                        XCTAssertEqual(
+                            IrohaOfflineDeviceTransferSendCompletionPolicy.shouldApplyFailureState(
+                                updatesBackendState: true,
+                                hasTerminalSuccess: hasTerminalSuccess
+                            ),
+                            !hasTerminalSuccess
+                        )
+                        XCTAssertFalse(
+                            IrohaOfflineDeviceTransferSendCompletionPolicy.shouldApplyFailureState(
+                                updatesBackendState: false,
+                                hasTerminalSuccess: hasTerminalSuccess
+                            )
+                        )
+                        XCTAssertEqual(
+                            IrohaOfflineDeviceTransferSendCompletionPolicy.shouldPublishFailureEvent(
+                                publishesEvent: true,
+                                hasTerminalSuccess: hasTerminalSuccess
+                            ),
+                            !hasTerminalSuccess
+                        )
+                        XCTAssertFalse(
+                            IrohaOfflineDeviceTransferSendCompletionPolicy.shouldPublishFailureEvent(
+                                publishesEvent: false,
+                                hasTerminalSuccess: hasTerminalSuccess
+                            )
+                        )
+                    }
+                }
+            }
+        }
     }
 
     func testNearbyErrorsNormalizeCancellationAndLocalNetworkPermissionDenials() {
@@ -826,6 +1330,131 @@ final class OfflineTransferWidgetTests: XCTestCase {
         )
     }
 
+    func testDeviceToDeviceTextPayloadFacadeRejectsBase64BodySmuggling() {
+        let paymentPrefix = OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix
+        let receivePrefix = OfflineNoteTransferTextPayloadCodec.receiveRequestPrefix
+        for body in ["A", "abc", "abc-DEF_123", "0"] {
+            XCTAssertTrue(
+                IrohaOfflineDeviceToDeviceTextPayload.hasBase64URLTextBody(
+                    "\(paymentPrefix)\(body)",
+                    prefixes: [paymentPrefix]
+                ),
+                body
+            )
+            XCTAssertTrue(
+                IrohaOfflineDeviceToDeviceTextPayload.hasBase64URLTextBody(
+                    "\(receivePrefix)\(body)",
+                    prefixes: [receivePrefix]
+                ),
+                body
+            )
+        }
+
+        for body in [
+            "",
+            "abc/def",
+            "abc+def",
+            "abc=def",
+            "abc.def",
+            "abc~def",
+            "abc:def",
+            "abc?def",
+            "abc#def",
+            "abc&def",
+            "abc%2Fdef",
+            "abc%0Adef",
+            "abc%00def",
+            "abc def",
+            "abc\tdef",
+            "abc\ndef",
+            "abc\rdef",
+            "abc\u{000B}def",
+            "abc\u{000C}def",
+            "abc\u{007F}def",
+            "abc\u{0085}def",
+            "abc\u{00A0}def",
+            "abc\u{200B}",
+            "abc\u{034F}def",
+            "abc\u{180E}def",
+            "abc\u{2007}def",
+            "abc\u{2028}def",
+            "abc\u{2029}def",
+            "abc\u{2060}def",
+            "\u{200B}",
+            "abc\u{200D}def",
+            "abc\u{2066}def",
+            "abc\u{202E}def",
+            "abc\u{FE0F}def",
+            "abc\u{1F600}def",
+        ] {
+            XCTAssertFalse(
+                IrohaOfflineDeviceToDeviceTextPayload.hasBase64URLTextBody(
+                    "\(paymentPrefix)\(body)",
+                    prefixes: [paymentPrefix]
+                ),
+                body
+            )
+            XCTAssertFalse(
+                IrohaOfflineDeviceToDeviceTextPayload.hasBase64URLTextBody(
+                    "\(receivePrefix)\(body)",
+                    prefixes: [receivePrefix]
+                ),
+                body
+            )
+        }
+    }
+
+    func testDeviceToDeviceTextPayloadFacadeRejectsUnicodeAndControlTransportCharacters() {
+        let payload = "\(OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix)abc_DEF-123"
+        XCTAssertEqual(
+            IrohaOfflineDeviceToDeviceTextPayload.trimmingBoundaryWhitespace(" \t\r\n\(payload)\n\r\t "),
+            payload
+        )
+        XCTAssertTrue(IrohaOfflineDeviceToDeviceTextPayload.hasOnlyTextTransportCharacters(payload))
+        XCTAssertTrue(
+            IrohaOfflineDeviceToDeviceTextPayload.hasBase64URLTextBody(
+                payload,
+                prefixes: [OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix]
+            )
+        )
+
+        for (label, candidate) in [
+            ("spaceInside", "\(OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix)abc DEF"),
+            ("tabInside", "\(OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix)abc\tDEF"),
+            ("newlineInside", "\(OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix)abc\nDEF"),
+            ("verticalTabPrefix", "\u{000B}\(payload)"),
+            ("formFeedPrefix", "\u{000C}\(payload)"),
+            ("deleteSuffix", "\(payload)\u{007F}"),
+            ("nextLinePrefix", "\u{0085}\(payload)"),
+            ("nextLineSuffix", "\(payload)\u{0085}"),
+            ("noBreakPrefix", "\u{00A0}\(payload)"),
+            ("noBreakSuffix", "\(payload)\u{00A0}"),
+            ("combiningGraphemeJoinerSuffix", "\(payload)\u{034F}"),
+            ("mongolianVowelSeparatorSuffix", "\(payload)\u{180E}"),
+            ("figureSpacePrefix", "\u{2007}\(payload)"),
+            ("zeroWidthSuffix", "\(payload)\u{200B}"),
+            ("lineSeparatorPrefix", "\u{2028}\(payload)"),
+            ("paragraphSeparatorSuffix", "\(payload)\u{2029}"),
+            ("wordJoinerSuffix", "\(payload)\u{2060}"),
+            ("bidiOverrideSuffix", "\(payload)\u{202E}"),
+            ("variationSelectorSuffix", "\(payload)\u{FE0F}"),
+            ("ideographicSpacePrefix", "\u{3000}\(payload)"),
+            ("fullwidthHyphenPrefix", "wallet\u{FF0D}offline-payment:abc"),
+            ("fullwidthColon", "wallet-offline-payment-legacy\u{FF1A}abc"),
+            ("emojiSuffix", "\(payload)\u{1F600}"),
+        ] {
+            XCTAssertFalse(IrohaOfflineDeviceToDeviceTextPayload.hasOnlyTextTransportCharacters(candidate), label)
+            XCTAssertFalse(
+                IrohaOfflineDeviceToDeviceTextPayload.hasBase64URLTextBody(
+                    candidate,
+                    prefixes: [OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix]
+                ),
+                label
+            )
+            XCTAssertEqual(IrohaOfflineDeviceToDeviceTextPayload.trimmingBoundaryWhitespace(candidate), candidate, label)
+        }
+    }
+
 #if canImport(Network)
     @MainActor
     func testNearbyLocalNetworkAuthorizationCachesSessionGrant() {
@@ -930,6 +1559,16 @@ final class OfflineTransferWidgetTests: XCTestCase {
         XCTAssertEqual(IrohaOfflineTransferTransportKind.available(in: capabilities), [.qr, .nearby])
     }
 
+    private func assertNearbyInvalid<T>(
+        _ expression: @autoclosure () throws -> T,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertThrowsError(try expression(), file: file, line: line) { error in
+            XCTAssertEqual(error as? IrohaOfflineNearbyExchangeError, .invalidMessage, file: file, line: line)
+        }
+    }
+
     private static func validReceiveRequestTextPayload() throws -> String {
         try OfflineNoteTransferTextPayloadCodec.encodeReceiveRequest(
             OfflineReceiveRequestPayload(
@@ -947,7 +1586,7 @@ final class OfflineTransferWidgetTests: XCTestCase {
                 ),
                 generatedAtMs: 1_706_000_000_000,
                 displayTtlMs: 300_000,
-                chainId: "cbsi-minamoto",
+                chainId: "minamoto-cbsi",
                 assetId: "sbd#cbsi",
                 outputCommitment: String(repeating: "a", count: 64)
             )

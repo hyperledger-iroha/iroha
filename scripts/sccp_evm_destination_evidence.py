@@ -105,8 +105,8 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
     return raw
@@ -130,8 +130,8 @@ def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must have an even hex length")
     try:
         raw = bytes.fromhex(text)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{label} must be hex") from exc
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
     return raw
@@ -143,8 +143,8 @@ def parse_runtime_bytecode_file(value: str, *, label: str) -> bytes:
     path = Path(value).expanduser()
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from exc
+    except OSError:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     return parse_runtime_bytecode_hex("".join(text.split()), label=label)
 
 
@@ -164,8 +164,8 @@ def parse_destination_domain(value: str) -> int:
     }
     try:
         return aliases[normalized]
-    except KeyError as exc:
-        raise argparse.ArgumentTypeError("domain must be eth or bsc") from exc
+    except KeyError:
+        raise argparse.ArgumentTypeError("domain must be eth or bsc") from None
 
 
 def parse_bsc_network(value: str) -> str:
@@ -185,10 +185,10 @@ def parse_bsc_network(value: str) -> str:
     }
     try:
         return aliases[normalized]
-    except KeyError as exc:
+    except KeyError:
         raise argparse.ArgumentTypeError(
             "BSC network must be mainnet or testnet"
-        ) from exc
+        ) from None
 
 
 def _bsc_network_from_value(value: str | None) -> str:
@@ -205,8 +205,8 @@ def profile_for_domain(domain: int, *, bsc_network: str | None = None) -> dict[s
         return BSC_NETWORK_PROFILES[_bsc_network_from_value(bsc_network)]
     try:
         return DOMAIN_PROFILES[domain]
-    except KeyError as exc:
-        raise ValueError("domain must be ETH or BSC") from exc
+    except KeyError:
+        raise ValueError("domain must be ETH or BSC") from None
 
 
 def evm_network_id_for_domain(domain: int, *, bsc_network: str | None = None) -> bytes:
@@ -214,8 +214,8 @@ def evm_network_id_for_domain(domain: int, *, bsc_network: str | None = None) ->
 
     try:
         return bytes(profile_for_domain(domain, bsc_network=bsc_network)["network_id"])
-    except KeyError as exc:  # pragma: no cover - profile validation is above.
-        raise ValueError("domain must be ETH or BSC") from exc
+    except KeyError:  # pragma: no cover - profile validation is above.
+        raise ValueError("domain must be ETH or BSC") from None
 
 
 def evm_mainnet_network_id_for_domain(domain: int) -> bytes:
@@ -531,8 +531,8 @@ def evm_destination_binding_hash(
         raise ValueError("source_domain must be SORA for EVM destination evidence")
     try:
         profile_for_domain(target_domain, bsc_network=bsc_network)
-    except ValueError as exc:
-        raise ValueError("target_domain must be ETH or BSC") from exc
+    except ValueError:
+        raise ValueError("target_domain must be ETH or BSC") from None
     if source_domain == target_domain:
         raise ValueError("source_domain and target_domain must differ")
     if verifier_backend != SCCP_EVM_GROTH16_BACKEND:
@@ -606,8 +606,8 @@ def evm_destination_binding_key(
         raise ValueError("source_domain must be SORA for EVM destination evidence")
     try:
         profile_for_domain(target_domain, bsc_network=bsc_network)
-    except ValueError as exc:
-        raise ValueError("target_domain must be ETH or BSC") from exc
+    except ValueError:
+        raise ValueError("target_domain must be ETH or BSC") from None
     if source_domain == target_domain:
         raise ValueError("source_domain and target_domain must differ")
     if verifier_backend != SCCP_EVM_GROTH16_BACKEND:
@@ -735,8 +735,8 @@ def evm_route_canary_transaction_evidence_hash(
     target_domain = _require_exact_u32(target_domain, "target_domain")
     try:
         profile_for_domain(target_domain, bsc_network=bsc_network)
-    except ValueError as exc:
-        raise ValueError("target_domain must be ETH or BSC for EVM route canaries") from exc
+    except ValueError:
+        raise ValueError("target_domain must be ETH or BSC for EVM route canaries") from None
     if source_domain == target_domain:
         raise ValueError("source_domain and target_domain must differ")
     proof_version = _require_exact_u32(proof_version, "proof_version")

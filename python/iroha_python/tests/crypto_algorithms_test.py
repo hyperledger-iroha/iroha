@@ -145,6 +145,27 @@ def test_algorithm_labels_reject_empty_strings_before_native_normalization() -> 
         normalize_crypto_algorithm("")
 
 
+def test_algorithm_labels_reject_empty_strings_across_public_api() -> None:
+    keypair = derive_keypair_from_seed(b"strict empty algorithm label boundary", ED25519_ALGORITHM)
+    message = b"strict empty algorithm label boundary message"
+    signature = sign(ED25519_ALGORITHM, keypair.private_key, message)
+
+    calls = (
+        lambda: normalize_crypto_algorithm(""),
+        lambda: generate_keypair(""),
+        lambda: derive_keypair_from_seed(b"strict empty algorithm label boundary", ""),
+        lambda: load_keypair(keypair.private_key, ""),
+        lambda: public_key_multihash("", keypair.public_key),
+        lambda: private_key_multihash("", keypair.private_key),
+        lambda: sign("", keypair.private_key, message),
+        lambda: verify("", keypair.public_key, message, signature),
+        lambda: CryptoKeyPair("", keypair.private_key, keypair.public_key),
+    )
+    for call in calls:
+        with pytest.raises(ValueError, match="algorithm must be a non-empty string"):
+            call()
+
+
 def test_algorithm_labels_reject_surrounding_whitespace_across_public_api() -> None:
     keypair = derive_keypair_from_seed(b"strict algorithm label boundary", ED25519_ALGORITHM)
     message = b"strict algorithm label boundary message"
@@ -176,6 +197,59 @@ def test_algorithm_labels_reject_surrounding_whitespace_across_public_api() -> N
                 match="algorithm must not contain surrounding whitespace",
             ):
                 call()
+
+
+@pytest.mark.parametrize(
+    ("label", "message"),
+    [
+        ("", "algorithm must be a non-empty string"),
+        (" ed25519", "algorithm must not contain surrounding whitespace"),
+        ("ed25519 ", "algorithm must not contain surrounding whitespace"),
+        ("\ted25519", "algorithm must not contain surrounding whitespace"),
+        ("ed25519\n", "algorithm must not contain surrounding whitespace"),
+        (" eD-25519 ", "algorithm must not contain surrounding whitespace"),
+    ],
+)
+def test_algorithm_labels_reject_empty_and_padded_native_inputs(
+    label: str,
+    message: str,
+) -> None:
+    keypair = derive_keypair_from_seed(b"strict native algorithm label boundary", ED25519_ALGORITHM)
+    payload = b"strict native algorithm label boundary message"
+    signature = sign(ED25519_ALGORITHM, keypair.private_key, payload)
+
+    calls = (
+        lambda: crypto_module._crypto.normalize_crypto_algorithm(label),
+        lambda: crypto_module._crypto.generate_keypair(label),
+        lambda: crypto_module._crypto.derive_keypair_from_seed(
+            b"strict native algorithm label boundary",
+            label,
+        ),
+        lambda: crypto_module._crypto.load_keypair(keypair.private_key, label),
+        lambda: crypto_module._crypto.public_key_multihash(label, keypair.public_key, False),
+        lambda: crypto_module._crypto.private_key_multihash(label, keypair.private_key, False),
+        lambda: crypto_module._crypto.sign(label, keypair.private_key, payload),
+        lambda: crypto_module._crypto.verify(label, keypair.public_key, payload, signature),
+    )
+    for call in calls:
+        with pytest.raises(ValueError, match=message):
+            call()
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "ed\00025519",
+        "ed\u001f25519",
+        "ed\u007f25519",
+        "ed\u200b25519",
+        "\u0435d25519",
+        "ed\uff0d25519",
+    ],
+)
+def test_algorithm_labels_reject_control_and_confusable_native_inputs(label: str) -> None:
+    with pytest.raises(ValueError, match="unsupported crypto algorithm"):
+        normalize_crypto_algorithm(label)
 
 
 def test_asset_definition_id_builds_canonical_address_from_domain_and_name() -> None:

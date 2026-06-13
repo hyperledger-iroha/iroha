@@ -768,7 +768,8 @@ async fn contracts_call_enqueues_transaction() {
     let signing_message = base64::engine::general_purpose::STANDARD
         .decode(signing_message_b64)
         .expect("decode signing message");
-    let detached_signature = Signature::new(&creds.private_key.0, &signing_message);
+    let detached_signature =
+        Signature::try_new(&creds.private_key.0, &signing_message).expect("sign detached call");
     let detached_submit_body = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
         iroha_torii::json_entry(

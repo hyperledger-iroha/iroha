@@ -12,8 +12,8 @@ public sealed class TransactionBuilder
 
     public TransactionBuilder(string chainId, string authorityAccountId)
     {
-        ChainId = NormalizeRequiredValue(chainId, nameof(chainId));
-        AuthorityAccountId = NormalizeRequiredValue(authorityAccountId, nameof(authorityAccountId));
+        ChainId = RequireExactNonBlank(chainId, nameof(chainId));
+        AuthorityAccountId = RequireExactNonBlank(authorityAccountId, nameof(authorityAccountId));
     }
 
     public string ChainId { get; }
@@ -195,17 +195,23 @@ public sealed class TransactionBuilder
 
     public TransactionBuilder SetMetadata(string key, JsonNode? value)
     {
-        metadata[NormalizeRequiredValue(key, nameof(key))] = value?.DeepClone();
+        metadata[RequireExactNonBlank(key, nameof(key))] = value?.DeepClone();
         return this;
     }
 
     public TransactionBuilder ReplaceMetadata(IReadOnlyDictionary<string, JsonNode?> values)
     {
         ArgumentNullException.ThrowIfNull(values);
-        metadata.Clear();
+        var replacement = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
         foreach (var (key, value) in values)
         {
-            metadata[NormalizeRequiredValue(key, nameof(values))] = value?.DeepClone();
+            replacement[RequireExactNonBlank(key, nameof(values))] = value?.DeepClone();
+        }
+
+        metadata.Clear();
+        foreach (var (key, value) in replacement)
+        {
+            metadata[key] = value;
         }
 
         return this;
@@ -253,13 +259,21 @@ public sealed class TransactionBuilder
         return payload.ToArray();
     }
 
-    private static string NormalizeRequiredValue(string value, string paramName)
+    private static string RequireExactNonBlank(string? value, string paramName)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (string.IsNullOrEmpty(value))
         {
-            throw new ArgumentException("Value cannot be null or whitespace.", paramName);
+            throw new ArgumentException("Value cannot be null or empty.", paramName);
+        }
+        if (value != value.Trim() || value.Any(char.IsControl))
+        {
+            throw new ArgumentException("Value must not contain surrounding whitespace or control characters.", paramName);
+        }
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Value must not contain surrounding whitespace.", paramName);
         }
 
-        return value.Trim();
+        return value;
     }
 }

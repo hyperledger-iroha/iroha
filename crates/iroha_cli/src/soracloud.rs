@@ -9834,6 +9834,11 @@ fn encode_sorafs_manifest_for_storage(manifest: &ManifestV1) -> Result<(Vec<u8>,
     Ok((manifest_bytes, manifest_digest))
 }
 
+fn sign_soracloud_payload(key_pair: &KeyPair, payload: &[u8]) -> Result<Signature> {
+    Signature::try_new(key_pair.private_key(), payload)
+        .wrap_err("failed to sign Soracloud CLI payload")
+}
+
 fn attach_sorafs_release_governance(
     mut manifest: ManifestV1,
     key_pair: &KeyPair,
@@ -9859,7 +9864,7 @@ fn attach_sorafs_release_governance(
             signer_bytes.len()
         )
     })?;
-    let signature = Signature::new(key_pair.private_key(), unsigned_manifest_digest.as_bytes());
+    let signature = sign_soracloud_payload(key_pair, unsigned_manifest_digest.as_bytes())?;
     manifest.governance = GovernanceProofs {
         council_signatures: vec![CouncilSignature {
             signer,
@@ -10968,7 +10973,7 @@ fn signed_bundle_request(
         }
     }
     .wrap_err("failed to encode deployment bundle payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &payload);
+    let signature = sign_soracloud_payload(key_pair, &payload)?;
     Ok(SignedBundleRequest {
         bundle,
         initial_service_configs,
@@ -10990,7 +10995,7 @@ fn signed_app_infra_request(
 ) -> Result<SignedAppInfraRequest> {
     let payload = encode_app_infra_provenance_payload(&manifest)
         .wrap_err("failed to encode app infra manifest payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &payload);
+    let signature = sign_soracloud_payload(key_pair, &payload)?;
     let (deploy_services, upgrade_services) = match mode {
         MutationMode::Deploy => (services, Vec::new()),
         MutationMode::Upgrade => (Vec::new(), services),
@@ -11229,7 +11234,7 @@ fn signed_service_config_set_request(
         &payload.value_json,
     )
     .wrap_err("failed to encode service config payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedServiceConfigSetRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11260,7 +11265,7 @@ fn signed_service_config_delete_request(
         payload.config_name.as_str(),
     )
     .wrap_err("failed to encode service config delete payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedServiceConfigDeleteRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11294,7 +11299,7 @@ fn signed_service_secret_set_request(
         &payload.secret,
     )
     .wrap_err("failed to encode service secret payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedServiceSecretSetRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11325,7 +11330,7 @@ fn signed_service_secret_delete_request(
         payload.secret_name.as_str(),
     )
     .wrap_err("failed to encode service secret delete payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedServiceSecretDeleteRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11352,7 +11357,7 @@ fn signed_rollback_request(
     };
     let encoded = encode_rollback_signature_payload(&payload)
         .wrap_err("failed to encode rollback payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedRollbackRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11399,7 +11404,7 @@ fn signed_rollout_request(
     };
     let encoded = encode_rollout_signature_payload(&payload)
         .wrap_err("failed to encode rollout payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedRolloutAdvanceRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11425,7 +11430,7 @@ fn signed_agent_deploy_request(
     };
     let encoded = encode_agent_deploy_signature_payload(&payload)
         .wrap_err("failed to encode agent deploy payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentDeployRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11455,7 +11460,7 @@ fn signed_agent_lease_renew_request(
     };
     let encoded = encode_agent_lease_renew_signature_payload(&payload)
         .wrap_err("failed to encode agent lease renew payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentLeaseRenewRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11565,7 +11570,7 @@ fn sign_generated_hf_service_provenance(
             .wrap_err("failed to encode generated HF service bundle for signing")?;
     Ok(ManifestProvenance {
         signer: key_pair.public_key().clone(),
-        signature: Signature::new(key_pair.private_key(), &payload),
+        signature: sign_soracloud_payload(key_pair, &payload)?,
     })
 }
 
@@ -11581,7 +11586,7 @@ fn sign_generated_hf_apartment_provenance(
     .wrap_err("failed to encode generated HF apartment manifest for signing")?;
     Ok(ManifestProvenance {
         signer: key_pair.public_key().clone(),
-        signature: Signature::new(key_pair.private_key(), &payload),
+        signature: sign_soracloud_payload(key_pair, &payload)?,
     })
 }
 
@@ -11632,7 +11637,7 @@ fn signed_hf_deploy_request(
     };
     let encoded = encode_hf_deploy_signature_payload(&payload)
         .wrap_err("failed to encode hf deploy payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     let service_name = service_name
         .parse::<Name>()
         .expect("validated HF service name must parse");
@@ -11694,7 +11699,7 @@ fn signed_hf_lease_leave_request(
     };
     let encoded = encode_hf_lease_leave_signature_payload(&payload)
         .wrap_err("failed to encode hf lease leave payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedHfLeaseLeaveRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11753,7 +11758,7 @@ fn signed_hf_lease_renew_request(
     };
     let encoded = encode_hf_lease_renew_signature_payload(&payload)
         .wrap_err("failed to encode hf lease renew payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     let service_name = service_name
         .parse::<Name>()
         .expect("validated HF service name must parse");
@@ -11852,7 +11857,7 @@ fn signed_model_host_advertise_request(
     let payload = ModelHostAdvertisePayload { capability };
     let encoded = encode_model_host_advertise_signature_payload(&payload)
         .wrap_err("failed to encode model host advertise payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelHostAdvertiseRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11878,7 +11883,7 @@ fn signed_model_host_heartbeat_request(
     };
     let encoded = encode_model_host_heartbeat_signature_payload(&payload)
         .wrap_err("failed to encode model host heartbeat payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelHostHeartbeatRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11899,7 +11904,7 @@ fn signed_model_host_withdraw_request(
     };
     let encoded = encode_model_host_withdraw_signature_payload(&payload)
         .wrap_err("failed to encode model host withdraw payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelHostWithdrawRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11929,7 +11934,7 @@ fn signed_agent_restart_request(
     };
     let encoded = encode_agent_restart_signature_payload(&payload)
         .wrap_err("failed to encode agent restart payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentRestartRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11961,7 +11966,7 @@ fn signed_agent_policy_revoke_request(
     };
     let encoded = encode_agent_policy_revoke_signature_payload(&payload)
         .wrap_err("failed to encode agent policy revoke payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentPolicyRevokeRequest {
         payload,
         provenance: ManifestProvenance {
@@ -11996,7 +12001,7 @@ fn signed_agent_wallet_spend_request(
     };
     let encoded = encode_agent_wallet_spend_signature_payload(&payload)
         .wrap_err("failed to encode agent wallet spend payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentWalletSpendRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12026,7 +12031,7 @@ fn signed_agent_wallet_approve_request(
     };
     let encoded = encode_agent_wallet_approve_signature_payload(&payload)
         .wrap_err("failed to encode agent wallet approve payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentWalletApproveRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12066,7 +12071,7 @@ fn signed_agent_message_send_request(
     };
     let encoded = encode_agent_message_send_signature_payload(&payload)
         .wrap_err("failed to encode agent message send payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentMessageSendRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12096,7 +12101,7 @@ fn signed_agent_message_ack_request(
     };
     let encoded = encode_agent_message_ack_signature_payload(&payload)
         .wrap_err("failed to encode agent message ack payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentMessageAckRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12174,7 +12179,7 @@ fn signed_agent_artifact_allow_request(
     };
     let encoded = encode_agent_artifact_allow_signature_payload(&payload)
         .wrap_err("failed to encode agent autonomy allow payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentArtifactAllowRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12223,7 +12228,7 @@ fn signed_agent_autonomy_run_request(
     };
     let encoded = encode_agent_autonomy_run_signature_payload(&payload)
         .wrap_err("failed to encode agent autonomy run payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedAgentAutonomyRunRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12293,7 +12298,7 @@ fn signed_training_job_start_request(
     };
     let encoded = encode_training_job_start_signature_payload(&payload)
         .wrap_err("failed to encode training job start payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedTrainingJobStartRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12335,7 +12340,7 @@ fn signed_training_job_checkpoint_request(
     };
     let encoded = encode_training_job_checkpoint_signature_payload(&payload)
         .wrap_err("failed to encode training job checkpoint payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedTrainingJobCheckpointRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12370,7 +12375,7 @@ fn signed_training_job_retry_request(
     };
     let encoded = encode_training_job_retry_signature_payload(&payload)
         .wrap_err("failed to encode training job retry payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedTrainingJobRetryRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12419,7 +12424,7 @@ fn signed_model_artifact_register_request(
     };
     let encoded = encode_model_artifact_register_signature_payload(&payload)
         .wrap_err("failed to encode model artifact register payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelArtifactRegisterRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12478,7 +12483,7 @@ fn signed_model_weight_register_request(
     };
     let encoded = encode_model_weight_register_signature_payload(&payload)
         .wrap_err("failed to encode model weight register payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelWeightRegisterRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12517,7 +12522,7 @@ fn signed_model_weight_promote_request(
     };
     let encoded = encode_model_weight_promote_signature_payload(&payload)
         .wrap_err("failed to encode model weight promote payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelWeightPromoteRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12557,7 +12562,7 @@ fn signed_model_weight_rollback_request(
     };
     let encoded = encode_model_weight_rollback_signature_payload(&payload)
         .wrap_err("failed to encode model weight rollback payload for signing")?;
-    let signature = Signature::new(key_pair.private_key(), &encoded);
+    let signature = sign_soracloud_payload(key_pair, &encoded)?;
     Ok(SignedModelWeightRollbackRequest {
         payload,
         provenance: ManifestProvenance {
@@ -12645,11 +12650,11 @@ fn signed_uploaded_model_register_request(
         payload,
         bundle_provenance: ManifestProvenance {
             signer: key_pair.public_key().clone(),
-            signature: Signature::new(key_pair.private_key(), &bundle_encoded),
+            signature: sign_soracloud_payload(key_pair, &bundle_encoded)?,
         },
         finalize_provenance: ManifestProvenance {
             signer: key_pair.public_key().clone(),
-            signature: Signature::new(key_pair.private_key(), &finalize_encoded),
+            signature: sign_soracloud_payload(key_pair, &finalize_encoded)?,
         },
         authority: None,
         private_key: None,
@@ -13067,7 +13072,7 @@ fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
         .map_err(|error| eyre!("Soracloud mutation signature nonce OS RNG failed: {error}"))?;
     let nonce = hex::encode(nonce_bytes);
     let message = canonical_request_signature_message("POST", endpoint, body, timestamp_ms, &nonce);
-    let signature = Signature::new(submission_config.key_pair.private_key(), &message);
+    let signature = sign_soracloud_payload(&submission_config.key_pair, &message)?;
 
     Ok(vec![
         (HEADER_IROHA_ACCOUNT, submission_config.account.to_string()),
@@ -23988,6 +23993,18 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         )
         .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("torii-url"));
+    }
+
+    #[test]
+    fn sign_soracloud_payload_returns_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let payload = b"soracloud cli checked signing";
+        let signature =
+            sign_soracloud_payload(&key_pair, payload).expect("checked signature construction");
+
+        signature
+            .verify(key_pair.public_key(), payload)
+            .expect("checked signature should verify");
     }
 
     #[test]

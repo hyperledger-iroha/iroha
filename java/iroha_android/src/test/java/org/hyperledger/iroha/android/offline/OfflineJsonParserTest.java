@@ -191,6 +191,29 @@ public final class OfflineJsonParserTest {
             "\"recursive_compact_v1\"",
             "7",
             "7",
+            "7",
+            "7")),
+        "offline_kagemusha_abi7_circuit_id must be a string");
+    expectIllegalState(
+        () -> parseOfflineReadiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "7",
+            "7",
+            "\"kagemusha-recursive-compact-v1\"",
+            "\"kagemusha-recursive-compact-v1\"",
+            "\"true\"")),
+        "offline_kagemusha_abi7_artifacts must be a boolean");
+    expectIllegalState(
+        () -> parseOfflineReadiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "7",
+            "7",
             "\"kagemusha-recursive-compact-v1\"",
             "\"kagemusha-recursive-compact-v1\"",
             "true",
@@ -305,6 +328,29 @@ public final class OfflineJsonParserTest {
             "\"kagemusha-recursive-compact-v1\"",
             "\"\"")),
         "offline_kagemusha_recursive_compact_circuit_id must be an exact non-empty string");
+    expectIllegalState(
+        () -> parseOfflineV2Readiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "7",
+            "7",
+            "7",
+            "7")),
+        "offline_kagemusha_abi7_circuit_id must be a string");
+    expectIllegalState(
+        () -> parseOfflineV2Readiness(aliasReadinessBody(
+            "true",
+            "true",
+            "\"recursive_compact_v1\"",
+            "\"recursive_compact_v1\"",
+            "7",
+            "7",
+            "\"kagemusha-recursive-compact-v1\"",
+            "\"kagemusha-recursive-compact-v1\"",
+            "\"true\"")),
+        "offline_kagemusha_abi7_artifacts must be a boolean");
     expectIllegalState(
         () -> parseOfflineV2Readiness(aliasReadinessBody(
             "true",

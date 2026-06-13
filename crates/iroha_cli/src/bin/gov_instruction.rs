@@ -20,7 +20,7 @@ use iroha::{
         metadata::Metadata,
         name::Name,
         proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId},
-        transaction::{Executable, IvmBytecode, IvmProved, TransactionBuilder},
+        transaction::{Executable, IvmBytecode, IvmProved, SignedTransaction, TransactionBuilder},
     },
 };
 use iroha_crypto::Hash;
@@ -327,6 +327,16 @@ fn ivm_execution_vk_id(name: &str) -> VerifyingKeyId {
     VerifyingKeyId::new(iroha_core::zk::ZK_BACKEND_HALO2_IPA, name)
 }
 
+fn sign_governance_transaction(
+    transaction: TransactionBuilder,
+    config: &Config,
+    context: &'static str,
+) -> Result<SignedTransaction> {
+    transaction
+        .try_sign(config.key_pair.private_key())
+        .wrap_err(context)
+}
+
 fn ensure_ivm_execution_vk(
     client: &Client,
     config: &Config,
@@ -349,8 +359,12 @@ fn ensure_ivm_execution_vk(
         .with_instructions([InstructionBox::from(verifying_keys::RegisterVerifyingKey {
             id: id.clone(),
             record,
-        })])
-        .sign(config.key_pair.private_key());
+        })]);
+    let tx = sign_governance_transaction(
+        tx,
+        config,
+        "failed to sign IVM execution VK registration transaction",
+    )?;
     let hash = match client.submit_transaction_blocking(&tx) {
         Ok(hash) => hash,
         Err(err) => {
@@ -487,8 +501,9 @@ fn submit_sccp_transfer_ivm_proved(
     let tx = TransactionBuilder::new(config.chain.clone(), config.account.clone())
         .with_metadata(metadata)
         .with_executable(Executable::IvmProved(proved))
-        .with_attachments(ProofAttachmentList(vec![attachment]))
-        .sign(config.key_pair.private_key());
+        .with_attachments(ProofAttachmentList(vec![attachment]));
+    let tx =
+        sign_governance_transaction(tx, &config, "failed to sign SCCP IVM-proved transaction")?;
     let tx_hash = client
         .submit_transaction_blocking(&tx)
         .wrap_err("failed to submit SCCP IVM-proved transaction")?;
@@ -822,6 +837,21 @@ mod tests {
             sorafs_anonymity_policy: default_anonymity_policy(),
             sorafs_rollout_phase: default_rollout_phase(),
         }
+    }
+
+    #[test]
+    fn sign_governance_transaction_checked_helper_verifies() -> Result<()> {
+        let config = test_config_with_chain_discriminant(369);
+        let tx_builder = TransactionBuilder::new(config.chain.clone(), config.account.clone())
+            .with_instructions(Vec::<InstructionBox>::new());
+
+        let tx =
+            sign_governance_transaction(tx_builder, &config, "sign test governance transaction")?;
+
+        tx.verify_signature()
+            .wrap_err("verify governance helper signature")?;
+        assert_eq!(tx.authority(), &config.account);
+        Ok(())
     }
 
     #[test]

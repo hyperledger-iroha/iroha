@@ -713,7 +713,7 @@ public static class KagemushaRecursiveSpendNative
                     }
                 }
 
-                circuitId = Encoding.UTF8.GetString(payload).Trim();
+                circuitId = Encoding.UTF8.GetString(payload);
                 if (circuitId.Length == 0)
                 {
                     throw new ArgumentException("lineage_verifier_key");

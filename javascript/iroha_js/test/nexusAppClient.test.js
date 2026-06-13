@@ -23,6 +23,39 @@ const fixtureWalletSignature = Buffer.from(
   fixture.expected.wallet_signature_hex,
   "hex",
 );
+const unsupportedSignatureAlgorithms = [
+  "secp256k1",
+  "",
+  " ",
+  " Ed25519",
+  "Ed25519 ",
+  "\tEd25519",
+  "Ed25519\n",
+  "ed25519 ",
+  " ed25519",
+  "\ted25519",
+  "ed25519\u00A0",
+  "0 ",
+  " 0",
+  "\t0",
+  "00",
+  "\uFF10",
+  "ED25519",
+  "Ed25519",
+  "ed\t25519",
+  "ed\u000025519",
+  "ed\u001F25519",
+  "ed\u007F25519",
+  "ed\u200B25519",
+  "\u00A0Ed25519",
+  "Ed25519\u00A0",
+  "\u0435d25519",
+  "ed\uFF0D25519",
+  1,
+  false,
+  Buffer.from("ed25519"),
+  ["ed25519"],
+];
 
 test("NexusAppClient builds a signable transfer draft", () => {
   const payloadBytes = Buffer.from("canonical-transfer-payload");
@@ -229,14 +262,7 @@ test("NexusAppClient rejects non-Ed25519 wallet signatures", async () => {
       },
     },
   });
-  for (const algorithm of [
-    "secp256k1",
-    "ed\t25519",
-    "ed\u200B25519",
-    "\u0435d25519",
-    "ed\uFF0D25519",
-    " ED25519 ",
-  ]) {
+  for (const algorithm of unsupportedSignatureAlgorithms) {
     await assert.rejects(
       () =>
         client.finalizeAndSubmit(
@@ -255,23 +281,70 @@ test("NexusAppClient rejects non-Ed25519 wallet signatures", async () => {
         error.code === fixture.error_cases[0].expected_code,
     );
   }
-  await assert.rejects(
-    () =>
-      client.finalizeAndSubmit(
-        {
-          payloadBytes: Buffer.from("payload"),
-          payloadHashHex: nexusPayloadHashHex(Buffer.from("payload")),
-          authority: "account-i105",
-          signingPublicKey: Buffer.alloc(32, 1),
-          signatureAlgorithm: "ed\u200B25519",
-        },
-        { algorithm: "ed25519", signature: Buffer.alloc(64) },
-        { wait: false },
-      ),
-    (error) =>
-      error instanceof NexusAppError &&
-      error.code === fixture.error_cases[0].expected_code,
+  for (const algorithm of unsupportedSignatureAlgorithms) {
+    await assert.rejects(
+      () =>
+        client.finalizeAndSubmit(
+          {
+            payloadBytes: Buffer.from("payload"),
+            payloadHashHex: nexusPayloadHashHex(Buffer.from("payload")),
+            authority: "account-i105",
+            signingPublicKey: Buffer.alloc(32, 1),
+            signatureAlgorithm: algorithm,
+          },
+          { algorithm: "ed25519", signature: Buffer.alloc(64) },
+          { wait: false },
+        ),
+      (error) =>
+        error instanceof NexusAppError &&
+        error.code === fixture.error_cases[0].expected_code,
+    );
+  }
+});
+
+test("NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags", async () => {
+  const payload = fixturePayloadBytes;
+  const signedTransaction = Buffer.from("signed");
+  const hashHex = "b".repeat(64);
+  const finalized = [];
+  const submitted = [];
+  const client = new NexusAppClient({
+    chainId: "test-chain",
+    authority: "account-i105",
+    signingPublicKey: fixturePublicKey,
+    transactionCodec: {
+      buildTransferPayload() {
+        return payload;
+      },
+      finalizeSignedTransaction(signable, signature, signingPublicKey) {
+        finalized.push({ signable, signature, signingPublicKey });
+        return { signedTransaction, hashHex };
+      },
+    },
+    toriiClient: {
+      async submitTransaction(transaction) {
+        submitted.push(Buffer.from(transaction));
+        return { accepted: true };
+      },
+    },
+  });
+
+  const receipt = await client.finalizeAndSubmit(
+    {
+      payloadBytes: payload,
+      payloadHashHex: nexusPayloadHashHex(payload),
+      authority: "account-i105",
+      signingPublicKey: fixturePublicKey,
+      signatureAlgorithm: "0",
+    },
+    { algorithm: 0, signature: fixtureWalletSignature },
+    { wait: false },
   );
+
+  assert.deepEqual(receipt.signedTransaction, signedTransaction);
+  assert.equal(receipt.signedTransactionHashHex, hashHex);
+  assert.equal(finalized[0].signature.algorithm, "ed25519");
+  assert.deepEqual(submitted, [signedTransaction]);
 });
 
 test("NexusAppClient rejects missing approval account and missing signing key", async () => {

@@ -94,6 +94,7 @@ export PYTHONPATH="${ROOT_DIR}/python/iroha_python/src:${ROOT_DIR}/python/norito
   tests/kagemusha_test.py \
   tests/privacy_catalog_test.py \
   tests/crypto_algorithms_test.py \
+  tests/test_nexus_app.py \
   tests/offline_cash_test.py \
   tests/test_address_format.py \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_canonical_request_auth_rejects_padded_fields_before_send" \

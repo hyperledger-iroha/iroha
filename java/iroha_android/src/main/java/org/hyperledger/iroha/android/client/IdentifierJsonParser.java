@@ -31,10 +31,10 @@ public final class IdentifierJsonParser {
                   : requiredExactString(
                       item.get("program_id"),
                       "identifier policy list.items[" + i + "].program_id"),
-              requiredString(item.get("owner"), "identifier policy list.items[" + i + "].owner"),
+              requiredExactString(item.get("owner"), "identifier policy list.items[" + i + "].owner"),
               Boolean.TRUE.equals(item.get("active")),
               IdentifierNormalization.fromWireValue(
-                  requiredString(
+                  requiredExactLowercaseString(
                       item.get("normalization"),
                       "identifier policy list.items[" + i + "].normalization")),
               requiredExactString(
@@ -47,9 +47,14 @@ public final class IdentifierJsonParser {
                   : requiredExactString(
                       item.get("output_opening_public_key"),
                       "identifier policy list.items[" + i + "].output_opening_public_key"),
-              requiredString(item.get("backend"), "identifier policy list.items[" + i + "].backend"),
-              optionalString(item.get("input_encryption")),
-              optionalString(item.get("input_encryption_public_parameters")),
+              requiredExactLowercaseString(
+                  item.get("backend"), "identifier policy list.items[" + i + "].backend"),
+              optionalExactLowercaseString(
+                  item.get("input_encryption"),
+                  "identifier policy list.items[" + i + "].input_encryption"),
+              optionalExactHexString(
+                  item.get("input_encryption_public_parameters"),
+                  "identifier policy list.items[" + i + "].input_encryption_public_parameters"),
 	              item.get("input_encryption_public_parameters_decoded") == null
 	                  ? null
 	                  : parseBfvPublicParameters(
@@ -57,7 +62,7 @@ public final class IdentifierJsonParser {
 	                          item.get("input_encryption_public_parameters_decoded"),
 	                          "identifier policy list.items[" + i + "].input_encryption_public_parameters_decoded"),
 	                      "identifier policy list.items[" + i + "].input_encryption_public_parameters_decoded"),
-	              optionalString(item.get("note")),
+	              optionalExactString(item.get("note"), "identifier policy list.items[" + i + "].note"),
 	              item.get("proof_verifier") == null
 	                  ? null
 	                  : parseProofVerifier(
@@ -93,17 +98,17 @@ public final class IdentifierJsonParser {
     final Map<String, Object> root =
         expectObject(parse(payload, "identifier claim record"), "identifier claim record");
     return new IdentifierClaimRecord(
-        requiredString(root.get("policy_id"), "identifier claim record.policy_id"),
+        requiredExactString(root.get("policy_id"), "identifier claim record.policy_id"),
         canonicalizeOpaque(
-            requiredString(root.get("opaque_id"), "identifier claim record.opaque_id"),
+            requiredExactString(root.get("opaque_id"), "identifier claim record.opaque_id"),
             "identifier claim record.opaque_id"),
         canonicalizeHex32(
-            requiredString(root.get("receipt_hash"), "identifier claim record.receipt_hash"),
+            requiredExactString(root.get("receipt_hash"), "identifier claim record.receipt_hash"),
             "identifier claim record.receipt_hash"),
         UaidLiteral.canonicalize(
-            requiredString(root.get("uaid"), "identifier claim record.uaid"),
+            requiredExactString(root.get("uaid"), "identifier claim record.uaid"),
             "identifier claim record.uaid"),
-        requiredString(root.get("account_id"), "identifier claim record.account_id"),
+        requiredExactString(root.get("account_id"), "identifier claim record.account_id"),
         asLong(root.get("verified_at_ms"), "identifier claim record.verified_at_ms"),
         root.containsKey("expires_at_ms")
             ? asOptionalLong(root.get("expires_at_ms"), "identifier claim record.expires_at_ms")
@@ -162,9 +167,41 @@ public final class IdentifierJsonParser {
   private static String requiredExactLowercaseString(final Object value, final String path) {
     final String string = requiredExactString(value, path);
     if (!string.toLowerCase(Locale.ROOT).equals(string)) {
-      throw new IllegalStateException(path + " must be an exact lowercase RAM-LFE tag");
+      throw new IllegalStateException(path + " must be an exact lowercase wire value");
     }
     return string;
+  }
+
+  private static String optionalExactString(final Object value, final String path) {
+    if (value == null) {
+      return null;
+    }
+    return requiredExactString(value, path);
+  }
+
+  private static String optionalExactLowercaseString(final Object value, final String path) {
+    final String string = optionalExactString(value, path);
+    if (string == null) {
+      return null;
+    }
+    if (!string.toLowerCase(Locale.ROOT).equals(string)) {
+      throw new IllegalStateException(path + " must be an exact lowercase wire value");
+    }
+    return string;
+  }
+
+  private static String optionalExactHexString(final Object value, final String path) {
+    String hex = optionalExactString(value, path);
+    if (hex == null) {
+      return null;
+    }
+    if (hex.startsWith("0x") || hex.startsWith("0X")) {
+      hex = hex.substring(2);
+    }
+    if (hex.isEmpty() || (hex.length() & 1) == 1 || !hex.matches("(?i)[0-9a-f]+")) {
+      throw new IllegalArgumentException(path + " must contain an even number of hex characters");
+    }
+    return hex;
   }
 
   private static String optionalString(final Object value) {
@@ -293,20 +330,20 @@ public final class IdentifierJsonParser {
             asLongList(publicKey.get("b"), context + ".public_key.b"),
             asLongList(publicKey.get("a"), context + ".public_key.a")),
         Math.toIntExact(asLong(root.get("max_input_bytes"), context + ".max_input_bytes")),
-        root.get("norito_length_encoding") instanceof String
-            ? (String) root.get("norito_length_encoding")
-            : null);
+        optionalExactString(root.get("norito_length_encoding"), context + ".norito_length_encoding"));
   }
 
   private static RamLfeProofVerifierMetadata parseProofVerifier(
       final Map<String, Object> root, final String context) {
     return new RamLfeProofVerifierMetadata(
-        requiredString(root.get("proof_backend"), context + ".proof_backend"),
-        requiredString(root.get("circuit_id"), context + ".circuit_id"),
+        requiredExactString(root.get("proof_backend"), context + ".proof_backend"),
+        requiredExactString(root.get("circuit_id"), context + ".circuit_id"),
         canonicalizeHex32(
-            requiredString(root.get("public_inputs_schema_hash"), context + ".public_inputs_schema_hash"),
+            requiredExactString(
+                root.get("public_inputs_schema_hash"), context + ".public_inputs_schema_hash"),
             context + ".public_inputs_schema_hash"),
-        requiredString(root.get("verifying_key_bytes_b64"), context + ".verifying_key_bytes_b64"));
+        requiredExactString(
+            root.get("verifying_key_bytes_b64"), context + ".verifying_key_bytes_b64"));
   }
 
   private static IdentifierResolutionPayload parseResolutionPayload(

@@ -20975,7 +20975,7 @@ function normalizeMultisigContractCallResponse(
   }
   return {
     ok: true,
-    resolved_multisig_account_id: ToriiClient._normalizeAccountId(
+    resolved_multisig_account_id: requireExactAccountId(
       record.resolved_multisig_account_id,
       `${context}.resolved_multisig_account_id`,
     ),
@@ -21014,7 +21014,7 @@ function normalizeMultisigContractCallResponse(
 function normalizeMultisigSpecResponse(payload, context = "multisig spec response") {
   const record = ensureRecord(payload, context);
   return {
-    resolved_multisig_account_id: ToriiClient._normalizeAccountId(
+    resolved_multisig_account_id: requireExactAccountId(
       record.resolved_multisig_account_id,
       `${context}.resolved_multisig_account_id`,
     ),
@@ -21044,7 +21044,7 @@ function normalizeMultisigProposalsListResponse(
     throw new TypeError(`${context}.proposals must be an array`);
   }
   return {
-    resolved_multisig_account_id: ToriiClient._normalizeAccountId(
+    resolved_multisig_account_id: requireExactAccountId(
       record.resolved_multisig_account_id,
       `${context}.resolved_multisig_account_id`,
     ),
@@ -21091,7 +21091,7 @@ function normalizeMultisigProposalGetResponse(
 ) {
   const record = ensureRecord(payload, context);
   return {
-    resolved_multisig_account_id: ToriiClient._normalizeAccountId(
+    resolved_multisig_account_id: requireExactAccountId(
       record.resolved_multisig_account_id,
       `${context}.resolved_multisig_account_id`,
     ),
@@ -21244,12 +21244,16 @@ function normalizeAliasResolutionResponse(
   context = "alias resolution response",
 ) {
   const record = ensureRecord(payload ?? {}, context);
-  const alias = requireNonEmptyString(record.alias, `${context}.alias`);
+  const alias = requireExactNonEmptyString(record.alias, `${context}.alias`);
   const normalizedAlias = looksLikeIban(alias)
     ? normalizeIban(alias, `${context}.alias`)
     : alias;
-  const accountId = ToriiClient._requireAccountId(
+  const rawAccountId = requireExactNonEmptyString(
     record.account_id,
+    `${context}.account_id`,
+  );
+  const accountId = ToriiClient._requireAccountId(
+    rawAccountId,
     `${context}.account_id`,
   );
   const result = {
@@ -21263,7 +21267,7 @@ function normalizeAliasResolutionResponse(
   }
   const sourceValue = record.source;
   if (sourceValue !== undefined && sourceValue !== null) {
-    result.source = requireNonEmptyString(sourceValue, `${context}.source`);
+    result.source = requireExactNonEmptyString(sourceValue, `${context}.source`);
   }
   return result;
 }
@@ -21723,7 +21727,7 @@ function normalizeIdentifierBfvPublicParameters(payload, context) {
     record.norito_length_encoding !== undefined &&
     record.norito_length_encoding !== null
   ) {
-    normalized.norito_length_encoding = requireNonEmptyString(
+    normalized.norito_length_encoding = requireExactNonEmptyString(
       record.norito_length_encoding,
       `${context}.norito_length_encoding`,
     );
@@ -22157,22 +22161,38 @@ function normalizeRamLfeProgramPolicyListResponse(
 
 function normalizeRamLfeProgramPolicySummary(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
+  const backend = requireExactNonEmptyString(record.backend, `${context}.backend`);
+  if (backend !== backend.toLowerCase()) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.backend must be an exact lowercase RAM-LFE backend tag`,
+      `${context}.backend`,
+    );
+  }
+  const verificationMode = requireExactNonEmptyString(
+    record.verification_mode,
+    `${context}.verification_mode`,
+  );
+  if (verificationMode !== verificationMode.toLowerCase()) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.verification_mode must be an exact lowercase RAM-LFE verification mode`,
+      `${context}.verification_mode`,
+    );
+  }
   const result = {
-    program_id: requireNonEmptyString(record.program_id, `${context}.program_id`),
-    owner: ToriiClient._requireAccountId(record.owner, `${context}.owner`),
+    program_id: requireExactNonEmptyString(record.program_id, `${context}.program_id`),
+    owner: requireExactAccountId(record.owner, `${context}.owner`),
     active: record.active === true,
     resolver_public_key: requireExactNonEmptyString(
       record.resolver_public_key,
       `${context}.resolver_public_key`,
     ),
-    backend: requireNonEmptyString(record.backend, `${context}.backend`),
-    verification_mode: requireNonEmptyString(
-      record.verification_mode,
-      `${context}.verification_mode`,
-    ).toLowerCase(),
+    backend,
+    verification_mode: verificationMode,
   };
   if (record.input_encryption !== undefined && record.input_encryption !== null) {
-    result.input_encryption = requireNonEmptyString(
+    result.input_encryption = requireExactNonEmptyString(
       record.input_encryption,
       `${context}.input_encryption`,
     );
@@ -22181,7 +22201,7 @@ function normalizeRamLfeProgramPolicySummary(payload, context) {
     record.input_encryption_public_parameters !== undefined &&
     record.input_encryption_public_parameters !== null
   ) {
-    result.input_encryption_public_parameters = requireHexString(
+    result.input_encryption_public_parameters = requireExactHexString(
       record.input_encryption_public_parameters,
       `${context}.input_encryption_public_parameters`,
     );
@@ -22195,6 +22215,12 @@ function normalizeRamLfeProgramPolicySummary(payload, context) {
         record.input_encryption_public_parameters_decoded,
         `${context}.input_encryption_public_parameters_decoded`,
       );
+  }
+  if (record.proof_verifier !== undefined && record.proof_verifier !== null) {
+    result.proof_verifier = normalizeRamLfeProofVerifierMetadata(
+      record.proof_verifier,
+      `${context}.proof_verifier`,
+    );
   }
   if (record.note !== undefined && record.note !== null) {
     result.note = requireNonEmptyString(record.note, `${context}.note`);
@@ -22202,30 +22228,73 @@ function normalizeRamLfeProgramPolicySummary(payload, context) {
   return result;
 }
 
+function normalizeRamLfeProofVerifierMetadata(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    proof_backend: requireExactNonEmptyString(record.proof_backend, `${context}.proof_backend`),
+    circuit_id: requireExactNonEmptyString(record.circuit_id, `${context}.circuit_id`),
+    public_inputs_schema_hash: requireExactReceiptHash(
+      record.public_inputs_schema_hash,
+      `${context}.public_inputs_schema_hash`,
+    ),
+    verifying_key_bytes_b64: requireExactNonEmptyString(
+      record.verifying_key_bytes_b64,
+      `${context}.verifying_key_bytes_b64`,
+    ),
+  };
+}
+
 function normalizeIdentifierPolicySummary(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
+  const normalization = requireExactNonEmptyString(
+    record.normalization,
+    `${context}.normalization`,
+  );
+  if (normalization !== normalization.toLowerCase()) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.normalization must be an exact lowercase identifier normalization`,
+      `${context}.normalization`,
+    );
+  }
+  const backend = requireExactNonEmptyString(record.backend, `${context}.backend`);
+  if (backend !== backend.toLowerCase()) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.backend must be an exact lowercase identifier backend tag`,
+      `${context}.backend`,
+    );
+  }
   const result = {
     policy_id: requireIdentifierPolicyId(record.policy_id, `${context}.policy_id`),
-    owner: ToriiClient._requireAccountId(record.owner, `${context}.owner`),
+    owner: requireExactAccountId(record.owner, `${context}.owner`),
     active: record.active === true,
-    normalization: requireNonEmptyString(record.normalization, `${context}.normalization`),
+    normalization,
     resolver_public_key: requireExactNonEmptyString(
       record.resolver_public_key,
       `${context}.resolver_public_key`,
     ),
-    backend: requireNonEmptyString(record.backend, `${context}.backend`),
+    backend,
   };
   if (record.input_encryption !== undefined && record.input_encryption !== null) {
-    result.input_encryption = requireNonEmptyString(
+    const inputEncryption = requireExactNonEmptyString(
       record.input_encryption,
       `${context}.input_encryption`,
     );
+    if (inputEncryption !== inputEncryption.toLowerCase()) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${context}.input_encryption must be an exact lowercase identifier encryption tag`,
+        `${context}.input_encryption`,
+      );
+    }
+    result.input_encryption = inputEncryption;
   }
   if (
     record.input_encryption_public_parameters !== undefined &&
     record.input_encryption_public_parameters !== null
   ) {
-    result.input_encryption_public_parameters = requireHexString(
+    result.input_encryption_public_parameters = requireExactHexString(
       record.input_encryption_public_parameters,
       `${context}.input_encryption_public_parameters`,
     );
@@ -22240,8 +22309,14 @@ function normalizeIdentifierPolicySummary(payload, context) {
         `${context}.input_encryption_public_parameters_decoded`,
       );
   }
+  if (record.proof_verifier !== undefined && record.proof_verifier !== null) {
+    result.proof_verifier = normalizeRamLfeProofVerifierMetadata(
+      record.proof_verifier,
+      `${context}.proof_verifier`,
+    );
+  }
   if (record.note !== undefined && record.note !== null) {
-    result.note = requireNonEmptyString(record.note, `${context}.note`);
+    result.note = requireExactNonEmptyString(record.note, `${context}.note`);
   }
   return result;
 }
@@ -22501,11 +22576,11 @@ function normalizeIdentifierClaimLookupResponse(
 ) {
   const record = ensureRecord(payload ?? {}, context);
   return {
-    policy_id: requireNonEmptyString(record.policy_id, `${context}.policy_id`),
-    opaque_id: normalizeOpaqueLiteral(record.opaque_id, `${context}.opaque_id`),
-    receipt_hash: normalizeHex32String(record.receipt_hash, `${context}.receipt_hash`),
-    uaid: normalizeUaidLiteral(record.uaid, `${context}.uaid`),
-    account_id: ToriiClient._requireAccountId(record.account_id, `${context}.account_id`),
+    policy_id: requireIdentifierPolicyId(record.policy_id, `${context}.policy_id`),
+    opaque_id: requireExactReceiptPrefixedHash(record.opaque_id, "opaque:", `${context}.opaque_id`),
+    receipt_hash: requireExactReceiptHash(record.receipt_hash, `${context}.receipt_hash`),
+    uaid: requireExactReceiptUaid(record.uaid, `${context}.uaid`),
+    account_id: requireExactAccountId(record.account_id, `${context}.account_id`),
     verified_at_ms: ToriiClient._normalizeUnsignedInteger(
       record.verified_at_ms,
       `${context}.verified_at_ms`,
@@ -22527,16 +22602,35 @@ function normalizeRamLfeExecuteResponse(
   context = "ram-lfe execute response",
 ) {
   const record = ensureRecord(payload ?? {}, context);
+  const backend = requireExactNonEmptyString(record.backend, `${context}.backend`);
+  if (backend !== backend.toLowerCase()) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.backend must be an exact lowercase RAM-LFE backend tag`,
+      `${context}.backend`,
+    );
+  }
+  const verificationMode = requireExactNonEmptyString(
+    record.verification_mode,
+    `${context}.verification_mode`,
+  );
+  if (verificationMode !== verificationMode.toLowerCase()) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.verification_mode must be an exact lowercase RAM-LFE verification mode`,
+      `${context}.verification_mode`,
+    );
+  }
   return {
-    program_id: requireNonEmptyString(record.program_id, `${context}.program_id`),
-    opaque_hash: requireNonEmptyString(record.opaque_hash, `${context}.opaque_hash`),
-    receipt_hash: requireNonEmptyString(record.receipt_hash, `${context}.receipt_hash`),
-    output_ciphertext: requireHexString(
+    program_id: requireExactNonEmptyString(record.program_id, `${context}.program_id`),
+    opaque_hash: requireExactReceiptHash(record.opaque_hash, `${context}.opaque_hash`),
+    receipt_hash: requireExactReceiptHash(record.receipt_hash, `${context}.receipt_hash`),
+    output_ciphertext: requireExactHexString(
       record.output_ciphertext,
       `${context}.output_ciphertext`,
     ),
-    output_hash: requireNonEmptyString(record.output_hash, `${context}.output_hash`),
-    associated_data_hash: requireNonEmptyString(
+    output_hash: requireExactReceiptHash(record.output_hash, `${context}.output_hash`),
+    associated_data_hash: requireExactReceiptHash(
       record.associated_data_hash,
       `${context}.associated_data_hash`,
     ),
@@ -22553,11 +22647,8 @@ function normalizeRamLfeExecuteResponse(
           `${context}.expires_at_ms`,
           { allowZero: true },
         ),
-    backend: requireNonEmptyString(record.backend, `${context}.backend`),
-    verification_mode: requireNonEmptyString(
-      record.verification_mode,
-      `${context}.verification_mode`,
-    ).toLowerCase(),
+    backend,
+    verification_mode: verificationMode,
     receipt: ensureRecord(record.receipt ?? {}, `${context}.receipt`),
   };
 }
@@ -22567,16 +22658,32 @@ function normalizeRamLfeReceiptVerifyResponse(
   context = "ram-lfe receipt verify response",
 ) {
   const record = ensureRecord(payload ?? {}, context);
+  const backend = requireExactNonEmptyString(record.backend, `${context}.backend`);
+  if (backend !== backend.toLowerCase()) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.backend must be an exact lowercase RAM-LFE backend tag`,
+      `${context}.backend`,
+    );
+  }
+  const verificationMode = requireExactNonEmptyString(
+    record.verification_mode,
+    `${context}.verification_mode`,
+  );
+  if (verificationMode !== verificationMode.toLowerCase()) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.verification_mode must be an exact lowercase RAM-LFE verification mode`,
+      `${context}.verification_mode`,
+    );
+  }
   const result = {
     valid: record.valid === true,
-    program_id: requireNonEmptyString(record.program_id, `${context}.program_id`),
-    backend: requireNonEmptyString(record.backend, `${context}.backend`),
-    verification_mode: requireNonEmptyString(
-      record.verification_mode,
-      `${context}.verification_mode`,
-    ).toLowerCase(),
-    output_hash: requireNonEmptyString(record.output_hash, `${context}.output_hash`),
-    associated_data_hash: requireNonEmptyString(
+    program_id: requireExactNonEmptyString(record.program_id, `${context}.program_id`),
+    backend,
+    verification_mode: verificationMode,
+    output_hash: requireExactReceiptHash(record.output_hash, `${context}.output_hash`),
+    associated_data_hash: requireExactReceiptHash(
       record.associated_data_hash,
       `${context}.associated_data_hash`,
     ),

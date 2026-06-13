@@ -224,8 +224,36 @@ def test_solana_json_rpc_http_error_detail_is_bounded():
         assert message == "JSON-RPC getAccountInfo failed with HTTP 429"
         assert "secret-token" not in message
         assert len(message) < 100
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("oversized Solana JSON-RPC error body was accepted")
+
+
+def test_solana_json_rpc_redacts_invalid_json_parser_details():
+    module = load_live_module()
+
+    def invalid_json_opener(_request, timeout):
+        assert timeout == 3.0
+        return RawResponse(b'{"secret-token invalid Solana JSON-RPC payload": ')
+
+    try:
+        module._json_rpc(
+            "https://solana.example.invalid",
+            "getAccountInfo",
+            [],
+            opener=invalid_json_opener,
+            timeout=3.0,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "JSON-RPC getAccountInfo returned invalid JSON"
+        assert "secret-token" not in message
+        assert "JSON-RPC payload" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("secret-bearing invalid Solana JSON-RPC was accepted")
 
 
 def test_solana_json_rpc_rejects_duplicate_json_keys():
@@ -292,6 +320,8 @@ def test_solana_json_rpc_redacts_transport_and_error_response_details():
         message = str(exc)
         assert message == "JSON-RPC getAccountInfo request failed"
         assert "secret-token" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("secret-bearing Solana transport error was accepted")
 
@@ -750,6 +780,44 @@ def test_live_solana_evidence_redacts_imported_parser_failures(monkeypatch):
             assert exc.__suppress_context__ is True
         else:
             raise AssertionError("Solana live summary leaked executable parser detail")
+
+
+def test_live_solana_account_data_redacts_base64_parser_causes():
+    module = load_live_module()
+    account = {"data": ["secret-token live account base64", "base64"]}
+
+    try:
+        module._account_data(account, label="Solana Program")
+    except RuntimeError as exc:
+        rendered = str(exc)
+        assert rendered == "Solana Program account data is invalid base64"
+        assert "secret-token" not in rendered
+        assert "live account base64" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("Solana account data accepted invalid base64")
+
+
+def test_live_solana_metadata_base64_redacts_parser_causes():
+    module = load_live_module()
+    live = {"programdata_metadata_base64": "secret-token live metadata base64"}
+
+    try:
+        module._live_base64_bytes(
+            live,
+            "programdata_metadata_base64",
+            label="Solana ProgramData metadata base64 metadata",
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "Solana ProgramData metadata base64 metadata must be base64"
+        assert "secret-token" not in rendered
+        assert "live metadata base64" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("Solana live metadata accepted invalid base64")
 
 
 def test_live_solana_summary_requires_boolean_destination_readiness(monkeypatch):

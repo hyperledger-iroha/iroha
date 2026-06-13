@@ -934,6 +934,63 @@ def test_parse_hex_bytes_rejects_padded_tron_source_material():
             raise AssertionError("non-canonical TRON source network id was accepted")
 
 
+def test_tron_source_bridge_direct_parsers_redact_parser_causes(tmp_path):
+    module = load_evidence_module()
+
+    fixed_hex_payload = "secret-token-tron-source-fixed-hex"
+    fixed_hex_payload += "g" * (64 - len(fixed_hex_payload))
+    runtime_payload = "secret-token-tron-source-runtime"
+    if len(runtime_payload) % 2:
+        runtime_payload += "g"
+    address_payload = "secret-token-tron-source-address"
+    address_payload += "g" * (40 - len(address_payload))
+
+    cases = (
+        (
+            lambda: module.parse_hex_bytes(
+                fixed_hex_payload,
+                label="network id",
+                byte_length=32,
+            ),
+            "network id must be hex",
+        ),
+        (
+            lambda: module.parse_runtime_bytecode_hex(
+                runtime_payload,
+                label="source bridge runtime bytecode",
+            ),
+            "source bridge runtime bytecode must be hex",
+        ),
+        (
+            lambda: module.parse_runtime_bytecode_file(
+                str(tmp_path / "secret-token-tron-source-file.hex"),
+                label="source bridge runtime bytecode",
+            ),
+            "source bridge runtime bytecode file cannot be read",
+        ),
+        (
+            lambda: module.parse_tron_address(
+                address_payload,
+                label="source bridge address",
+            ),
+            "source bridge address must be hex",
+        ),
+    )
+
+    for parse, expected_message in cases:
+        try:
+            parse()
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert "parser detail" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("TRON source bridge parser leaked nested details")
+
+
 def test_parse_runtime_bytecode_hex_rejects_padded_inline_text(tmp_path):
     module = load_evidence_module()
     runtime_bytecode = bytes.fromhex("6001600055")

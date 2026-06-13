@@ -3,7 +3,7 @@
 //! Run with `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
 //! to refresh `fixtures/offline/interop_contract_v2.json`. Use `--check` to verify it is up to date.
 
-use std::{env, error::Error, fs, path::Path};
+use std::{env, error::Error, fs, io, path::Path};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use hex::encode;
@@ -556,7 +556,7 @@ fn signed_certificate(
         issuer_signature: Signature::from_bytes(&[0_u8; 64]),
     };
     let signing_bytes = unsigned_certificate.signing_bytes()?;
-    let issuer_signature = Signature::new(issuer_key_pair.private_key(), &signing_bytes);
+    let issuer_signature = sign_offline_certificate_payload(issuer_key_pair, &signing_bytes)?;
     let certificate = OfflineNoteKeyCertificate {
         version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
         platform: platform.to_owned(),
@@ -587,6 +587,15 @@ fn signed_certificate(
         one_use: true,
         issuer_signature_base64: BASE64_STANDARD.encode(issuer_signature.payload()),
         issuer_signature_payload_base64: BASE64_STANDARD.encode(signing_bytes),
+    })
+}
+
+fn sign_offline_certificate_payload(
+    issuer_key_pair: &KeyPair,
+    signing_bytes: &[u8],
+) -> Result<Signature, Box<dyn Error>> {
+    Signature::try_new(issuer_key_pair.private_key(), signing_bytes).map_err(|err| {
+        io::Error::other(format!("failed to sign Offline V2 certificate: {err}")).into()
     })
 }
 
@@ -1103,6 +1112,63 @@ mod tests {
         verifying_key
             .verify(challenge, &signature)
             .expect("Android assertion verifies against certificate key");
+    }
+
+    #[test]
+    fn signed_certificate_issuer_signature_uses_checked_signing_and_verifies() {
+        let issuer_key_pair =
+            fixed_ed25519_keypair("issuer", 0x11).expect("fixed issuer key derives");
+        let note_key_pair =
+            fixed_ed25519_keypair("sender note", 0x31).expect("fixed note key derives");
+        let account_id = AccountId::new(note_key_pair.public_key().clone());
+        let certificate = signed_certificate(
+            &issuer_key_pair,
+            &note_key_pair,
+            &account_id,
+            "ios-appattest",
+            SENDER_KEY_ID,
+            SENDER_DEVICE_ID,
+        )
+        .expect("signed certificate");
+        let signing_bytes = certificate
+            .model
+            .signing_bytes()
+            .expect("certificate signing bytes");
+
+        certificate
+            .model
+            .issuer_signature
+            .verify(issuer_key_pair.public_key(), &signing_bytes)
+            .expect("issuer signature verifies");
+
+        let mut tampered_signature = certificate.model.issuer_signature.payload().to_vec();
+        tampered_signature[0] ^= 0x01;
+        assert!(
+            Signature::from_bytes(&tampered_signature)
+                .verify(issuer_key_pair.public_key(), &signing_bytes)
+                .is_err(),
+            "tampered issuer signature must fail verification"
+        );
+
+        let mut tampered_signing_bytes = signing_bytes.clone();
+        tampered_signing_bytes[0] ^= 0x01;
+        assert!(
+            certificate
+                .model
+                .issuer_signature
+                .verify(issuer_key_pair.public_key(), &tampered_signing_bytes)
+                .is_err(),
+            "issuer signature must commit to canonical certificate bytes"
+        );
+
+        assert_eq!(
+            certificate.issuer_signature_base64,
+            BASE64_STANDARD.encode(certificate.model.issuer_signature.payload())
+        );
+        assert_eq!(
+            certificate.issuer_signature_payload_base64,
+            BASE64_STANDARD.encode(signing_bytes)
+        );
     }
 
     #[test]

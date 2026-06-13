@@ -65,18 +65,54 @@ public final class OfflineJsonParser {
   }
 
   private static String kagemushaRecursiveCompactCircuitId(final Map<String, Object> object) {
-    return matchingNullableStringAlias(
-        object,
-        "offline_kagemusha_abi7_circuit_id",
-        "offline_kagemusha_recursive_compact_circuit_id");
+    final boolean hasAbi7 = object.containsKey("offline_kagemusha_abi7_circuit_id");
+    final boolean hasCompact =
+        object.containsKey("offline_kagemusha_recursive_compact_circuit_id");
+    final String abi7 = hasAbi7 ? strictAbi7CircuitId(object) : null;
+    final String compact =
+        hasCompact
+            ? asPresentAliasString(
+                object.get("offline_kagemusha_recursive_compact_circuit_id"),
+                "offline_kagemusha_recursive_compact_circuit_id")
+            : null;
+    if (hasAbi7 && hasCompact && !valuesEqual(abi7, compact)) {
+      throw new IllegalStateException(
+          "offline_kagemusha_abi7_circuit_id and offline_kagemusha_recursive_compact_circuit_id must match");
+    }
+    return abi7 != null ? abi7 : compact;
+  }
+
+  private static String strictAbi7CircuitId(final Map<String, Object> object) {
+    asNullableString(object.get("offline_kagemusha_abi7_circuit_id"));
+    return asPresentAliasString(
+        object.get("offline_kagemusha_abi7_circuit_id"),
+        "offline_kagemusha_abi7_circuit_id");
   }
 
   private static boolean kagemushaRecursiveCompactArtifactsAvailable(final Map<String, Object> object) {
-    return matchingOptionalBooleanAlias(
-        object,
-        "offline_kagemusha_abi7_artifacts",
-        "offline_kagemusha_recursive_compact_artifacts_available",
-        false);
+    final boolean hasAbi7 = object.containsKey("offline_kagemusha_abi7_artifacts");
+    final boolean hasCompact =
+        object.containsKey("offline_kagemusha_recursive_compact_artifacts_available");
+    final boolean abi7 = asOptionalBoolean(object.get("offline_kagemusha_abi7_artifacts"), false);
+    final Boolean abi7Value =
+        hasAbi7
+            ? Boolean.valueOf(
+                asBoolean(
+                    object.get("offline_kagemusha_abi7_artifacts"),
+                    "offline_kagemusha_abi7_artifacts"))
+            : null;
+    final Boolean compact =
+        hasCompact
+            ? Boolean.valueOf(
+                asBoolean(
+                    object.get("offline_kagemusha_recursive_compact_artifacts_available"),
+                    "offline_kagemusha_recursive_compact_artifacts_available"))
+            : null;
+    if (hasAbi7 && hasCompact && !valuesEqual(abi7Value, compact)) {
+      throw new IllegalStateException(
+          "offline_kagemusha_abi7_artifacts and offline_kagemusha_recursive_compact_artifacts_available must match");
+    }
+    return abi7Value != null ? abi7 : compact != null ? compact.booleanValue() : false;
   }
 
   public static String canonicalJson(final byte[] payload) {
@@ -291,6 +327,10 @@ public final class OfflineJsonParser {
       return value.toString();
     }
     return "";
+  }
+
+  private static String asNullableString(final Object value) {
+    return asOptionalString(value);
   }
 
   private static long asOptionalLong(final Object value, final long defaultValue) {

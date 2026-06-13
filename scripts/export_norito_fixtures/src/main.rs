@@ -182,6 +182,7 @@ struct WireInstructionPayload {
     payload_base64: String,
 }
 
+#[derive(Debug)]
 struct SignedEnvelopeFields {
     attachments_field: Vec<u8>,
     multisig_field: Vec<u8>,
@@ -262,7 +263,9 @@ impl RawFixture {
         let builder = payload
             .to_builder()
             .with_context(|| format!("failed to build payload for fixture '{}'", self.name))?;
-        let signed = builder.sign(keypair.private_key());
+        let signed = builder
+            .try_sign(keypair.private_key())
+            .with_context(|| format!("failed to sign payload for fixture '{}'", self.name))?;
         let payload_value = signed.payload().clone();
         let encoded_struct = payload_value.encode();
         let encoded = encoded_struct;
@@ -279,7 +282,8 @@ impl RawFixture {
             );
         }
         let signed_struct = signed.encode();
-        let signed_bytes = reencode_signed_with_payload(keypair, &encoded, &signed_struct)?;
+        let signed_bytes = reencode_signed_with_payload(keypair, &encoded, &signed_struct)
+            .with_context(|| format!("failed to re-encode signed fixture '{}'", self.name))?;
         let signed_base64 = BASE64.encode(&signed_bytes);
         let payload_hash_hex = format!("{}", Hash::new(&encoded));
         let signed_hash_hex = format!("{}", Hash::new(&signed_bytes));
@@ -405,7 +409,8 @@ fn reencode_signed_with_payload(
 ) -> Result<Vec<u8>> {
     let fields = decode_signed_envelope_fields(signed_bytes)?;
     let payload_hash = Hash::new(payload_bytes);
-    let signature = Signature::new(keypair.private_key(), payload_hash.as_ref());
+    let signature = Signature::try_new(keypair.private_key(), payload_hash.as_ref())
+        .context("failed to sign re-encoded fixture payload hash")?;
     Ok(encode_signed_envelope(
         signature.payload(),
         payload_bytes,
@@ -1155,6 +1160,94 @@ mod tests {
             .and_then(|value| value.as_u64())
             .expect("creation_time_ms must be present");
         assert_eq!(creation_time_ms, generated.summary.creation_time_ms);
+    }
+
+    #[test]
+    fn reencoded_signed_fixture_signature_verifies_payload() {
+        let keypair = signing_keypair().expect("test keypair");
+        let generated = sample_fixture(None)
+            .into_fixture(&keypair, true, true)
+            .expect("fixture from payload");
+
+        let mut cursor = 0usize;
+        let signature_field =
+            read_len_prefixed_field(&generated.signed_bytes, &mut cursor, "signature")
+                .expect("signature field");
+        let payload_field =
+            read_len_prefixed_field(&generated.signed_bytes, &mut cursor, "payload")
+                .expect("payload field");
+        let attachments_field =
+            read_len_prefixed_field(&generated.signed_bytes, &mut cursor, "attachments")
+                .expect("attachments field");
+        let multisig_field =
+            read_len_prefixed_field(&generated.signed_bytes, &mut cursor, "multisig_signatures")
+                .expect("multisig field");
+        assert_eq!(cursor, generated.signed_bytes.len());
+        assert_eq!(payload_field, generated.encoded);
+        assert_eq!(attachments_field, vec![0]);
+        assert_eq!(multisig_field, vec![0]);
+
+        let mut signature_cursor = signature_field.as_slice();
+        let signature =
+            TransactionSignature::decode(&mut signature_cursor).expect("decode signature field");
+        assert!(
+            signature_cursor.is_empty(),
+            "signature field must not contain trailing bytes"
+        );
+        let mut payload_cursor = payload_field.as_slice();
+        let payload = TransactionPayload::decode(&mut payload_cursor).expect("decode payload");
+        assert!(
+            payload_cursor.is_empty(),
+            "payload field must not contain trailing bytes"
+        );
+        signature
+            .0
+            .verify(keypair.public_key(), &payload)
+            .expect("re-encoded fixture signature verifies");
+    }
+
+    #[test]
+    fn reencode_signed_payload_rejects_truncated_envelope() {
+        let keypair = signing_keypair().expect("test keypair");
+        let generated = sample_fixture(None)
+            .into_fixture(&keypair, true, true)
+            .expect("fixture from payload");
+
+        let err = reencode_signed_with_payload(&keypair, &generated.encoded, &[0x80])
+            .expect_err("truncated varint must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("invalid") || message.contains("length") || message.contains("eof"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn read_len_prefixed_field_rejects_oversized_field() {
+        let mut bytes = Vec::new();
+        norito::core::write_len_to_vec(&mut bytes, 64);
+        bytes.extend_from_slice(&[1, 2, 3]);
+        let mut cursor = 0usize;
+
+        let err = read_len_prefixed_field(&bytes, &mut cursor, "signature")
+            .expect_err("oversized field must be rejected");
+        assert!(
+            err.to_string().contains("length exceeds payload"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn decode_signed_envelope_fields_rejects_trailing_bytes() {
+        let mut envelope = encode_signed_envelope(&[7; 64], &[1, 2, 3], None, None);
+        envelope.push(0);
+
+        let err =
+            decode_signed_envelope_fields(&envelope).expect_err("trailing bytes must be rejected");
+        assert!(
+            err.to_string().contains("trailing bytes"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

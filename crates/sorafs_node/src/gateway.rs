@@ -2421,7 +2421,8 @@ mod tests {
             .build();
         let key = load_gateway_signing_key(&config).expect("load signing key");
         let keypair = KeyPair::from_private_key(key).expect("derive keypair");
-        let signature = Signature::new(keypair.private_key(), b"sorafs-proof");
+        let signature = Signature::try_new(keypair.private_key(), b"sorafs-proof")
+            .expect("checked gateway signing-key fixture signature");
         signature
             .verify(keypair.public_key(), b"sorafs-proof")
             .expect("signature should verify");

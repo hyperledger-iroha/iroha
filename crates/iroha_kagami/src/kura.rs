@@ -310,7 +310,7 @@ mod tests {
     use std::{borrow::Cow, fs, sync::Arc};
 
     use iroha_core::{block::BlockBuilder, kura::PipelineDagSnapshot, tx::AcceptedTransaction};
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::{BlockHeader, SignedBlock},
         prelude::*,
@@ -325,15 +325,44 @@ mod tests {
         // A simple instruction is enough; validity is not exercised here.
         let tx = iroha_data_model::transaction::TransactionBuilder::new(chain_id, authority)
             .with_instructions([Log::new(Level::INFO, "test".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            .try_sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+            .expect("sign Kagami Kura fixture transaction");
+        tx.verify_signature()
+            .expect("Kagami Kura fixture transaction signature verifies");
         let acc = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let sb: SignedBlock = BlockBuilder::new(vec![acc])
             .chain(0, prev)
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+            .try_sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+            .expect("sign Kagami Kura fixture block")
             .unpack(|_| {})
             .into();
         store.append_block_to_chain(&sb).expect("append");
         Arc::new(sb)
+    }
+
+    #[test]
+    fn appended_block_uses_verifiable_checked_signature() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = BlockStore::new(temp.path());
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let block = append_block(&mut store, None);
+        let signature = block
+            .signatures()
+            .next()
+            .expect("fixture block carries signature");
+        signature
+            .signature()
+            .verify_hash(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(), block.hash())
+            .expect("Kagami Kura fixture block signature verifies");
+
+        let wrong_key =
+            KeyPair::try_random_with_algorithm(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.algorithm())
+                .expect("generate wrong-key verifier");
+        signature
+            .signature()
+            .verify_hash(wrong_key.public_key(), block.hash())
+            .expect_err("Kagami Kura fixture block rejects wrong key");
     }
 
     #[test]

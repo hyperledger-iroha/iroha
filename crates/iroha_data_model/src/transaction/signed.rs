@@ -1520,6 +1520,13 @@ mod tests {
             .sign(&private_key)
     }
 
+    fn checked_transaction_payload_signature(
+        private_key: &iroha_crypto::PrivateKey,
+        payload: &model::TransactionPayload,
+    ) -> SignatureOf<model::TransactionPayload> {
+        SignatureOf::try_new(private_key, payload).expect("checked transaction fixture signature")
+    }
+
     #[test]
     fn with_instructions_accepts_instruction_box() {
         let chain: ChainId = "test-chain".parse().unwrap();
@@ -1575,7 +1582,12 @@ mod tests {
         let payload_hash = builder.payload_hash();
         assert_eq!(payload_hash, Hash::new(&payload_bytes));
 
-        let signature = Signature::new(key_pair.private_key(), &builder.payload_hash_bytes());
+        let payload_hash_bytes = builder.payload_hash_bytes();
+        let signature = Signature::try_new(key_pair.private_key(), &payload_hash_bytes)
+            .expect("checked external transaction fixture signature");
+        signature
+            .verify(key_pair.public_key(), &payload_hash_bytes)
+            .expect("checked external transaction fixture signature verifies prehash");
         let signed = builder.build_with_signature(signature);
         assert!(signed.verify_signature().is_ok());
     }
@@ -1904,7 +1916,10 @@ mod tests {
             nonce: None,
             metadata: Metadata::default(),
         };
-        let signature = TransactionSignature(SignatureOf::new(signer.private_key(), &payload));
+        let signature = TransactionSignature(checked_transaction_payload_signature(
+            signer.private_key(),
+            &payload,
+        ));
         let tx = SignedTransaction {
             signature,
             payload,
@@ -1946,7 +1961,7 @@ mod tests {
             nonce: None,
             metadata: Metadata::default(),
         };
-        let member_sig = SignatureOf::new(signer.private_key(), &payload);
+        let member_sig = checked_transaction_payload_signature(signer.private_key(), &payload);
         let signature = TransactionSignature(member_sig.clone());
         let multisig_signatures = MultisigSignatures::new(vec![MultisigSignature::new(
             signer.public_key().clone(),
@@ -1977,7 +1992,8 @@ mod tests {
         // should ignore these entries during verification.
         let payload = tx.payload().clone();
         let extraneous_signer = iroha_crypto::KeyPair::random();
-        let stray_signature = SignatureOf::new(extraneous_signer.private_key(), &payload);
+        let stray_signature =
+            checked_transaction_payload_signature(extraneous_signer.private_key(), &payload);
         tx.set_multisig_signatures(MultisigSignatures::new(vec![MultisigSignature::new(
             extraneous_signer.public_key().clone(),
             stray_signature,
@@ -2030,7 +2046,10 @@ mod tests {
             nonce: None,
             metadata: Metadata::default(),
         };
-        let signature = TransactionSignature(SignatureOf::new(signer.private_key(), &payload));
+        let signature = TransactionSignature(checked_transaction_payload_signature(
+            signer.private_key(),
+            &payload,
+        ));
         let tx = SignedTransaction {
             signature,
             payload,
@@ -2068,10 +2087,13 @@ mod tests {
             nonce: None,
             metadata: Metadata::default(),
         };
-        let signature = TransactionSignature(SignatureOf::new(member_key.private_key(), &payload));
+        let signature = TransactionSignature(checked_transaction_payload_signature(
+            member_key.private_key(),
+            &payload,
+        ));
         let multisig_signatures = MultisigSignatures::new(vec![MultisigSignature::new(
             unknown_key.public_key().clone(),
-            SignatureOf::new(unknown_key.private_key(), &payload),
+            checked_transaction_payload_signature(unknown_key.private_key(), &payload),
         )]);
 
         let tx = SignedTransaction {
@@ -2113,8 +2135,12 @@ mod tests {
             nonce: None,
             metadata: Metadata::default(),
         };
-        let signature = TransactionSignature(SignatureOf::new(signer.private_key(), &payload));
-        let duplicate_signature = SignatureOf::new(signer.private_key(), &payload);
+        let signature = TransactionSignature(checked_transaction_payload_signature(
+            signer.private_key(),
+            &payload,
+        ));
+        let duplicate_signature =
+            checked_transaction_payload_signature(signer.private_key(), &payload);
         let multisig_signatures = MultisigSignatures::new(vec![
             MultisigSignature::new(signer.public_key().clone(), duplicate_signature.clone()),
             MultisigSignature::new(signer.public_key().clone(), duplicate_signature),
@@ -2182,7 +2208,7 @@ mod tests {
             nonce: None,
             metadata: Metadata::default(),
         };
-        let signature = SignatureOf::new(signer.private_key(), &payload);
+        let signature = checked_transaction_payload_signature(signer.private_key(), &payload);
         let multisig_signatures = MultisigSignatures::new(vec![
             MultisigSignature::new(signer.public_key().clone(), signature.clone()),
             MultisigSignature::new(signer.public_key().clone(), signature.clone()),

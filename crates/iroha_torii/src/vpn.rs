@@ -1692,7 +1692,7 @@ mod tests {
 
     use axum::{body::to_bytes, response::IntoResponse};
     use iroha_core::state::World;
-    use iroha_crypto::{KeyPair, Signature};
+    use iroha_crypto::KeyPair;
     use iroha_data_model::{
         Registrable,
         account::{Account, AccountId},
@@ -1958,11 +1958,8 @@ mod tests {
             active_ms: 10_000,
             issued_at_ms: now_ms(),
         };
-        let voucher = VpnUsageVoucherV1 {
-            signature: Signature::new(metering_keys.private_key(), &voucher_body.encode()),
-            client_public_key: metering_keys.public_key().clone(),
-            body: voucher_body,
-        };
+        let voucher = VpnUsageVoucherV1::try_sign(voucher_body, metering_keys.private_key())
+            .expect("checked usage voucher fixture");
         let earned_fee_nanos = legacy_session_earned_fee_nanos(record, &voucher);
         let receipt = VpnSessionReceiptV1 {
             session_id: relay_session_id,
@@ -3118,14 +3115,9 @@ mod tests {
         let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
             active_wsv_receipt_fixture().await;
         let wrong_metering_keys = KeyPair::random();
-        let voucher = VpnUsageVoucherV1 {
-            body: fixture.voucher.body,
-            client_public_key: wrong_metering_keys.public_key().clone(),
-            signature: Signature::new(
-                wrong_metering_keys.private_key(),
-                &fixture.voucher.body.encode(),
-            ),
-        };
+        let voucher =
+            VpnUsageVoucherV1::try_sign(fixture.voucher.body, wrong_metering_keys.private_key())
+                .expect("checked wrong-metering-key voucher");
         let mut relay_receipt = fixture.relay_receipt;
         relay_receipt.client_voucher_hash = voucher.hash();
         let body = receipt_submit_body(&relay_receipt, &voucher);
@@ -3166,7 +3158,8 @@ mod tests {
             active_wsv_receipt_fixture().await;
         let mut voucher = fixture.voucher.clone();
         voucher.body.sequence = voucher.body.sequence.saturating_add(1);
-        voucher.signature = Signature::new(metering_keys.private_key(), &voucher.body.encode());
+        voucher = VpnUsageVoucherV1::try_sign(voucher.body, metering_keys.private_key())
+            .expect("checked changed voucher");
         let body = receipt_submit_body(&fixture.relay_receipt, &voucher);
         let method = Method::POST;
         let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
@@ -3658,11 +3651,8 @@ mod tests {
             active_ms: 10_000,
             issued_at_ms: now_ms(),
         };
-        let voucher = VpnUsageVoucherV1 {
-            signature: Signature::new(metering_keys.private_key(), &voucher_body.encode()),
-            client_public_key: metering_keys.public_key().clone(),
-            body: voucher_body,
-        };
+        let voucher = VpnUsageVoucherV1::try_sign(voucher_body, metering_keys.private_key())
+            .expect("checked usage voucher fixture");
         let earned_fee_nanos = {
             let record = app
                 .vpn_sessions

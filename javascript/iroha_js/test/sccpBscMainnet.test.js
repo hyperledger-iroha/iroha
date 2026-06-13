@@ -1486,6 +1486,81 @@ test("BscTestnetSccp requires production attestations on native prover reports",
   );
 });
 
+test("BscTestnetSccp rejects native prover report hash role collisions", () => {
+  const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+
+  const parityCollision = sampleBscTestnetNativeEvmProverParityFixture(
+    fixture.bundle,
+  );
+  parityCollision.source_proof_hash = parityCollision.receipt_proof_hash;
+  for (const sdkResult of Object.values(parityCollision.sdk_results)) {
+    sdkResult.source_proof_hash = parityCollision.receipt_proof_hash;
+  }
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverParityFixture(
+        parityCollision,
+        fixture.bundle,
+      ),
+    /nativeProverParityFixture hashes must be role-separated: sourceProofHash matches receiptProofHash/u,
+  );
+
+  const selfTestCollision = sampleBscTestnetNativeEvmProverSelfTestFixture(
+    fixture.bundle,
+  );
+  selfTestCollision.witness_hash = selfTestCollision.request_hash;
+  for (const sdkResult of Object.values(selfTestCollision.sdk_results)) {
+    sdkResult.witness_hash = selfTestCollision.request_hash;
+  }
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverSelfTestFixture(
+        selfTestCollision,
+        fixture.bundle,
+      ),
+    /nativeProverSelfTestFixture hashes must be role-separated: witnessHash matches requestHash/u,
+  );
+
+  const parityFixture = sampleBscTestnetNativeEvmProverParityFixture(
+    fixture.bundle,
+  );
+  const crossCollisionSelfTest = sampleBscTestnetNativeEvmProverSelfTestFixture(
+    fixture.bundle,
+  );
+  crossCollisionSelfTest.source_proof_hash = parityFixture.source_proof_hash;
+  for (const sdkResult of Object.values(crossCollisionSelfTest.sdk_results)) {
+    sdkResult.source_proof_hash = parityFixture.source_proof_hash;
+  }
+  const crossCollisionSelfTestBytes = Buffer.from(
+    JSON.stringify(crossCollisionSelfTest),
+    "utf8",
+  );
+  const bundle = {
+    ...fixture.bundle,
+    audit_hashes: {
+      ...fixture.bundle.audit_hashes,
+      native_prover_self_test: sha256Hex(crossCollisionSelfTestBytes),
+    },
+  };
+  assert.throws(
+    () =>
+      verifyBscTestnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: bundle,
+          proofArtifactBytes: fixture.proofArtifactBytes,
+          provingKeyBytes: fixture.provingKeyBytes,
+          verifierKeyBytes: fixture.verifierKeyBytes,
+          crossSdkFixtureParityBytes: fixture.parityFixtureBytes,
+          nativeProverSelfTestBytes: crossCollisionSelfTestBytes,
+          sdk: "javascript",
+          implementationBytes: fixture.implementationBytes,
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /nativeProverReports hashes must be role-separated: nativeProverSelfTest\.sourceProofHash matches crossSdkFixtureParity\.sourceProofHash/u,
+  );
+});
+
 test("BscTestnetSccp rejects native prover bundle artifact path aliasing", () => {
   const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
 
@@ -1545,6 +1620,43 @@ test("BscTestnetSccp rejects native prover bundle proof material with generic fi
         { destinationBinding: fixture.destinationBinding },
       ),
     /provingKey must reference a \.zkey artifact/u,
+  );
+});
+
+test("BscTestnetSccp rejects percent-encoded native prover artifact paths", () => {
+  const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(
+        {
+          ...fixture.bundle,
+          proof_artifact: "artifacts/bsc-testnet/%2e%2e/proof-artifact.r1cs",
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /proofArtifact must not contain percent-encoded path segments/u,
+  );
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(
+        {
+          ...fixture.bundle,
+          native_sdk_artifacts: fixture.bundle.native_sdk_artifacts.map(
+            (artifact) =>
+              artifact.sdk === "javascript"
+                ? {
+                    ...artifact,
+                    implementation_artifact:
+                      "artifacts/bsc-testnet/javascript%2fimplementation.bin",
+                  }
+                : artifact,
+          ),
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /nativeSdkArtifacts\[0\]\.implementationArtifact must not contain percent-encoded path segments/u,
   );
 });
 

@@ -2111,7 +2111,7 @@ impl Iso20022BridgeRuntime {
             builder = builder.with_metadata(metadata);
         }
 
-        let transaction = builder.sign(&self.signer_private_key);
+        let transaction = sign_iso_transaction(builder, &self.signer_private_key)?;
         Ok((transaction, context))
     }
 
@@ -2310,7 +2310,7 @@ impl Iso20022BridgeRuntime {
             builder = builder.with_metadata(metadata);
         }
 
-        let transaction = builder.sign(&self.signer_private_key);
+        let transaction = sign_iso_transaction(builder, &self.signer_private_key)?;
         Ok((transaction, context))
     }
 
@@ -2318,6 +2318,15 @@ impl Iso20022BridgeRuntime {
     pub fn signer_account(&self) -> &AccountId {
         &self.signer_account
     }
+}
+
+fn sign_iso_transaction(
+    builder: TransactionBuilder,
+    private_key: &PrivateKey,
+) -> Result<iroha_data_model::transaction::SignedTransaction, MsgError> {
+    builder
+        .try_sign(private_key)
+        .map_err(|_| MsgError::ValidationFailed)
 }
 
 impl Iso20022BridgeRuntime {
@@ -20604,6 +20613,8 @@ mod tests {
         assert!(context.asset_id.as_ref().is_some());
 
         assert_eq!(tx.chain(), &chain_id);
+        tx.verify_signature()
+            .expect("pacs.008 transaction signature should verify");
         let metadata = tx.metadata();
 
         let ledger_key = Name::from_str("iso20022_ledger_id").unwrap();
@@ -20784,6 +20795,8 @@ mod tests {
             Some(asset_definition.as_str())
         );
 
+        tx.verify_signature()
+            .expect("pacs.009 transaction signature should verify");
         let metadata = tx.metadata();
         let purpose_key = Name::from_str("iso20022_category_purpose").unwrap();
         let stored_purpose = metadata

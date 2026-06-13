@@ -1,6 +1,6 @@
 # Android StrongBox Offline Payments Device Matrix
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
 
 This matrix gates production readiness for Android offline-offline payment
 flows. A device row is ready only after the lab attaches signed evidence for
@@ -10,7 +10,7 @@ ABI-7 package-backed multi-hop recursive compact proof probing.
 
 | Device family | Minimum OS | StrongBox / KeyMint gate | Kagemusha recursive compact gate | Status |
 | --- | --- | --- | --- | --- |
-| Google Pixel 6 / 6a | Android 14 | Physical Pixel 6 / Android 16 StrongBox export captured and signed in slot `google-pixel-6-6a-physical-1781077370103` | Focused production command passes with ABI-6/ABI-7 JNI load assertions; signed slot carries one-hop `recursive_compact_v1` JNI probe and package-backed multi-hop probe state | Blocked by remaining standard-matrix families |
+| Google Pixel 6 / 6a | Android 14 | Physical Pixel 6 / Android 16 StrongBox export captured and signed in slot `google-pixel-6-6a-physical-1781260116917` | Focused production command passes with ABI-6/ABI-7 JNI load assertions; signed slot carries one-hop `recursive_compact_v1` JNI probe and package-backed multi-hop probe state | Blocked by remaining standard-matrix families |
 | Google Pixel 7 / 7 Pro | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
 | Google Pixel 8 / 8a / 8 Pro | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
 | Google Pixel Fold / Tablet | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
@@ -114,6 +114,11 @@ Production release criteria:
 	  identity so post-preflight regular-file swaps fail closed, and nonblank
 	  manifest lines must not rely on leading or trailing whitespace
 	  normalization or leading `*` path normalization before digest/path parsing.
+	  All-zero SHA-256 placeholders are rejected in `sha256sum.txt`, slot
+	  metadata bindings, attestation summaries, D2D and wallet transcripts,
+	  signed-evidence payload fields, and signed-evidence artifact digests.
+	  The raw puller and slot assembler enforce the same non-zero digest rule
+	  before installing raw device output or publishing signed slot metadata.
 	  Direct slot-file discovery reports unreadable slot-root and
 	  artifact-directory metadata through caller error lists, returns no artifacts
 	  for secret-looking slot paths, symlinked slot ancestors, missing roots,
@@ -186,7 +191,14 @@ Production release criteria:
   even if each individual slot is otherwise signed and hash-consistent. The
   scanner and release-bundle validator expose this only as hash-backed
   `duplicate_bindings` metadata with unique sorted slot lists, so raw
-  fingerprints or challenge material do not leak into release summaries.
+  fingerprints or challenge material do not leak into release summaries. The
+  scanner's production-mode summary and the production-readiness rollup reflect
+  matrix coverage and duplicate-binding metadata only for slots admitted through
+  complete signed evidence: safe slot id, canonical family/model/codename,
+  ABI 7, canonical signed-evidence timestamp, non-zero artifact digests, a signer
+  digest present in the supplied trusted signer pins, and safe release artifact
+  path/digest pairs. Incomplete direct reports still
+  keep duplicate blockers but do not publish partial duplicate metadata.
   Existing release manifests must also retain exact standard-matrix family
   coverage, an empty missing-family list, and canonical trusted-signer SHA-256
   pins during `--verify-existing`.
@@ -223,7 +235,14 @@ Production release criteria:
   slot assembler. The exporter hash-binds the installed package returned by
   `Context.getPackageCodePath()` as the offline-wallet APK digest; deterministic
   slot-id placeholder digests and hashes of the androidTest APK are not
-  production evidence.
+  production evidence. The exporter also fails closed when the attached
+  device model/codename cannot be matched exactly to one of the standard
+  matrix families. Pixel-family rows accept only the listed model/codename
+  pairs, Samsung rows accept only the S23/S24 standard model prefixes, and
+  unsupported near matches such as Pixel 6 Pro, Pixel 7a, and Galaxy S23 FE
+  cannot silently emit evidence labeled as a covered production slot. If the
+  model and codename each identify different standard matrix families, the
+  identity is rejected instead of accepting the first matching field.
   Pull the newest raw slot from an attached physical device with
   `python3 scripts/kagemusha_pull_android_device_lab_raw_slot.py --serial <adb-serial> --run-as-package org.hyperledger.iroha.sdk.offline.wallet.lab --out-root target/kagemusha-android-raw --summary-out target/kagemusha-android-raw-pull-summary.json`.
   The puller rejects empty, surrounding-whitespace-normalized,
@@ -233,15 +252,17 @@ Production release criteria:
   one slot id plus a trailing newline, streams the selected slot with
   `adb exec-out ... tar`, refuses to overwrite an existing local raw slot, and
   rejects symlink, hardlink, special-file, traversal, duplicate, oversized,
-  directory-colliding, unreviewed extra-artifact, and slot-mismatched tar
-  members before the raw artifacts can be assembled into
+  over-entry-limit, directory-colliding, unreviewed extra-artifact, and
+  slot-mismatched tar members before the raw artifacts can be assembled into
   signed production evidence. The
   `latest-slot.txt` included in the tar stream must also be exactly the selected
   slot id plus a trailing newline; surrounding whitespace or otherwise
   normalized matches are rejected. After raw-slot validation, the host puller
-  rechecks the final destination, creates that slot directory exclusively with
-  owner-only permissions, moves only the expected top-level artifact
-  directories into it through opened stage and final directory descriptors,
+  rechecks the final destination, forces the local raw output root and final
+  slot directory to owner-only permissions, forces extracted artifact
+  directories to `0700` and files to `0600`, moves only the expected top-level
+  artifact directories into it through opened stage and final directory
+  descriptors,
   binds the created slot-directory identity through each parent-fd slot-entry
   stat, move, and slot fsync, binds the output-root identity through the parent fsync,
   and removes partial installs through the identity-bound output-root file
@@ -310,13 +331,23 @@ Production release criteria:
   identity binding that rejects symlinks, hardlinks, and file swaps.
 - Assemble a production slot from completed attached-device artifacts with
   `python3 scripts/kagemusha_android_device_lab_slot.py --slot-root artifacts/android/device_lab --slot-id <slot-id> --device-family "<standard-family>" --attestation-result <result.json> --attestation-harness-result <harness-result.json> --attestation-report <report.json> --attestation-certificate-chain <chain.pem> --offline-wallet-apk <offline-wallet-release.apk> --d2d-payment-transcript <d2d-payment.json> --wallet-integrity-transcript <integrity.json> --telemetry-json <telemetry.json> --status-ndjson <status.ndjson> --pending-queue-json <pending_queue.json> --runtime-log <runtime.log> --private-key <runtime-only-lab-private-key.pem> --public-key <lab-public-key.pem> --signer-key-id <lab-signer-id>`.
-  The assembler reads the attached device identity from ADB unless explicit
-  device fingerprint and OS build overrides are supplied; each `getprop`
-  response must be exactly one LF-terminated value and the value must not rely
-  on trimming surrounding whitespace. It refuses to overwrite an existing slot
-  directory and requires signing inputs by default; unsigned staging slots
-  require the explicit `--allow-unsigned` flag and remain rejected by production
-  readiness. Every source artifact copied by the
+  The assembler uses explicit identity overrides first, then validated captured
+  identity from `attestation/result.json`, `attestation/report.json`, and
+  `telemetry/telemetry.json`, and only falls back to attached-device ADB when a
+  value is still missing. Each captured or ADB identity value must be a string
+  that does not rely on trimming surrounding whitespace or control characters,
+  present-but-empty captured source values are rejected, repeated captured
+  source values for the same identity field must agree, and explicit overrides
+  must be non-empty and match captured source values when both are present.
+  Each ADB `getprop` response must be exactly one LF-terminated value. When
+  `--device-family` is supplied explicitly, it must still match the family
+  inferred from the exact model/codename evidence; unsupported near-match
+  devices cannot be promoted by overriding the family string, and conflicting
+  standard model/codename evidence fails closed. It refuses to overwrite an
+  existing slot directory and requires signing inputs by default; unsigned
+  staging slots require the explicit `--allow-unsigned` flag and remain
+  rejected by production readiness.
+  Every source artifact copied by the
   assembler is read through symlink-free ancestors and an opened-file identity
   binding, then the staged copy is parent-synced and read back through its own
   opened-file identity binding, so symlinked source directories, hardlinked
@@ -355,7 +386,7 @@ Production release criteria:
 		  signer helper also rejects secret-looking `--slot`, `--output`, and
 		  `--signer-key-id` runtime arguments before reading slot metadata, and
 	  rejects padded or control-character signer key ids before metadata reads.
-	  The signed-slot assembler also rejects padded or control-character
+	  The signed-slot assembler also rejects blank, padded, or control-character
 	  `--slot-id`, requested device-family, and device identity override inputs
 	  before path construction or ADB fallback.
 	  Device-lab JSON summaries also carry a local root label instead of the
@@ -441,7 +472,27 @@ Production release criteria:
   which combines the ABI-6 Reserved-lineage manifest, ABI-7 fail-closed
   contract, Reserved-lineage proof evidence, ABI-7 recursive compact key evidence,
   signed Android evidence, and standard device-family coverage into a
-  strict ready/blocked JSON summary. A ready summary must then be packaged with
+  strict ready/blocked JSON summary. Blocked summaries keep invalid or partial
+  device-family/model/codename tuples as blockers, but do not reflect any of
+  those non-standard identity fields in the per-slot signed-evidence summary.
+  Signed-evidence summary slot keys must be safe real slot ids; unsafe,
+  redacted, traversal-shaped, or control-character slot names keep blockers but
+  are omitted instead of being published under placeholder keys.
+  Direct reports with any missing or malformed release-facing signed-evidence
+  field keep their blockers but are omitted from the per-slot signed-evidence
+  summary and do not count toward standard device-family coverage. Their
+  `android_device_lab.slots[*].kagemusha` release-facing fields are omitted
+  until the same slot is admitted into the complete signed-evidence summary.
+  Duplicate or colliding slot reports cannot borrow another report's admitted
+  signed-evidence entry; each slot report must exactly match the admitted
+  per-slot signed-evidence fields before its Kagemusha details or device family
+  are reflected.
+  The signed-at timestamp, signed-evidence artifact digest, and signer
+  public-key digest are reflected only as a complete signed-evidence provenance
+  group. Blocked summaries also omit partial release-artifact bindings: APK,
+  D2D transcript, wallet integrity transcript, and attestation-chain paths are
+  reflected only together with their matching SHA-256 digest. A ready summary
+  must then be packaged with
   `python3 scripts/kagemusha_release_bundle.py --repo-root . --bundle-root . --readiness-summary dist/kagemusha-production-readiness.json --lineage-proof-evidence artifacts/kagemusha/lineage-proof-evidence.json --compact-key-evidence artifacts/kagemusha/recursive-compact-key-evidence.json --device-lab-root artifacts/android/device_lab --trusted-signer-public-key <lab-public-key.pem> --out dist/kagemusha-production-release-bundle.json`.
   The release bundle manifest uses
   `iroha.kagemusha.production_release_bundle.v1`, recomputes the checked-in
@@ -453,8 +504,9 @@ Production release criteria:
   ABI-7 compact artifact size maps from the recomputed readiness summary, records
   every packaged lineage artifact, compact key artifact, and production proof
   log plus the compact key generator log with bundle-relative path, SHA-256
-  digest, and byte size, and
-  rejects summary drift,
+  digest, and byte size, and rejects summary drift, repeated or noncanonical
+  duplicate-binding value inventories,
+  exact signed-evidence and slot device family/model/codename drift,
   duplicate JSON keys, unexpected top-level or section-level summary fields,
   per-section blockers in a ready summary, secret-looking paths,
   secret-looking strings anywhere inside the readiness summary, plain-text
@@ -525,7 +577,7 @@ Production release criteria:
   `python3 scripts/kagemusha_run_recursive_compact_keygen_staged.py --staged-artifact-dir <staged>/artifacts/kagemusha --exit-file <staged-exit-file>`
   first so the real keygen exit code and generator log are captured, then
   finalize it only after the staged process writes a zero exit marker:
-  `python3 scripts/kagemusha_finalize_recursive_compact_key_staged_run.py --staged-artifact-dir <staged>/artifacts/kagemusha --exit-file <staged-exit-file> --artifact-dir artifacts/kagemusha --out artifacts/kagemusha/recursive-compact-key-evidence.json`.
+  `python3 scripts/kagemusha_finalize_recursive_compact_key_staged_run.py --staged-artifact-dir <staged>/artifacts/kagemusha --exit-file <staged-exit-file> --max-generated-at-future-skew-seconds 300 --artifact-dir artifacts/kagemusha --out artifacts/kagemusha/recursive-compact-key-evidence.json`.
   If path flags are omitted, both compact staged commands use the symlink-free
   resolution of `/tmp`, for example `/private/tmp` on macOS, so the default
   finalizer reads the default runner output without tripping the symlink-ancestor
@@ -550,9 +602,10 @@ Production release criteria:
 		  surrounding whitespace, instead of normalizing it. The lineage and
 		  compact-key evidence helpers also reject `generated_at_utc` values more
 		  than 300 seconds ahead of the helper clock by default before writing
-		  evidence JSON. The lineage helper rejects symlinked
-			  output ancestors before creating missing `--out` parent directories or
-			  reading release artifact and proof-log inputs. It also rejects dangling
+		  evidence JSON, and the staged finalizers apply the same preflight
+		  before temporary publish staging or artifact copying starts. The
+		  lineage helper rejects symlinked output ancestors before creating missing `--out` parent directories or
+		  reading release artifact and proof-log inputs. It also rejects dangling
 			  symlink and unreadable-metadata output parents or leaves before following
 			  or writing them, classifies `--out` parents with `lstat()` before any
 			  `Path.is_dir()` preflight, binds output readback to the opened file
@@ -563,7 +616,7 @@ Production release criteria:
 		  Detached Reserved-lineage proof runs must be captured with
 		  `python3 scripts/kagemusha_run_lineage_proof_staged.py --repo-root . --staged-artifact-dir <staged>/artifacts/kagemusha --exit-file <staged-exit-file> --elapsed-seconds-file <staged-elapsed-seconds-file>`
 		  and promoted with
-		  `python3 scripts/kagemusha_finalize_lineage_proof_staged_run.py --staged-artifact-dir <staged>/artifacts/kagemusha --exit-file <staged-exit-file> --elapsed-seconds-file <staged-elapsed-seconds-file> --artifact-dir artifacts/kagemusha --out artifacts/kagemusha/lineage-proof-evidence.json`;
+		  `python3 scripts/kagemusha_finalize_lineage_proof_staged_run.py --staged-artifact-dir <staged>/artifacts/kagemusha --exit-file <staged-exit-file> --elapsed-seconds-file <staged-elapsed-seconds-file> --max-generated-at-future-skew-seconds 300 --artifact-dir artifacts/kagemusha --out artifacts/kagemusha/lineage-proof-evidence.json`;
 		  if path flags are omitted, both commands share the symlink-free
 		  resolution of `/tmp`, for example `/private/tmp` on macOS, so the
 		  default finalizer reads the default runner output without tripping the
@@ -628,8 +681,15 @@ Production release criteria:
 		  before those trust roots are resolved.
 	  Successful summaries carry a local device-lab root label instead of
   the absolute lab filesystem path, include a per-slot signed-evidence map with
-  `signed_at_utc`, artifact SHA-256, and trusted signer public-key SHA-256 for
-  validated slots, and the rollup does not print the absolute summary output path.
+  `signed_at_utc`, `device_family`, `device_model`, `device_codename`,
+  artifact SHA-256, and trusted signer public-key SHA-256 for validated slots.
+  The readiness summary and release bundle recompute the standard family from
+  model/codename before accepting that summary entry. Build-time release-bundle
+  comparison reports same-family model/codename substitutions as
+  Android-specific identity drift before broader summary metadata drift, and
+  verify-existing release manifest checks apply the same exact identity binding
+  before generic manifest drift. The rollup does not print the absolute summary
+  output path.
   As a second-line guard, any secret-looking string that reaches an
   Android scanner report is redacted before readiness summary serialization and
   blocks the rollup; symlinked output ancestors plus symlinked, hardlinked, or non-regular
@@ -637,8 +697,9 @@ Production release criteria:
   identity-bound output parent after atomic replacement, so the summary output path
   remains a local operator detail.
   The strict slot metadata lives in `slot.json` and must bind the device family,
-  the family-specific minimum OS from the table, fingerprint, OS build id,
-  app package name, app signing certificate, attestation challenge, offline
+  exact device model and codename, the family-specific minimum OS from the
+  table, fingerprint, OS build id, app package name, app signing certificate,
+  attestation challenge, offline
   wallet policy, attestation certificate chain path and SHA-256, release APK
   path and SHA-256, D2D payment transcript path and SHA-256, native bridge ABI
   version, wallet integrity transcript path and SHA-256, StrongBox/KeyMint
@@ -649,6 +710,11 @@ Production release criteria:
   raw test commands, signed evidence artifact path, and signed evidence artifact
   hash. Required `slot.json` string fields are exact: surrounding whitespace and
   non-printing control characters are rejected before path or digest validation.
+  The scanner recomputes the standard matrix family from the signed
+  model/codename fields and rejects a slot whose claimed family differs or
+  whose model and codename identify different standard families.
+  Required telemetry must repeat the same model/codename values, so a raw export
+  for one attached device cannot be signed as a different family.
   Production `slot.json` is a closed schema: unexpected fields are rejected
   before signed evidence can pass or be generated.
   The release APK path and SHA-256 plus native bridge ABI version are
@@ -659,7 +725,8 @@ Production release criteria:
   transcript, report, and log artifacts retain the 16 MiB cap. The native bridge
   ABI version is pinned to the ABI-7 surface so the signed ABI-7 fail-closed
   probe cannot come from a stale bridge build.
-  The hash must match the referenced artifact bytes inside the slot. The signed evidence artifact schema must repeat the slot identity fields, carry signer
+  The hash must match the referenced artifact bytes inside the slot. The signed evidence artifact schema must repeat the slot identity fields, including
+  device family, model, and codename, carry signer
   and signature metadata, including `signer_public_key_sha256` and
   `signature_payload_sha256`, include artifact digests for the required telemetry, attestation, queue, log, wallet integrity, and D2D handoff files, and verify against a trusted signer public key.
   The signed evidence artifact path must be the canonical

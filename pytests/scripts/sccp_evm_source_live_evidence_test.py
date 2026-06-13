@@ -327,8 +327,38 @@ def test_evm_source_json_rpc_http_error_detail_is_bounded():
         assert message == "JSON-RPC eth_chainId failed with HTTP 502"
         assert "secret-token" not in message
         assert len(message) < 100
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("oversized EVM source JSON-RPC error body was accepted")
+
+
+def test_evm_source_json_rpc_redacts_invalid_json_parser_details():
+    module = load_live_module()
+
+    def invalid_json_opener(_request, timeout):
+        del timeout
+        return RawResponse(b'{"secret-token invalid EVM source JSON-RPC payload": ')
+
+    try:
+        module._json_rpc(
+            "https://ethereum.example",
+            "eth_chainId",
+            [],
+            opener=invalid_json_opener,
+            timeout=3.0,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "JSON-RPC eth_chainId returned invalid JSON"
+        assert "secret-token" not in message
+        assert "JSON-RPC payload" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError(
+            "secret-bearing invalid EVM source JSON-RPC payload was accepted"
+        )
 
 
 def test_evm_source_json_rpc_rejects_duplicate_json_keys():
@@ -396,6 +426,8 @@ def test_evm_source_json_rpc_redacts_transport_and_error_response_details():
         message = str(exc)
         assert message == "JSON-RPC eth_chainId request failed"
         assert "secret-token" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("secret-bearing EVM source transport error was accepted")
 
@@ -494,6 +526,21 @@ def test_evm_source_live_numeric_parsers_require_canonical_decimal():
         assert "must not contain whitespace" in str(exc)
     else:
         raise AssertionError("padded EVM source component hash was accepted")
+
+    payload = "secret-token-evm-source-live-hex"
+    try:
+        module._parse_hex32(
+            "0x" + payload + ("a" * (64 - len(payload))),
+            label="component hash",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "component hash must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("invalid EVM source component hash hex was accepted")
 
     for value, expected in (
         ("0X" + "11" * 32, "lowercase 0x prefix"),
@@ -1157,6 +1204,69 @@ def test_evm_source_live_rejects_receipt_transaction_hash_drift():
         assert "transactionHash does not match" in str(exc)
     else:
         raise AssertionError("drifted deployment receipt transactionHash was accepted")
+
+
+def test_evm_source_live_redacts_receipt_field_parser_exception_causes(monkeypatch):
+    module = load_live_module()
+    original_rpc_fixed_hex_data = module._rpc_fixed_hex_data
+    cases = (
+        (
+            "eth_getTransactionReceipt transactionHash",
+            "deployment receipt transactionHash must be a non-zero bytes32",
+        ),
+        (
+            "eth_getTransactionReceipt contractAddress",
+            "deployment receipt contractAddress must be a non-zero 20-byte EVM address",
+        ),
+        (
+            "eth_getTransactionReceipt blockHash",
+            "deployment receipt blockHash must be a non-zero bytes32",
+        ),
+    )
+
+    for target_method, expected_message in cases:
+        fake = fake_opener_for(module)
+
+        def fail_target_receipt_field(
+            result,
+            *,
+            method,
+            byte_length,
+            nonzero=True,
+            target_method=target_method,
+        ):
+            if method == target_method:
+                raise RuntimeError(
+                    f"secret-token {target_method} parser detail"
+                )
+            return original_rpc_fixed_hex_data(
+                result,
+                method=method,
+                byte_length=byte_length,
+                nonzero=nonzero,
+            )
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "_rpc_fixed_hex_data", fail_target_receipt_field)
+            try:
+                module.collect_source_bridge_evidence(
+                    "https://ethereum.example",
+                    domain=module.SCCP_DOMAIN_ETH,
+                    bridge_address=fake.bridge,
+                    block_tag="latest",
+                    deployment_transaction_hash=bytes.fromhex("de" * 32),
+                    opener=fake.opener,
+                    timeout=1.0,
+                )
+            except RuntimeError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert "parser detail" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(f"{target_method} parser detail was accepted")
 
 
 def test_evm_source_live_rejects_deployment_transaction_readback_drift():

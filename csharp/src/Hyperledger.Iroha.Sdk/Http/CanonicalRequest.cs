@@ -17,15 +17,19 @@ public static class CanonicalRequest
         long? timestampMs = null,
         string? nonce = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(method);
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var exactAccountId = RequireExactNonBlank(accountId, nameof(accountId));
+        var exactMethod = RequireExactNonBlank(method, nameof(method));
+        var exactPath = RequireExactNonBlank(path, nameof(path));
 
         var effectiveTimestamp = timestampMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var effectiveNonce = string.IsNullOrWhiteSpace(nonce) ? GenerateNonce() : nonce;
-        var message = BuildSignatureMessage(method, path, query, body, effectiveTimestamp, effectiveNonce);
+        var effectiveNonce = nonce is null ? GenerateNonce() : RequireExactNonBlank(nonce, nameof(nonce));
+        var message = BuildSignatureMessage(exactMethod, exactPath, query, body, effectiveTimestamp, effectiveNonce);
         var signature = Ed25519Signer.Sign(message, privateKeySeed);
-        return new CanonicalRequestHeaders(accountId, Convert.ToBase64String(signature), effectiveTimestamp, effectiveNonce);
+        return new CanonicalRequestHeaders(
+            exactAccountId,
+            Convert.ToBase64String(signature),
+            effectiveTimestamp,
+            effectiveNonce);
     }
 
     public static string BuildCanonicalQueryString(string? rawQuery)
@@ -61,9 +65,11 @@ public static class CanonicalRequest
 
     public static byte[] BuildMessage(string method, string path, string? query = null, ReadOnlySpan<byte> body = default)
     {
+        var checkedMethod = RequireExactNonBlank(method, nameof(method));
+        var checkedPath = RequireExactNonBlank(path, nameof(path));
         var bodyHash = Convert.ToHexString(SHA256.HashData(body)).ToLowerInvariant();
         var canonicalQuery = BuildCanonicalQueryString(query);
-        return Encoding.UTF8.GetBytes($"{method.ToUpperInvariant()}\n{path}\n{canonicalQuery}\n{bodyHash}");
+        return Encoding.UTF8.GetBytes($"{checkedMethod.ToUpperInvariant()}\n{checkedPath}\n{canonicalQuery}\n{bodyHash}");
     }
 
     public static byte[] BuildSignatureMessage(
@@ -74,9 +80,27 @@ public static class CanonicalRequest
         long timestampMs = 0,
         string? nonce = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(nonce);
+        var exactNonce = RequireExactNonBlank(nonce, nameof(nonce));
         var baseMessage = Encoding.UTF8.GetString(BuildMessage(method, path, query, body));
-        return Encoding.UTF8.GetBytes($"{baseMessage}\n{timestampMs}\n{nonce}");
+        return Encoding.UTF8.GetBytes($"{baseMessage}\n{timestampMs}\n{exactNonce}");
+    }
+
+    internal static string RequireExactNonBlank(string? value, string paramName)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            throw new ArgumentException($"{paramName} must not be empty.", paramName);
+        }
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{paramName} must not contain surrounding whitespace.", paramName);
+        }
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException($"{paramName} must not contain control characters.", paramName);
+        }
+
+        return value;
     }
 
     private static int CompareUtf8(string left, string right)
