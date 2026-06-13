@@ -1548,7 +1548,8 @@ mod tests {
 
     #[test]
     fn segment_signing_manifest_round_trips() {
-        let kp = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
+        let kp = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
+            .expect("derive checked Taikai signing fixture keypair");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let publisher_account = AccountId::new(kp.public_key().clone());
         let alias_binding = sample_alias_binding();
@@ -1564,7 +1565,11 @@ mod tests {
             alias_binding.clone(),
             ExtraMetadata::default(),
         );
-        let signature = SignatureOf::new(kp.private_key(), &body);
+        let signature = SignatureOf::try_new(kp.private_key(), &body)
+            .expect("sign checked Taikai segment manifest fixture");
+        signature
+            .verify(kp.public_key(), &body)
+            .expect("checked Taikai segment manifest fixture verifies");
         let manifest = TaikaiSegmentSigningManifestV1::new(body.clone(), signature.clone());
         let encoded = manifest.encode();
         let mut cursor = std::io::Cursor::new(encoded);

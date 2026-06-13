@@ -2520,7 +2520,8 @@ pub fn release_directory(options: DirectoryReleaseOptions) -> Result<(), Box<dyn
         &builder_public_key,
     )?;
     let signing_bytes = serde_json::to_vec(&signing_payload)?;
-    let builder_signature = Signature::new(builder_keypair.private_key(), &signing_bytes);
+    let builder_signature = Signature::try_new(builder_keypair.private_key(), &signing_bytes)
+        .map_err(|err| format!("failed to sign SoraDNS release directory payload: {err}"))?;
 
     let record = ResolverDirectoryRecordV1 {
         root_hash,
@@ -3228,7 +3229,9 @@ mod tests {
 
     #[test]
     fn signing_payload_uses_checked_builder_public_key_payload() {
-        let key_pair = KeyPair::from_seed(b"xtask-soradns-release".to_vec(), Algorithm::Ed25519);
+        let key_pair =
+            KeyPair::try_from_seed(b"xtask-soradns-release".to_vec(), Algorithm::Ed25519)
+                .expect("generate checked SoraDNS release fixture keypair");
         let (_, expected_payload) = key_pair
             .public_key()
             .try_to_bytes()
@@ -3247,8 +3250,14 @@ mod tests {
             key_pair.public_key(),
         )
         .expect("signing payload builds");
+        let signing_bytes = serde_json::to_vec(&payload).expect("serialize signing payload");
+        let signature = Signature::try_new(key_pair.private_key(), &signing_bytes)
+            .expect("sign checked SoraDNS release fixture payload");
 
         assert_eq!(payload.builder_public_key_hex, hex_encode(expected_payload));
+        signature
+            .verify(key_pair.public_key(), &signing_bytes)
+            .expect("checked SoraDNS release fixture signature verifies");
     }
 
     #[test]

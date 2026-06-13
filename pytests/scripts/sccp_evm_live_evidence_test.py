@@ -84,31 +84,34 @@ class OversizedErrorBody:
 def test_evm_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_live_module()
 
-    def fail_collect(_args):
-        raise RuntimeError("secret-token /tmp/operator/private-path")
+    for exception_type in (RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module, "collect_live_evidence", fail_collect)
+        def fail_collect(_args, exception_type=exception_type):
+            raise exception_type("secret-token /tmp/operator/private-path")
 
-    try:
-        module.main(
-            [
-                "--rpc-url",
-                "https://evm.example.invalid",
-                "--domain",
-                "eth",
-                "--bridge-address",
-                "0x" + "22" * 20,
-            ]
-        )
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("EVM live CLI accepted top-level collection failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "collect_live_evidence", fail_collect)
+            try:
+                module.main(
+                    [
+                        "--rpc-url",
+                        "https://evm.example.invalid",
+                        "--domain",
+                        "eth",
+                        "--bridge-address",
+                        "0x" + "22" * 20,
+                    ]
+                )
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError("EVM live CLI accepted top-level collection failure")
 
-    captured = capsys.readouterr()
-    assert "SCCP EVM live evidence collection failed" in captured.err
-    assert "secret-token" not in captured.err
-    assert "private-path" not in captured.err
+            captured = capsys.readouterr()
+            assert "SCCP EVM live evidence collection failed" in captured.err
+            assert "secret-token" not in captured.err
+            assert "private-path" not in captured.err
+            assert exception_type.__name__ not in captured.err
 
 
 def abi_word_u32(value):
@@ -1896,6 +1899,44 @@ def test_live_evm_expected_rpc_chain_id_parser_requires_canonical_decimal():
             assert "canonical lowercase 0x hex" in str(exc)
         else:
             raise AssertionError(f"noncanonical EVM exact hex {value!r} was accepted")
+
+
+def test_evm_live_hex_parsers_redact_typeerror_parser_causes(monkeypatch):
+    module = load_live_module()
+
+    class SecretBytes:
+        @staticmethod
+        def fromhex(_text):
+            raise TypeError("secret-token EVM live hex TypeError detail")
+
+    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+
+    try:
+        module._rpc_hex_data("0x6000", method="eth_getCode bridge")
+    except RuntimeError as exc:
+        rendered = str(exc)
+        assert rendered == "eth_getCode bridge returned non-canonical lowercase 0x hex data"
+        assert "secret-token" not in rendered
+        assert "TypeError" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("EVM live RPC hex parser TypeError was accepted")
+
+    try:
+        module._parse_exact_hex32_blob(
+            "0x" + "11" * 32,
+            label="route-canary receipt blockHash",
+        )
+    except RuntimeError as exc:
+        rendered = str(exc)
+        assert rendered == "route-canary receipt blockHash must be canonical lowercase 0x hex"
+        assert "secret-token" not in rendered
+        assert "TypeError" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("EVM live exact hex parser TypeError was accepted")
 
 
 def test_live_evm_default_domain_lookups_redact_lookup_causes(monkeypatch):

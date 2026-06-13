@@ -27139,10 +27139,8 @@ impl<'state> StateBlock<'state> {
     ) -> Result<(), BlockValidationError> {
         let commitments = self.da_commitments.read();
         for record in &bundle.commitments {
-            if commitments
-                .get_by_lane_epoch_sequence(record.lane_id.as_u32(), record.epoch, record.sequence)
-                .is_some()
-            {
+            let key = iroha_data_model::da::commitment::DaCommitmentKey::from_record(record);
+            if commitments.get_committed_by_key(&key).is_some() {
                 return Err(BlockValidationError::DaCommitmentBundle(
                     DaCommitmentValidationError::DuplicateCommitment {
                         key_lane: record.lane_id,
@@ -27152,7 +27150,7 @@ impl<'state> StateBlock<'state> {
                 ));
             }
 
-            if let Some(existing) = commitments.get_by_manifest(&record.manifest_hash) {
+            if let Some(existing) = commitments.get_committed_by_manifest(&record.manifest_hash) {
                 let existing = &existing.commitment;
                 return Err(BlockValidationError::DaCommitmentBundle(
                     DaCommitmentValidationError::CommittedManifest {
@@ -27166,7 +27164,9 @@ impl<'state> StateBlock<'state> {
                 ));
             }
 
-            if let Some(existing) = commitments.get_by_storage_ticket(&record.storage_ticket) {
+            if let Some(existing) =
+                commitments.get_committed_by_storage_ticket(&record.storage_ticket)
+            {
                 let existing = &existing.commitment;
                 return Err(BlockValidationError::DaCommitmentBundle(
                     DaCommitmentValidationError::CommittedStorageTicket {
@@ -45548,6 +45548,120 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
+    fn validate_da_shard_cursors_rejects_retired_lane_storage_ticket_reuse() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
+        sumeragi.da_enabled = true;
+        state.set_sumeragi_parameters(&sumeragi);
+
+        let lane0 = LaneConfig::default();
+        let lane1 = LaneConfig {
+            id: LaneId::new(1),
+            alias: "lane1".to_string(),
+            ..LaneConfig::default()
+        };
+        let catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1.clone()]).expect("catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: catalog,
+                lane_config,
+                ..Default::default()
+            })
+            .expect("apply Nexus catalog for retired-lane duplicate ticket test");
+
+        let keypair = KeyPair::random();
+        let first = DaCommitmentRecord::new(
+            lane1.id,
+            1,
+            1,
+            BlobDigest::new([0x61; 32]),
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x62; 32]),
+            DaProofScheme::MerkleSha256,
+            Hash::prehashed([0x63; 32]),
+            None,
+            None,
+            RetentionClass::default(),
+            StorageTicketId::new([0x64; 32]),
+            Signature::from_bytes(&[0x65; 64]),
+        );
+        let first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .with_da_commitments(Some(DaCommitmentBundle::new(vec![first.clone()])))
+            .sign(keypair.private_key())
+            .unpack(|_| {})
+            .into();
+        kura.store_block(Arc::new(first_block.clone()))
+            .expect("store first block");
+        {
+            let mut hashes = state.block_hashes.block();
+            hashes.push(first_block.hash());
+            hashes.commit_for_tests();
+        }
+        state
+            .ensure_da_indexes_hydrated()
+            .expect("hydrate committed lane1 ticket before retirement");
+
+        state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: Vec::new(),
+                retire: vec![lane1.id],
+            })
+            .expect("retire lane1");
+        assert!(
+            state
+                .da_commitments()
+                .get_by_storage_ticket(&first.storage_ticket)
+                .is_none(),
+            "retired lane ticket should be pruned from query index"
+        );
+
+        let second = DaCommitmentRecord::new(
+            LaneId::new(0),
+            1,
+            1,
+            BlobDigest::new([0x71; 32]),
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x72; 32]),
+            DaProofScheme::MerkleSha256,
+            Hash::prehashed([0x73; 32]),
+            None,
+            None,
+            RetentionClass::default(),
+            first.storage_ticket,
+            Signature::from_bytes(&[0x74; 64]),
+        );
+        let second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, Some(&first_block))
+            .with_da_commitments(Some(DaCommitmentBundle::new(vec![second])))
+            .sign(keypair.private_key())
+            .unpack(|_| {})
+            .into();
+
+        let state_block = state.block(second_block.header());
+        let err = state_block
+            .validate_da_shard_cursors(&second_block)
+            .expect_err("storage ticket reuse after lane retirement must fail");
+        assert!(matches!(
+            err,
+            BlockValidationError::DaCommitmentBundle(
+                DaCommitmentValidationError::CommittedStorageTicket {
+                    lane,
+                    epoch: 1,
+                    sequence: 1,
+                    existing_lane,
+                    existing_epoch: 1,
+                    existing_sequence: 1
+                }
+            ) if lane == LaneId::new(0) && existing_lane == lane1.id
+        ));
+    }
+
+    #[test]
     fn hydrate_da_indexes_rejects_cursor_regression() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -48541,7 +48655,7 @@ mod tests {
 
     #[cfg(feature = "telemetry")]
     #[test]
-    fn da_shard_cursor_unknown_lane_records_telemetry() {
+    fn da_commitment_unknown_lane_fails_before_cursor_telemetry() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let metrics = Arc::new(Metrics::default());
@@ -48592,30 +48706,18 @@ mod tests {
             .expect_err("unknown lane should fail validation");
         assert!(matches!(
             err,
-            BlockValidationError::DaShardCursor(DaShardCursorError::UnknownLane { .. })
+            BlockValidationError::DaCommitmentBundle(
+                crate::da::DaCommitmentValidationError::ProofPolicy(
+                    crate::da::DaProofPolicyError::UnknownLane { .. }
+                )
+            )
         ));
 
         let counter = metrics
             .da_shard_cursor_events_total
             .with_label_values(&["unknown_lane", "9", "9"])
             .get();
-        assert_eq!(counter, 1);
-        let height = metrics
-            .da_shard_cursor_height
-            .with_label_values(&["9", "9"])
-            .get();
-        assert_eq!(
-            height,
-            i64::try_from(block.header().height().get()).expect("height fits in i64")
-        );
-        let lag = metrics
-            .da_shard_cursor_lag_blocks
-            .with_label_values(&["9", "9"])
-            .get();
-        assert_eq!(
-            lag,
-            i64::try_from(block.header().height().get()).expect("height fits in i64")
-        );
+        assert_eq!(counter, 0);
     }
 
     #[cfg(feature = "telemetry")]

@@ -409,8 +409,14 @@ fn refresh_proposal_routing_from_state(
     state_view: &crate::state::StateView<'_>,
     ledger_time_ms: u64,
 ) -> Result<bool> {
-    debug_assert_eq!(tx_batch.len(), routing_batch.len());
-    debug_assert_eq!(tx_batch.len(), routing_plan_batch.len());
+    if tx_batch.len() != routing_batch.len() || tx_batch.len() != routing_plan_batch.len() {
+        return Err(eyre!(
+            "proposal routing vector length mismatch: txs={} routes={} plans={}",
+            tx_batch.len(),
+            routing_batch.len(),
+            routing_plan_batch.len()
+        ));
+    }
     if tx_batch.is_empty() {
         return Ok(false);
     }
@@ -449,12 +455,13 @@ const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_mil
 pub(super) struct InternalProposalWork {
     pub(super) time_triggers: bool,
     pub(super) da_commitments: bool,
+    pub(super) da_receipts: bool,
     pub(super) da_pin_intents: bool,
 }
 
 impl InternalProposalWork {
     pub(super) const fn has_work(self) -> bool {
-        self.time_triggers || self.da_commitments || self.da_pin_intents
+        self.time_triggers || self.da_commitments || self.da_receipts || self.da_pin_intents
     }
 }
 
@@ -796,13 +803,15 @@ impl Actor {
             return InternalProposalWork {
                 time_triggers,
                 da_commitments: false,
+                da_receipts: false,
                 da_pin_intents: false,
             };
         }
-        let (da_commitments, da_pin_intents) = self.proposal_da_spool_work();
+        let (da_commitments, da_receipts, da_pin_intents) = self.proposal_da_spool_work();
         InternalProposalWork {
             time_triggers,
             da_commitments,
+            da_receipts,
             da_pin_intents,
         }
     }
@@ -861,7 +870,7 @@ impl Actor {
             })
     }
 
-    fn proposal_da_spool_work(&mut self) -> (bool, bool) {
+    fn proposal_da_spool_work(&mut self) -> (bool, bool, bool) {
         let da_rbc = &mut self.subsystems.da_rbc;
         let commitment_has = match da_rbc.spool_cache.load_commitment_bundle(&da_rbc.spool_dir) {
             Ok((value, cache_outcome)) => {
@@ -886,9 +895,53 @@ impl Actor {
                 warn!(
                     ?err,
                     spool = %da_rbc.spool_dir.display(),
-                    "failed to load DA commitments from spool; proceeding without DA bundle"
+                    "failed to load DA commitments during proposal preflight; scheduling assembly to surface the error"
                 );
+                true
+            }
+        };
+
+        let receipt_has = {
+            let nexus = self.state.nexus_snapshot();
+            if !nexus.enabled {
                 false
+            } else {
+                let cursor_snapshot = self.state.da_receipt_cursor_snapshot();
+                match da_rbc.spool_cache.load_receipt_entries(&da_rbc.spool_dir) {
+                    Ok((entries, cache_outcome)) => {
+                        #[cfg(feature = "telemetry")]
+                        self.telemetry.note_da_spool_cache(
+                            crate::telemetry::DaSpoolCacheKind::Receipts,
+                            cache_outcome.as_telemetry(),
+                        );
+                        #[cfg(not(feature = "telemetry"))]
+                        let _ = cache_outcome;
+                        match crate::da::receipts::plan_committable_receipts(
+                            &nexus.lane_config,
+                            &cursor_snapshot,
+                            &da_rbc.da.sealed_commitments,
+                            entries,
+                        ) {
+                            Ok(plan) => !plan.is_empty(),
+                            Err(err) => {
+                                warn!(
+                                    ?err,
+                                    spool = %da_rbc.spool_dir.display(),
+                                    "failed to plan DA receipts during proposal preflight; scheduling assembly to surface the error"
+                                );
+                                true
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            spool = %da_rbc.spool_dir.display(),
+                            "failed to load DA receipts during proposal preflight; scheduling assembly to surface the error"
+                        );
+                        true
+                    }
+                }
             }
         };
 
@@ -916,13 +969,13 @@ impl Actor {
                 warn!(
                     ?err,
                     spool = %da_rbc.spool_dir.display(),
-                    "failed to load DA pin intents from spool; proceeding without pin bundle"
+                    "failed to load DA pin intents during proposal preflight; scheduling assembly to surface the error"
                 );
-                false
+                true
             }
         };
 
-        (commitment_has, pin_intent_has)
+        (commitment_has, receipt_has, pin_intent_has)
     }
 
     pub(super) fn max_tx_budget(
@@ -3086,7 +3139,15 @@ impl Actor {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot();
                     let (receipts, cache_outcome) = {
                         let da_rbc = &mut self.subsystems.da_rbc;
-                        crate::da::receipts::prune_spool(&da_rbc.spool_dir, &cursor_snapshot);
+                        let prune_report =
+                            crate::da::receipts::prune_spool(&da_rbc.spool_dir, &cursor_snapshot);
+                        if prune_report.has_failures() {
+                            warn!(
+                                ?prune_report,
+                                path = %da_rbc.spool_dir.display(),
+                                "DA receipt spool cleanup encountered filesystem failures"
+                            );
+                        }
                         da_rbc
                             .spool_cache
                             .load_receipt_entries(&da_rbc.spool_dir)
@@ -3124,12 +3185,10 @@ impl Actor {
                             value
                         }
                         Err(err) => {
-                            warn!(
-                                ?err,
-                                spool = %da_rbc.spool_dir.display(),
-                                "failed to load DA commitments from spool; proceeding without DA bundle"
-                            );
-                            None
+                            return Err(eyre!(
+                                "failed to load DA commitments from spool `{}`: {err}",
+                                da_rbc.spool_dir.display()
+                            ));
                         }
                     }
                 };
@@ -3179,8 +3238,17 @@ impl Actor {
                                 .note_da_manifest_cache(cache_outcome.as_telemetry());
                             #[cfg(not(feature = "telemetry"))]
                             let _ = cache_outcome;
-                            if available {
-                                kept.push(record.clone());
+                            match available {
+                                Ok(true) => kept.push(record.clone()),
+                                Ok(false) => {}
+                                Err(err) => {
+                                    return Err(eyre!(
+                                        "DA manifest guard failed before sealing commitment for lane {} epoch {} seq {}: {err}",
+                                        record.lane_id.as_u32(),
+                                        record.epoch,
+                                        record.sequence
+                                    ));
+                                }
                             }
                         }
                         kept
@@ -3216,29 +3284,22 @@ impl Actor {
                         ) {
                             Ok(journal) => journal,
                             Err(err) => {
-                                warn!(
-                                    ?err,
-                                    path = %shard_cursor_path.display(),
-                                    "failed to load DA shard cursor journal; rebuilding from scratch"
-                                );
-                                crate::da::DaShardCursorJournal::new(
-                                    &lane_config,
-                                    shard_cursor_path.clone(),
-                                )
+                                return Err(eyre!(
+                                    "failed to load DA shard cursor journal `{}` before sealing DA bundle: {err}",
+                                    shard_cursor_path.display()
+                                ));
                             }
                         };
 
                         if let Err(err) = shard_journal.record_bundle(proposal_height, bundle) {
-                            warn!(
-                                ?err,
-                                "failed to update shard cursors from DA bundle; leaving journal unchanged"
-                            );
+                            return Err(eyre!(
+                                "failed to update DA shard cursors before sealing DA bundle: {err}"
+                            ));
                         } else if let Err(err) = shard_journal.persist() {
-                            warn!(
-                                ?err,
-                                path = %shard_cursor_path.display(),
-                                "failed to persist DA shard cursor journal"
-                            );
+                            return Err(eyre!(
+                                "failed to persist DA shard cursor journal `{}` before sealing DA bundle: {err}",
+                                shard_cursor_path.display()
+                            ));
                         }
                     }
                 }
@@ -3271,12 +3332,10 @@ impl Actor {
                             value
                         }
                         Err(err) => {
-                            warn!(
-                                ?err,
-                                spool = %da_rbc.spool_dir.display(),
-                                "failed to load DA pin intents from spool; proceeding without pin bundle"
-                            );
-                            None
+                            return Err(eyre!(
+                                "failed to load DA pin intents from spool `{}`: {err}",
+                                da_rbc.spool_dir.display()
+                            ));
                         }
                     }
                 };
@@ -3291,19 +3350,24 @@ impl Actor {
                         &lane_config,
                         account_exists,
                     );
-                    if !rejected.is_empty() {
-                        for reason in rejected {
+                    if let Some(first_rejection) = rejected.first().cloned() {
+                        for reason in &rejected {
                             #[cfg(feature = "telemetry")]
                             self.telemetry.note_da_pin_intent_spool(
                                 crate::telemetry::PinIntentSpoolResult::Dropped,
-                                crate::telemetry::PinIntentSpoolReason::from(&reason),
+                                crate::telemetry::PinIntentSpoolReason::from(reason),
                             );
                             warn!(
                                 height = proposal_height,
                                 ?reason,
-                                "dropping invalid DA pin intent before sealing bundle"
+                                "rejecting invalid DA pin intent before sealing bundle"
                             );
                         }
+                        return Err(eyre!(
+                            "invalid DA pin intent in spool `{}`: {first_rejection} ({} rejection(s))",
+                            self.subsystems.da_rbc.spool_dir.display(),
+                            rejected.len()
+                        ));
                     }
                     #[cfg(feature = "telemetry")]
                     let dedupe_before = intents.len();
@@ -6787,8 +6851,8 @@ mod tests {
         ProposalBackpressure, cached_slot_timeout_hysteresis_remaining,
         canonicalize_parallel_batch_by_key, canonicalize_proposal_batch,
         canonicalize_proposal_batch_with_plans, consensus_queue_backpressure, da_payload_budget,
-        next_cached_slot_timeout_streak, trim_batch_for_size_cap,
-        trim_batch_for_size_cap_with_plans,
+        next_cached_slot_timeout_streak, refresh_proposal_routing_from_state,
+        trim_batch_for_size_cap, trim_batch_for_size_cap_with_plans,
     };
     use crate::queue::{BackpressureState, RoutingDecision, RoutingPlan};
     use crate::sumeragi::status;
@@ -6814,6 +6878,94 @@ mod tests {
             .sign(&private_key);
 
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
+    fn blank_state() -> crate::state::State {
+        let world = crate::state::World::default();
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        #[cfg(feature = "telemetry")]
+        {
+            let telemetry = crate::telemetry::StateTelemetry::default();
+            crate::state::State::with_telemetry(world, kura, query, telemetry)
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            crate::state::State::new(world, kura, query)
+        }
+    }
+
+    #[test]
+    fn refresh_proposal_routing_from_state_replaces_stale_vectors() {
+        let state = blank_state();
+        let tx_batch = vec![
+            accepted_log_transaction("refresh-route-a"),
+            accepted_log_transaction("refresh-route-b"),
+        ];
+        let stale_route = RoutingDecision::new(LaneId::new(7), DataSpaceId::new(7));
+        let mut routing_batch = vec![stale_route; tx_batch.len()];
+        let mut routing_plan_batch = vec![RoutingPlan::single(stale_route); tx_batch.len()];
+        let default_route = RoutingDecision::default();
+        let default_plan = RoutingPlan::single(default_route);
+
+        let changed = refresh_proposal_routing_from_state(
+            &tx_batch,
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &state.view(),
+            0,
+        )
+        .expect("refresh should use committed state routing");
+
+        assert!(changed, "stale route vectors should be replaced");
+        assert_eq!(routing_batch, vec![default_route; tx_batch.len()]);
+        assert_eq!(routing_plan_batch, vec![default_plan; tx_batch.len()]);
+
+        let changed_again = refresh_proposal_routing_from_state(
+            &tx_batch,
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &state.view(),
+            0,
+        )
+        .expect("second refresh should remain valid");
+
+        assert!(
+            !changed_again,
+            "already-current route vectors should not report another refresh"
+        );
+    }
+
+    #[test]
+    fn refresh_proposal_routing_from_state_rejects_vector_length_drift() {
+        let state = blank_state();
+        let tx_batch = vec![accepted_log_transaction("refresh-route-drift")];
+        let mut routing_batch = Vec::new();
+        let mut routing_plan_batch = vec![RoutingPlan::single(RoutingDecision::default())];
+
+        let err = refresh_proposal_routing_from_state(
+            &tx_batch,
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &state.view(),
+            0,
+        )
+        .expect_err("routing vector drift must fail closed");
+
+        assert!(
+            err.to_string()
+                .contains("proposal routing vector length mismatch"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            routing_batch.is_empty(),
+            "failed refresh must not mutate route vector"
+        );
+        assert_eq!(
+            routing_plan_batch,
+            vec![RoutingPlan::single(RoutingDecision::default())],
+            "failed refresh must not mutate plan vector"
+        );
     }
 
     #[test]

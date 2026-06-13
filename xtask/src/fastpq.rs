@@ -584,7 +584,8 @@ fn sign_manifest(payload: &[u8], key_path: &Path) -> Result<SignatureEnvelope> {
     let private_key =
         PrivateKey::from_hex(Algorithm::Ed25519, &cleaned).context("parse signing key")?;
     let key_pair: KeyPair = private_key.clone().into();
-    let signature = Signature::new(key_pair.private_key(), payload);
+    let signature = Signature::try_new(key_pair.private_key(), payload)
+        .map_err(|err| eyre!("failed to sign FastPQ manifest payload: {err}"))?;
     let (algorithm, public_bytes) = key_pair
         .public_key()
         .try_to_bytes()
@@ -1488,6 +1489,9 @@ mod tests {
 
         assert_eq!(signature.algorithm, "ed25519");
         assert_eq!(signature.public_key_hex, hex::encode(expected_public));
+        Signature::from_bytes(&hex::decode(&signature.signature_hex).expect("decode signature"))
+            .verify(expected_key_pair.public_key(), b"bench manifest")
+            .expect("checked manifest signature verifies");
     }
 
     #[test]

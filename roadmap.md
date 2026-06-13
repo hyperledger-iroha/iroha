@@ -1313,16 +1313,42 @@ and completed history lives in [`status.md`](./status.md).
 	  the actual adversarial token inputs for EVM receipt-proof, EVM live/source-live,
 	  TON live, and TRON live parser/transport failures, not only generic
 	  `secret-token` absence assertions. EVM receipt-proof, direct EVM
-	  destination, and EVM-family source-bridge hex parser TypeErrors, plus TRON
-	  live metadata bytecode, contract-address, transaction-address, and
+	  destination, EVM-family source-bridge, EVM live/source-live RPC and copied
+	  scalar hex, and TRON source-bridge hex parser TypeErrors, plus TRON live
+	  metadata bytecode, contract-address, transaction-address, and
 	  trigger-request address parser boundaries, must also classify `TypeError`
 	  helper drift into fixed categories before public evidence output is
 	  rendered. EVM receipt-proof collection
 	  helper `TypeError`s must also use the fixed top-level CLI fallback before
 	  stderr is emitted, and all-lanes evidence load/validation helper
-	  `TypeError`s must follow the same fallback rule. Direct EVM destination
-	  evidence helper `TypeError`s must also use the fixed top-level CLI fallback
-	  before stderr is emitted.
+	  `TypeError`s must follow the same fallback rule. All-lanes copied hex
+	  helper `TypeError`s must collapse to the existing malformed-value blockers
+	  before public summaries are rendered. EVM source-live deployment receipt
+	  transaction-hash, contract-address, and block-hash reparsing must also
+	  convert `ValueError` helper drift into the same category-only receipt
+	  blockers as `TypeError` and `RuntimeError`. Solana live summary validation
+	  must likewise convert imported parser-helper `ValueError`s for verifier
+	  program ids, ProgramData addresses, verifier code hashes, executable
+	  base64, and ProgramData account decoding into fixed metadata blockers.
+	  Direct EVM destination evidence
+	  helper `TypeError`s must also use the fixed top-level CLI fallback
+	  before stderr is emitted, and ETH/BSC source bridge evidence helper
+	  `TypeError`s must follow that same fixed top-level CLI fallback before
+	  stderr is emitted. Direct Solana destination/source-state, direct TON
+	  destination/source-state, TRON source bridge, EVM live/source-live,
+	  Solana/TON live, and TRON live collection evidence helper `TypeError`s
+	  must also use the fixed top-level CLI fallback before stderr is emitted.
+	  Release bundle and readiness-report helper `TypeError`s must follow the
+	  same fixed top-level CLI fallback before release stderr is emitted.
+	  EVM live/source-live, EVM receipt-proof, Solana live, all-lanes
+	  validation, release bundle, and readiness-report CLI regressions must also
+	  cover secret-bearing `ValueError`s at the same public boundary.
+  Release-readiness and strict bundle verifier hex predicate helper
+  `TypeError`s must also fail closed as canonical hex blockers before active
+  launch metadata or public release evidence is rendered. Bundle-builder and
+  strict verifier Solana route-canary pubkey parser `TypeError`s must likewise
+  fail closed as canonical base58-address blockers before public release
+  evidence is rendered.
   TRON source-event and route-canary log topic parser TypeErrors must be
   treated as non-matching logs or fixed public blockers, never as leaked parser
   details.
@@ -1345,8 +1371,10 @@ and completed history lives in [`status.md`](./status.md).
   chains suppressed and adversarial `secret-token` regressions pinned. Release
   public scalar-text source inventory must pin the direct destination
   parser-detail payloads themselves for both Solana and TON. Direct Solana
-  verifier program base64 decoding must also convert decoder `TypeError`s into
-  the fixed invalid-base64 parser category before output rendering.
+  verifier program base64 decoding, direct Solana/TON source/destination hex
+  parsing, and direct TON code-BoC base64/url decoding must also convert
+  decoder/parser `TypeError`s into the fixed parser categories before output
+  rendering.
 - SCCP all-lanes Solana live ProgramData and route-canary base64 comment
   diagnostics must stay category-only before aggregate blockers are emitted; raw
   canonical-base64 parser details must not be copied into release readiness
@@ -1355,7 +1383,8 @@ and completed history lives in [`status.md`](./status.md).
   only generic absence assertions. Aggregate all-lanes EVM, TRON, TON, and
   Solana copied live-metadata parser boundaries must also convert `TypeError`
   helper drift into the same fixed blockers before public readiness output is
-  rendered.
+  rendered, including the Solana live ProgramData and route-canary base64
+  caller wrappers that feed aggregate blockers.
 - SCCP TRON solid-block header proof canonicalization failures must stay
   category-only before live-evidence summaries or full-TOML blockers are
   emitted; lower-level proof encoder exception text, including `TypeError`
@@ -3870,6 +3899,21 @@ and completed history lives in [`status.md`](./status.md).
   material under the all-zero seed admission policy; client query request body
   assembly now uses `QueryRequestWithAuthority::try_sign` and returns a
   contextual `QueryError` before HTTP dispatch on backend signing failure;
+  data-model `QuerySignature` roundtrip fixtures now use checked Ed25519 key
+  generation plus `SignatureOf::try_new`, verifying typed query payload
+  signatures before serialization;
+  data-model Taikai segment signing manifest fixtures now use checked seeded
+  Ed25519 key generation plus `SignatureOf::try_new`, verifying typed body
+  signatures before Norito roundtrip;
+  data-model moderation reproducibility manifest fixtures now use checked
+  random Ed25519 key generation plus `SignatureOf::try_new`, verifying typed
+  body signatures before validation consumes them;
+  data-model RAM-LFE receipt and output-opening fixtures now use checked random
+  Ed25519 key generation plus `SignatureOf::try_new`, verifying typed
+  signatures before wrong-key and tamper regressions consume them;
+  data-model governance parliament roster and enactment certificate fixtures now
+  use checked random Ed25519 key generation plus `SignatureOf::try_new`,
+  verifying typed enactment signatures before Norito roundtrips consume them;
   client transaction build/sign helpers now use `TransactionBuilder::try_sign`
   and return contextual `eyre` errors from fallible construction/submission
   paths while retaining compatibility wrappers for existing infallible callers;
@@ -3924,7 +3968,13 @@ and completed history lives in [`status.md`](./status.md).
   deterministic seed material accepted by `KeyPair::try_from_seed`, with
   wrong-validator, non-BLS public-key, pending-block, block-sync/QC,
   payload-availability, and P2P topology helper regressions rerun on checked
-  Sumeragi fixture signatures;
+  Sumeragi fixture signatures; Sumeragi main-loop RBC/QC fixtures now share
+  checked `Signature::try_new` and `SignatureOf::try_from_hash` helpers for
+  READY/DELIVER evidence, leader-signature mutations, aggregate vote/QC,
+  checkpoint, and telemetry fuzz fixtures, with forged-leader, malformed-shape,
+  invalid INIT/seed/frontier, NPoS rotated-signer, and mismatched-signer
+  regressions rerun under `sumeragi-main-loop-tests` plus the gated telemetry
+  fuzz case rerun under `telemetry`;
   `sora-vpn-helper` usage voucher control-cell envelopes now sign through
   `Signature::try_new`, propagate controller signing errors, and exercise the
   fallible envelope builder in the cumulative voucher signer regression;
@@ -4051,6 +4101,19 @@ and completed history lives in [`status.md`](./status.md).
   `Signature::try_new`, with wrong-verifier receipt,
   stale/replay/tampered body proof, multisig, certificate usage-limit,
   signed-balance tamper, and refill lineage coverage on checked fixtures;
+  Torii offline v2 issuer fixtures now route local seeded Ed25519 material
+  through `KeyPair::try_from_seed` and attestation receipts through
+  `Signature::try_new`, with wrong-verifier and certificate-key
+  canonicalization regressions covering the receipt path;
+  xtask SoraNet testnet drill bundle, FastPQ bench manifest, Taikai anchor
+  bundle, and OpenAPI manifest signers now propagate `Signature::try_new`
+  failures with command context, with the signing-focused xtask suite verifying
+  the generated signature envelopes; xtask SoraNet rollout capture and SoraDNS
+  release directory signers now use `Signature::try_new`, checked seeded
+  fixture keypairs, and focused signature-verification regressions; xtask I3
+  benchmark proof fixtures now use nonzero checked Ed25519 seed material,
+  `Signature::try_new`, and immediate signature verification before benchmark
+  scenarios consume commit-certificate, attestation, or bridge proofs;
   native AMX BLS vote fixtures now use checked seeded/random key generation
   plus `Signature::try_new`, verifying each vote preimage signature before
   aggregate-QC ordering and rejection regressions consume it; JDG SDN seals and
@@ -6144,6 +6207,7 @@ and completed history lives in [`status.md`](./status.md).
   RBC global state-change exit classification,
   RBC evidence protocol/fault provenance,
   RBC global evidence-change effect classification,
+  RBC global progress/evidence mutation classifier,
   RBC header installation provenance,
   RBC header evidence monotonicity,
   RBC digest installation provenance,

@@ -290,10 +290,15 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
 
+    fn checked_seed_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked escrow fixture keypair")
+    }
+
     #[test]
     fn asset_escrow_record_roundtrips_norito() {
-        let seller_keypair = KeyPair::from_seed(vec![0x51; 32], Algorithm::Ed25519);
-        let buyer_keypair = KeyPair::from_seed(vec![0x52; 32], Algorithm::Ed25519);
+        let seller_keypair = checked_seed_keypair(0x51);
+        let buyer_keypair = checked_seed_keypair(0x52);
         let seller = AccountId::new(seller_keypair.public_key().clone());
         let buyer = AccountId::new(buyer_keypair.public_key().clone());
         let asset_definition: AssetDefinitionId =
@@ -337,8 +342,8 @@ mod tests {
 
     #[test]
     fn anonymous_asset_escrow_record_roundtrips_norito() {
-        let seller_keypair = KeyPair::from_seed(vec![0x61; 32], Algorithm::Ed25519);
-        let buyer_keypair = KeyPair::from_seed(vec![0x62; 32], Algorithm::Ed25519);
+        let seller_keypair = checked_seed_keypair(0x61);
+        let buyer_keypair = checked_seed_keypair(0x62);
         let seller = AccountId::new(seller_keypair.public_key().clone());
         let buyer = AccountId::new(buyer_keypair.public_key().clone());
         let asset_definition: AssetDefinitionId =

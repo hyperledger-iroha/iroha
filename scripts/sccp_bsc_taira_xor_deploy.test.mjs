@@ -448,6 +448,27 @@ const productionReadyRouteManifest = (overrides = {}) => {
   return attachNativeProverBundle(manifest, bundleOverrides ?? {});
 };
 
+const offlineFullTomlEvidence = (overrides = {}) => ({
+  schema: "iroha-sccp-bsc-taira-xor-offline-full-toml-evidence/v1",
+  routeId: "taira_bsc_xor",
+  assetKey: "xor",
+  bscNetwork: "testnet",
+  chain: "bsc-testnet",
+  chainIdHex: "0x61",
+  networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
+  fullTomlReady: true,
+  offlineFullTomlSha256: HASH_88,
+  hashMode:
+    "sha256:merged-full-config-without-post_deploy_offline_full_toml_sha256",
+  hashInputSha256: HASH_88,
+  renderedTomlSha256: HASH_66,
+  postDeployLiveEvidence: {
+    fullTomlReady: true,
+    offlineFullTomlSha256: HASH_88,
+  },
+  ...overrides,
+});
+
 const fixtureWords = (byte) => Array.from({ length: 9 }, () => hex32(byte));
 
 const nativeProverSdkResults = (fields) =>
@@ -807,6 +828,7 @@ test("BSC route-manifest command builds production-ready manifests only with bou
   const evidencePath = join(dir, "deployment.evidence.json");
   const contractPath = join(dir, "burn-record.contract.json");
   const bundlePath = join(dir, "native-prover-bundle.json");
+  const fullTomlEvidencePath = join(dir, "full-config.evidence.json");
   const out = join(dir, "route.manifest.json");
   const evidence = buildDeploymentEvidence({
     tokenAddress: BSC_TOKEN_ADDRESS,
@@ -824,6 +846,10 @@ test("BSC route-manifest command builds production-ready manifests only with bou
     `${JSON.stringify(tairaBurnRecordContract(), null, 2)}\n`,
   );
   await writeFile(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
+  await writeFile(
+    fullTomlEvidencePath,
+    `${JSON.stringify(offlineFullTomlEvidence(), null, 2)}\n`,
+  );
 
   const result = await main([
     "route-manifest",
@@ -847,10 +873,8 @@ test("BSC route-manifest command builds production-ready manifests only with bou
     HASH_77,
     "--route-canary-explorer-url",
     ROUTE_CANARY_EXPLORER_URL,
-    "--full-toml-ready",
-    "true",
-    "--offline-full-toml-sha256",
-    hex32("88"),
+    "--offline-full-toml-evidence",
+    fullTomlEvidencePath,
     "--production-ready",
     "true",
     "--live-readback-checked",
@@ -882,6 +906,46 @@ test("BSC route-manifest command builds production-ready manifests only with bou
     manifest.postDeployLiveEvidence.offlineFullTomlSha256,
     hex32("88"),
   );
+
+  await assert.rejects(
+    () =>
+      main([
+        "route-manifest",
+        "--evidence",
+        evidencePath,
+        "--taira-contract",
+        contractPath,
+        "--settlement-asset-definition-id",
+        "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+        "--native-prover-bundle",
+        bundlePath,
+        "--source-bridge-config-hash",
+        HASH_33,
+        "--source-event-transaction-id",
+        HASH_55,
+        "--source-event-explorer-url",
+        SOURCE_EVENT_EXPLORER_URL,
+        "--route-canary-evidence-hash",
+        HASH_66,
+        "--route-canary-transaction-id",
+        HASH_77,
+        "--route-canary-explorer-url",
+        ROUTE_CANARY_EXPLORER_URL,
+        "--full-toml-ready",
+        "true",
+        "--offline-full-toml-sha256",
+        hex32("88"),
+        "--production-ready",
+        "true",
+        "--live-readback-checked",
+        "true",
+        "--confirm-testnet",
+        "taira_bsc_xor",
+        "--out",
+        join(dir, "route.raw-hash-only.manifest.json"),
+      ]),
+    /production-ready BSC route manifests require --offline-full-toml-evidence/u,
+  );
 });
 
 test("BSC route-manifest command accepts generated offline full TOML evidence", async () => {
@@ -904,25 +968,6 @@ test("BSC route-manifest command accepts generated offline full TOML evidence", 
     readback: readyReadback(),
   });
   const bundle = nativeProverBundleForRollout(routeManifest().destinationRollout);
-  const fullTomlEvidence = {
-    schema: "iroha-sccp-bsc-taira-xor-offline-full-toml-evidence/v1",
-    routeId: "taira_bsc_xor",
-    assetKey: "xor",
-    bscNetwork: "testnet",
-    chain: "bsc-testnet",
-    chainIdHex: "0x61",
-    networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
-    fullTomlReady: true,
-    offlineFullTomlSha256: HASH_88,
-    hashMode:
-      "sha256:merged-full-config-without-post_deploy_offline_full_toml_sha256",
-    hashInputSha256: HASH_88,
-    renderedTomlSha256: HASH_66,
-    postDeployLiveEvidence: {
-      fullTomlReady: true,
-      offlineFullTomlSha256: HASH_88,
-    },
-  };
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
   await writeFile(
     contractPath,
@@ -931,7 +976,7 @@ test("BSC route-manifest command accepts generated offline full TOML evidence", 
   await writeFile(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
   await writeFile(
     fullTomlEvidencePath,
-    `${JSON.stringify(fullTomlEvidence, null, 2)}\n`,
+    `${JSON.stringify(offlineFullTomlEvidence(), null, 2)}\n`,
   );
 
   const result = await main([
@@ -1025,6 +1070,7 @@ test("BSC route-manifest production readiness rejects missing TOML hash and diag
   const contractPath = join(dir, "burn-record.contract.json");
   const bundlePath = join(dir, "native-prover-bundle.json");
   const diagnosticBundlePath = join(dir, "diagnostic-native-prover-bundle.json");
+  const fullTomlEvidencePath = join(dir, "full-config.evidence.json");
   const evidence = buildDeploymentEvidence({
     tokenAddress: BSC_TOKEN_ADDRESS,
     bridgeAddress: BSC_BRIDGE_ADDRESS,
@@ -1076,6 +1122,10 @@ test("BSC route-manifest production readiness rejects missing TOML hash and diag
     diagnosticBundlePath,
     `${JSON.stringify(diagnosticBundle, null, 2)}\n`,
   );
+  await writeFile(
+    fullTomlEvidencePath,
+    `${JSON.stringify(offlineFullTomlEvidence(), null, 2)}\n`,
+  );
   const readyArgs = [
     "route-manifest",
     "--taira-contract",
@@ -1115,7 +1165,7 @@ test("BSC route-manifest production readiness rejects missing TOML hash and diag
         "--native-prover-bundle",
         bundlePath,
       ]),
-    /offlineFullTomlSha256/u,
+    /production-ready BSC route manifests require --offline-full-toml-evidence/u,
   );
   await assert.rejects(
     () =>
@@ -1125,8 +1175,8 @@ test("BSC route-manifest production readiness rejects missing TOML hash and diag
         diagnosticEvidencePath,
         "--native-prover-bundle",
         diagnosticBundlePath,
-        "--offline-full-toml-sha256",
-        hex32("88"),
+        "--offline-full-toml-evidence",
+        fullTomlEvidencePath,
       ]),
     /diagnostic BSC verifier material/u,
   );
@@ -1518,6 +1568,41 @@ test("BSC deployment helper rejects unsafe secret-like evidence material", () =>
       notes: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
     }),
     /private key material/u,
+  );
+  assert.match(
+    unsafeSecretReason({ nested: { api_token: "tok_live_operator" } }),
+    /token|secret/u,
+  );
+  assert.match(
+    unsafeSecretReason({
+      headers: ["Authorization: Bearer abcdefghijklmnopqrstuvwxyz"],
+    }),
+    /token|secret/u,
+  );
+  assert.match(
+    unsafeSecretReason({ notes: "password=correct horse battery staple" }),
+    /token|secret/u,
+  );
+  assert.match(
+    unsafeSecretReason({ notes: "api_token=<operator-token>" }),
+    /token|secret/u,
+  );
+  assert.match(
+    unsafeSecretReason({ nested: { refreshToken: "refresh-token-value" } }),
+    /token|secret/u,
+  );
+  assert.equal(
+    unsafeSecretReason({
+      notes:
+        'private_key = "<redacted>"\npassword = <runtime-only>\napi_token = "***"',
+    }),
+    "",
+  );
+  assert.equal(
+    unsafeSecretReason({
+      notes: 'private_key = "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"',
+    }),
+    "",
   );
 });
 
@@ -3660,6 +3745,52 @@ test("BSC route-config command reports the exact merged full-config hash", async
   assert.match(toml, /\[\[zk\.sccp_route_manifests\]\]/u);
 });
 
+test("BSC route-config command accepts redacted secret placeholders in public base configs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-redacted-"));
+  const manifestPath = join(dir, "manifest.json");
+  const baseConfigPath = join(dir, "base.toml");
+  const out = join(dir, "full-config.toml");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+  await writeFile(
+    baseConfigPath,
+    [
+      "[network]",
+      'address = "127.0.0.1:1337"',
+      "",
+      "[account]",
+      'private_key = "<redacted>"',
+      'validator_private_key = "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"',
+      "",
+      "[torii]",
+      'identity_private_key = "<runtime-only>"',
+      'address = "127.0.0.1:8080"',
+      "",
+    ].join("\n"),
+  );
+
+  const result = await main([
+    "route-config",
+    "--manifest",
+    manifestPath,
+    "--base-config",
+    baseConfigPath,
+    "--out",
+    out,
+    "--allow-unready",
+    "true",
+  ]);
+  const toml = await readFile(out, "utf8");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, "merged-full-config");
+  assert.match(toml, /private_key = "<redacted>"/u);
+  assert.match(toml, /validator_private_key = "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"/u);
+  assert.match(toml, /identity_private_key = "<runtime-only>"/u);
+});
+
 test("BSC route-config command writes non-self-referential offline full TOML evidence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-evidence-"));
   const manifestPath = join(dir, "manifest.json");
@@ -4106,6 +4237,7 @@ test("BSC production requirements expose network-specific public handoff inputs"
     /requirements --bsc-network testnet --out artifacts\/sccp-bsc\/taira-bsc-xor-production-requirements\.json/u,
   );
   for (const required of [
+    "--evidence artifacts/sccp-bsc/taira-bsc-xor-deployment.evidence.json",
     "--taira-contract artifacts/sccp-bsc/taira-bsc-xor-burn-record.contract.json",
     "--settlement-asset-definition-id <canonical-asset-definition-id>",
     "--native-prover-bundle artifacts/sccp-bsc/bsc-testnet-native-evm-prover-bundle.json",
@@ -4135,8 +4267,12 @@ test("BSC production requirements expose network-specific public handoff inputs"
         [
           "production-groth16-verifier-key-json",
           "testnet-funded-bsc-deployer",
+          "testnet-bsc-deployment-evidence",
           "taira-burn-record-contract",
+          "canonical-settlement-asset-definition-id",
           "post-deploy-live-evidence",
+          "deployed-taira-base-config",
+          "offline-full-toml-evidence",
           "burn-record-proof-artifact",
           "burn-record-proving-key",
           "cross-sdk-parity-report",
@@ -4147,8 +4283,12 @@ test("BSC production requirements expose network-specific public handoff inputs"
     [
       "production-groth16-verifier-key-json",
       "testnet-funded-bsc-deployer",
+      "testnet-bsc-deployment-evidence",
       "taira-burn-record-contract",
+      "canonical-settlement-asset-definition-id",
       "post-deploy-live-evidence",
+      "deployed-taira-base-config",
+      "offline-full-toml-evidence",
       "burn-record-proof-artifact",
       "burn-record-proving-key",
       "cross-sdk-parity-report",
@@ -4210,6 +4350,14 @@ test("BSC production requirements expose network-specific public handoff inputs"
     mainnet.commands.routeConfig,
     /--manifest artifacts\/sccp-bsc\/taira-bsc-mainnet-xor-route\.manifest\.json/u,
   );
+  assert.match(
+    mainnet.commands.routeConfig,
+    /--write-offline-full-toml-evidence artifacts\/sccp-bsc\/taira-bsc-mainnet-xor-route\.full-taira-config\.evidence\.json/u,
+  );
+  assert.match(
+    JSON.stringify(mainnet.inputs),
+    /offline-full-toml-evidence/u,
+  );
   assert.match(mainnet.commands.deploy, /--confirm-mainnet true/u);
   assert.doesNotMatch(JSON.stringify(mainnet), /testnet-funded-bsc-deployer/u);
   assert.doesNotMatch(
@@ -4240,7 +4388,7 @@ test("BSC production requirements command writes public artifact without deploye
     assert.equal(result.wrote, out);
     assert.equal(result.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
     assert.equal(result.bscNetwork, "mainnet");
-    assert.equal(result.inputCount, 21);
+    assert.equal(result.inputCount, 25);
     assert.deepEqual(result.requiredReports, [
       "route-preflight",
       "peer-config-audit",

@@ -38,22 +38,27 @@ def load_evidence_module():
 def test_solana_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
-    def fail_apply(_args):
-        raise ValueError("secret-token /tmp/operator/private-path")
+    for exception_type in (RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module, "apply_verifier_program_code_hash", fail_apply)
+        def fail_apply(_args, exception_type=exception_type):
+            raise exception_type("secret-token /tmp/operator/private-path")
 
-    try:
-        module.main(["--verifier-program-id", SOLANA_VERIFIER_PROGRAM_ID])
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("Solana destination CLI accepted top-level render failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "apply_verifier_program_code_hash", fail_apply)
+            try:
+                module.main(["--verifier-program-id", SOLANA_VERIFIER_PROGRAM_ID])
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError(
+                    "Solana destination CLI accepted top-level render failure"
+                )
 
-    captured = capsys.readouterr()
-    assert "SCCP Solana destination evidence rendering failed" in captured.err
-    assert "secret-token" not in captured.err
-    assert "private-path" not in captured.err
+            captured = capsys.readouterr()
+            assert "SCCP Solana destination evidence rendering failed" in captured.err
+            assert "secret-token" not in captured.err
+            assert "private-path" not in captured.err
+            assert exception_type.__name__ not in captured.err
 
 
 def test_solana_destination_redacts_verifier_program_parser_failures(monkeypatch):
@@ -116,6 +121,43 @@ def test_solana_destination_hex_parsers_redact_parser_causes():
         assert exc.__suppress_context__ is True
     else:
         raise AssertionError("invalid Solana destination program hex was accepted")
+
+
+def test_solana_destination_hex_parsers_redact_typeerror_parser_causes(monkeypatch):
+    module = load_evidence_module()
+
+    class SecretBytes:
+        @staticmethod
+        def fromhex(_text):
+            raise TypeError("secret-token Solana destination hex TypeError detail")
+
+    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+
+    for parser, value, label, kwargs in (
+        (
+            module.parse_hex_bytes,
+            "0x" + "11" * 32,
+            "verifier code hash",
+            {"byte_length": 32},
+        ),
+        (
+            module.parse_program_bytes_hex,
+            "0x" + SOLANA_VERIFIER_PROGRAM_BYTES.hex(),
+            "verifier program bytes",
+            {},
+        ),
+    ):
+        try:
+            parser(value, label=label, **kwargs)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == f"{label} must be hex"
+            assert "secret-token" not in rendered
+            assert "TypeError" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"{label} parser TypeError was accepted")
 
 
 def test_solana_destination_base64_parser_redacts_parser_causes(monkeypatch):

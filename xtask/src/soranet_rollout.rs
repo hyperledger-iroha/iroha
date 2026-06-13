@@ -333,7 +333,8 @@ pub fn capture_rollout(options: CaptureOptions) -> Result<(), Box<dyn Error>> {
     let mut payload_hasher = Blake3Hasher::new();
     payload_hasher.update(&payload);
     let payload_digest = payload_hasher.finalize();
-    let signature = Signature::new(key_pair.private_key(), &payload);
+    let signature = Signature::try_new(key_pair.private_key(), &payload)
+        .map_err(|err| format!("failed to sign SoraNet rollout capture payload: {err}"))?;
     let signature_bytes = signature.payload();
     let sig_algo = Algorithm::Ed25519;
     let (public_key_algorithm, public_key_bytes) = key_pair
@@ -526,7 +527,9 @@ mod tests {
         let log_path = temp.path().join("rollout.log");
         fs::write(&log_path, "rollout-ok").expect("write log");
 
-        let key_pair = KeyPair::from_seed(b"xtask-rollout-capture".to_vec(), Algorithm::Ed25519);
+        let key_pair =
+            KeyPair::try_from_seed(b"xtask-rollout-capture".to_vec(), Algorithm::Ed25519)
+                .expect("generate checked rollout capture fixture keypair");
         let key_path = temp.path().join("signing.key");
         fs::write(&key_path, hex_encode(key_pair.private_key().to_bytes().1)).expect("write key");
 

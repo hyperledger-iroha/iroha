@@ -9,6 +9,7 @@ use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
     convert::TryFrom,
+    ffi::OsStr,
     fs,
     num::NonZeroUsize,
     ops::Bound::{Excluded, Unbounded},
@@ -12173,11 +12174,54 @@ impl SpoolDirStamp {
     }
 }
 
-fn is_da_spool_file(name: &str) -> bool {
-    (name.starts_with("da-commitment-")
-        || name.starts_with("da-pin-intent-")
-        || name.starts_with("da-receipt-"))
-        && name.ends_with(".norito")
+fn da_spool_file_name(name: &OsStr) -> Result<Option<&str>, std::io::Error> {
+    if let Some(name) = name.to_str() {
+        return Ok((name.ends_with(".norito")
+            && ((name.starts_with("da-commitment-")
+                && !name.starts_with("da-commitment-schedule-"))
+                || name.starts_with("da-pin-intent-")
+                || name.starts_with("da-receipt-")))
+        .then_some(name));
+    }
+    if raw_da_spool_file_name_matches(name, b"da-commitment-schedule-", b".norito") {
+        return Ok(None);
+    }
+    if raw_da_spool_file_name_matches(name, b"da-commitment-", b".norito")
+        || raw_da_spool_file_name_matches(name, b"da-pin-intent-", b".norito")
+        || raw_da_spool_file_name_matches(name, b"da-receipt-", b".norito")
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "DA spool artifact filename is not valid UTF-8",
+        ));
+    }
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn raw_da_spool_file_name_matches(name: &OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let bytes = name.as_bytes();
+    bytes.starts_with(prefix) && bytes.ends_with(suffix)
+}
+
+#[cfg(not(unix))]
+fn raw_da_spool_file_name_matches(_name: &OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
+    false
+}
+
+fn manifest_spool_file_name(name: &OsStr) -> Result<Option<&str>, std::io::Error> {
+    if let Some(name) = name.to_str() {
+        return Ok((name.starts_with("manifest-") && name.ends_with(".norito")).then_some(name));
+    }
+    if raw_da_spool_file_name_matches(name, b"manifest-", b".norito") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "manifest spool artifact filename is not valid UTF-8",
+        ));
+    }
+    Ok(None)
 }
 
 fn scan_da_spool_stamp(spool_dir: &Path) -> Result<Option<SpoolDirStamp>, std::io::Error> {
@@ -12195,28 +12239,40 @@ fn scan_da_spool_stamp(spool_dir: &Path) -> Result<Option<SpoolDirStamp>, std::i
         let entry = match entry {
             Ok(value) => value,
             Err(err) => {
-                warn!(?err, "failed to read DA spool entry");
-                continue;
+                return Err(std::io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to read DA spool entry in `{}`: {err}",
+                        spool_dir.display()
+                    ),
+                ));
             }
         };
-        let name = match entry.file_name().to_str() {
-            Some(value) => value.to_string(),
-            None => continue,
-        };
-        if !is_da_spool_file(&name) {
+        let file_name = entry.file_name();
+        let Some(name) = da_spool_file_name(&file_name)?.map(ToOwned::to_owned) else {
             continue;
-        }
+        };
         let metadata = match entry.metadata() {
             Ok(meta) => meta,
             Err(err) => {
-                warn!(
-                    ?err,
-                    path = %entry.path().display(),
-                    "failed to read DA spool metadata"
-                );
-                continue;
+                return Err(std::io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to read DA spool metadata `{}`: {err}",
+                        entry.path().display()
+                    ),
+                ));
             }
         };
+        if !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "DA spool artifact `{}` is not a regular file",
+                    entry.path().display()
+                ),
+            ));
+        }
         entries.push((name, metadata.len(), metadata.modified().ok()));
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -46399,31 +46455,43 @@ fn scan_manifest_spool(spool_dir: &Path) -> Result<Option<ManifestSpoolScan>, st
         let entry = match entry {
             Ok(value) => value,
             Err(err) => {
-                warn!(?err, "failed to read manifest spool entry");
-                continue;
+                return Err(std::io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to read manifest spool entry in `{}`: {err}",
+                        spool_dir.display()
+                    ),
+                ));
             }
         };
-        let name = match entry.file_name().to_str() {
-            Some(value) => value.to_string(),
-            None => continue,
-        };
-        if !name.starts_with("manifest-") || !name.ends_with(".norito") {
+        let file_name = entry.file_name();
+        let Some(name) = manifest_spool_file_name(&file_name)?.map(ToOwned::to_owned) else {
             continue;
-        }
+        };
         let Some(key) = parse_manifest_spool_key(&name) else {
             continue;
         };
         let metadata = match entry.metadata() {
             Ok(meta) => meta,
             Err(err) => {
-                warn!(
-                    ?err,
-                    path = %entry.path().display(),
-                    "failed to read manifest spool metadata"
-                );
-                continue;
+                return Err(std::io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to read manifest spool metadata `{}`: {err}",
+                        entry.path().display()
+                    ),
+                ));
             }
         };
+        if !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "manifest spool artifact `{}` is not a regular file",
+                    entry.path().display()
+                ),
+            ));
+        }
         entries.push((
             name,
             key,
@@ -46547,16 +46615,35 @@ impl ManifestSpoolCache {
 fn parse_manifest_spool_key(name: &str) -> Option<ManifestSpoolKey> {
     let name = name.strip_suffix(".norito")?;
     let rest = name.strip_prefix("manifest-")?;
-    let mut parts = rest.splitn(5, '-');
+    let mut parts = rest.split('-');
     let lane_hex = parts.next()?;
     let epoch_hex = parts.next()?;
     let sequence_hex = parts.next()?;
     let ticket_hex = parts.next()?;
+    let fingerprint_hex = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    if lane_hex.len() != 8
+        || epoch_hex.len() != 16
+        || sequence_hex.len() != 16
+        || ticket_hex.len() != 64
+        || fingerprint_hex.len() != 64
+        || !lane_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !epoch_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !sequence_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !ticket_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !fingerprint_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
     let lane = u32::from_str_radix(lane_hex, 16).ok()?;
     let epoch = u64::from_str_radix(epoch_hex, 16).ok()?;
     let sequence = u64::from_str_radix(sequence_hex, 16).ok()?;
     let mut ticket_bytes = [0u8; 32];
+    let mut fingerprint_bytes = [0u8; 32];
     hex::decode_to_slice(ticket_hex, &mut ticket_bytes).ok()?;
+    hex::decode_to_slice(fingerprint_hex, &mut fingerprint_bytes).ok()?;
     Some(ManifestSpoolKey {
         lane,
         epoch,
@@ -46843,11 +46930,11 @@ fn manifest_available_for_commitment(
     spool_dir: &Path,
     record: &DaCommitmentRecord,
     policy: DaManifestPolicy,
-) -> (bool, CacheOutcome) {
+) -> (Result<bool, ManifestGuardError>, CacheOutcome) {
     let (outcome, cache_outcome) =
         manifest_guard_outcome(manifest_cache, spool_dir, record, policy);
     let allowed = match outcome {
-        ManifestGuardOutcome::Pass => true,
+        ManifestGuardOutcome::Pass => Ok(true),
         ManifestGuardOutcome::Warn(err) => {
             warn!(
                 ?err,
@@ -46857,7 +46944,17 @@ fn manifest_available_for_commitment(
                 ?policy,
                 "proceeding with DA commitment without a verified manifest (audit-only lane)"
             );
-            true
+            Ok(true)
+        }
+        ManifestGuardOutcome::Reject(err @ ManifestGuardError::Missing { .. }) => {
+            warn!(
+                ?err,
+                lane = record.lane_id.as_u32(),
+                epoch = record.epoch,
+                sequence = record.sequence,
+                "deferring DA commitment: strict manifest is not available yet"
+            );
+            Ok(false)
         }
         ManifestGuardOutcome::Reject(err) => {
             warn!(
@@ -46867,7 +46964,7 @@ fn manifest_available_for_commitment(
                 sequence = record.sequence,
                 "dropping DA commitment: manifest guard failed"
             );
-            false
+            Err(err)
         }
     };
     (allowed, cache_outcome)

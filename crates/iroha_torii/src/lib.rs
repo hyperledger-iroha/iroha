@@ -38711,7 +38711,7 @@ impl Torii {
                 iroha_logger::error!(
                     ?err,
                     dir = ?self.da_ingest.manifest_store_dir,
-                    "failed to open DA receipt log; falling back to in-memory log"
+                    "failed to open DA receipt log; DA ingest receipt appends will fail closed with an in-memory log"
                 );
                 Arc::new(da::DaReceiptLog::in_memory(
                     Arc::clone(&replay_store),

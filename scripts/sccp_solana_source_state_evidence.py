@@ -144,7 +144,7 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except ValueError:
+    except (TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -1102,7 +1102,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_toml(args), end="")
         else:
             print(json.dumps(_json_summary(args), sort_keys=True, indent=2))
-    except (OSError, SystemExit, ValueError) as exc:
+    except (OSError, SystemExit, RuntimeError, TypeError, ValueError) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP Solana source-state evidence rendering failed",

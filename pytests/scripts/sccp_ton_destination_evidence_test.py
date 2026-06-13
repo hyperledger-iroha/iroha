@@ -45,27 +45,30 @@ def load_evidence_module():
 def test_ton_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
-    def fail_apply(_args):
-        raise ValueError("secret-token /tmp/operator/private-path")
+    for exception_type in (RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module, "apply_verifier_code_boc_hash", fail_apply)
+        def fail_apply(_args, exception_type=exception_type):
+            raise exception_type("secret-token /tmp/operator/private-path")
 
-    try:
-        module.main(
-            [
-                "--verifier-contract-address",
-                TON_VERIFIER_CONTRACT_ADDRESS,
-            ]
-        )
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("TON destination CLI accepted top-level render failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "apply_verifier_code_boc_hash", fail_apply)
+            try:
+                module.main(
+                    [
+                        "--verifier-contract-address",
+                        TON_VERIFIER_CONTRACT_ADDRESS,
+                    ]
+                )
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError("TON destination CLI accepted top-level render failure")
 
-    captured = capsys.readouterr()
-    assert "SCCP TON destination evidence rendering failed" in captured.err
-    assert "secret-token" not in captured.err
-    assert "private-path" not in captured.err
+            captured = capsys.readouterr()
+            assert "SCCP TON destination evidence rendering failed" in captured.err
+            assert "secret-token" not in captured.err
+            assert "private-path" not in captured.err
+            assert exception_type.__name__ not in captured.err
 
 
 def test_ton_destination_redacts_verifier_address_parser_failures(monkeypatch):
@@ -223,6 +226,70 @@ def test_ton_destination_direct_parsers_redact_parser_causes(tmp_path):
             assert exc.__suppress_context__ is True
         else:
             raise AssertionError("TON destination parser leaked nested details")
+
+
+def test_ton_destination_direct_parsers_redact_typeerror_parser_causes(monkeypatch):
+    module = load_evidence_module()
+
+    class SecretBytes:
+        @staticmethod
+        def fromhex(_text):
+            raise TypeError("secret-token TON destination hex TypeError detail")
+
+    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+
+    for parser, value, label, kwargs in (
+        (
+            module.parse_hex_bytes,
+            "0x" + "33" * 32,
+            "verifier code hash",
+            {"byte_length": 32},
+        ),
+        (
+            module.parse_code_boc_hex,
+            "0x" + TON_CODE_BOC_HEX,
+            "code BoC",
+            {},
+        ),
+    ):
+        try:
+            parser(value, label=label, **kwargs)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == f"{label} must be hex"
+            assert "secret-token" not in rendered
+            assert "TypeError" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"{label} parser TypeError was accepted")
+
+
+def test_ton_destination_code_boc_base64_redacts_typeerror_decoder_causes(
+    monkeypatch,
+):
+    module = load_evidence_module()
+
+    def fail_decode(*_args, **_kwargs):
+        raise TypeError("secret-token TON code BoC base64 TypeError detail")
+
+    monkeypatch.setattr(module.base64, "b64decode", fail_decode)
+    monkeypatch.setattr(module.base64, "urlsafe_b64decode", fail_decode)
+
+    try:
+        module.parse_code_boc_base64(
+            TON_CODE_BOC_BASE64,
+            label="code BoC",
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "code BoC must be base64 or base64url"
+        assert "secret-token" not in rendered
+        assert "TypeError" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("TON code BoC base64 decoder TypeError was accepted")
 
 
 def test_ton_code_boc_inline_parsers_reject_padded_values(tmp_path):
