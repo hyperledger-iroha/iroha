@@ -237,11 +237,11 @@ and completed history lives in [`status.md`](./status.md).
   and privacy native bridge tests, while the Android Java harness runs
   recursive spend, canonical request auth, Offline Cash lifecycle, Offline Note
   V2, Offline Note, privacy native bridge, and transaction-builder archive
-  tests. Kotlin/JVM and Android Java privacy capability APIs must continue
-  deriving bridge readiness from the native Norito capability archive when the
-  bridge is loaded, while malformed, duplicate, incomplete, or absent evidence
-  keeps the SDK capability surface fail-closed. Native ready rows must match the
-  audited production-gate contract exactly before the SDK exposes
+  tests. Swift, Kotlin/JVM, and Android Java privacy capability APIs must
+  continue deriving bridge readiness from the native Norito capability archive
+  when the bridge is loaded, while malformed, duplicate, incomplete, or absent
+  evidence keeps the SDK capability surface fail-closed. Native ready rows must
+  match the audited production-gate contract exactly before the SDK exposes
   `productionReady`: exact gate version, required-gate ordering, per-gate pass
   state, no missing or planned entrypoints, and the full ordered audit-reference
   set with canonical lowercase SHA-256 and Ed25519 evidence values. Privacy
@@ -288,6 +288,10 @@ and completed history lives in [`status.md`](./status.md).
   Torii event-filter verifier/proof exactness, verifier-key selector exactness,
   identifier-receipt adversarial and shared-vector exactness, package/browser,
   privacy native bridge, and transaction-builder archive test names together.
+  The typed recursive-spend request codecs must continue rejecting padded or
+  signed decimal-string `blockHeight` values across init, append, verify, and
+  redeem before native dispatch, while still allowing canonical non-negative
+  `u64` heights.
 - Kagemusha Swift SDK validation must keep the macOS parse runner aligned with
   the parity inventory by parsing every Kagemusha/Offline Note source and test
   file tracked for Swift, including canonical request auth helpers, recursive

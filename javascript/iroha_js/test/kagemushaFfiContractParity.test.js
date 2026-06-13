@@ -6454,18 +6454,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobilePrivacyProductionGateBranch,
-    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[kotlin_bridge\]\s*=\s*kotlin_mutated[\s\S]*?mutated_texts\[java_bridge\]\s*=\s*java_mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[swift_bridge\]\s*=\s*swift_mutated[\s\S]*?mutated_texts\[kotlin_bridge\]\s*=\s*kotlin_mutated[\s\S]*?mutated_texts\[java_bridge\]\s*=\s*java_mutated[\s\S]*?run_checks\(mutated_texts\)/u,
     "mobile privacy production-gate negative control must validate the mutated text snapshot",
   );
   assert.match(
     mobilePrivacyProductionGateBranch,
-    /rows\.any \{ !nativeCapabilityRowIsExact\(it\) \}[\s\S]*?rows\.any \{ it\.productionGate\.version != PRODUCTION_GATE_VERSION \}[\s\S]*?if \(!nativeCapabilityRowIsExact\(row\)\)[\s\S]*?if \(!PRODUCTION_GATE_VERSION\.equals\(row\.productionGate\.version\)\)/u,
+    /rows\.contains\(where: \{ !nativeCapabilityRowIsExact\(\$0\) \}\)[\s\S]*?rows\.contains\(where: \{ \$0\.productionGate\.version != version \}\)[\s\S]*?rows\.any \{ !nativeCapabilityRowIsExact\(it\) \}[\s\S]*?rows\.any \{ it\.productionGate\.version != PRODUCTION_GATE_VERSION \}[\s\S]*?if \(!nativeCapabilityRowIsExact\(row\)\)[\s\S]*?if \(!PRODUCTION_GATE_VERSION\.equals\(row\.productionGate\.version\)\)/u,
     "mobile privacy production-gate negative control must mutate exact-row checks to version-only checks",
   );
   assert.match(
     mobilePrivacyProductionGateBranch,
-    /Kotlin privacy production-gate exactness[\s\S]*?Android Java privacy production-gate exactness/u,
-    "mobile privacy production-gate negative control must require both mobile exactness labels",
+    /Swift privacy production-gate exactness[\s\S]*?Kotlin privacy production-gate exactness[\s\S]*?Android Java privacy production-gate exactness/u,
+    "mobile privacy production-gate negative control must require every mobile exactness label",
   );
   assert.match(
     mobilePrivacyProductionGateBranch,

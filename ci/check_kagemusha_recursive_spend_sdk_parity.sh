@@ -3924,10 +3924,35 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
 
 
 def check_mobile_privacy_production_gate_exactness(texts, errors):
+    swift_bridge = "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"
     java_bridge = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
     java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java"
     kotlin_bridge = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
     kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"
+    require_contains(
+        texts,
+        swift_bridge,
+        (
+            "rows.contains(where: { !nativeCapabilityRowIsExact($0) })",
+            "private static func nativeCapabilityRowIsExact(",
+            "row.productionReady != gate.ready",
+            "gate.requiredGates != requiredGateKeys",
+            "gate.gates.map(\\.key) != requiredGateKeys",
+            "gate.gates.contains(where: { $0.passed != gate.ready })",
+            "row.plannedEntrypoints.isEmpty",
+            "readyAuditReferencesAreExact(gate.auditReferences)",
+            "Set(references).count != references.count",
+            "productionHashIsValid(value)",
+            "productionSignatureIsValid(value)",
+            "code < 0x20 || code > 0x7E || code == 0x5C",
+            "compact.contains(\"devprooffixture\")",
+            "localnet_lifecycle_recursive_append_verify_hash:",
+            "static func privacyCapabilities(\n        fromArchive archive: Data,",
+        ),
+        "Swift privacy production-gate exactness",
+        errors,
+    )
     require_contains(
         texts,
         kotlin_bridge,
@@ -3994,6 +4019,24 @@ def check_mobile_privacy_production_gate_exactness(texts, errors):
             label,
             errors,
         )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            "testProductionReadyCapabilitiesRequireExactNativeGateEvidence",
+            "testForgedProductionReadyCapabilityRowsFailClosed",
+            "empty required gates",
+            "missing gate status",
+            "duplicate audit reference",
+            "bad audit hash",
+            "uppercase audit signature",
+            "mock localnet marker",
+            "planned entrypoint",
+            "production ready mismatch",
+        ),
+        "Swift privacy production-gate exactness tests",
+        errors,
+    )
 
 
 def check_javascript(texts, errors):
@@ -4045,6 +4088,8 @@ def check_javascript(texts, errors):
                 "AccountAddress.parseEncoded(recipient)",
                 "kagemushaCanonicalU128Decimal",
                 "kagemushaNormalizeBlockHeight",
+                "must be a canonical unsigned decimal u64",
+                "/^(0|[1-9]\\d*)$/.test(value)",
                 "previousLineageVerifierRecord",
                 "previousProofOpenEnvelopes",
                 "requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend",
@@ -4092,6 +4137,9 @@ def check_javascript(texts, errors):
             "previousLineageVerifierRecord",
             "previousProofOpenEnvelopes",
             "alice@wonderland",
+            "blockHeightEncoders",
+            "accepted non-canonical blockHeight",
+            "\"18446744073709551616\"",
             "String(1n << 128n)",
             "calls.at(-1)",
         ),
@@ -11338,8 +11386,14 @@ if mode == "--negative-control-mobile-recursive-spend-native-output-headers":
 
 if mode == "--negative-control-mobile-privacy-production-gate-exactness":
     mutated_texts = dict(texts)
+    swift_bridge = "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
     kotlin_bridge = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
     java_bridge = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
+    swift_mutated = read(swift_bridge).replace(
+        "rows.contains(where: { !nativeCapabilityRowIsExact($0) })",
+        "rows.contains(where: { $0.productionGate.version != version })",
+        1,
+    )
     kotlin_mutated = read(kotlin_bridge).replace(
         "rows.any { !nativeCapabilityRowIsExact(it) }",
         "rows.any { it.productionGate.version != PRODUCTION_GATE_VERSION }",
@@ -11350,8 +11404,13 @@ if mode == "--negative-control-mobile-privacy-production-gate-exactness":
         "if (!PRODUCTION_GATE_VERSION.equals(row.productionGate.version))",
         1,
     )
-    if kotlin_mutated == read(kotlin_bridge) or java_mutated == read(java_bridge):
+    if (
+        swift_mutated == read(swift_bridge)
+        or kotlin_mutated == read(kotlin_bridge)
+        or java_mutated == read(java_bridge)
+    ):
         raise SystemExit("negative control failed: unable to mutate mobile privacy production-gate exactness")
+    mutated_texts[swift_bridge] = swift_mutated
     mutated_texts[kotlin_bridge] = kotlin_mutated
     mutated_texts[java_bridge] = java_mutated
     try:
@@ -11359,6 +11418,7 @@ if mode == "--negative-control-mobile-privacy-production-gate-exactness":
     except ParityError as error:
         message = str(error)
         for label in (
+            "Swift privacy production-gate exactness",
             "Kotlin privacy production-gate exactness",
             "Android Java privacy production-gate exactness",
         ):

@@ -2,27 +2,47 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Kagemusha JS typed request block-height exactness
+
+- Hardened JavaScript typed recursive-spend request codecs so string
+  `blockHeight` inputs must be canonical unsigned decimal `u64` values. Padded
+  strings such as `"01"`, signed strings such as `"+7"` or `"-0"`, trailing
+  whitespace, and `u64 + 1` values now reject before Norito request encoding or
+  native dispatch.
+- Added adversarial coverage across init, append, verify, and redeem typed
+  request encoders, and extended the recursive-spend SDK parity guard to pin
+  the JS source parser plus the padded block-height regression inventory.
+- Focused validation passed:
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
 ## 2026-06-13 Kagemusha SDK production-gate exactness
 
-- Hardened Kotlin/JVM and Android Java privacy capability aggregation so native
-  Norito capability rows can only mark the SDK production-ready when both
+- Hardened Swift, Kotlin/JVM, and Android Java privacy capability aggregation
+  so native Norito capability rows can only mark the SDK production-ready when both
   audited rows expose the exact production-gate version, required-gate list,
   per-gate pass state, empty missing/planned fields, and the full ordered
   audit-reference set.
+- Swift now decodes the native `PrivacyCapabilitiesV1` Norito archive,
+  including compact lengths, delimited/packed sequences, and packed-struct
+  field-bitset layouts, before aggregating the public production-gate snapshot.
 - Added fail-closed validation for forged ready rows with missing or duplicate
   audit references, malformed SHA-256 or Ed25519 evidence values, mock/local-only
   evidence markers, non-empty planned entrypoints, missing gate statuses, and
   mismatched `production_ready` state.
 - Pinned the exact-row aggregation predicates in the recursive-spend SDK parity
-  guard and workflow, with a negative control that rewrites Kotlin/JVM and
-  Android Java back to the old version-only row check and requires the guard to
-  reject that drift.
+  guard and workflow, with a negative control that rewrites Swift, Kotlin/JVM,
+  and Android Java back to the old version-only row check and requires the guard
+  to reject that drift.
 - Focused validation passed:
+  - `cd IrohaSwift && swift test --filter PrivacyNativeBridgeTests`
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --rerun-tasks --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest ./gradlew :jvm:test --rerun-tasks --console=plain`
   - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
   - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness`
+  - `ci/check_kagemusha_production_readiness.sh`
   - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "SDK privacy native availability probes reject adversarial native output archives" javascript/iroha_js/test/privacyFfiContractParity.test.js`
   - `git diff --check`
 
 ## 2026-06-13 C# nested identifier receipt hardening
