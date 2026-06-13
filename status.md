@@ -7,8 +7,8 @@ Last updated: 2026-06-13
 - Hardened JavaScript typed recursive-spend request codecs so string
   `blockHeight` inputs must be canonical unsigned decimal `u64` values. Padded
   strings such as `"01"`, signed strings such as `"+7"` or `"-0"`, trailing
-  whitespace, and `u64 + 1` values now reject before Norito request encoding or
-  native dispatch.
+  whitespace, `u64 + 1` values, and numeric negative zero now reject before
+  Norito request encoding or native dispatch.
 - Added adversarial coverage across init, append, verify, and redeem typed
   request encoders, and extended the recursive-spend SDK parity guard to pin
   the JS source parser plus the padded block-height regression inventory.

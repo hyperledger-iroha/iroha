@@ -1335,8 +1335,10 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         }),
     ],
   ];
+  const invalidBlockHeights = ["00", "01", "0007", "-0", "+7", "7 ", "18446744073709551616", -0];
+  assert.equal(Object.is(invalidBlockHeights.at(-1), -0), true);
   for (const [name, encode] of blockHeightEncoders) {
-    for (const blockHeight of ["00", "01", "0007", "-0", "+7", "7 ", "18446744073709551616"]) {
+    for (const blockHeight of invalidBlockHeights) {
       assert.throws(
         () => encode(blockHeight),
         /blockHeight/,

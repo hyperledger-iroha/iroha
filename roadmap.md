@@ -289,9 +289,9 @@ and completed history lives in [`status.md`](./status.md).
   identifier-receipt adversarial and shared-vector exactness, package/browser,
   privacy native bridge, and transaction-builder archive test names together.
   The typed recursive-spend request codecs must continue rejecting padded or
-  signed decimal-string `blockHeight` values across init, append, verify, and
-  redeem before native dispatch, while still allowing canonical non-negative
-  `u64` heights.
+  signed decimal-string `blockHeight` values and numeric negative zero across
+  init, append, verify, and redeem before native dispatch, while still allowing
+  canonical non-negative `u64` heights.
 - Kagemusha Swift SDK validation must keep the macOS parse runner aligned with
   the parity inventory by parsing every Kagemusha/Offline Note source and test
   file tracked for Swift, including canonical request auth helpers, recursive

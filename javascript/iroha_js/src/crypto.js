@@ -3756,6 +3756,9 @@ function kagemushaNormalizeBlockHeight(value, field) {
     if (!Number.isSafeInteger(value)) {
       throw kagemushaFieldCodecError(field, `${field} must be a non-negative u64`);
     }
+    if (value < 0 || Object.is(value, -0)) {
+      throw kagemushaFieldCodecError(field, `${field} must be non-negative`);
+    }
     height = BigInt(value);
   } else if (typeof value === "string") {
     if (!/^(0|[1-9]\d*)$/.test(value)) {
