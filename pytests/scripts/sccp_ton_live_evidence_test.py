@@ -729,62 +729,72 @@ def test_live_ton_evidence_redacts_code_boc_parser_failures(monkeypatch):
         account_state_hash=bytes.fromhex("55" * 32),
     )
 
-    def fail_code_boc(_value, *, label):
-        raise ValueError(f"secret-token {label} parser detail")
+    for exception_type in (TypeError, ValueError):
 
-    monkeypatch.setattr(module.evidence, "parse_code_boc_base64", fail_code_boc)
+        def fail_code_boc(_value, *, label, exception_type=exception_type):
+            raise exception_type(f"secret-token {label} parser detail")
 
-    try:
-        module.collect_live_evidence(
-            "https://toncenter.example",
-            verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
-            opener=fake_ton_opener(module).opener,
-            timeout=3.0,
-        )
-    except RuntimeError as exc:
-        live_exc = exc
-        live_error = str(exc)
-    else:
-        raise AssertionError("TON live collection accepted parser failure")
+        monkeypatch.setattr(module.evidence, "parse_code_boc_base64", fail_code_boc)
 
-    try:
-        module._summary(args, live)
-    except ValueError as exc:
-        summary_exc = exc
-        summary_error = str(exc)
-    else:
-        raise AssertionError("TON live summary accepted parser failure")
+        try:
+            module.collect_live_evidence(
+                "https://toncenter.example",
+                verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+                opener=fake_ton_opener(module).opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            live_exc = exc
+            live_error = str(exc)
+        else:
+            raise AssertionError("TON live collection accepted parser failure")
 
-    rendered = "\n".join((live_error, summary_error))
-    assert live_error == "TON verifier account code_boc is invalid"
-    assert summary_error == "TON live code BoC base64 metadata is invalid"
-    assert "secret-token" not in rendered
-    assert "parser detail" not in rendered
-    assert "ValueError" not in rendered
-    assert "is invalid:" not in rendered
-    assert live_exc.__cause__ is None
-    assert live_exc.__suppress_context__ is True
-    assert summary_exc.__cause__ is None
-    assert summary_exc.__suppress_context__ is True
+        try:
+            module._summary(args, live)
+        except ValueError as exc:
+            summary_exc = exc
+            summary_error = str(exc)
+        else:
+            raise AssertionError("TON live summary accepted parser failure")
+
+        rendered = "\n".join((live_error, summary_error))
+        assert live_error == "TON verifier account code_boc is invalid"
+        assert summary_error == "TON live code BoC base64 metadata is invalid"
+        assert "secret-token" not in rendered
+        assert "parser detail" not in rendered
+        assert exception_type.__name__ not in rendered
+        assert "is invalid:" not in rendered
+        assert live_exc.__cause__ is None
+        assert live_exc.__suppress_context__ is True
+        assert summary_exc.__cause__ is None
+        assert summary_exc.__suppress_context__ is True
 
 
-def test_live_ton_hash_decoder_redacts_base64_parser_causes():
+def test_live_ton_hash_decoder_redacts_base64_parser_causes(monkeypatch):
     module = load_live_module()
 
-    try:
-        module._decode_hash_text(
-            "secret-token hash base64",
-            label="verifier_code_hash",
-        )
-    except RuntimeError as exc:
-        rendered = str(exc)
-        assert rendered == "verifier_code_hash must be 32-byte hex or base64"
-        assert "secret-token" not in rendered
-        assert "hash base64" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("TON live hash decoder accepted invalid base64")
+    for exception_type in (TypeError, ValueError):
+
+        def fail_b64decode(*_args, exception_type=exception_type, **_kwargs):
+            raise exception_type("secret-token hash base64")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module.base64, "b64decode", fail_b64decode)
+            try:
+                module._decode_hash_text(
+                    "ignored",
+                    label="verifier_code_hash",
+                )
+            except RuntimeError as exc:
+                rendered = str(exc)
+                assert rendered == "verifier_code_hash must be 32-byte hex or base64"
+                assert "secret-token" not in rendered
+                assert "hash base64" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError("TON live hash decoder accepted invalid base64")
 
 
 def test_live_ton_evidence_redacts_account_address_parser_failures(monkeypatch):

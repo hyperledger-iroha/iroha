@@ -3090,7 +3090,7 @@ def _parse_transaction_address_payload(value: Any, *, label: str) -> bytes:
         raise RuntimeError(f"{label} must be a TRON address")
     try:
         return parse_tron_address_payload(value, label=label)
-    except (argparse.ArgumentTypeError, ValueError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise RuntimeError(f"{label} is not a valid TRON address") from None
 
 
@@ -3229,7 +3229,7 @@ def _source_event_transaction_summary(
         try:
             topic0 = _parse_exact_hex32(topics[0], label="source-event log topic0")
             topic1 = _parse_exact_hex32(topics[1], label="source-event log topic1")
-        except (argparse.ArgumentTypeError, RuntimeError):
+        except (argparse.ArgumentTypeError, TypeError, RuntimeError):
             continue
         data = log.get("data", "")
         if not isinstance(data, str):
@@ -3547,7 +3547,7 @@ def _route_canary_message_proof_event_summary(
         return None
     try:
         topic0 = _parse_exact_hex32(topics[0], label="route-canary log topic0")
-    except (argparse.ArgumentTypeError, RuntimeError):
+    except (argparse.ArgumentTypeError, TypeError, RuntimeError):
         return None
     if log_address != verifier_address20 or topic0 != TRON_MESSAGE_PROOF_ACCEPTED_TOPIC:
         return None
@@ -4396,7 +4396,7 @@ def _metadata_runtime_bytecode(metadata: dict[str, Any], *, label: str) -> bytes
             bytecode,
             label=f"{label} bytecode",
         )
-    except (argparse.ArgumentTypeError, RuntimeError):
+    except (argparse.ArgumentTypeError, TypeError, RuntimeError):
         raise RuntimeError(
             f"/wallet/getcontract returned malformed {label} bytecode"
         ) from None
@@ -4416,7 +4416,7 @@ def _check_contract_metadata_address(
             value,
             label=f"{label} contract_address",
         )
-    except (argparse.ArgumentTypeError, ValueError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise RuntimeError(
             f"/wallet/getcontract returned malformed {label} contract_address"
         ) from None
@@ -5276,7 +5276,7 @@ def _source_event_trigger_request_verified(
             str(trigger_request["contract_address"]),
             label="source-event trigger contract address",
         )
-    except (argparse.ArgumentTypeError, ValueError):
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         return False
     return (
         trigger_request.get("endpoint") == "wallet/triggersmartcontract"

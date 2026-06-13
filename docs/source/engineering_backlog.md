@@ -5264,7 +5264,10 @@ redistributable schemas, and official trust/revocation bundles.
     endorsement/manifest/ISI fixture signatures, data-model block fixture
     signatures plus signed-block transparent API fixtures, and data-model
     transaction payload/multisig fixtures now use
-    `Signature::try_new`/`SignatureOf::try_from_hash`;
+    `Signature::try_new`/`SignatureOf::try_from_hash`; Soracloud
+    canonical-request witness fixtures now use checked Ed25519 key generation
+    and `Signature::try_new`, verifying the witness signature before Norito
+    roundtrip;
     SoraFS CLI
     fallback manifest `/transaction` submissions now use a checked
     `TransactionBuilder::try_sign` helper and return contextual command errors
@@ -5310,7 +5313,19 @@ redistributable schemas, and official trust/revocation bundles.
     usage-limit, signed-balance tamper, and refill lineage coverage on checked
     fixtures; native AMX BLS vote fixtures now use checked seeded/random key
     generation plus `Signature::try_new`, verifying each vote preimage
-    signature before aggregate-QC ordering and rejection regressions consume it.
+    signature before aggregate-QC ordering and rejection regressions consume it;
+    Sumeragi vote-verifier checked BLS batch fixtures now use non-zero
+    deterministic seed material accepted by `KeyPair::try_from_seed`, with
+    wrong-validator, non-BLS public-key, pending-block, block-sync/QC,
+    payload-availability, and P2P topology helper regressions rerun on checked
+    Sumeragi fixture signatures;
+    JDG SDN seals and committee attestation fixtures now use checked random key
+    generation, `SignatureOf::try_from_hash`, and `Signature::try_new`,
+    verifying fixture signatures before SDN, simple-threshold, and BLS aggregate guard
+    regressions consume them; data-model JDG SDN commitment fixtures now also
+    use checked random key generation plus `SignatureOf::try_from_hash`,
+    verifying sample seals before registry and attestation validation
+    regressions consume them.
     The
     ML-DSA key
     path now rejects inconsistent imported secrets and exposes

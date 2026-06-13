@@ -2911,6 +2911,26 @@ def test_release_readiness_report_guards_all_lanes_route_canary_scalar_gate_inve
         for error in errors
     )
 
+    route_redaction_marker = "secret-token operator route material"
+    sparse_test.write_text(
+        "\n".join(
+            marker
+            for marker in verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS[1][1]
+            if marker != route_redaction_marker
+        ),
+        encoding="utf-8",
+    )
+    errors = report._all_lanes_route_canary_scalar_gate_inventory_errors(
+        ((sparse_test, verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS[1][1]),)
+    )
+
+    assert any(
+        "SCCP all-lanes route-canary scalar source inventory" in error
+        and str(sparse_test) in error
+        and f"missing marker: {route_redaction_marker}" in error
+        for error in errors
+    )
+
 
 def test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inventory(
     tmp_path: Path,
@@ -4052,6 +4072,8 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
         "generated offline full TOML arguments are invalid",
         'f"/wallet/getcontract returned malformed {label} bytecode"',
         'f"/wallet/getcontract returned malformed {label} contract_address"',
+        "except (argparse.ArgumentTypeError, TypeError, RuntimeError):",
+        "except (argparse.ArgumentTypeError, TypeError, ValueError):",
         'f"TRON constant call {function_selector} returned non-hex data"',
         "except (RuntimeError, TypeError, ValueError):",
         "def _unsupported_tron_field_detail(",
@@ -4143,15 +4165,49 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
         for error in errors
     )
 
+    all_lanes_script_markers = next(
+        markers
+        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
+        if path == "scripts/sccp_all_lanes_evidence.py"
+    )
+    for all_lanes_removed_marker in (
+        "except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):",
+        "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
+    ):
+        sparse_all_lanes_script = tmp_path / "sccp_all_lanes_evidence.py"
+        sparse_all_lanes_script.write_text(
+            "\n".join(
+                marker
+                for marker in all_lanes_script_markers
+                if marker != all_lanes_removed_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = report._sccp_release_public_scalar_text_schema_gate_inventory_errors(
+            ((sparse_all_lanes_script, all_lanes_script_markers),)
+        )
+
+        assert any(
+            "SCCP release public scalar-text schema source inventory" in error
+            and str(sparse_all_lanes_script) in error
+            and f"missing marker: {all_lanes_removed_marker}" in error
+            for error in errors
+        )
+
     solana_test_markers = (
         "def test_solana_json_rpc_redacts_transport_and_error_response_details",
         "def test_solana_json_rpc_redacts_invalid_json_parser_details",
         "def test_live_solana_account_data_redacts_base64_parser_causes",
         "def test_live_solana_metadata_base64_redacts_parser_causes",
+        "parser_exception_types = (module.argparse.ArgumentTypeError, TypeError)",
         "secret-token-solana-error",
         "secret-token invalid Solana JSON-RPC payload",
+        "secret-token verifier_code_hash parser detail",
         "secret-token live account base64",
+        "account_exception_types = (TypeError, ValueError)",
+        "secret-token account-data decoder detail",
         "secret-token live metadata base64",
+        "secret-token {label} decode detail",
         "duplicate JSON keys",
         'assert "secret-token" not in message',
     )
@@ -4204,6 +4260,8 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
     for solana_script_removed_marker in (
         'raise RuntimeError(f"{label} account data is invalid base64") from None',
         'raise ValueError(f"{label} must be base64") from None',
+        "except (TypeError, ValueError, binascii.Error):",
+        "except (argparse.ArgumentTypeError, TypeError):",
     ):
         sparse_solana_script = (
             tmp_path / f"sccp_solana_live_base64_{len(solana_script_removed_marker)}.py"
@@ -4248,6 +4306,35 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
         for error in errors
     )
 
+    for solana_test_removed_marker in (
+        "parser_exception_types = (module.argparse.ArgumentTypeError, TypeError)",
+        "secret-token verifier_code_hash parser detail",
+        "secret-token {label} decode detail",
+        "account_exception_types = (TypeError, ValueError)",
+        "secret-token account-data decoder detail",
+    ):
+        sparse_solana_test = (
+            tmp_path / f"sccp_solana_live_parser_{len(solana_test_removed_marker)}.py"
+        )
+        sparse_solana_test.write_text(
+            "\n".join(
+                marker
+                for marker in solana_test_markers
+                if marker != solana_test_removed_marker
+            ),
+            encoding="utf-8",
+        )
+        errors = report._sccp_release_public_scalar_text_schema_gate_inventory_errors(
+            ((sparse_solana_test, solana_test_markers),)
+        )
+
+        assert any(
+            "SCCP release public scalar-text schema source inventory" in error
+            and str(sparse_solana_test) in error
+            and f"missing marker: {solana_test_removed_marker}" in error
+            for error in errors
+        )
+
     adversarial_marker_cases = (
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
@@ -4260,6 +4347,18 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
             "secret-token hash base64",
+        ),
+        (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "for exception_type in (TypeError, ValueError):",
+        ),
+        (
+            "scripts/sccp_ton_live_evidence.py",
+            "except (TypeError, binascii.Error, ValueError):",
+        ),
+        (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "secret-token {label} parser detail",
         ),
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
@@ -4278,6 +4377,22 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
             "secret-token-evm-receipt-hex",
         ),
         (
+            "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+            "secret-token EVM receipt hex TypeError detail",
+        ),
+        (
+            "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+            "for exception_type in (RuntimeError, TypeError):",
+        ),
+        (
+            "scripts/sccp_evm_receipt_proof_evidence.py",
+            "except (TypeError, ValueError):",
+        ),
+        (
+            "scripts/sccp_evm_receipt_proof_evidence.py",
+            "except (OSError, RuntimeError, TypeError, ValueError, argparse.ArgumentTypeError) as exc:",
+        ),
+        (
             "pytests/scripts/sccp_release_bundle_test.py",
             "secret-token-native-duplicate",
         ),
@@ -4290,6 +4405,18 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
             "secret-token live metadata base64",
         ),
         (
+            "pytests/scripts/sccp_solana_live_evidence_test.py",
+            "parser_exception_types = (module.argparse.ArgumentTypeError, TypeError)",
+        ),
+        (
+            "pytests/scripts/sccp_solana_live_evidence_test.py",
+            "secret-token verifier_code_hash parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_solana_live_evidence_test.py",
+            "secret-token {label} decode detail",
+        ),
+        (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
             "secret-token solid block proof parser detail",
         ),
@@ -4299,11 +4426,31 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "for exception_type in (ValueError, RuntimeError):",
+            "for exception_type in (TypeError, ValueError, RuntimeError):",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "for exception_type in (TypeError, ValueError):",
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
             "secret-token transaction source proof parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "def test_live_evidence_redacts_source_event_topic_parser_typeerror",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token source-event log topic0 parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "def test_live_evidence_redacts_route_canary_topic_parser_typeerror",
+        ),
+        (
+            "pytests/scripts/sccp_tron_live_evidence_test.py",
+            "secret-token route-canary log topic0 parser detail",
         ),
         (
             "pytests/scripts/sccp_tron_live_evidence_test.py",
@@ -4414,12 +4561,24 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
             "secret-token {target_method} parser detail",
         ),
         (
+            "pytests/scripts/sccp_evm_source_live_evidence_test.py",
+            "for exception_type in (TypeError, RuntimeError):",
+        ),
+        (
             "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
             "secret-token-eth-source-hex",
         ),
         (
             "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
             "secret-token-eth-source-runtime0",
+        ),
+        (
+            "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
+            "secret-token ETH source hex TypeError detail",
+        ),
+        (
+            "scripts/sccp_eth_source_bridge_evidence.py",
+            "except (TypeError, ValueError):",
         ),
         (
             "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
@@ -4432,6 +4591,14 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
         (
             "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
             "secret-token-bsc-source-runtime0",
+        ),
+        (
+            "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
+            "secret-token BSC source hex TypeError detail",
+        ),
+        (
+            "scripts/sccp_bsc_source_bridge_evidence.py",
+            "except (TypeError, ValueError):",
         ),
         (
             "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
@@ -4479,6 +4646,22 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
         ),
         (
             "pytests/scripts/sccp_evm_destination_evidence_test.py",
+            "secret-token EVM destination hex TypeError detail",
+        ),
+        (
+            "scripts/sccp_evm_destination_evidence.py",
+            "except (TypeError, ValueError):",
+        ),
+        (
+            "scripts/sccp_evm_destination_evidence.py",
+            "except (OSError, TypeError, ValueError) as exc:",
+        ),
+        (
+            "pytests/scripts/sccp_evm_destination_evidence_test.py",
+            "for exception_type in (TypeError, ValueError):",
+        ),
+        (
+            "pytests/scripts/sccp_evm_destination_evidence_test.py",
             "secret-token-evm-destination-file-path.hex",
         ),
         (
@@ -4496,6 +4679,14 @@ def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_
         (
             "pytests/scripts/sccp_solana_destination_evidence_test.py",
             "secret-token-solana-destination-base64",
+        ),
+        (
+            "scripts/sccp_solana_destination_evidence.py",
+            "except (TypeError, ValueError, binascii.Error):",
+        ),
+        (
+            "pytests/scripts/sccp_solana_destination_evidence_test.py",
+            "secret-token Solana destination base64 decoder detail",
         ),
         (
             "pytests/scripts/sccp_solana_destination_evidence_test.py",
@@ -5705,6 +5896,14 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
+            "except (TypeError, ValueError, binascii.Error):",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
             "def _minimal_toml_duplicate_key_detail(",
         ),
         (
@@ -5721,6 +5920,14 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
+            "except (SystemExit, TypeError, ValueError, RuntimeError):",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            "except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
             "unsupported zk section with sensitive name",
         ),
         (
@@ -5730,6 +5937,22 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "def test_all_lanes_minimal_toml_parser_redacts_json_exception_causes",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "for exception_type in (TypeError, ValueError, RuntimeError):",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_evidence_redacts_destination_binding_recompute_failures",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "def test_all_lanes_evidence_redacts_destination_identity_failures",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -5750,6 +5973,14 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "def test_all_lanes_base64_helper_redacts_parser_causes",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "source_record_exception_types = (",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "source_validator_exception_types = (",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -5788,6 +6019,18 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
             "secret-token all-lanes base64",
         ),
         (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "secret-token destination binding material",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "secret-token {label} parser detail",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "for exception_type in (TypeError, ValueError):",
+        ),
+        (
             "scripts/sccp_ton_live_evidence.py",
             'raise RuntimeError(f"{label} must be 32-byte hex or base64") from None',
         ),
@@ -5800,12 +6043,28 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
             'raise ValueError("TON live code BoC base64 metadata is invalid") from None',
         ),
         (
+            "scripts/sccp_ton_live_evidence.py",
+            "except (TypeError, binascii.Error, ValueError):",
+        ),
+        (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
         ),
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
             "secret-token hash base64",
+        ),
+        (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "for exception_type in (TypeError, ValueError):",
+        ),
+        (
+            "pytests/scripts/sccp_ton_live_evidence_test.py",
+            "secret-token {label} parser detail",
+        ),
+        (
+            "scripts/sccp_ton_live_evidence.py",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
         ),
     ):
         required_markers = next(
@@ -6159,6 +6418,31 @@ def test_release_readiness_report_guards_ethereum_evm_source_live_production_gat
 
     removed_marker = "secret-token {target_method} parser detail"
     sparse_source_test = tmp_path / "sccp_evm_source_live_evidence_test.py"
+    sparse_source_test.write_text(
+        "\n".join(
+            marker for marker in source_test_markers if marker != removed_marker
+        ),
+        encoding="utf-8",
+    )
+
+    errors = report._ethereum_evm_source_live_production_gate_inventory_errors(
+        (
+            (
+                sparse_source_test,
+                source_test_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet live EVM source production SDK test inventory" in error
+        and str(sparse_source_test) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+    removed_marker = "for exception_type in (TypeError, RuntimeError):"
+    sparse_source_test = tmp_path / "sccp_evm_source_live_type_error_test.py"
     sparse_source_test.write_text(
         "\n".join(
             marker for marker in source_test_markers if marker != removed_marker

@@ -1225,48 +1225,51 @@ def test_evm_source_live_redacts_receipt_field_parser_exception_causes(monkeypat
     )
 
     for target_method, expected_message in cases:
-        fake = fake_opener_for(module)
+        for exception_type in (TypeError, RuntimeError):
+            fake = fake_opener_for(module)
 
-        def fail_target_receipt_field(
-            result,
-            *,
-            method,
-            byte_length,
-            nonzero=True,
-            target_method=target_method,
-        ):
-            if method == target_method:
-                raise RuntimeError(
-                    f"secret-token {target_method} parser detail"
-                )
-            return original_rpc_fixed_hex_data(
+            def fail_target_receipt_field(
                 result,
-                method=method,
-                byte_length=byte_length,
-                nonzero=nonzero,
-            )
-
-        with monkeypatch.context() as patch:
-            patch.setattr(module, "_rpc_fixed_hex_data", fail_target_receipt_field)
-            try:
-                module.collect_source_bridge_evidence(
-                    "https://ethereum.example",
-                    domain=module.SCCP_DOMAIN_ETH,
-                    bridge_address=fake.bridge,
-                    block_tag="latest",
-                    deployment_transaction_hash=bytes.fromhex("de" * 32),
-                    opener=fake.opener,
-                    timeout=1.0,
+                *,
+                method,
+                byte_length,
+                nonzero=True,
+                exception_type=exception_type,
+                target_method=target_method,
+            ):
+                if method == target_method:
+                    raise exception_type(
+                        f"secret-token {target_method} parser detail"
+                    )
+                return original_rpc_fixed_hex_data(
+                    result,
+                    method=method,
+                    byte_length=byte_length,
+                    nonzero=nonzero,
                 )
-            except RuntimeError as exc:
-                rendered = str(exc)
-                assert rendered == expected_message
-                assert "secret-token" not in rendered
-                assert "parser detail" not in rendered
-                assert exc.__cause__ is None
-                assert exc.__suppress_context__ is True
-            else:
-                raise AssertionError(f"{target_method} parser detail was accepted")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(module, "_rpc_fixed_hex_data", fail_target_receipt_field)
+                try:
+                    module.collect_source_bridge_evidence(
+                        "https://ethereum.example",
+                        domain=module.SCCP_DOMAIN_ETH,
+                        bridge_address=fake.bridge,
+                        block_tag="latest",
+                        deployment_transaction_hash=bytes.fromhex("de" * 32),
+                        opener=fake.opener,
+                        timeout=1.0,
+                    )
+                except RuntimeError as exc:
+                    rendered = str(exc)
+                    assert rendered == expected_message
+                    assert "secret-token" not in rendered
+                    assert "parser detail" not in rendered
+                    assert exception_type.__name__ not in rendered
+                    assert exc.__cause__ is None
+                    assert exc.__suppress_context__ is True
+                else:
+                    raise AssertionError(f"{target_method} parser detail was accepted")
 
 
 def test_evm_source_live_rejects_deployment_transaction_readback_drift():

@@ -741,48 +741,132 @@ def test_live_solana_evidence_redacts_imported_parser_failures(monkeypatch):
     )
 
     original_normalize = module.evidence.normalize_solana_program_id
-    with monkeypatch.context() as patch:
-        def fail_program_id(value, *, label):
-            if label == "verifier program id":
-                raise module.argparse.ArgumentTypeError(
-                    "secret-token verifier program id parser detail"
-                )
-            return original_normalize(value, label=label)
+    original_parse_hex32 = module._parse_hex32
+    original_decode_base58 = module.evidence.decode_solana_base58
 
-        patch.setattr(module.evidence, "normalize_solana_program_id", fail_program_id)
-        try:
-            module._summary(args, live)
-        except ValueError as exc:
-            rendered = str(exc)
-            assert rendered == "Solana live verifier program id metadata is invalid"
-            assert "secret-token" not in rendered
-            assert "parser detail" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError("Solana live summary leaked verifier id parser detail")
+    def fail_with(exception_type, message):
+        raise exception_type(message)
 
-    with monkeypatch.context() as patch:
-        def fail_program_bytes(_value, *, label):
-            raise module.argparse.ArgumentTypeError(
-                f"secret-token {label} parser detail"
-            )
+    def normalize_failure_factory(target_label, message):
+        def build(exception_type):
+            def fail(value, *, label):
+                if label == target_label:
+                    fail_with(exception_type, message)
+                return original_normalize(value, label=label)
 
-        patch.setattr(module.evidence, "parse_program_bytes_base64", fail_program_bytes)
-        try:
-            module._summary(args, live)
-        except ValueError as exc:
-            rendered = str(exc)
-            assert rendered == "Solana ProgramData executable base64 metadata is invalid"
-            assert "secret-token" not in rendered
-            assert "parser detail" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is True
-        else:
-            raise AssertionError("Solana live summary leaked executable parser detail")
+            return fail
+
+        return build
+
+    def parse_hex_failure_factory(target_label, message):
+        def build(exception_type):
+            def fail(value, *, label):
+                if label == target_label:
+                    fail_with(exception_type, message)
+                return original_parse_hex32(value, label=label)
+
+            return fail
+
+        return build
+
+    def unconditional_failure_factory(message):
+        def build(exception_type):
+            def fail(_value, *, label):
+                fail_with(exception_type, message.format(label=label))
+
+            return fail
+
+        return build
+
+    def decode_after_normalization_failure_factory(message):
+        def build(exception_type):
+            calls = 0
+
+            def fail(value, *, label):
+                nonlocal calls
+                calls += 1
+                if calls > 2:
+                    fail_with(exception_type, message.format(label=label))
+                return original_decode_base58(value, label=label)
+
+            return fail
+
+        return build
+
+    parser_exception_types = (module.argparse.ArgumentTypeError, TypeError)
+    cases = (
+        (
+            "normalize_solana_program_id",
+            "verifier program id",
+            "Solana live verifier program id metadata is invalid",
+            normalize_failure_factory(
+                "verifier program id",
+                "secret-token verifier program id parser detail",
+            ),
+            module.evidence,
+        ),
+        (
+            "normalize_solana_program_id",
+            "programdata address",
+            "Solana live ProgramData address metadata is invalid",
+            normalize_failure_factory(
+                "programdata address",
+                "secret-token programdata address parser detail",
+            ),
+            module.evidence,
+        ),
+        (
+            "_parse_hex32",
+            "verifier_code_hash",
+            "Solana live verifier code hash metadata is invalid",
+            parse_hex_failure_factory(
+                "verifier_code_hash",
+                "secret-token verifier_code_hash parser detail",
+            ),
+            module,
+        ),
+        (
+            "parse_program_bytes_base64",
+            "Solana ProgramData executable base64 metadata",
+            "Solana ProgramData executable base64 metadata is invalid",
+            unconditional_failure_factory(
+                "secret-token {label} parser detail",
+            ),
+            module.evidence,
+        ),
+        (
+            "decode_solana_base58",
+            "programdata address",
+            "Solana Program account ProgramData address metadata is invalid",
+            decode_after_normalization_failure_factory(
+                "secret-token {label} decode detail",
+            ),
+            module.evidence,
+        ),
+    )
+
+    for attr_name, _label, expected, factory, owner in cases:
+        for exception_type in parser_exception_types:
+            with monkeypatch.context() as patch:
+                patch.setattr(owner, attr_name, factory(exception_type))
+                try:
+                    module._summary(args, live)
+                except ValueError as exc:
+                    rendered = str(exc)
+                    assert rendered == expected
+                    assert "secret-token" not in rendered
+                    assert "parser detail" not in rendered
+                    assert "decode detail" not in rendered
+                    assert exception_type.__name__ not in rendered
+                    assert exc.__cause__ is None
+                    assert exc.__suppress_context__ is True
+                else:
+                    raise AssertionError(
+                        f"Solana live summary leaked {_label} parser detail"
+                    )
 
 
-def test_live_solana_account_data_redacts_base64_parser_causes():
+def test_live_solana_account_data_redacts_base64_parser_causes(monkeypatch):
     module = load_live_module()
     account = {"data": ["secret-token live account base64", "base64"]}
 
@@ -798,26 +882,61 @@ def test_live_solana_account_data_redacts_base64_parser_causes():
     else:
         raise AssertionError("Solana account data accepted invalid base64")
 
+    account_exception_types = (TypeError, ValueError)
+    for exception_type in account_exception_types:
 
-def test_live_solana_metadata_base64_redacts_parser_causes():
+        def fail_decode(*_args, exception_type=exception_type, **_kwargs):
+            raise exception_type("secret-token account-data decoder detail")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module.base64, "b64decode", fail_decode)
+            try:
+                module._account_data(
+                    {"data": ["ignored", "base64"]},
+                    label="Solana Program",
+                )
+            except RuntimeError as exc:
+                rendered = str(exc)
+                assert rendered == "Solana Program account data is invalid base64"
+                assert "secret-token" not in rendered
+                assert "decoder detail" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError("Solana account data accepted parser failure")
+
+
+def test_live_solana_metadata_base64_redacts_parser_causes(monkeypatch):
     module = load_live_module()
     live = {"programdata_metadata_base64": "secret-token live metadata base64"}
 
-    try:
-        module._live_base64_bytes(
-            live,
-            "programdata_metadata_base64",
-            label="Solana ProgramData metadata base64 metadata",
-        )
-    except ValueError as exc:
-        rendered = str(exc)
-        assert rendered == "Solana ProgramData metadata base64 metadata must be base64"
-        assert "secret-token" not in rendered
-        assert "live metadata base64" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("Solana live metadata accepted invalid base64")
+    for exception_type in (TypeError, ValueError):
+
+        def fail_decode(*_args, exception_type=exception_type, **_kwargs):
+            raise exception_type("secret-token live metadata base64")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module.base64, "b64decode", fail_decode)
+            try:
+                module._live_base64_bytes(
+                    live,
+                    "programdata_metadata_base64",
+                    label="Solana ProgramData metadata base64 metadata",
+                )
+            except ValueError as exc:
+                rendered = str(exc)
+                assert (
+                    rendered
+                    == "Solana ProgramData metadata base64 metadata must be base64"
+                )
+                assert "secret-token" not in rendered
+                assert "live metadata base64" not in rendered
+                assert exception_type.__name__ not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError("Solana live metadata accepted invalid base64")
 
 
 def test_live_solana_summary_requires_boolean_destination_readiness(monkeypatch):

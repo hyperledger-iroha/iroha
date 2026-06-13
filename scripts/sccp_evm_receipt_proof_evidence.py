@@ -60,7 +60,7 @@ def parse_hex_bytes(value: str, *, label: str, byte_length: int, nonzero: bool =
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except ValueError:
+    except (TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -903,7 +903,7 @@ def main(argv: list[str] | None = None) -> int:
             allow_receipt_only_evidence=args.allow_receipt_only_evidence,
             timeout=args.timeout,
         )
-    except (OSError, RuntimeError, ValueError, argparse.ArgumentTypeError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError, argparse.ArgumentTypeError) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP EVM receipt proof evidence collection failed",

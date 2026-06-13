@@ -10134,11 +10134,11 @@ Temporal properties:
   also covered by the exact per-field installation, invalidation, counter
   increase, or reset classifier for the field that moved.
 - The aggregate `RbcProgressMutationAlwaysMatchesLocalClassification` theorem
-  composes four already checked RBC state/evidence obligations with three
-  boundary obligations: delivered-entry classification, corrupted-entry
-  classification, and corrupted-repair exit classification. The fast, deep, and
-  TLC-fast configs wire the new boundary obligations directly while reusing the
-  existing protocol/fault provenance and local state/evidence classifiers.
+  composes the already checked RBC state/evidence provenance, local
+  state/evidence classifiers, delivered-entry classifier, corrupted-entry
+  classifier, and corrupted-repair exit classifier. The fast, deep, and
+  TLC-fast configs wire those constituent obligations directly instead of
+  duplicating the aggregate body as a solver-heavy temporal property.
 - `RbcHeaderInstallationOnlyByProposalOrInit` proves that RBC header evidence
   can move from absent to present only through an honest proposal starting RBC
   from `Idle` or an explicit RBC INIT repair/recovery step.

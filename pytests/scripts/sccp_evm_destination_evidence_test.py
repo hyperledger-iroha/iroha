@@ -55,33 +55,38 @@ def load_evidence_module():
 def test_evm_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
-    def fail_scope(_args):
-        raise ValueError("secret-token /tmp/operator/private-path")
+    for exception_type in (TypeError, ValueError):
 
-    monkeypatch.setattr(module, "validate_bsc_network_scope", fail_scope)
+        def fail_scope(_args, exception_type=exception_type):
+            raise exception_type("secret-token /tmp/operator/private-path")
 
-    try:
-        module.main(
-            [
-                "--domain",
-                "eth",
-                "--verifier-address",
-                "0x" + "11" * 20,
-                "--bridge-address",
-                "0x" + "22" * 20,
-                "--verifier-key-hash",
-                "0x" + "cc" * 32,
-            ]
-        )
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("EVM destination CLI accepted top-level render failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "validate_bsc_network_scope", fail_scope)
+            try:
+                module.main(
+                    [
+                        "--domain",
+                        "eth",
+                        "--verifier-address",
+                        "0x" + "11" * 20,
+                        "--bridge-address",
+                        "0x" + "22" * 20,
+                        "--verifier-key-hash",
+                        "0x" + "cc" * 32,
+                    ]
+                )
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError(
+                    "EVM destination CLI accepted top-level render failure"
+                )
 
-    captured = capsys.readouterr()
-    assert "SCCP EVM destination evidence rendering failed" in captured.err
-    assert "secret-token" not in captured.err
-    assert "private-path" not in captured.err
+            captured = capsys.readouterr()
+            assert "SCCP EVM destination evidence rendering failed" in captured.err
+            assert "secret-token" not in captured.err
+            assert "private-path" not in captured.err
+            assert exception_type.__name__ not in captured.err
 
 
 def evm_runtime_material(module, *, domain=1, bsc_network="mainnet"):
@@ -450,6 +455,43 @@ def test_evm_destination_direct_parsers_redact_parser_causes(tmp_path):
         assert exc.__suppress_context__ is True
     else:
         raise AssertionError("missing secret EVM destination runtime file was accepted")
+
+
+def test_evm_destination_direct_parsers_redact_typeerror_parser_causes(monkeypatch):
+    module = load_evidence_module()
+
+    class SecretBytes:
+        @staticmethod
+        def fromhex(_text):
+            raise TypeError("secret-token EVM destination hex TypeError detail")
+
+    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+
+    for parser, value, label, kwargs in (
+        (
+            module.parse_hex_bytes,
+            "0x" + "11" * 32,
+            "network id",
+            {"byte_length": 32},
+        ),
+        (
+            module.parse_runtime_bytecode_hex,
+            "0x6001600055",
+            "bridge runtime bytecode",
+            {},
+        ),
+    ):
+        try:
+            parser(value, label=label, **kwargs)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == f"{label} must be hex"
+            assert "secret-token" not in rendered
+            assert "TypeError" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"{label} parser TypeError was accepted")
 
 
 def test_evm_destination_binding_hash_matches_vectors_and_domain_separates():

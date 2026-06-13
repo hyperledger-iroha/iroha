@@ -1064,6 +1064,11 @@ fn normalize_keys(mut keys: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
 mod tests {
     use super::*;
 
+    fn checked_random_keypair() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random()
+            .expect("generate checked data-model JDG fixture keypair")
+    }
+
     fn sample_sdn_commitment(
         scope: &JdgAttestationScope,
         keypair: &iroha_crypto::KeyPair,
@@ -1075,7 +1080,10 @@ mod tests {
             seal: SignatureOf::from_signature(Signature::from_bytes(&[0u8])),
             sdn_public_key: keypair.public_key().clone(),
         };
-        let seal = SignatureOf::from_hash(keypair.private_key(), commitment.signing_hash());
+        let seal = SignatureOf::try_from_hash(keypair.private_key(), commitment.signing_hash())
+            .expect("checked data-model JDG SDN commitment fixture seal");
+        seal.verify_hash(keypair.public_key(), commitment.signing_hash())
+            .expect("checked data-model JDG SDN commitment fixture seal verifies");
         commitment.seal = seal;
         commitment
     }
@@ -1087,9 +1095,9 @@ mod tests {
             dataspace: DataSpaceId::new(7),
             block_range: JdgBlockRange::new(10, 12).expect("valid range"),
         };
-        let keypair = iroha_crypto::KeyPair::random();
+        let keypair = checked_random_keypair();
         let signer = keypair.public_key().clone();
-        let sdn_keypair = iroha_crypto::KeyPair::random();
+        let sdn_keypair = checked_random_keypair();
         let sdn_commitment = sample_sdn_commitment(&scope, &sdn_keypair);
         JdgAttestation {
             version: JDG_ATTESTATION_VERSION_V1,
@@ -1482,8 +1490,8 @@ mod tests {
         let rotation = JdgSdnRotationPolicy {
             dual_publish_blocks: 3,
         };
-        let parent = iroha_crypto::KeyPair::random();
-        let child = iroha_crypto::KeyPair::random();
+        let parent = checked_random_keypair();
+        let child = checked_random_keypair();
         let mut registry = JdgSdnRegistry::default();
 
         registry
@@ -1518,8 +1526,8 @@ mod tests {
         let rotation = JdgSdnRotationPolicy {
             dual_publish_blocks: 1,
         };
-        let parent = iroha_crypto::KeyPair::random();
-        let child = iroha_crypto::KeyPair::random();
+        let parent = checked_random_keypair();
+        let child = checked_random_keypair();
         let mut registry = JdgSdnRegistry::default();
 
         registry

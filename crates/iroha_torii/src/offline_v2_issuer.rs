@@ -2029,9 +2029,19 @@ mod tests {
     const NOW_MS: u64 = 1_700_000_000_000;
     const REPORT_BYTES: &[u8] = b"offline-v2-platform-attestation";
 
+    fn checked_seed_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("generate checked offline v2 issuer fixture keypair")
+    }
+
+    fn checked_signature(key_pair: &KeyPair, message: &[u8]) -> Signature {
+        Signature::try_new(key_pair.private_key(), message)
+            .expect("sign checked offline v2 issuer fixture")
+    }
+
     fn sample_issuer() -> (OfflineV2IssuerRuntime, KeyPair) {
-        let issuer_key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-        let verifier_key_pair = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
+        let issuer_key_pair = checked_seed_keypair(0x11);
+        let verifier_key_pair = checked_seed_keypair(0x22);
         let authority = AccountId::new(issuer_key_pair.public_key().clone());
         (
             OfflineV2IssuerRuntime {
@@ -2072,7 +2082,7 @@ mod tests {
         note_key: [u8; 32],
         assertion_key: Vec<u8>,
     ) -> ParsedOfflineRequest {
-        let account_key_pair = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
+        let account_key_pair = checked_seed_keypair(0x33);
         let account_id = AccountId::new(account_key_pair.public_key().clone());
         let account_literal = account_id.to_string();
         let asset_definition_id = AssetDefinitionId::new(
@@ -2159,7 +2169,7 @@ mod tests {
         ]);
         let signature = {
             let bytes = json::to_vec(&unsigned).expect("receipt json");
-            Signature::new(verifier.private_key(), &bytes)
+            checked_signature(verifier, &bytes)
         };
         let mut map = value_object(unsigned).expect("receipt object");
         map.insert(
@@ -2446,11 +2456,7 @@ mod tests {
     #[test]
     fn redeem_route_rejects_redemption_for_different_authenticated_account() {
         let mut request = fixture_redeem_request();
-        request.account_id = AccountId::new(
-            KeyPair::from_seed(vec![0x44; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        request.account_id = AccountId::new(checked_seed_keypair(0x44).public_key().clone());
         let model = chain_admissible_fixture_redeem_model();
         let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
         insert_field(
@@ -2502,6 +2508,18 @@ mod tests {
         assert_eq!(
             certificate.get("one_use").and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn attestation_receipt_rejects_wrong_verifier_signature() {
+        let (mut issuer, verifier) = sample_issuer();
+        let request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        issuer.attestation_verifier_public_key = checked_seed_keypair(0x23).public_key().clone();
+
+        assert_eq!(
+            validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_ATTESTATION_RECEIPT_INVALID"
         );
     }
 

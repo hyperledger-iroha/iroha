@@ -437,7 +437,7 @@ def _receipt_summary(
             method="eth_getTransactionReceipt transactionHash",
             byte_length=32,
         )
-    except RuntimeError:
+    except (RuntimeError, TypeError):
         raise RuntimeError(
             "deployment receipt transactionHash must be a non-zero bytes32"
         ) from None
@@ -456,7 +456,7 @@ def _receipt_summary(
             byte_length=20,
             method="eth_getTransactionReceipt contractAddress",
         )
-    except RuntimeError:
+    except (RuntimeError, TypeError):
         raise RuntimeError(
             "deployment receipt contractAddress must be a non-zero 20-byte EVM address"
         ) from None
@@ -471,7 +471,7 @@ def _receipt_summary(
             method="eth_getTransactionReceipt blockHash",
             byte_length=32,
         )
-    except RuntimeError:
+    except (RuntimeError, TypeError):
         raise RuntimeError(
             "deployment receipt blockHash must be a non-zero bytes32"
         ) from None
