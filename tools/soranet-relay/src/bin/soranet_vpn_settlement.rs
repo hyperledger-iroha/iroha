@@ -221,7 +221,7 @@ fn sign_artifact(
     let body = request_body(artifact)?;
     let key_pair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
     let message = canonical_request_signature_message("POST", path, &body, timestamp_ms, nonce);
-    let signature = Signature::new(key_pair.private_key(), &message);
+    let signature = Signature::try_new(key_pair.private_key(), &message)?;
     let body = String::from_utf8(body)?;
     let url = torii_root.map(|root| request_url(root, path));
     Ok(SignedSettlementRequest {

@@ -87,6 +87,33 @@ class NexusAppClientTest {
     }
 
     @Test
+    fun `finalizeAndSubmit accepts exact zero signature algorithm alias`() {
+        val torii = FakeToriiClient()
+        val client = NexusAppClient(
+            config = NexusAppConfig(
+                chainId = "test-chain",
+                authority = ACCOUNT_ID,
+                signingPublicKey = PUBLIC_KEY,
+            ),
+            codecAdapter = NoritoJavaCodecAdapter(),
+            toriiClient = torii,
+        )
+        val draft = client.buildTransferDraft(sampleInput())
+        val signable = draft.signable.copy(signatureAlgorithm = "0")
+
+        val receipt = client.finalizeAndSubmit(
+            signable,
+            NexusWalletSignature(WALLET_SIGNATURE, "0"),
+            NexusFinalizeOptions(waitForFinalStatus = false),
+        )
+
+        assertEquals(receipt.transactionHashHex, torii.submittedHash)
+        assertEquals(receipt.transactionHashHex, SignedTransactionHasher.hashHex(receipt.signedTransaction))
+        assertContentEquals(WALLET_SIGNATURE, receipt.signedTransaction.signature())
+        assertContentEquals(PUBLIC_KEY, receipt.signedTransaction.publicKey())
+    }
+
+    @Test
     fun `finalizeAndSubmit rejects unsupported signature algorithm`() {
         val client = NexusAppClient(
             config = NexusAppConfig(
@@ -100,8 +127,26 @@ class NexusAppClientTest {
         val draft = client.buildTransferDraft(sampleInput())
 
         for (algorithm in listOf(
+            "",
+            " ",
+            "\t",
+            "\n",
+            "\u00A0",
+            "ed25519 ",
+            " ed25519",
+            "\ted25519",
+            "ed25519\n",
+            "ed25519\u00A0",
+            "0 ",
+            " 0",
+            "\t0",
+            "00",
+            "\uFF10",
             "secp256k1",
             "ed\t25519",
+            "ed\u000025519",
+            "ed\u001F25519",
+            "ed\u007F25519",
             "ed\u200B25519",
             "\u0435d25519",
             "ed\uFF0D25519",
@@ -116,22 +161,78 @@ class NexusAppClientTest {
                 )
             }
 
-            assertEquals("unsupported_signature_algorithm", error.code)
+            assertEquals("unsupported_signature_algorithm", error.code, algorithm)
         }
 
-        val signableError = assertFailsWith<NexusAppError> {
-            client.finalizeAndSubmit(
-                NexusSignableTransaction(
-                    draft.signable.payloadBytes,
-                    draft.signable.payloadHashHex,
-                    draft.signable.authority,
-                    draft.signable.signingPublicKey,
-                    "ed\u200B25519",
-                ),
-                NexusWalletSignature(ByteArray(64) { 0x07 }),
-            )
+        for (algorithm in listOf(
+            "",
+            " ",
+            "ed25519 ",
+            " ed25519",
+            "0 ",
+            " 0",
+            "00",
+            "ED25519",
+            "ed\u000025519",
+            "ed\u200B25519",
+            "\u0435d25519",
+        )) {
+            val signableError = assertFailsWith<NexusAppError> {
+                client.finalizeAndSubmit(
+                    draft.signable.copy(signatureAlgorithm = algorithm),
+                    NexusWalletSignature(WALLET_SIGNATURE),
+                )
+            }
+            assertEquals("unsupported_signature_algorithm", signableError.code, algorithm)
         }
-        assertEquals("unsupported_signature_algorithm", signableError.code)
+    }
+
+    @Test
+    fun `requestSignature rejects unsupported algorithms at transport boundary`() {
+        val session = NexusConnectSession(
+            sessionId = "session-1",
+            walletLaunchUri = "sora://wallet/connect?session=session-1",
+            approvedAccount = ACCOUNT_ID,
+            signingPublicKey = PUBLIC_KEY,
+        )
+        val signable = NexusSignableTransaction(
+            payloadBytes = byteArrayOf(0x01, 0x02, 0x03),
+            payloadHashHex = "0".repeat(64),
+            authority = ACCOUNT_ID,
+            signingPublicKey = PUBLIC_KEY,
+        )
+
+        for (algorithm in listOf("", "ed25519 ", " 0", "ED25519", "ed\u200B25519")) {
+            val connect = SignatureConnect(WALLET_SIGNATURE)
+            val client = NexusAppClient(
+                config = NexusAppConfig(chainId = "test-chain"),
+                connectTransport = connect,
+                codecAdapter = NoritoJavaCodecAdapter(),
+            )
+
+            val error = assertFailsWith<NexusAppError> {
+                client.requestSignature(session, signable.copy(signatureAlgorithm = algorithm))
+            }
+
+            assertEquals("unsupported_signature_algorithm", error.code, algorithm)
+            assertEquals(null, connect.lastSignable)
+        }
+
+        for (algorithm in listOf("ed25519 ", " 0", "\uFF10", "ed\u000025519", "\u0435d25519")) {
+            val connect = SignatureConnect(WALLET_SIGNATURE, algorithm)
+            val client = NexusAppClient(
+                config = NexusAppConfig(chainId = "test-chain"),
+                connectTransport = connect,
+                codecAdapter = NoritoJavaCodecAdapter(),
+            )
+
+            val error = assertFailsWith<NexusAppError> {
+                client.requestSignature(session, signable)
+            }
+
+            assertEquals("unsupported_signature_algorithm", error.code, algorithm)
+            assertNotNull(connect.lastSignable)
+        }
     }
 
     @Test
@@ -326,6 +427,35 @@ class NexusAppClientTest {
             lastSignable = signable
             assertEquals(NEXUS_SIGNATURE_ALGORITHM_ED25519, signable.signatureAlgorithm)
             return NexusWalletSignature(signature)
+        }
+    }
+
+    private class SignatureConnect(
+        private val signature: ByteArray,
+        private val algorithm: String = NEXUS_SIGNATURE_ALGORITHM_ED25519,
+    ) : NexusConnectTransport {
+        var lastSignable: NexusSignableTransaction? = null
+
+        override fun startConnect(
+            options: NexusConnectOptions,
+            config: NexusAppConfig,
+        ): NexusConnectSession = NexusConnectSession("session-1", "sora://wallet/connect?session=session-1")
+
+        override fun awaitApproval(
+            session: NexusConnectSession,
+            config: NexusAppConfig,
+        ): NexusApprovedAccount = NexusApprovedAccount(
+            accountId = ACCOUNT_ID,
+            signingPublicKey = PUBLIC_KEY,
+        )
+
+        override fun requestSignature(
+            session: NexusConnectSession,
+            signable: NexusSignableTransaction,
+            config: NexusAppConfig,
+        ): NexusWalletSignature {
+            lastSignable = signable
+            return NexusWalletSignature(signature.copyOf(), algorithm)
         }
     }
 

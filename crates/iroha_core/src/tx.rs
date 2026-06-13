@@ -1302,6 +1302,7 @@ pub(crate) fn is_heartbeat_accepted_transaction(tx: &AcceptedTransaction<'_>) ->
 }
 
 /// Build a Sumeragi heartbeat transaction using the provided time source.
+#[cfg(test)]
 pub(crate) fn build_heartbeat_transaction_with_time_source(
     chain_id: ChainId,
     signer: &KeyPair,
@@ -1309,6 +1310,24 @@ pub(crate) fn build_heartbeat_transaction_with_time_source(
     proposal_height: u64,
     time_source: &TimeSource,
 ) -> SignedTransaction {
+    try_build_heartbeat_transaction_with_time_source(
+        chain_id,
+        signer,
+        tx_params,
+        proposal_height,
+        time_source,
+    )
+    .expect("signing should succeed for a valid heartbeat transaction payload")
+}
+
+/// Try to build a Sumeragi heartbeat transaction using the provided time source.
+pub(crate) fn try_build_heartbeat_transaction_with_time_source(
+    chain_id: ChainId,
+    signer: &KeyPair,
+    tx_params: &TransactionParameters,
+    proposal_height: u64,
+    time_source: &TimeSource,
+) -> std::result::Result<SignedTransaction, TransactionSignatureError> {
     let authority = AccountId::new(signer.public_key().clone());
     let mut metadata = Metadata::default();
     metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new(true));
@@ -1326,7 +1345,7 @@ pub(crate) fn build_heartbeat_transaction_with_time_source(
     }
     TransactionBuilder::new_with_time_source(chain_id, authority, time_source)
         .with_metadata(metadata)
-        .sign(signer.private_key())
+        .try_sign(signer.private_key())
 }
 
 impl<'tx> AcceptedTransaction<'tx> {
@@ -10039,6 +10058,29 @@ pub mod tests {
             }
             other => panic!("expected TransactionLimit failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn try_build_heartbeat_transaction_checked_signing_verifies() {
+        use std::time::Duration;
+
+        let chain: ChainId = "heartbeat-checked-signing".parse().unwrap();
+        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let tx_params = TransactionParameters::default();
+
+        let tx = try_build_heartbeat_transaction_with_time_source(
+            chain,
+            &signer,
+            &tx_params,
+            7,
+            &time_source,
+        )
+        .expect("checked heartbeat signing");
+
+        assert!(is_heartbeat_transaction(&tx));
+        tx.verify_signature()
+            .expect("checked heartbeat transaction signature should verify");
     }
 
     #[test]

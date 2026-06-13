@@ -777,7 +777,8 @@ mod tests {
             alias_merkle_root(&bundle.binding, &bundle.merkle_path).expect("compute merkle root");
         bundle.registry_root = root;
         let digest = alias_proof_signature_digest(&bundle);
-        let signature = Signature::new(keypair.private_key(), digest.as_ref());
+        let signature = Signature::try_new(keypair.private_key(), digest.as_ref())
+            .expect("sign SoraFS alias proof fixture");
         let signer_vec = keypair
             .public_key()
             .try_to_bytes()
@@ -836,6 +837,18 @@ mod tests {
     fn alias_proof_bundle_verification_succeeds() {
         let (bundle, _) = signed_alias_proof_bundle();
         verify_alias_proof_bundle(&bundle).expect("bundle must verify");
+    }
+
+    #[test]
+    fn signed_alias_proof_bundle_checked_signature_verifies_digest() {
+        let (bundle, keypair) = signed_alias_proof_bundle();
+        let digest = alias_proof_signature_digest(&bundle);
+        let signature = &bundle.council_signatures[0].signature;
+        let signature = Signature::from_bytes(signature);
+
+        signature
+            .verify(keypair.public_key(), digest.as_ref())
+            .expect("checked alias proof fixture signature verifies");
     }
 
     #[test]

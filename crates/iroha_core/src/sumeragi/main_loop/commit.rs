@@ -39,7 +39,6 @@ pub(super) struct CommitWork {
     pub(super) consensus_mode: ConsensusMode,
     pub(super) qc_signers: Option<BTreeSet<ValidatorIndex>>,
     pub(super) commit_qc: Option<crate::sumeragi::consensus::Qc>,
-    pub(super) allow_quorum_bypass: bool,
     pub(super) allow_signature_index_recovery: bool,
     pub(super) events_sender: crate::EventsSender,
 }
@@ -132,6 +131,19 @@ fn pending_allows_stale_view_commit_qc_fetch(
             tip_height,
             tip_hash,
         )
+}
+
+fn sign_vote_with_local_key(
+    chain_id: &iroha_data_model::ChainId,
+    mode_tag: &str,
+    private_key: &iroha_crypto::PrivateKey,
+    vote: &mut crate::sumeragi::consensus::Vote,
+) -> Result<(), iroha_crypto::Error> {
+    vote.bls_sig.clear();
+    let preimage = vote_preimage(chain_id, mode_tag, vote);
+    let signature = Signature::try_new(private_key, &preimage)?;
+    vote.bls_sig = signature.payload().to_vec();
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -470,7 +482,6 @@ pub(super) fn execute_commit_work(
         consensus_mode,
         qc_signers: _qc_signers,
         commit_qc,
-        allow_quorum_bypass: _allow_quorum_bypass,
         allow_signature_index_recovery,
         events_sender: _events_sender,
         ..
@@ -1502,7 +1513,6 @@ impl Actor {
                                 .0,
                             qc_signers: inflight.qc_signers.clone(),
                             commit_qc: inflight.commit_qc.clone(),
-                            allow_quorum_bypass: inflight.allow_quorum_bypass,
                             allow_signature_index_recovery,
                             events_sender: self.events_sender.clone(),
                         };
@@ -1610,7 +1620,6 @@ impl Actor {
             signature_topology,
             qc_signers,
             commit_qc,
-            allow_quorum_bypass,
             post_commit_qc,
             ..
         } = inflight;
@@ -1927,7 +1936,7 @@ impl Actor {
                 if let Some(qc) = cached_qc.as_ref() {
                     self.qc_cache.entry(qc_key).or_insert_with(|| qc.clone());
                 }
-                if !allow_quorum_bypass && cached_qc.is_none() {
+                if cached_qc.is_none() {
                     if let (Some(signers), Some(view_signers)) =
                         (qc_signers.as_ref(), view_signers.as_ref())
                     {
@@ -3163,7 +3172,6 @@ impl Actor {
                     })
                     .map(|parsed| parsed.voting)
             });
-        let allow_quorum_bypass = false;
         let view_signers = quorum_signers.as_ref().and_then(|signers| {
             let mapped =
                 super::normalize_signer_indices_to_view(signers, &topology, &canonical_topology);
@@ -3191,7 +3199,7 @@ impl Actor {
                 &commit_topology,
             )
         });
-        if !allow_quorum_bypass && commit_qc.is_none() {
+        if commit_qc.is_none() {
             if let (Some(signers), Some(view_signers)) =
                 (quorum_signers.as_ref(), view_signers.as_ref())
             {
@@ -3299,7 +3307,6 @@ impl Actor {
             consensus_mode,
             qc_signers: quorum_signers.clone(),
             commit_qc: commit_qc.clone(),
-            allow_quorum_bypass,
             allow_signature_index_recovery,
             events_sender: self.events_sender.clone(),
         };
@@ -3312,7 +3319,6 @@ impl Actor {
             signature_topology,
             qc_signers: quorum_signers,
             commit_qc,
-            allow_quorum_bypass,
             post_commit_qc,
             enqueue_time: now,
             timeout_reported: false,
@@ -3853,12 +3859,7 @@ impl Actor {
             }
             let (aborted, payload_available) = match self.pending.pending_blocks.get(&hash) {
                 Some(snapshot) => {
-                    let payload_available = da_enabled
-                        && Self::payload_available_for_da(
-                            &self.subsystems.da_rbc.rbc.sessions,
-                            &self.subsystems.da_rbc.rbc.status_handle,
-                            snapshot,
-                        );
+                    let payload_available = da_enabled && self.payload_available_for_da(snapshot);
                     (snapshot.aborted, payload_available)
                 }
                 None => continue,
@@ -5781,9 +5782,22 @@ impl Actor {
             bls_sig: Vec::new(),
         };
         let (_, mode_tag, _) = self.consensus_context_for_height(height);
-        let preimage = vote_preimage(&self.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
-        vote.bls_sig = signature.payload().to_vec();
+        if let Err(err) = sign_vote_with_local_key(
+            &self.common_config.chain,
+            mode_tag,
+            self.common_config.key_pair.private_key(),
+            &mut vote,
+        ) {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                signer,
+                error = %err,
+                "failed to sign local consensus vote; skipping vote"
+            );
+            return None;
+        }
         Some(vote)
     }
 
@@ -7359,9 +7373,10 @@ impl Actor {
         }
     }
 
-    /// Check whether an RBC session already has authoritative local payload for this exact slot.
-    /// Consults both in-memory sessions and the persisted status snapshot so restarts and
-    /// multi-view recovery continue to expose availability deterministically.
+    /// Check whether an RBC session already has complete payload bytes for this exact slot.
+    /// Status snapshots remain diagnostic-only because they do not carry byte-level
+    /// availability evidence for DA gating.
+    #[cfg(test)]
     fn ensure_block_matches_rbc_payload(
         sessions: &BTreeMap<super::rbc_store::SessionKey, RbcSession>,
         handle: &rbc_status::Handle,
@@ -7379,7 +7394,23 @@ impl Actor {
     }
 
     /// Return true when the pending block payload is available locally or via RBC.
-    pub(super) fn payload_available_for_da(
+    pub(super) fn payload_available_for_da(&self, pending: &PendingBlock) -> bool {
+        if Hash::new(pending.payload_bytes()) == pending.payload_hash {
+            return true;
+        }
+        let key = (pending.block.hash(), pending.height, pending.view);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| {
+                self.rbc_session_has_verified_payload_for_da(key, session, &pending.payload_hash)
+            })
+    }
+
+    #[cfg(test)]
+    pub(super) fn payload_available_for_da_from_sessions(
         sessions: &BTreeMap<super::rbc_store::SessionKey, RbcSession>,
         handle: &rbc_status::Handle,
         pending: &PendingBlock,
@@ -7510,12 +7541,7 @@ impl Actor {
 
     fn refresh_da_gate_status(&mut self, pending: &mut PendingBlock) -> DaGateStatus {
         let da_enabled = self.runtime_da_enabled();
-        let missing_local_data = da_enabled
-            && !Self::payload_available_for_da(
-                &self.subsystems.da_rbc.rbc.sessions,
-                &self.subsystems.da_rbc.rbc.status_handle,
-                pending,
-            );
+        let missing_local_data = da_enabled && !self.payload_available_for_da(pending);
         let lane_config = self.state.nexus_snapshot().lane_config.clone();
         let telemetry = {
             #[cfg(feature = "telemetry")]
@@ -8408,6 +8434,18 @@ impl Actor {
             .filter(|(hash, _, _)| *hash == block_hash)
             .copied()
             .collect();
+        let verified_live_payload_keys: BTreeSet<_> = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .iter()
+            .filter_map(|(key, session)| {
+                (key.0 == block_hash
+                    && self.rbc_session_has_local_authoritative_payload_for_progress(*key, session))
+                .then_some(*key)
+            })
+            .collect();
         let delivered_payload_fallbacks = self
             .subsystems
             .da_rbc
@@ -8466,10 +8504,9 @@ impl Actor {
             .collect();
         for key in orphan_keys {
             let live_session_payload_verified =
-                !live_session_keys.contains(&key) || delivered_payload_fallbacks.contains_key(&key);
-            if live_session_payload_verified {
-                self.refresh_retained_rbc_summary_from_local_payload(key);
-            }
+                !live_session_keys.contains(&key) || verified_live_payload_keys.contains(&key);
+            let retained_summary_refreshed = live_session_payload_verified
+                && self.refresh_retained_rbc_summary_from_local_payload(key);
             // Commit cleanup retains the final status summary for observability and restart
             // recovery, while still clearing runtime-only RBC state. If the live session has
             // already retired, only local payload evidence can promote the retained summary to
@@ -8485,6 +8522,7 @@ impl Actor {
                 });
                 let can_promote_from_local_payload = local_payload_matches_summary
                     && live_session_payload_verified
+                    && retained_summary_refreshed
                     && summary.total_chunks > 0
                     && summary.received_chunks <= summary.total_chunks;
                 let mut changed = false;
@@ -8505,7 +8543,7 @@ impl Actor {
                         .update(summary, SystemTime::now());
                 }
             }
-            if live_session_payload_verified {
+            if live_session_payload_verified && retained_summary_refreshed {
                 self.maybe_record_rbc_payload_bytes_metric_for_retained_summary(key);
             }
             self.clear_rbc_runtime_state(key, false);
@@ -8574,31 +8612,28 @@ impl Actor {
     fn refresh_retained_rbc_summary_from_local_payload(
         &mut self,
         key: super::rbc_store::SessionKey,
-    ) {
+    ) -> bool {
         let Some(expected_payload_hash) = self
             .subsystems
             .da_rbc
             .rbc
             .status_handle
             .get(&key)
-            .map(|summary| {
-                (!summary.invalid && summary.received_chunks < summary.total_chunks)
-                    .then_some(summary.payload_hash)
-            })
-            .unwrap_or(Some(None))
+            .and_then(|summary| (!summary.invalid).then_some(summary.payload_hash))
+            .flatten()
         else {
-            return;
+            return false;
         };
 
         let Some(block) = self.local_signed_block_for_hash(key.0) else {
-            return;
+            return false;
         };
         let header = block.header();
         if block.hash() != key.0
             || header.height().get() != key.1
             || header.view_change_index() != key.2
         {
-            return;
+            return false;
         }
         let (payload_bytes, payload_hash) = self
             .with_local_payload_for_progress(key.0, |height, view, bytes, hash| {
@@ -8610,22 +8645,26 @@ impl Actor {
                 let payload_hash = Hash::new(&payload_bytes);
                 (payload_bytes, payload_hash)
             });
-        if expected_payload_hash.is_some_and(|expected| expected != payload_hash) {
-            return;
+        if expected_payload_hash != payload_hash {
+            return false;
         }
-        if let Err(err) = self.persist_exact_frontier_rbc_recovery_snapshot(
+        match self.persist_exact_frontier_rbc_recovery_snapshot(
             key,
             block.as_ref(),
             payload_bytes.as_slice(),
             payload_hash,
         ) {
-            debug!(
+            Ok(refreshed) => refreshed,
+            Err(err) => {
+                debug!(
                 height = key.1,
                 view = key.2,
                 block = %key.0,
                 ?err,
                 "failed to refresh retained committed RBC snapshot from local payload"
-            );
+                );
+                false
+            }
         }
     }
 
@@ -10057,7 +10096,6 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
-            allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
             events_sender,
         }
@@ -10329,7 +10367,6 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
-            allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
             events_sender,
         };
@@ -10458,7 +10495,6 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: Some(qc.clone()),
-            allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
             events_sender,
         };
@@ -10555,7 +10591,6 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
-            allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
             events_sender,
         };
@@ -10613,7 +10648,6 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
-            allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
             events_sender,
         };
@@ -10952,7 +10986,6 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
-            allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
             events_sender,
         };
@@ -11030,7 +11063,6 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
-            allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
             events_sender: events_sender.clone(),
         };
@@ -11050,7 +11082,6 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
-            allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
             events_sender,
         };
@@ -11128,7 +11159,6 @@ mod tests {
             consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
-            allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
             events_sender,
         };
@@ -11169,6 +11199,37 @@ mod tests {
             Some(&signers),
             min_votes_for_commit
         ));
+    }
+
+    #[test]
+    fn sign_vote_with_local_key_attaches_verifiable_signature() {
+        let chain = "test-chain".parse::<ChainId>().expect("chain id");
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Prepare,
+            block_hash: sample_block(3, 0).hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 3,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: vec![0xAA; 4],
+        };
+
+        sign_vote_with_local_key(&chain, PERMISSIONED_TAG, key_pair.private_key(), &mut vote)
+            .expect("local vote signing succeeds");
+
+        assert!(!vote.bls_sig.is_empty());
+        assert_ne!(vote.bls_sig, vec![0xAA; 4]);
+        let preimage = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
+        Signature::from_bytes(&vote.bls_sig)
+            .verify(key_pair.public_key(), &preimage)
+            .expect("signed vote verifies against local key");
     }
 
     #[test]
@@ -11658,7 +11719,7 @@ mod tests {
         let sessions = BTreeMap::new();
         let handle = rbc_status::Handle::new();
 
-        assert!(Actor::payload_available_for_da(
+        assert!(Actor::payload_available_for_da_from_sessions(
             &sessions, &handle, &pending
         ));
     }
@@ -11693,7 +11754,7 @@ mod tests {
         handle.update(summary, std::time::SystemTime::now());
 
         assert!(
-            !Actor::payload_available_for_da(&sessions, &handle, &pending),
+            !Actor::payload_available_for_da_from_sessions(&sessions, &handle, &pending),
             "summary-only RBC delivery does not carry payload bytes and must not satisfy DA availability",
         );
     }
@@ -11707,13 +11768,33 @@ mod tests {
         let mut sessions = BTreeMap::new();
         let handle = rbc_status::Handle::new();
 
+        let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0)
+            .expect("rbc session");
+        session.test_set_block_header_and_signature(&block);
+        sessions.insert((block.hash(), 2, 0), session);
+
+        assert!(Actor::payload_available_for_da_from_sessions(
+            &sessions, &handle, &pending
+        ));
+    }
+
+    #[test]
+    fn payload_available_for_da_rejects_complete_rbc_payload_without_metadata() {
+        let block = sample_block(2, 0);
+        let payload = b"authoritative-rbc-payload".to_vec();
+        let payload_hash = Hash::new(&payload);
+        let pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
+        let mut sessions = BTreeMap::new();
+        let handle = rbc_status::Handle::new();
+
         let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0)
             .expect("rbc session");
         sessions.insert((block.hash(), 2, 0), session);
 
-        assert!(Actor::payload_available_for_da(
-            &sessions, &handle, &pending
-        ));
+        assert!(
+            !Actor::payload_available_for_da_from_sessions(&sessions, &handle, &pending),
+            "DA availability must not accept RBC bytes that are not bound to block metadata",
+        );
     }
 
     #[test]
@@ -11725,11 +11806,12 @@ mod tests {
         let handle = rbc_status::Handle::new();
 
         let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+        session.test_set_block_header_and_signature(&block);
         session.test_note_chunk(0, b"different-complete-bytes".to_vec(), 0);
         sessions.insert((block.hash(), 2, 0), session);
 
         assert!(
-            !Actor::payload_available_for_da(&sessions, &handle, &pending),
+            !Actor::payload_available_for_da_from_sessions(&sessions, &handle, &pending),
             "DA availability must not accept complete RBC counters when the reconstructed bytes hash differently",
         );
     }

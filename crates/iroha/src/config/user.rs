@@ -577,7 +577,7 @@ mod tests {
     use super::*;
 
     fn root_with_timeouts(ttl: Duration, timeout: Duration) -> Root {
-        let key_pair = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::from_seed(b"iroha:config:user:tests".to_vec(), Algorithm::Ed25519);
         Root {
             chain: ChainId::from_str("test-chain").expect("chain id"),
             torii_url: WithOrigin::inline(

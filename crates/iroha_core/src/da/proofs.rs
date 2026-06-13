@@ -32,6 +32,14 @@ pub enum DaProofVerificationError {
         /// Height extracted from the block header.
         observed: u64,
     },
+    /// Proof bundle length disagrees with the referenced bundle.
+    #[error("DA commitment proof advertises bundle length {observed} but bundle has {expected}")]
+    BundleLengthMismatch {
+        /// Number of commitments in the referenced bundle.
+        expected: u32,
+        /// Bundle length advertised by the proof.
+        observed: u32,
+    },
     /// The commitment index falls outside the bundle bounds.
     #[error("commitment index {index} out of bounds for bundle length {len}")]
     IndexOutOfBounds {
@@ -180,6 +188,14 @@ pub fn verify_da_commitment_proof(
         });
     }
 
+    let expected_bundle_len = u32::try_from(bundle.commitments.len()).unwrap_or(u32::MAX);
+    if proof.bundle_len != expected_bundle_len {
+        return Err(DaProofVerificationError::BundleLengthMismatch {
+            expected: expected_bundle_len,
+            observed: proof.bundle_len,
+        });
+    }
+
     let idx = usize::try_from(proof.location.index_in_bundle).map_err(|_| {
         DaProofVerificationError::IndexOutOfBounds {
             index: usize::MAX,
@@ -311,6 +327,24 @@ mod tests {
         let err = verify_da_commitment_proof(&proof, &bundle, &header, &lane_config())
             .expect_err("should fail");
         assert!(matches!(err, DaProofVerificationError::PathMismatch));
+    }
+
+    #[test]
+    fn verify_rejects_bundle_len_mismatch() {
+        let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
+        let mut proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
+        proof.bundle_len = proof.bundle_len.saturating_add(1);
+        let header = header_with_hash(3, bundle.canonical_hash());
+
+        let err = verify_da_commitment_proof(&proof, &bundle, &header, &lane_config())
+            .expect_err("tampered bundle length must fail");
+        assert!(matches!(
+            err,
+            DaProofVerificationError::BundleLengthMismatch {
+                expected: 2,
+                observed: 3
+            }
+        ));
     }
 
     #[test]

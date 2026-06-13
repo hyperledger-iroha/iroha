@@ -257,7 +257,8 @@ fn sample_directory_bundle() -> (ResolverAttestationDocumentV1, Vec<u8>, Vec<u8>
         builder_signature: Signature::from_bytes(&[0; 64]),
     };
     let payload = signing_payload_bytes(&record).expect("signing payload");
-    record.builder_signature = Signature::new(builder_keys.private_key(), &payload);
+    record.builder_signature = Signature::try_new(builder_keys.private_key(), &payload)
+        .expect("directory record should sign");
     let record_bytes = norito::json::to_vec(&record).expect("serialize record");
 
     (rad, directory_bytes, record_bytes)

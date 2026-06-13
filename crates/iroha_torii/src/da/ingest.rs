@@ -416,16 +416,6 @@ pub async fn handler_post_da_ingest(
             }
 
             {
-                let spool_dir = app.da_ingest.manifest_store_dir.clone();
-                let receipt = receipt.clone();
-                let sequence = request.sequence;
-                spool_batch.push(DaSpoolAction::new("receipt_file", move || {
-                    persistence::persist_da_receipt(&spool_dir, &receipt, sequence, &fingerprint)
-                        .map(|_| DaSpoolActionOutput::None)
-                        .map_err(|err| err.to_string())
-                }));
-            }
-            {
                 let receipt_log = Arc::clone(&app.da_receipt_log);
                 let receipt = receipt.clone();
                 let sequence = request.sequence;
@@ -632,6 +622,9 @@ pub async fn handler_post_da_ingest(
             }
             if !receipt_log_recorded {
                 record_da_receipt_error_metrics(&telemetry, lane_epoch, request.sequence);
+            }
+            if let Some(response) = da_spool_rejection_response(&spool_report, format) {
+                return Ok(response);
             }
             if let Some((routing_manifest, manifest_digest_hex)) = taikai_alias_rotation_event
                 && spool_report_action_ok(&spool_report, "taikai_trm")
@@ -1084,12 +1077,13 @@ fn build_receipt(
         rent_quote,
         operator_signature: Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER),
     };
-    let unsigned_bytes = to_bytes(&receipt).map_err(|err| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to encode DA ingest receipt for signing: {err}"),
-        )
-    })?;
+    let unsigned_bytes =
+        persistence::unsigned_receipt_bytes(&receipt, request.sequence).map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to encode DA ingest receipt for signing: {err}"),
+            )
+        })?;
     receipt.operator_signature = Signature::try_new(signer.private_key(), &unsigned_bytes)
         .map_err(|err| {
             (
@@ -1674,6 +1668,56 @@ fn log_da_spool_failures(report: &DaSpoolBatchReport) {
             );
         }
     }
+}
+
+fn da_spool_rejection_response(
+    report: &DaSpoolBatchReport,
+    format: ResponseFormat,
+) -> Option<Response> {
+    for action in report.actions() {
+        if let Some(error) = action.error() {
+            let message = format!("DA spool action `{}` failed: {error}", action.kind());
+            return Some(build_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &message,
+                format,
+            ));
+        }
+    }
+
+    let mut saw_receipt_log = false;
+    for action in report.actions() {
+        let Some(DaSpoolActionOutput::ReceiptOutcome(outcome)) = action.output() else {
+            continue;
+        };
+        saw_receipt_log = true;
+        match outcome {
+            ReceiptInsertOutcome::Stored { .. } | ReceiptInsertOutcome::Duplicate { .. } => {}
+            ReceiptInsertOutcome::ManifestConflict { .. } => {
+                return Some(build_error_response(
+                    StatusCode::CONFLICT,
+                    "receipt sequence already used for a different manifest",
+                    format,
+                ));
+            }
+            ReceiptInsertOutcome::StaleSequence { highest } => {
+                let message = format!(
+                    "sequence is stale relative to persisted DA receipts; highest stored sequence is {highest}"
+                );
+                return Some(build_error_response(StatusCode::CONFLICT, &message, format));
+            }
+        }
+    }
+
+    if !saw_receipt_log {
+        return Some(build_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DA receipt log did not report an outcome",
+            format,
+        ));
+    }
+
+    None
 }
 
 fn spool_report_action_ok(report: &DaSpoolBatchReport, kind: &'static str) -> bool {

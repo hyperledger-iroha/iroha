@@ -6429,6 +6429,15 @@ struct ManifestSubmitRequest<'a> {
     api_version_hint: Option<&'a str>,
 }
 
+fn sign_manifest_submit_fallback_transaction(
+    builder: iroha_data_model::transaction::signed::TransactionBuilder,
+    private_key: &PrivateKey,
+) -> Result<iroha_data_model::transaction::signed::SignedTransaction, String> {
+    builder
+        .try_sign(private_key)
+        .map_err(|err| format!("failed to sign fallback manifest transaction: {err}"))
+}
+
 fn submit_manifest_via_transaction_endpoint(
     request: &ManifestSubmitRequest<'_>,
     manifest: &ManifestV1,
@@ -6475,11 +6484,12 @@ fn submit_manifest_via_transaction_endpoint(
             Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
         tx_metadata.insert(gas_asset_key, Json::new(asset_id.to_owned()));
     }
-    let transaction =
+    let transaction = sign_manifest_submit_fallback_transaction(
         TransactionBuilder::new(ChainId::from(chain_id.clone()), request.authority.clone())
             .with_instructions([InstructionBox::from(instruction)])
-            .with_metadata(tx_metadata)
-            .sign(request.private_key);
+            .with_metadata(tx_metadata),
+        request.private_key,
+    )?;
     let tx_hash_hex = hex_encode(transaction.hash().as_ref());
     let tx_endpoint = request
         .torii_base_url
@@ -8918,6 +8928,41 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(files, expected_files);
+    }
+
+    #[test]
+    fn manifest_submit_fallback_transaction_checked_signing_verifies() {
+        use iroha_data_model::{
+            ChainId,
+            prelude::{InstructionBox, TransactionBuilder},
+            sorafs::pin_registry::ManifestDigest,
+        };
+
+        let manifest = sample_manifest();
+        let manifest_digest = manifest.digest().expect("manifest digest");
+        let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest::new(
+            ManifestDigest::new(*manifest_digest.as_bytes()),
+            chunker_handle_from_profile(&manifest.chunking),
+            [0xCC; 32],
+            manifest.content_length,
+            convert_pin_policy(&manifest.pin_policy),
+            42,
+            None,
+            Some(ManifestDigest::new([0xDD; 32])),
+        );
+        let keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+
+        let tx = sign_manifest_submit_fallback_transaction(
+            TransactionBuilder::new(ChainId::from("test-chain".to_owned()), authority.clone())
+                .with_instructions([InstructionBox::from(instruction)]),
+            keypair.private_key(),
+        )
+        .expect("checked fallback transaction signing");
+
+        assert_eq!(tx.authority(), &authority);
+        tx.verify_signature()
+            .expect("checked fallback transaction signature should verify");
     }
 
     #[test]

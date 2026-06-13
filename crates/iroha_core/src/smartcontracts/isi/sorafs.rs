@@ -2407,7 +2407,8 @@ mod sorafs_tests {
         let manifest_hex = hex::encode(record.digest.as_bytes());
         let chunk_hex = hex::encode(record.chunk_digest_sha3_256);
         let profile = canonical_profile(&record.chunker);
-        let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
+        let signature = Signature::try_new(keypair.private_key(), record.digest.as_bytes())
+            .expect("council envelope fixture should sign");
         let signature_hex = hex::encode(signature.payload());
         let public_key = keypair.public_key();
         let (_, signer_bytes) = public_key
@@ -2681,7 +2682,8 @@ mod sorafs_tests {
         let digest_bytes = alias_proof_signature_digest(&bundle);
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x22; 32]).expect("seeded key");
         let keypair = KeyPair::from_private_key(private).expect("derive keypair");
-        let signature = Signature::new(keypair.private_key(), digest_bytes.as_ref());
+        let signature = Signature::try_new(keypair.private_key(), digest_bytes.as_ref())
+            .expect("alias proof fixture should sign");
         let (_, signer_bytes) = keypair
             .public_key()
             .try_to_bytes()

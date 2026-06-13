@@ -4209,6 +4209,8 @@ export interface EthereumMainnetNativeEvmProverBundleInput {
   proving_key?: string;
   verifierKeyHash?: string;
   verifier_key_hash?: string;
+  verifierKeyArtifactHash?: string;
+  verifier_key_artifact_hash?: string;
   verifierKey?: string;
   verifier_key?: string;
   destinationBindingHash?: string;
@@ -4260,6 +4262,7 @@ export interface EthereumMainnetNativeEvmProverBundle {
   readonly provingKeyHash: string;
   readonly provingKey: string;
   readonly verifierKeyHash: string;
+  readonly verifierKeyArtifactHash: string;
   readonly verifierKey: string;
   readonly destinationBindingHash: string;
   readonly noWasm: true;
@@ -4339,6 +4342,8 @@ export interface EthereumMainnetNativeEvmProverParityFixtureInput {
   calldata_hash?: string;
   toriiSubmitPayloadHash?: string;
   torii_submit_payload_hash?: string;
+  productionAttestationHash?: string;
+  production_attestation_hash?: string;
   sdkResults?: Partial<
     Record<
       "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
@@ -4376,6 +4381,7 @@ export interface EthereumMainnetNativeEvmProverParityFixture {
   readonly publicSignalWords: readonly string[];
   readonly calldataHash: string;
   readonly toriiSubmitPayloadHash: string;
+  readonly productionAttestationHash: string;
   readonly sdkResults: Readonly<
     Record<
       "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
@@ -4444,6 +4450,8 @@ export interface EthereumMainnetNativeEvmProverSelfTestFixtureInput {
   calldata_hash?: string;
   toriiSubmitPayloadHash?: string;
   torii_submit_payload_hash?: string;
+  productionAttestationHash?: string;
+  production_attestation_hash?: string;
   sdkResults?: Partial<
     Record<
       "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
@@ -4484,6 +4492,7 @@ export interface EthereumMainnetNativeEvmProverSelfTestFixture {
   readonly publicSignalWords: readonly string[];
   readonly calldataHash: string;
   readonly toriiSubmitPayloadHash: string;
+  readonly productionAttestationHash: string;
   readonly sdkResults: Readonly<
     Record<
       "dotnet" | "java-android" | "javascript" | "kotlin" | "swift",
@@ -4576,6 +4585,7 @@ export interface EthereumMainnetNativeEvmProverArtifacts {
   readonly proofArtifactHash: string;
   readonly provingKeyHash: string;
   readonly verifierKeyHash: string;
+  readonly verifierKeyArtifactHash: string;
   readonly crossSdkFixtureParityHash: string;
   readonly crossSdkFixtureParity: Readonly<EthereumMainnetNativeEvmProverParityFixture>;
   readonly nativeProverSelfTestHash: string;
@@ -7461,17 +7471,17 @@ export interface TairaXorFinalizeFromTairaCallDataInput
   public_inputs?: SccpMessageTransparentPublicInputsInput;
   statementHash?: string;
   statement_hash?: string;
-  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  /** Canonical SORA->TRON or SORA->BSC TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
   canonicalPayloadBytes?: BinaryLike | number[];
-  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  /** Canonical SORA->TRON or SORA->BSC TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
   canonical_payload_bytes?: BinaryLike | number[];
-  /** Canonical SORA->TRON TAIRA XOR transfer payload hex; optional cleartext fields must match. */
+  /** Canonical SORA->TRON or SORA->BSC TAIRA XOR transfer payload hex; optional cleartext fields must match. */
   canonicalPayloadHex?: string;
-  /** Canonical SORA->TRON TAIRA XOR transfer payload hex; optional cleartext fields must match. */
+  /** Canonical SORA->TRON or SORA->BSC TAIRA XOR transfer payload hex; optional cleartext fields must match. */
   canonical_payload_hex?: string;
-  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  /** Canonical SORA->TRON or SORA->BSC TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
   payloadBytes?: BinaryLike | number[];
-  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  /** Canonical SORA->TRON or SORA->BSC TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
   payload_bytes?: BinaryLike | number[];
 }
 

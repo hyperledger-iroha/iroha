@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -13,6 +13,7 @@ Retired runtime-network families outside that launch scope are not supported for
 SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
 That exclusion is intentional current-launch scope, not a hidden compatibility
 lane.
+Do not track that family as remaining SCCP launch work in this cycle.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
@@ -1332,6 +1333,19 @@ redistributable schemas, and official trust/revocation bundles.
   supplied public input bounds before rejecting zero-round requests, so
   oversized input-bound metadata cannot be hidden by invalid direct refresh
   counts.
+  Bounded full-bootstrap linear-transform, raw-sample, and sample-switch bound
+  helpers now preflight public artifact metadata before rounded-capacity errors
+  while leaving full key-entry validation behind the capacity gate.
+  Direct no-artifact bounded full-bootstrap execution and bound helpers now
+  preflight FullBootstrapV1 key/material metadata before rounded-capacity
+  errors, and artifact-aware bounded full-bootstrap prefix execution/bound
+  helpers share that key/material preflight before concrete artifact or
+  ciphertext validation.
+  Bounded raw-sample coefficient-zero repack and owner diagnostic helpers now
+  reject malformed raw-sample metadata before rounded-capacity errors.
+  Bounded raw-sample extraction and sample-switch execution helpers now do the
+  same for sample/key metadata and key/sample consistency before inspecting
+  ciphertexts or full switch-key entries.
   Exact and bounded multiply bound propagation now
   rejects oversized public input/output bounds before validating
   caller-supplied relinearization key material. Soracloud exact and
@@ -1840,10 +1854,16 @@ redistributable schemas, and official trust/revocation bundles.
   ML-DSA public-key reconstruction from private-key material now has a
   fallible API, and `KeyPair::from_private_key` uses it so length-valid but
   internally inconsistent ML-DSA secrets return `KeyGen` instead of panicking;
-  ML-DSA seeded-keygen HKDF expansion now propagates `Error::KeyGen` through
-  the existing `Result` path instead of relying on a panic-only assertion, and
-  its S2 nonce offset conversion now uses the same `Error::KeyGen` route
-  instead of a const-conversion `expect`;
+  ML-DSA seeded-keygen now rejects non-empty all-zero seed material before HKDF,
+  random ML-DSA keygen draws checked OS seed material through the same
+  constructor instead of the infallible PQ random keypair path and validates
+  generated public/secret key consistency before return, HKDF expansion
+  propagates `Error::KeyGen` through the existing `Result` path instead of
+  relying on a panic-only assertion, top-level ML-DSA signing delegates to the
+  checked SoraNet PQ hedged signer with RNG-injected failure and all-zero seed
+  regressions, direct ML-DSA backend signatures are validated before wrapper
+  construction, and its S2 nonce offset conversion now uses the same
+  `Error::KeyGen` route instead of a const-conversion `expect`;
   GOST deterministic nonce generation now feeds the domain tag, private scalar,
   message scalar, and optional extra entropy into HMAC-Streebog as separate
   components and streams the HMAC inner hash directly while preserving the
@@ -1861,9 +1881,15 @@ redistributable schemas, and official trust/revocation bundles.
   regeneration utility now use `KeyPair::try_from_seed`, returning existing
   bridge/key-derivation errors instead of panic-only seed expansion;
   GOST random scalar sampling and per-signature extra entropy now also use
-  checked OS fills, while both BLS backends derive random keys from checked OS
-  seed material and the default w3f backend seeds its key-splitting/signing RNGs
-  only after checked OS fills, leaving the compatibility `os_rng()` adapter
+  checked OS fills, random scalar sampling rejects all-zero OS material before
+  retry-budget exhaustion, per-signature entropy rejects all-zero OS material
+  before falling back to deterministic nonce derivation, and GOST deterministic
+  key generation rejects non-empty all-zero seed material before scalar sampling, while both BLS backends derive
+  random keys from checked OS
+  seed material after rejecting all-zero OS seed output and the default w3f
+  backend seeds its key-splitting/signing RNGs only after checked OS fills,
+  with both backend test/clippy lanes pinned in release-readiness validation
+  while leaving the compatibility `os_rng()` adapter
   test-only; P2P SoraNet runtime handshakes now seed their local `StdRng`
   through `SeedableRng::try_from_os_rng` and surface entropy-source failures as
   `HandshakeSoranet` instead of panicking; Taikai ingest-edge drift jitter now
@@ -1879,9 +1905,10 @@ redistributable schemas, and official trust/revocation bundles.
   secp256k1 key generation and surfaces entropy/keygen failures as `StartTorii`,
   while `iroha_swarm` peer/genesis key generation, seeded network material, and
   BLS PoP proving now return `Error::KeyGeneration` through `Swarm::new`
-  instead of panicking; the CLI offline fallback config and governance council
-  VRF candidate-account derivation now use `KeyPair::try_from_seed`, surfacing
-  config/candidate derivation errors through existing `Result` paths, and
+  instead of panicking; the CLI offline fallback config now uses a nonzero
+  domain seed with `KeyPair::try_from_seed`, governance council VRF
+  candidate-account derivation also uses `KeyPair::try_from_seed`, and both
+  surface config/candidate derivation errors through existing `Result` paths;
   Izanami workload, Nexus gas, NPoS validator, post-topology, and network-builder
   key material now uses `KeyPair::try_random` / `KeyPair::try_from_seed` with
   explicit `Result` propagation instead of panic-only `KeyPair` wrappers;
@@ -1908,8 +1935,12 @@ redistributable schemas, and official trust/revocation bundles.
   display and prefixed compatibility formatting now return a non-secret
   invalid-private-key marker instead of unwrapping checked private-key
   formatting; `Signature::try_new` now routes SM2 through checked private-key
-  rebuild/signing helpers and SM2 key-pair/public-key derivation now routes
-  through `try_public_key`, SM2 concrete public-key prefixed formatting now
+  rebuild/signing helpers, the high-level Rust SDK `Sm2KeyPair` exposes
+  `try_sign` while keeping `sign` as a compatibility wrapper, Connect/Norito C
+  SM2 detached signing returns `ERR_SM2_SIGN` from the checked signer on backend
+  failures, and SM2 key-pair/public-key derivation now routes through
+  `try_public_key`, SM2
+  concrete public-key prefixed formatting now
   returns a deterministic invalid-key marker instead of unwrapping checked
   multihash encoding, SM2 private-key byte export now exposes
   `PrivateKey::try_to_bytes` and routes exposed private-key multihash formatting
@@ -1917,7 +1948,9 @@ redistributable schemas, and official trust/revocation bundles.
   wrapper no longer falls back to an empty private-key payload if checked export
   fails, secp256k1 message signing now exposes
   `try_sign` and routes `Signature::try_new` through the fallible helper,
-  direct secp256k1 verification maps malformed and all-zero compact signatures
+  deterministic secp256k1 key generation now rejects explicit all-zero
+  32-byte seed material before DRBG expansion, direct secp256k1 verification
+  maps malformed and all-zero compact signatures
   to `Error::BadSignature`, the compatibility `sign` helper no longer falls
   back to an empty signature if checked signing fails, and
   secp256k1 recoverable prehash signing now checks the low-S recovery-id parity
@@ -1930,7 +1963,9 @@ redistributable schemas, and official trust/revocation bundles.
   payload if that invariant is broken, and routes the OpenSSL bridge through
   that fallible exporter before DER parsing, SM2 signature decoding now rejects
   all-zero and zero-scalar encodings before backend parsing, and SM2 verifier
-  boundaries map malformed signature material to `Error::BadSignature`,
+  boundaries map malformed signature material to `Error::BadSignature`, SM2
+  random private-key generation now rejects all-zero RNG seed material
+  immediately before scalar parsing or retry-budget exhaustion,
   generic ML-DSA public/private key import and direct batch verification now
   reject all-zero public-key, private-key, and detached-signature material before
   backend parsing,
@@ -1949,7 +1984,10 @@ redistributable schemas, and official trust/revocation bundles.
   SoraNet PQ ML-DSA helpers now apply the same secret-key consistency check to
   direct validation and direct/OS-backed signing, reject all-zero standalone
   public-key, secret-key, and detached-signature material before backend use,
-  and expose fallible public-key reconstruction from secret material;
+  reject all-zero deterministic `HedgedRngSeed` material before seeded keygen,
+  reject all-zero caller/OS seed draws before `*_from_rng` keygen or signing,
+  reject all-zero generated backend coins before direct keypair/signing PQClean
+  calls, and expose fallible public-key reconstruction from secret material;
   BLS same-message aggregate and preaggregated verification now reject
   duplicate public keys and public-key aggregates that cancel to the identity
   before verification, and the public PoP-gated same-message wrappers reject
@@ -1966,13 +2004,17 @@ redistributable schemas, and official trust/revocation bundles.
   test targets while the default w3f `bls` all-targets corridor is also green
   after removing an unused panic-only secret-key wrapper. The default w3f BLS
   backend now exposes fallible secret reload, signing, and public-key derivation
-  helpers, both BLS backends expose checked keypair generation, the public
-  backend helper names `keypair` and `sign` now return `Result`, and the w3f
-  stored-secret `public_key` helper is fallible too. SM2 top-level random
+  helpers, both BLS backends expose checked keypair generation and reject
+  non-empty all-zero deterministic seed material before deriving a secret, the
+  public backend helper names `keypair` and `sign` now return `Result`, and the
+  w3f stored-secret `public_key` helper is fallible too. SM2 top-level random
   key generation now routes through `Sm2PrivateKey::try_random`, fallible
   `TryCryptoRng` byte draws, and bounded scalar validation before returning
-  key material. Top-level BLS keygen, signing, proof-of-possession proving, and
-  public-key derivation route through checked paths on `Result`-returning APIs;
+  key material, while SM2 deterministic seed derivation rejects non-empty
+  all-zero seed material and validates distinguishing identifiers before
+  hashing candidates. Top-level BLS keygen, signing, proof-of-possession
+  proving, and public-key derivation route through checked paths on
+  `Result`-returning APIs;
   BLS VRF proof construction now returns `Result`, rejects invalid stored
   secret scalars before signing for both Normal and Small variants, and uses
   checked compressed-proof decoding so malformed G1/G2 proof encodings fail
@@ -2034,8 +2076,10 @@ redistributable schemas, and official trust/revocation bundles.
 	  checked tag/payload accessors, so malformed compact state returns
 	  `ParseError` instead of relying on panic-only invariant accessors;
 	  `KeyPair::new` also reuses the checked public-key payload for ML-DSA
-	  pair validation instead of re-entering the compatibility
-	  `PublicKey::to_bytes()` helper after compact parsing has succeeded;
+	  pair validation and compares deterministic public-key recovery output
+	  instead of re-entering the compatibility `PublicKey::to_bytes()` helper
+	  or issuing a randomized probe signature after compact parsing has
+	  succeeded;
 	  `PublicKey::try_to_bytes()` is now public, giving downstream
 	  `Result`-returning paths a checked algorithm/payload accessor without
 	  relying on the infallible compatibility wrapper; the legacy signer-backed
@@ -2162,7 +2206,11 @@ redistributable schemas, and official trust/revocation bundles.
 						  through checked seed expansion and reports failures through the
 						  handshake harness error path; offline v1/v2 interop vector generators
 						  now derive their fixed issuer, account, and note Ed25519 keys through
-						  checked seed-expansion helpers with fixture-specific error context; the
+						  checked seed-expansion helpers with fixture-specific error context; Torii
+						  IVM proof-route synthetic transactions now use checked transaction
+						  signing and route signing failures through the existing derive/prove
+						  error paths, and the STARK route fixture uses production-floor STARK/FRI
+						  verifier parameters; the
 							  `iroha` dev key-material example now generates its
 							  Ed25519 keypair through checked randomness and propagates entropy
 							  failures from `main`; the `iroha` Nexus app transfer and tutorial,
@@ -2200,15 +2248,23 @@ redistributable schemas, and official trust/revocation bundles.
 							  SoraNet client and relay
 							  handshake construction now also uses fallible `TryCryptoRng` draws for nonce,
 							  Noise secret, and client ML-KEM seed material, returning labelled
-							  `HarnessError::RandomBytes` failures; SoraNet PoW and Argon2 puzzle
+							  `HarnessError::RandomBytes` failures and rejects all-zero generated
+							  material before nonce, Noise, or ML-KEM seed state can be emitted;
+							  SoraNet PoW and Argon2 puzzle
 							  ticket minting now also uses fallible `TryCryptoRng` draws and preserves
 							  labelled nonce-generation failures through `MintError::RandomBytes` and
-							  the p2p challenge wrapper; SoraNet admission-token minting and SoraFS
+							  the p2p challenge wrapper, with all-zero nonce draws rejected as inert
+							  random material; SoraNet admission-token minting and SoraFS
 							  proof-token minting now also use fallible `TryCryptoRng` draws and return
 							  labelled `MintError::RandomBytes` failures for admission-token nonce and
-							  proof-token id generation; SoraNet request blinding nonce generation now
+							  proof-token id generation, including all-zero random draws; SoraNet
+							  request blinding nonce generation now
 							  also accepts fallible `TryCryptoRng` inputs and reports entropy failures
-							  through `BlindingError::RandomBytes`; P2P handshake hello
+							  through `BlindingError::RandomBytes`, while all-zero generated nonces fail
+							  through the existing weak-input gate; AEAD convenience encryption now keeps
+							  caller-supplied nonce compatibility unchanged while generated
+							  `encrypt_easy`/`encrypt_easy_into` nonces reject inert all-zero material
+							  through `Error::InertNonce`; P2P handshake hello
 							  construction now also extracts local peer key metadata through checked accessors and reports
 						  malformed local keys through a dedicated handshake error, while multisig
 						  members expose a fallible checked algorithm accessor for result-returning
@@ -2230,7 +2286,8 @@ redistributable schemas, and official trust/revocation bundles.
 						  artifacts; offline note tests, ADDR-2 compliance
 						  vectors, and Offline V1/V2 interop vector generators now also extract
 						  fixture public-key payloads through checked accessors before embedding
-						  certificate, address, or offline FI public-key fields; the remaining
+						  certificate, address, or offline FI public-key fields and sign issuer
+						  certificate payloads through `Signature::try_new`; the remaining
 						  SoraFS conformance/chunker/pin/discovery fixtures, gov draw fixtures,
 						  bridge proof vectors, config/test-network assertions, dev key example,
 						  Swift parity generator, and offline-note integration certificate helpers
@@ -2261,7 +2318,9 @@ redistributable schemas, and official trust/revocation bundles.
 								  embedding advert/admission bytes;
 							  X25519 public-key decoders for hybrid KEM keys, hybrid ephemeral ciphertext
 				  keys, and the standalone key-exchange surface now reject low-order encodings
-  before ECDH while retaining all-zero shared-secret fallback checks, and
+  before ECDH through the shared standalone X25519 predicate, with standalone
+  regressions covering every distinct dalek-torsion-derived Montgomery
+  encoding while retaining all-zero shared-secret fallback checks, and
   X25519 session-key derivation now maps HKDF expansion failures through the
   shared-secret `Result` path instead of using a panic-only assertion; SoraNet
   PQ ML-KEM key generation now exposes checked direct and seeded constructors,
@@ -2271,9 +2330,20 @@ redistributable schemas, and official trust/revocation bundles.
   instead of panicking after checked generation; hybrid key-generation,
   encapsulation, and SoraFS hybrid payload envelope paths now consume fallible
   `TryCryptoRng` draws and return labelled RNG errors before key, ciphertext,
-  or AEAD nonce material is emitted; the public direct and seeded
+  or AEAD nonce material is emitted, while hybrid generated X25519 secret and
+  ML-KEM seed draws now reject all-zero material before key generation or
+  encapsulation can derive transport keys; the public direct and seeded
   `generate_mlkem_keypair*` wrappers now
-  return `Result` instead of panicking after validation; nonzero PQClean ML-KEM
+  return `Result` instead of panicking after validation, and deterministic
+  ML-KEM keygen/encapsulation reject all-zero `HedgedRngSeed` material before
+  seeded RNG construction while ML-KEM caller/OS seed draws reject all-zero
+  material before `*_from_rng` keygen or encapsulation, direct ML-KEM
+  keypair/encapsulation reject all-zero generated backend coins before PQClean,
+  direct ML-KEM keypair outputs validate generated public/secret consistency
+  before return, direct ML-KEM backend shared-secret and ciphertext outputs
+  reject all-zero material before wrapper construction, and seeded
+  encapsulation preserves invalid-public-key preflight order;
+  nonzero PQClean ML-KEM
   backend statuses now surface as
   `MlKemError::BackendFailure` through keygen, encapsulation, and decapsulation
   `Result` paths instead of panic-only assertions, and ML-KEM 12-bit
@@ -2323,14 +2393,17 @@ redistributable schemas, and official trust/revocation bundles.
   X25519 low-order admission;
   standalone ML-KEM public-key validation, secret-key validation,
   encapsulation, and decapsulation now reject all-zero public keys, all-zero
-  secret keys, all-zero embedded secret-key public keys, noncanonical 12-bit
+  secret keys, all-zero embedded secret-key public keys, all-zero secret-key
+  implicit-rejection seeds, all-zero ciphertexts, noncanonical 12-bit
   public-key coefficients, and noncanonical secret-key private coefficients,
   and secret-key validation plus decapsulation reject corrupted embedded `H(ek)`
   public-key hashes before implicit rejection can derive divergent transport
   keys; hybrid envelope constructors and Norito streaming Kyber key-material,
   fingerprint, session, snapshot, encapsulation, and decapsulation admission now
   also reject all-zero ML-KEM public or secret key material before accepting
-  fingerprints, transport state, or envelope keys;
+  fingerprints, transport state, or envelope keys, and Norito streaming
+  generated X25519 ephemeral secrets plus GCK wrap nonces reject all-zero
+  material before key-update or content-key update state is emitted;
   changing the streaming ML-KEM profile on key material or live sessions now
   clears configured Kyber public keys, fingerprints, and local decapsulation
   secrets before any later HPKE use, and direct local ephemeral-payload
@@ -2571,7 +2644,9 @@ redistributable schemas, and official trust/revocation bundles.
   hedged seed construction now also accepts caller-supplied `TryCryptoRng`
   seed entropy, and ML-DSA keypair/signing plus ML-KEM keypair/encapsulation
   OS helpers delegate through the same fail-closed required-seed boundary
-  before deriving PQ material;
+  before deriving PQ material, with direct ML-DSA and ML-KEM backend-coin
+  boundaries also rejecting all-zero generated coin material before PQClean
+  calls;
   admission-token verifier construction exposes a
   fallible path that rejects malformed issuer public keys before fingerprint
   derivation or runtime state admission, and the compatibility constructor now
@@ -4606,10 +4681,12 @@ redistributable schemas, and official trust/revocation bundles.
     isolation and hardening the RBC sidecar cooldown fixture.
   - The later 2026-05-03 restarted-peer commit-QC recovery fix is covered by
     focused block-body response regressions and the confidential downtime plus
-    timeout localnet scenario, now passing without the restarted-peer catch-up
-    waiver warning. Rerun the full `cargo test -p iroha_core --lib` corridor
-    after the next main-loop edit or before opening the next full workspace
-    sweep.
+    timeout localnet scenario, which now enforces restarted-peer non-empty
+    height catch-up before final balance checks.
+  - The 2026-06-12 `cargo test -p iroha_core --lib -- --nocapture` rerun is
+    green (`4647` passed, `0` failed, `262` ignored; finished in `11832.87s`)
+    after the retained-summary DA/RBC evidence hardening and default-feature
+    STARK-only fixture gating.
   - For the next consensus change, rerun the same broad window so the collector
     fallback, exact-frontier repair, cached-target, vote replay, roster
     recovery, future-new-view, and model-backed reschedule fixtures continue to
@@ -4631,9 +4708,9 @@ redistributable schemas, and official trust/revocation bundles.
     into an arbitrary pipeline unless a new bug requires more than the active
     plus one-future-slot abstraction.
 - Reopen the wider validation corridor after the recent focused `iroha_core`, `iroha_torii`, and `iroha_data_model` test additions.
-  - `cargo test -p iroha_core --lib` is green as of 2026-05-03; rerun it only
-    after the next core/consensus change or before opening the full workspace
-    corridor.
+  - `cargo test -p iroha_core --lib -- --nocapture` is green as of 2026-06-12
+    (`4647` passed, `262` ignored); rerun it only after the next core/consensus
+    change or before opening the full workspace corridor.
   - `cargo test -p iroha_torii` is green as of 2026-05-03 after fixing the
     macOS attachment-sanitizer subprocess wrapper path; rerun it after the next
     Torii/API change or before opening the full workspace corridor.
@@ -5029,7 +5106,177 @@ redistributable schemas, and official trust/revocation bundles.
     deterministic Ed25519 batch precheck is already implemented, and the
     crypto-layer direct/preparsed Ed25519 batch APIs now filter exact
     verify-cache hits before signature parsing; the thread-local exact
-    verify-ok cache also keeps two colliding entries per slot. The ML-DSA key
+    verify-ok cache also keeps two colliding entries per slot. Peer-trust gossip
+    entry signing now routes through `Signature::try_new` and skips logged
+    per-entry failures instead of unwinding the broadcast loop; local Sumeragi
+    consensus vote signing now routes through `Signature::try_new` and skips
+    logged vote-emission failures instead of unwinding the commit/precommit
+    path, while native AMX vote, merge committee, and RBC ready/deliver
+    wire-message signing now share the same checked consensus preimage helper
+    and skip logged local emission failures; contract
+    manifest provenance signing now exposes `ContractManifest::try_signed`, and
+    the CLI build/deploy, Torii app API deployment prep, and Connect Norito
+    governance propose-deploy bridge paths propagate signing failures through
+    existing `Result` surfaces; runtime-upgrade manifest provenance signing now
+    exposes `RuntimeUpgradeManifest::try_signed` while preserving canonical
+    payload stability after provenance attachment; queue-backed Soracloud
+    runtime mutation submissions and Nexus fee relay worker submissions now use
+    `TransactionBuilder::try_sign` helpers and return endpoint-specific `eyre`
+    context before acceptance/enqueueing on backend signing failure; CLI
+    contract simulation now
+    signs its locally built transaction through `TransactionBuilder::try_sign`
+    and returns a contextual command error on backend signing failure; Torii
+    proof-record signed-query construction now uses
+    `QueryRequestWithAuthority::try_sign`, data-model `BlockBuilder` now
+    exposes `try_build_with_signature` so incremental block assembly can
+    propagate `SignatureOf::try_from_hash` failures while keeping the
+    compatibility block-signing helper, `SignedBlock` genesis assembly now
+    exposes checked variants that return signing failures and reject empty
+    transaction sets without panic-only construction, and default streaming key material in
+    test/restored state construction uses nonzero deterministic seed material
+    under the all-zero seed admission policy; client query request body assembly
+    now uses `QueryRequestWithAuthority::try_sign` and returns a contextual
+    `QueryError` before HTTP dispatch on backend signing failure; client
+    transaction build/sign helpers now use `TransactionBuilder::try_sign` and
+    return contextual `eyre` errors from fallible construction/submission paths
+    while retaining compatibility wrappers for existing infallible callers;
+    test-network genesis consensus metadata overrides and cached-genesis
+    augmentation now use checked transaction signing and checked genesis block
+    signature reconstruction;
+    snapshot digest files now use `Signature::try_new` during snapshot writes,
+    verify generated signatures against stored digests, and reject wrong-key
+    signatures over matching digests in focused regressions;
+    quarantined Sumeragi vNext re-chain and view-change votes now use
+    `Signature::try_new`, verify canonical vote signatures, and reject
+    wrong-mode consensus-domain preimages in focused regressions;
+    peer trust gossip roundtrip and adversarial trust-record fixtures now share a
+    checked `Signature::try_new` helper, matching the production trust-gossip
+    signing path in focused regressions;
+    SoraFS ISI council envelope and alias proof fixtures now sign through
+    `Signature::try_new`, keeping approval and pending-manifest
+    invalid-signature regressions on checked fixture signatures;
+    `iroha` client SoraFS alias-proof bundle fixtures now sign through
+    `Signature::try_new`, with fresh, stale, and send-builder alias-policy
+    regressions covering checked council signatures; remaining direct `iroha`
+    client transaction fixtures now use `TransactionBuilder::try_sign` across
+    pipeline-status, committed-query/hash, block WebSocket, and prepared-payload
+    regressions;
+    SoraDNS resolver CLI directory-record fixtures now sign through
+    `Signature::try_new`, with the directory fetch/verify CLI suite covering the
+    checked builder signature;
+    SoraDNS ISI directory-record fixtures now sign through `Signature::try_new`,
+    with submit-draft and publish-directory instruction regressions covering the
+    checked builder signature;
+    VPN usage vouchers now expose `VpnUsageVoucherV1::try_sign`, verify checked
+    voucher signatures, and reject tampered or wrong-key voucher signatures in
+    focused regressions;
+    core VPN lease settlement fixtures now build settlement vouchers through
+    `VpnUsageVoucherV1::try_sign`, covering tariff recomputation and relay
+    overclaim rejection on checked voucher signatures;
+    Torii app-API VPN receipt fixtures now build client vouchers through
+    `VpnUsageVoucherV1::try_sign`, with the filtered receipt suite covering
+    WSV-grace success and wrong-key, tampered, malformed, replayed, and
+    substituted receipt/voucher cases;
+    `sora-vpn-helper` usage voucher control-cell envelopes now sign through
+    `Signature::try_new`, propagate controller signing errors, and exercise the
+    fallible envelope builder in the cumulative voucher signer regression;
+    `soranet-vpn-settlement` request header signatures now use
+    `Signature::try_new`, relay runtime usage-voucher fixtures now use
+    `VpnUsageVoucherV1::try_sign`, and the relay DoS outcome labels classify
+    inert admission-token signatures as invalid signature material;
+    Offline v1/v2 vector issuer certificate signatures now use
+    `Signature::try_new`, verify generated certificate signatures, and reject
+    tampered signature or canonical payload bytes in binary regressions;
+    Swift parity fixture generation and the standalone Norito fixture exporter
+    now use checked transaction signing and verify regenerated fixture
+    signatures in regressions; the exporter also uses `Signature::try_new` for
+    hand-reencoded payload hashes, rejects malformed signed-envelope framing in
+    adversarial tests, and pins standalone `time` resolution to the root-locked
+    `0.3.47`;
+    the confidential wallet fixture exporter now routes shield, ZK transfer, and
+    unshield transactions through `TransactionBuilder::try_sign`, verifies
+    regenerated fixture signatures, rejects tampered signatures, and validates
+    proof backend identifiers in example regressions;
+    the `iroha_core` transaction-size example now builds its measured transaction
+    through `TransactionBuilder::try_sign` and verifies the checked signature in
+    an example regression;
+    the SoraFS pin snapshot fixture generator now signs alias proof and council
+    envelope fixtures through `Signature::try_new` and verifies both generated
+    signatures in example regressions;
+    the `iroha_core` parity fixture generator now routes event fixture
+    transactions and synthetic fixture block signing through checked signing
+    helpers and verifies both paths in example regressions;
+    the Nexus app transfer example wallet path now uses `Signature::try_new`
+    and verifies the checked demo wallet signature while rejecting malformed
+    payload hashes in example regressions;
+    Nexus app facade wallet-signature regressions now share a checked
+    `Signature::try_new` helper for Connect finalization, wallet flow,
+    hash-mismatch, and submit/status error-code fixtures;
+    split and IVM contract deploy CLI helpers now use
+    `TransactionBuilder::try_sign` for deploy-envelope transaction construction
+    and return contextual command errors on backend signing failure; CLI ZK
+    verifier-key register/update helpers now use the same checked transaction
+    signer before submitting governed verifier-key registry updates; governance
+    CLI IVM execution VK registration and SCCP IVM-proved transaction
+    construction now use a checked `TransactionBuilder::try_sign` helper and
+    return contextual command errors on backend signing failure; Torii
+    governance signable-payload drafts now use deterministic checked dummy
+    signing instead of throwaway random compatibility signing before returning
+    client-signable payload bytes; Torii ISO 20022 pacs.008 and pacs.009
+    transfer transaction construction now uses checked
+    `TransactionBuilder::try_sign` before returning signed bridge
+    transactions; CLI Soracloud release-governance, provenance,
+    uploaded-model, generated-HF, and mutation-auth header signatures now share
+    a checked `Signature::try_new` helper and return contextual command errors
+    on backend signing failure; Torii Offline Notes V1 issue submission and V2
+    issue/redeem submission now use
+    issuer-local checked `TransactionBuilder::try_sign` helpers before queue
+    submission; the shared Connect Norito bridge transaction encoder now uses
+    `TransactionBuilder::try_sign` and propagates a bridge transaction-signing
+    error through transfer, shield/unshield, ZK, governance, mint/burn,
+    multisig, identifier, and Offline Notes FFI exports; Torii App API
+    transaction submissions now share a checked
+    `TransactionBuilder::try_sign` helper across confidential relay, account
+    onboarding/faucet/alias, space-directory manifests, contract
+    call/deploy/alias, verifier-key registry, SoraFS, and subscription
+    endpoints, and Torii contract-call, bridge proof/message, and multisig
+    propose/approve/cancel signable scaffold and detached-signature routes now
+    use checked scaffold key generation plus `TransactionBuilder::try_sign`
+    before returning client signable payloads; JavaScript host transaction
+    assembly and re-sign N-API paths now use a checked
+    `TransactionBuilder::try_sign` helper and return N-API errors on backend
+    signing failure, and JavaScript host SM2 sign/fixture N-API paths now use
+    `Sm2PrivateKey::try_sign`; Offline V1/V2 interop vector generator
+    certificate issuer signatures now use `Signature::try_new`, and SCCP
+    source-proof, Torii routing finality/evidence, data-model bridge finality,
+    SoraFS manifest alias-proof, SoraFS node gateway, data-model
+    endorsement/manifest/ISI fixture signatures, data-model block fixture
+    signatures plus signed-block transparent API fixtures, and data-model
+    transaction payload/multisig fixtures now use
+    `Signature::try_new`/`SignatureOf::try_from_hash`;
+    SoraFS CLI
+    fallback manifest `/transaction` submissions now use a checked
+    `TransactionBuilder::try_sign` helper and return contextual command errors
+    before HTTP dispatch on backend signing
+    failure; genesis batch transaction construction now uses
+    `TransactionBuilder::try_sign` and returns contextual genesis-build errors
+    on backend signing failure; Sumeragi recovery-heartbeat transaction
+    construction now uses a fallible `TransactionBuilder::try_sign` helper and
+    returns contextual consensus errors on backend signing failure;
+    transaction-gossip frame-size probing now uses `TransactionBuilder::try_sign`
+    and falls back to a zero payload cap with a warning on dummy probe signing
+    failure; Torii runtime-handler signed app-header, pipeline-status,
+    block/header, commit-QC, and SCCP message-bundle fixtures now share checked
+    `Signature::try_new`, `SignatureOf::try_from_hash`, and
+    `TransactionBuilder::try_sign` helpers, with a wrong-key BLS block-signature
+    regression covering adversarial verification failure; Kagami Kura
+    block-store test fixtures now use checked transaction and block signing,
+    verify the fixture transaction signature before append, and reject a wrong
+    block-signature key in the focused regression; `iroha_crypto` packed
+    signature alignment fixtures now use checked Ed25519 key generation,
+    `Signature::try_new`, and `SignatureOf::try_from_hash`, with raw and typed
+    signature wrong-key rejection coverage. The
+    ML-DSA key
     path now rejects inconsistent imported secrets and exposes
     `KeyPair::try_from_seed`, `KeyPair::try_random`,
     `KeyPair::try_random_with_algorithm`, `PublicKey::try_to_*`,

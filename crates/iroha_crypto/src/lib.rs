@@ -200,17 +200,8 @@ impl KeyPair {
             Algorithm::Secp256k1 => {
                 secp256k1::EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::Random).map(Into::into)
             }
-            Algorithm::MlDsa => {
-                use pqcrypto_mldsa::mldsa65;
-                use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
-
-                let (pk, sk) = mldsa65::keypair();
-                let public_key = PublicKey::from_bytes(Algorithm::MlDsa, pk.as_bytes())
-                    .map_err(|err| Error::KeyGen(err.to_string()))?;
-                let private_key = PrivateKey::from_bytes(Algorithm::MlDsa, sk.as_bytes())
-                    .map_err(|err| Error::KeyGen(err.to_string()))?;
-                KeyPair::new(public_key, private_key)
-            }
+            Algorithm::MlDsa => mldsa_seed::mldsa65::random_keypair()
+                .and_then(|(public_key, private_key)| KeyPair::new(public_key, private_key)),
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
             | Algorithm::Gost3410_2012_256ParamSetB
@@ -389,26 +380,18 @@ impl KeyPair {
         }
 
         if algorithm == Algorithm::MlDsa {
-            use pqcrypto_mldsa::mldsa65;
-            use pqcrypto_traits::sign::PublicKey as _;
-
             use crate::secrecy::ExposeSecret;
-
-            let mldsa_pk = mldsa65::PublicKey::from_bytes(public_payload)
-                .map_err(|_| Error::KeyGen(String::from("Invalid ML-DSA public key")))?;
 
             let secret_bytes = match private_key.0.expose_secret() {
                 PrivateKeyInner::MlDsa(bytes) => bytes,
                 _ => unreachable!("Algorithm is ML-DSA"),
             };
 
-            let mldsa_secret_key = secret_bytes.as_secret();
-
-            let probe_message = b"iroha:ml-dsa:keypair-check";
-            let probe_signature = mldsa65::detached_sign(probe_message, mldsa_secret_key);
-            if mldsa65::verify_detached_signature(&probe_signature, probe_message, &mldsa_pk)
-                .is_err()
-            {
+            let derived_public =
+                mldsa_seed::mldsa65::public_key_from_secret(secret_bytes.as_secret())
+                    .map_err(|err| Error::KeyGen(err.to_string()))?;
+            let (_, derived_payload) = derived_public.try_to_bytes()?;
+            if derived_payload != public_payload {
                 return Err(Error::KeyGen(String::from("Key pair mismatch")));
             }
 
@@ -2209,18 +2192,29 @@ impl MlDsaSecretKey {
         self.inner.secret.as_bytes().to_vec()
     }
 
-    fn sign(&self, payload: &[u8]) -> Vec<u8> {
-        use pqcrypto_mldsa::mldsa65;
-        use pqcrypto_traits::sign::DetachedSignature as _;
-
-        let sig = mldsa65::detached_sign(payload, self.as_secret());
-        sig.as_bytes().to_vec()
+    fn try_sign(&self, payload: &[u8]) -> Result<Vec<u8>, Error> {
+        let mut rng = rand::rngs::OsRng;
+        self.try_sign_with_rng(payload, &mut rng)
     }
 
-    fn try_sign(&self, payload: &[u8]) -> Result<Vec<u8>, Error> {
+    fn try_sign_with_rng<R: rand_core::TryCryptoRng + ?Sized>(
+        &self,
+        payload: &[u8],
+        rng: &mut R,
+    ) -> Result<Vec<u8>, Error> {
+        use pqcrypto_traits::sign::SecretKey as _;
+
         mldsa_seed::mldsa65::public_key_from_secret(self.as_secret())
             .map_err(|err| Error::Signing(err.to_string()))?;
-        Ok(self.sign(payload))
+        soranet_pq::sign_mldsa_from_rng(
+            soranet_pq::MlDsaSuite::MlDsa65,
+            self.as_secret().as_bytes(),
+            &[],
+            payload,
+            rng,
+        )
+        .map(|signature| signature.as_bytes().to_vec())
+        .map_err(|err| Error::Signing(err.to_string()))
     }
 
     #[cfg(test)]
@@ -3003,6 +2997,69 @@ mod tests {
             .collect()
     }
 
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl core::fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("failing ML-DSA signing RNG")
+        }
+    }
+
+    struct FailingTryRng;
+
+    impl rand_core::TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dest: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl rand_core::TryCryptoRng for FailingTryRng {}
+
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl rand_core::TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl rand_core::TryCryptoRng for FixedTryRng {}
+
+    fn seeded_ml_dsa_secret(seed: &[u8]) -> (PublicKey, MlDsaSecretKey) {
+        use pqcrypto_traits::sign::SecretKey as _;
+
+        let (public, private) =
+            mldsa_seed::mldsa65::keypair_from_seed(seed).expect("seeded ML-DSA keypair");
+        let raw_secret = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
+            .expect("valid ML-DSA secret bytes");
+
+        (public, MlDsaSecretKey::new(&raw_secret))
+    }
+
     #[test]
     fn session_key_from_zeroizing_vec_preserves_payload_and_zeroizes_on_drop() {
         let _test_guard = session_key_zeroization_test_guard();
@@ -3134,6 +3191,18 @@ mod tests {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)
             .expect("checked secp256k1 random keypair");
         let message = b"top-level checked secp256k1 random keypair";
+        let signature = Signature::new(key_pair.private_key(), message);
+
+        signature
+            .verify(key_pair.public_key(), message)
+            .expect("signature verifies");
+    }
+
+    #[test]
+    fn try_random_with_algorithm_ml_dsa_signs_and_verifies() {
+        let key_pair = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
+            .expect("checked ML-DSA random keypair");
+        let message = b"top-level checked ML-DSA random keypair";
         let signature = Signature::new(key_pair.private_key(), message);
 
         signature
@@ -3457,8 +3526,8 @@ mod tests {
         assert_eq!(key.strong_count(), 2, "cloning increments strong count");
 
         let message = b"iroha:ml-dsa:test-arc-sharing";
-        let sig_original = key.sign(message);
-        let sig_clone = cloned.sign(message);
+        let sig_original = key.try_sign(message).expect("original ML-DSA signature");
+        let sig_clone = cloned.try_sign(message).expect("clone ML-DSA signature");
         Signature::from_bytes(&sig_original)
             .verify(&public, message)
             .expect("original ML-DSA signature should verify");
@@ -3468,6 +3537,51 @@ mod tests {
 
         drop(cloned);
         assert_eq!(key.strong_count(), 1, "dropping clone decrements count");
+    }
+
+    #[test]
+    fn ml_dsa_try_sign_with_rng_reports_rng_failure() {
+        let (_, key) = seeded_ml_dsa_secret(b"iroha:ml-dsa:signing-rng-failure");
+        let mut rng = FailingTryRng;
+
+        let err = key
+            .try_sign_with_rng(b"iroha:ml-dsa:message", &mut rng)
+            .expect_err("ML-DSA signing RNG failure must fail closed");
+
+        assert!(
+            matches!(err, Error::Signing(ref message) if message.contains("hedged RNG seed draw failed")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn ml_dsa_try_sign_with_rng_rejects_all_zero_seed_material() {
+        let (_, key) = seeded_ml_dsa_secret(b"iroha:ml-dsa:signing-all-zero");
+        let mut rng = FixedTryRng { byte: 0 };
+
+        let err = key
+            .try_sign_with_rng(b"iroha:ml-dsa:message", &mut rng)
+            .expect_err("all-zero ML-DSA signing seed material must fail closed");
+
+        assert!(
+            matches!(err, Error::Signing(ref message) if message.contains("all-zero material")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn ml_dsa_try_sign_with_rng_accepts_nonzero_seed_material() {
+        let (public, key) = seeded_ml_dsa_secret(b"iroha:ml-dsa:signing-nonzero");
+        let mut rng = FixedTryRng { byte: 0x42 };
+        let message = b"iroha:ml-dsa:signing-nonzero-message";
+
+        let signature = key
+            .try_sign_with_rng(message, &mut rng)
+            .expect("nonzero ML-DSA signing seed material should sign");
+
+        Signature::from_bytes(&signature)
+            .verify(&public, message)
+            .expect("ML-DSA signature should verify");
     }
 
     #[test]
@@ -3503,14 +3617,14 @@ mod tests {
 
     #[test]
     fn ml_dsa_public_key_parse_rejects_invalid_length() {
-        use pqcrypto_mldsa::mldsa65;
-        use pqcrypto_traits::sign::PublicKey as _;
+        let key_pair = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
+            .expect("checked ML-DSA random keypair");
+        let (_, public_payload) = key_pair.public_key().to_bytes();
 
-        let (pk, _) = mldsa65::keypair();
-        let parsed = PublicKey::from_bytes(Algorithm::MlDsa, pk.as_bytes());
+        let parsed = PublicKey::from_bytes(Algorithm::MlDsa, public_payload);
         assert!(parsed.is_ok(), "expected valid ML-DSA public key bytes");
 
-        let mut bad = pk.as_bytes().to_vec();
+        let mut bad = public_payload.to_vec();
         bad.push(0x00);
         let err = PublicKey::from_bytes(Algorithm::MlDsa, &bad).unwrap_err();
         assert!(

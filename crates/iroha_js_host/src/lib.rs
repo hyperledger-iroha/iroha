@@ -1613,7 +1613,7 @@ pub fn sm2_sign(
     distid: Option<String>,
 ) -> napi::Result<Buffer> {
     let private = parse_sm2_private_key(distid, private_key.as_ref())?;
-    let signature = private.sign(message.as_ref()).to_bytes();
+    let signature = try_sign_sm2_message(&private, message.as_ref())?;
     Ok(Buffer::from(signature.to_vec()))
 }
 
@@ -3208,8 +3208,11 @@ pub fn sm2_fixture_from_seed(
         .map_err(norito_to_napi)?;
     let za = public.compute_z(distid.as_str()).map_err(norito_to_napi)?;
     let za_hex = hex::encode_upper(za);
-    let signature = private.sign(&message_bytes);
-    let signature_hex = hex::encode_upper(signature.as_bytes());
+    let signature = private
+        .try_sign(&message_bytes)
+        .map_err(|err| norito_to_napi(format!("failed to sign SM2 fixture message: {err}")))?;
+    let signature_bytes = signature.as_bytes();
+    let signature_hex = hex::encode_upper(signature_bytes);
     let r_hex = hex::encode_upper(signature.r);
     let s_hex = hex::encode_upper(signature.s);
 
@@ -3245,6 +3248,16 @@ fn parse_sm2_private_key(distid: Option<String>, bytes: &[u8]) -> napi::Result<S
     let distid = sm2_distid_arg(distid);
     Sm2PrivateKey::from_bytes(distid, bytes)
         .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))
+}
+
+fn try_sign_sm2_message(
+    private: &Sm2PrivateKey,
+    message: &[u8],
+) -> napi::Result<[u8; SM2_SIGNATURE_LENGTH]> {
+    private
+        .try_sign(message)
+        .map(|signature| signature.as_bytes())
+        .map_err(|err| norito_to_napi(format!("failed to sign SM2 message: {err}")))
 }
 
 fn parse_sm2_public_key(distid: Option<String>, bytes: &[u8]) -> napi::Result<Sm2PublicKey> {
@@ -3287,6 +3300,16 @@ fn account_address_err(err: AccountAddressError) -> napi::Error {
 
 fn norito_to_napi<E: fmt::Display>(error: E) -> napi::Error {
     napi::Error::new(napi::Status::GenericFailure, error.to_string())
+}
+
+fn sign_js_transaction(
+    builder: TransactionBuilder,
+    private_key: &PrivateKey,
+    context: &str,
+) -> napi::Result<SignedTransaction> {
+    builder
+        .try_sign(private_key)
+        .map_err(|err| norito_to_napi(format!("failed to sign {context} transaction: {err}",)))
 }
 
 fn alias_policy_from_js(policy: Option<&JsAliasPolicy>) -> napi::Result<AliasCachePolicy> {
@@ -10147,7 +10170,7 @@ fn assemble_executable_transaction(
     }
 
     let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, secret).map_err(norito_to_napi)?;
-    let signed = builder.sign(&private_key);
+    let signed = sign_js_transaction(builder, &private_key, "JavaScript host assembled")?;
     let signed_bytes = Encode::encode(&signed);
     let hash = Buffer::from(signed.hash().as_ref().to_vec());
 
@@ -10267,7 +10290,7 @@ pub fn sign_transaction(bytes: Uint8Array, secret: Uint8Array) -> napi::Result<B
 
     let private_key =
         PrivateKey::from_bytes(Algorithm::Ed25519, secret.as_ref()).map_err(norito_to_napi)?;
-    let signed = builder.sign(&private_key);
+    let signed = sign_js_transaction(builder, &private_key, "JavaScript host re-signed")?;
     Ok(Buffer::from(Encode::encode(&signed)))
 }
 
@@ -10823,6 +10846,7 @@ struct PrivacyProductionGateEvidenceV1 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 struct PrivacyProductionLocalnetEvidenceV1 {
     run_id: &'static str,
     target: &'static str,
@@ -10940,7 +10964,6 @@ fn privacy_expected_verifier_key_id(entry: &PrivacyAlgorithmEntry) -> &'static s
 
 fn privacy_expected_public_inputs_schema(entry: &PrivacyAlgorithmEntry) -> Option<&'static str> {
     match entry.id {
-        "transparent-transfer" => None,
         "shield" => Some("asset,from,amount,note_commitment"),
         "confidential-transfer-v2" => Some(
             "input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,asset_tag,chain_tag",
@@ -11005,11 +11028,6 @@ fn privacy_expected_public_inputs_schema(entry: &PrivacyAlgorithmEntry) -> Optio
 
 fn privacy_expected_required_state(entry: &PrivacyAlgorithmEntry) -> &'static [&'static str] {
     match entry.id {
-        "transparent-transfer"
-        | "shield"
-        | "confidential-transfer-v2"
-        | "unshield"
-        | "asset-hidden-confidential-transfer-v1" => &[],
         "zk-ace-pq-authorization-v0" => &[
             "registered ZK-ACE identity commitment",
             "source-account allowlist",
@@ -17918,6 +17936,30 @@ mod tests {
     }
 
     #[test]
+    fn sm2_sign_uses_checked_signing_and_verifies() {
+        let distid = "js-sm2-checked-signing".to_owned();
+        let private =
+            Sm2PrivateKey::from_seed(&distid, b"js-sm2-checked-signing-seed").expect("SM2 key");
+        let message = b"js-host SM2 checked signing";
+
+        let signature = sm2_sign(
+            Uint8Array::from(private.secret_bytes().to_vec()),
+            Uint8Array::from(message.to_vec()),
+            Some(distid.clone()),
+        )
+        .expect("checked SM2 signing");
+
+        let verified = sm2_verify(
+            Uint8Array::from(private.public_key().to_sec1_bytes(false)),
+            Uint8Array::from(message.to_vec()),
+            Uint8Array::from(signature.as_ref().to_vec()),
+            Some(distid),
+        )
+        .expect("SM2 verify");
+        assert!(verified);
+    }
+
+    #[test]
     fn alias_proof_fixture_uses_checked_council_signer_payload() {
         let fixture = sorafs_alias_proof_fixture(Some(JsAliasProofFixtureOptions {
             generated_at_unix: Some(10),
@@ -23679,6 +23721,31 @@ mod tests {
     }
 
     #[test]
+    fn sign_js_transaction_checked_signing_verifies() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_id = AssetId::new(asset_definition, authority.clone());
+        let instruction: InstructionBox =
+            Mint::asset_numeric(Numeric::from_str("10").expect("valid numeric"), asset_id).into();
+
+        let tx = sign_js_transaction(
+            TransactionBuilder::new(chain_id, authority.clone()).with_instructions([instruction]),
+            keypair.private_key(),
+            "test",
+        )
+        .expect("checked signing should succeed");
+
+        assert_eq!(tx.authority(), &authority);
+        tx.verify_signature()
+            .expect("checked signed JS transaction should verify");
+    }
+
+    #[test]
     fn smart_contract_bytes_instruction_json_roundtrip() {
         let code_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF];
         let instruction: InstructionBox = Box::new(RegisterSmartContractBytes {
@@ -23861,6 +23928,8 @@ mod tests {
         let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
         assert_eq!(tx.authority(), &authority);
         assert_eq!(tx.chain(), &chain_id);
+        tx.verify_signature()
+            .expect("assembled transaction signature should verify");
         match tx.instructions() {
             Executable::Instructions(batch) => {
                 assert_eq!(batch.len(), 1);

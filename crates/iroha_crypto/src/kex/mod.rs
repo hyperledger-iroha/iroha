@@ -9,6 +9,11 @@ pub use x25519::X25519Sha256;
 
 use crate::{Error, KeyGenOption, SessionKey, error::ParseError};
 
+/// Return `true` when an X25519 public key is low-order.
+pub(crate) fn is_x25519_low_order_public_key(public_key: &x25519_dalek::PublicKey) -> bool {
+    x25519::is_x25519_low_order_public_key(public_key)
+}
+
 /// A Generic trait for key exchange schemes. Each scheme provides a way to generate keys and
 /// do a diffie-hellman computation
 pub trait KeyExchangeScheme {

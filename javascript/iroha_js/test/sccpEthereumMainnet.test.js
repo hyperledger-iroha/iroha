@@ -53,6 +53,7 @@ import {
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
+const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
 const indexedHexBytes = (fillByte, length, index) => {
   const bytes = new Uint8Array(length).fill(fillByte);
   bytes[length - 2] = (index >>> 8) & 0xff;
@@ -225,7 +226,7 @@ const sampleNativeEvmProverBundle = (destinationBindingHash, overrides = {}) => 
     no_wasm: true,
     remote_prover_required: false,
     browser_implementation: "pure-typescript",
-    cross_sdk_fixture_parity_artifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+    cross_sdk_fixture_parity_artifact: "artifacts/eth-mainnet/cross-sdk-parity.json",
     native_prover_self_test_artifact: "artifacts/eth-mainnet/native-prover-self-test.json",
     native_sdk_artifacts: Object.entries(
       SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
@@ -238,12 +239,16 @@ const sampleNativeEvmProverBundle = (destinationBindingHash, overrides = {}) => 
       implementation_hash: hex32((index + 1).toString(16).padStart(2, "0")),
     })),
     audit_hashes: {
-      circuit_security_audit: hex32("a1"),
-      native_implementation_audit: hex32("a2"),
-      reproducible_build_attestation: hex32("a3"),
-      cross_sdk_fixture_parity: hex32("a4"),
-      native_prover_self_test: hex32("a5"),
-      no_wasm_no_remote_scan: hex32("a6"),
+      circuit_security_audit: fixtureHash("eth circuit security audit"),
+      native_implementation_audit: fixtureHash(
+        "eth native implementation audit",
+      ),
+      reproducible_build_attestation: fixtureHash(
+        "eth reproducible build attestation",
+      ),
+      cross_sdk_fixture_parity: fixtureHash("eth cross-SDK fixture parity"),
+      native_prover_self_test: fixtureHash("eth native prover self-test"),
+      no_wasm_no_remote_scan: fixtureHash("eth no-wasm no-remote scan"),
     },
     ...overrides,
   };
@@ -271,6 +276,9 @@ const sampleNativeEvmProverParityFixture = (bundle, overrides = {}) => {
     proving_key_hash: bundle.proving_key_hash ?? bundle.provingKeyHash,
     verifier_key_hash: bundle.verifier_key_hash ?? bundle.verifierKeyHash,
     destination_binding_hash: destinationBindingHash,
+    production_attestation_hash: fixtureHash(
+      "eth native prover parity production attestation",
+    ),
     ...result,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
@@ -308,6 +316,9 @@ const sampleNativeEvmProverSelfTestFixture = (bundle, overrides = {}) => {
     proving_key_hash: bundle.proving_key_hash ?? bundle.provingKeyHash,
     verifier_key_hash: bundle.verifier_key_hash ?? bundle.verifierKeyHash,
     destination_binding_hash: destinationBindingHash,
+    production_attestation_hash: fixtureHash(
+      "eth native prover self-test production attestation",
+    ),
     ...result,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
@@ -4814,6 +4825,14 @@ test("EthereumMainnetSccp rejects unsafe native EVM prover bundle manifests", ()
     () =>
       validateEthereumMainnetNativeEvmProverBundle({
         ...bundle,
+        proof_artifact: "artifacts/eth-mainnet/%2e%2e/proof-artifact.r1cs",
+      }),
+    /proofArtifact must not contain percent-encoded path segments/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
         proof_artifact: "artifacts/ethereum-mainnet/fixtures/proof-artifact.r1cs",
       }),
     /proofArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
@@ -4876,6 +4895,31 @@ test("EthereumMainnetSccp rejects unsafe native EVM prover bundle manifests", ()
     () =>
       validateEthereumMainnetNativeEvmProverBundle({
         ...bundle,
+        audit_hashes: {
+          ...bundle.audit_hashes,
+          native_implementation_audit: hex32("a2"),
+        },
+      }),
+    /auditHashes\.native_implementation_audit must not look like a placeholder audit hash: repeated 1-byte pattern/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        audit_hashes: {
+          ...bundle.audit_hashes,
+          reproducible_build_attestation: `0x${Array.from(
+            { length: 32 },
+            (_, index) => index.toString(16).padStart(2, "0"),
+          ).join("")}`,
+        },
+      }),
+    /auditHashes\.reproducible_build_attestation must not look like a placeholder audit hash: arithmetic byte sequence/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
         experimental_manifest_note: "ignored fields must fail",
       }),
     /nativeProverBundle contains unknown field: experimental_manifest_note/u,
@@ -4923,6 +4967,22 @@ test("EthereumMainnetSccp rejects unsafe native EVM prover bundle manifests", ()
         ),
       }),
     /implementationArtifact must be a relative POSIX path/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        native_sdk_artifacts: bundle.native_sdk_artifacts.map((artifact) =>
+          artifact.sdk === "javascript"
+            ? {
+                ...artifact,
+                implementation_artifact:
+                  "artifacts/eth-mainnet/javascript%2fimplementation.bin",
+              }
+            : artifact,
+        ),
+      }),
+    /nativeSdkArtifacts\[0\]\.implementationArtifact must not contain percent-encoded path segments/u,
   );
   assert.throws(
     () =>

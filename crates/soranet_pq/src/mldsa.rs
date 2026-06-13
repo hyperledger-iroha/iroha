@@ -149,6 +149,14 @@ impl MlDsaSuite {
             MlDsaSuite::MlDsa87 => "ML-DSA-87 signature",
         }
     }
+
+    const fn generated_keypair_kind(self) -> &'static str {
+        match self {
+            MlDsaSuite::MlDsa44 => "ML-DSA-44 generated key pair",
+            MlDsaSuite::MlDsa65 => "ML-DSA-65 generated key pair",
+            MlDsaSuite::MlDsa87 => "ML-DSA-87 generated key pair",
+        }
+    }
 }
 
 /// ML-DSA keypair.
@@ -181,8 +189,9 @@ pub struct MlDsaSignature {
 }
 
 impl MlDsaSignature {
-    fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+    fn try_new(suite: MlDsaSuite, bytes: Vec<u8>) -> Result<Self, MlDsaError> {
+        suite.validate_signature(&bytes)?;
+        Ok(Self { bytes })
     }
 
     /// Access raw signature bytes.
@@ -284,6 +293,19 @@ fn validate_mldsa_material_not_all_zero(
     Ok(())
 }
 
+fn validate_mldsa_seed_material_not_all_zero(
+    suite: MlDsaSuite,
+    seed: &HedgedRngSeed,
+) -> Result<(), MlDsaError> {
+    if seed.is_all_zero() {
+        return Err(MlDsaError::InertKeyMaterial {
+            suite,
+            kind: "ML-DSA seed material",
+        });
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Error)]
 #[error("invalid {kind} encoding: {source}")]
 pub struct MlDsaEncodingError {
@@ -307,7 +329,32 @@ pub fn generate_mldsa_keypair(
 ) -> Result<MlDsaKeyPair, MlDsaError> {
     let mut coins = Zeroizing::new([0u8; 32]);
     rng.fill_bytes(coins.as_mut());
-    backend::generate_keypair(suite, &coins)
+    generate_mldsa_keypair_from_coins(suite, &coins)
+}
+
+fn generate_mldsa_keypair_from_coins(
+    suite: MlDsaSuite,
+    coins: &[u8; 32],
+) -> Result<MlDsaKeyPair, MlDsaError> {
+    validate_mldsa_material_not_all_zero(suite, "ML-DSA keypair coins", coins)?;
+    let keypair = backend::generate_keypair(suite, coins)?;
+    validate_generated_mldsa_keypair(suite, &keypair)?;
+    Ok(keypair)
+}
+
+fn validate_generated_mldsa_keypair(
+    suite: MlDsaSuite,
+    keypair: &MlDsaKeyPair,
+) -> Result<(), MlDsaError> {
+    suite.validate_public_key(keypair.public_key())?;
+    let reconstructed = suite.public_key_from_secret_key(keypair.secret_key())?;
+    if reconstructed != keypair.public_key() {
+        return Err(MlDsaError::SecretKeyMismatch {
+            suite,
+            kind: suite.generated_keypair_kind(),
+        });
+    }
+    Ok(())
 }
 
 /// Generate an ML-DSA keypair using a seed plus live OS entropy when available.
@@ -336,12 +383,14 @@ pub fn generate_mldsa_keypair_from_rng<R: TryCryptoRng + ?Sized>(
 /// Deterministically generate an ML-DSA keypair from explicit seed material.
 ///
 /// # Errors
-/// Returns backend encoding errors.
+/// Returns an error when seed material is all zero, or when generated material
+/// fails backend validation.
 pub fn generate_mldsa_keypair_from_seed(
     suite: MlDsaSuite,
     seed: HedgedRngSeed,
     personalization: &[u8],
 ) -> Result<MlDsaKeyPair, MlDsaError> {
+    validate_mldsa_seed_material_not_all_zero(suite, &seed)?;
     let mut rng = deterministic_chacha20_rng(seed, personalization);
     generate_mldsa_keypair(suite, &mut rng)
 }
@@ -363,7 +412,19 @@ pub fn sign_mldsa(
     suite.validate_secret_key(secret_key)?;
     let mut coins = Zeroizing::new([0u8; 32]);
     rng.fill_bytes(coins.as_mut());
-    backend::sign(suite, secret_key, context, message, &coins).map(MlDsaSignature::new)
+    sign_mldsa_from_coins(suite, secret_key, context, message, &coins)
+}
+
+fn sign_mldsa_from_coins(
+    suite: MlDsaSuite,
+    secret_key: &[u8],
+    context: &[u8],
+    message: &[u8],
+    coins: &[u8; 32],
+) -> Result<MlDsaSignature, MlDsaError> {
+    validate_mldsa_material_not_all_zero(suite, "ML-DSA signing coins", coins)?;
+    let signature = backend::sign(suite, secret_key, context, message, coins)?;
+    MlDsaSignature::try_new(suite, signature)
 }
 
 /// Sign using fresh OS seed material plus live OS entropy when available.
@@ -524,6 +585,31 @@ mod tests {
 
     impl TryCryptoRng for FailingPqSeedRng {}
 
+    struct FixedPqSeedRng {
+        seed: [u8; 32],
+    }
+
+    impl TryRngCore for FixedPqSeedRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes(self.seed[..4].try_into().unwrap()))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes(self.seed[..8].try_into().unwrap()))
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            for (index, byte) in dst.iter_mut().enumerate() {
+                *byte = self.seed[index % self.seed.len()];
+            }
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedPqSeedRng {}
+
     fn seeded_keypair(suite: MlDsaSuite, seed: u8, personalization: &'static [u8]) -> MlDsaKeyPair {
         generate_mldsa_keypair_from_seed(
             suite,
@@ -623,6 +709,16 @@ mod tests {
     }
 
     #[test]
+    fn from_rng_keypair_rejects_all_zero_seed_material() {
+        let mut rng = FixedPqSeedRng { seed: [0_u8; 32] };
+        match generate_mldsa_keypair_from_rng(MlDsaSuite::MlDsa44, &mut rng) {
+            Err(MlDsaError::Rng(RngError)) => {}
+            Ok(_) => panic!("ML-DSA keypair all-zero seed material must be rejected"),
+            Err(other) => panic!("expected ML-DSA inert seed RNG error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn from_rng_signing_reports_seed_failure() {
         let suite = MlDsaSuite::MlDsa44;
         let keypair = seeded_keypair(suite, 0xA4, b"failing-sign-seed-keygen");
@@ -633,6 +729,90 @@ mod tests {
             Ok(_) => panic!("ML-DSA signing seed RNG failure must be reported"),
             Err(other) => panic!("expected ML-DSA signing RNG error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn from_rng_signing_rejects_all_zero_seed_material() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = seeded_keypair(suite, 0xA5, b"inert-sign-seed-keygen");
+        let mut rng = FixedPqSeedRng { seed: [0_u8; 32] };
+
+        match sign_mldsa_from_rng(suite, keypair.secret_key(), b"", b"message", &mut rng) {
+            Err(MlDsaError::Rng(RngError)) => {}
+            Ok(_) => panic!("ML-DSA signing all-zero seed material must be rejected"),
+            Err(other) => panic!("expected ML-DSA inert signing seed error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn direct_keypair_rejects_all_zero_coin_material() {
+        let suite = MlDsaSuite::MlDsa44;
+        let err = generate_mldsa_keypair_from_coins(suite, &[0_u8; 32])
+            .expect_err("all-zero ML-DSA keypair coins must be rejected");
+
+        match err {
+            MlDsaError::InertKeyMaterial {
+                suite: actual,
+                kind,
+            } => {
+                assert_eq!(actual.suite_id(), suite.suite_id());
+                assert_eq!(kind, "ML-DSA keypair coins");
+            }
+            other => panic!("expected ML-DSA inert keypair coin error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn generated_keypair_validator_rejects_public_secret_mismatch() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = seeded_keypair(suite, 0xA9, b"generated-keypair-mismatch");
+        let mut mismatched = MlDsaKeyPair {
+            public_key: keypair.public_key().to_vec(),
+            secret_key: Zeroizing::new(keypair.secret_key().to_vec()),
+        };
+        mismatched.public_key[0] ^= 0x80;
+
+        let err = validate_generated_mldsa_keypair(suite, &mismatched)
+            .expect_err("generated ML-DSA keypair mismatch must be rejected");
+        assert_secret_key_mismatch(err);
+    }
+
+    #[test]
+    fn direct_signing_rejects_all_zero_coin_material() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = seeded_keypair(suite, 0xA8, b"inert-sign-coins-keygen");
+        let err = sign_mldsa_from_coins(suite, keypair.secret_key(), b"", b"message", &[0_u8; 32])
+            .expect_err("all-zero ML-DSA signing coins must be rejected");
+
+        match err {
+            MlDsaError::InertKeyMaterial {
+                suite: actual,
+                kind,
+            } => {
+                assert_eq!(actual.suite_id(), suite.suite_id());
+                assert_eq!(kind, "ML-DSA signing coins");
+            }
+            other => panic!("expected ML-DSA inert signing coin error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn signature_constructor_preserves_guarded_payload() {
+        let suite = MlDsaSuite::MlDsa44;
+        let signature = vec![0xA7; suite.signature_len()];
+        let wrapped = MlDsaSignature::try_new(suite, signature.clone())
+            .expect("nonzero ML-DSA signature should be accepted");
+
+        assert_eq!(wrapped.as_bytes(), signature.as_slice());
+    }
+
+    #[test]
+    fn signature_constructor_rejects_all_zero_payload() {
+        let suite = MlDsaSuite::MlDsa44;
+        let err = MlDsaSignature::try_new(suite, vec![0u8; suite.signature_len()])
+            .expect_err("all-zero ML-DSA signature must be rejected");
+
+        assert_inert_key_material(err, suite, "signature");
     }
 
     #[test]
@@ -650,6 +830,33 @@ mod tests {
 
             assert_eq!(first.public_key(), second.public_key());
             assert_eq!(first.secret_key(), second.secret_key());
+        }
+    }
+
+    #[test]
+    fn seeded_keypair_rejects_all_zero_seed_material() {
+        for suite in [
+            MlDsaSuite::MlDsa44,
+            MlDsaSuite::MlDsa65,
+            MlDsaSuite::MlDsa87,
+        ] {
+            let err = generate_mldsa_keypair_from_seed(
+                suite,
+                HedgedRngSeed::from_entropy([0_u8; 32]),
+                b"seeded-keygen",
+            )
+            .expect_err("all-zero ML-DSA seed material must be rejected");
+
+            match err {
+                MlDsaError::InertKeyMaterial {
+                    suite: actual,
+                    kind,
+                } => {
+                    assert_eq!(actual.suite_id(), suite.suite_id());
+                    assert_eq!(kind, "ML-DSA seed material");
+                }
+                other => panic!("unexpected ML-DSA all-zero seed error: {other:?}"),
+            }
         }
     }
 

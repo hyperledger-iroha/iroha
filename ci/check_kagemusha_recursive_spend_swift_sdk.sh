@@ -10,6 +10,7 @@ cd "${ROOT_DIR}"
   IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift \
   IrohaSwift/Sources/IrohaSwift/Crypto.swift \
   IrohaSwift/Sources/IrohaSwift/NativeBridge.swift \
+  IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift \
   IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift \
   IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift \
   IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift \
@@ -57,6 +58,7 @@ cd "${ROOT_DIR}"
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift \

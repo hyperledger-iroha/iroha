@@ -865,6 +865,51 @@ test("generate-deployer writes restrictive secret files and refuses accidental o
   });
 });
 
+test("TRON deploy operator booleans reject malformed option values", async () => {
+  await withTempDir(async (dir) => {
+    const malformedValues = [" TRUE", "true ", "TRUE", "1", "yes", "on", true, false, 1, 0];
+    const originalConsoleLog = console.log;
+    console.log = () => {};
+    try {
+      for (const [index, value] of malformedValues.entries()) {
+        await assert.rejects(
+          () =>
+            generateDeployer({
+              out: join(dir, `malformed-force-${index}.secret.json`),
+              force: value,
+            }),
+          /--force must be true or false/u,
+        );
+      }
+    } finally {
+      console.log = originalConsoleLog;
+    }
+
+    for (const key of [
+      "check-account",
+      "require-secret",
+      "require-verifier",
+      "require-optional-packages",
+    ]) {
+      for (const value of malformedValues) {
+        await assert.rejects(
+          () =>
+            buildDeploymentDoctorReport(
+              { [key]: value },
+              {
+                resolveNodeModule: (name) => `/mock/node_modules/${name}/index.js`,
+                tronPost: async () => {
+                  throw new Error("unexpected TRON network access");
+                },
+              },
+            ),
+          new RegExp(`--${key} must be true or false`, "u"),
+        );
+      }
+    }
+  });
+});
+
 test("deployment configuration specs define the required post-deploy trigger order", () => {
   const specs = buildDeploymentConfigurationSpecs({
     tokenAddress: routeAddresses.token,
@@ -1400,6 +1445,22 @@ test("TRON route-config refuses allow-unready for production-ready manifests", a
     const toml = buildTairaXorRouteConfigToml(manifest);
     assert.match(toml, /production_ready = true/u);
     assert.match(toml, /sccp_allow_unready_transparent_proofs = false/u);
+    const snakeCaseSettlementToml = buildTairaXorRouteConfigToml({
+      ...manifest,
+      settlement: {
+        ...manifest.settlement,
+        contract_address: "tron-settlement-v1",
+        contract_alias: "taira-tron-xor",
+      },
+    });
+    assert.match(
+      snakeCaseSettlementToml,
+      /settlement_contract_address = "tron-settlement-v1"/u,
+    );
+    assert.match(
+      snakeCaseSettlementToml,
+      /settlement_contract_alias = "taira-tron-xor"/u,
+    );
 
     assert.throws(
       () => buildTairaXorRouteConfigToml(manifest, { "allow-unready": "true" }),
@@ -1414,6 +1475,45 @@ test("TRON route-config refuses allow-unready for production-ready manifests", a
         ),
       /production-ready route manifests cannot enable --allow-unready/u,
     );
+  });
+});
+
+test("TRON route-config rejects malformed allow-unready option values", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+
+    for (const value of [" TRUE", "true ", "TRUE", true, false, 1, 0]) {
+      assert.throws(
+        () => buildTairaXorRouteConfigToml(manifest, { "allow-unready": value }),
+        /--allow-unready must be true or false/u,
+      );
+      assert.throws(
+        () =>
+          buildMergedTairaXorRouteConfigToml(
+            "[zk]\nother_setting = true\n",
+            manifest,
+            { "allow-unready": value },
+          ),
+        /--allow-unready must be true or false/u,
+      );
+    }
   });
 });
 
@@ -1462,6 +1562,40 @@ test("route manifest draft defaults to disabled and requires production readines
         }),
       /live-evidence/u,
     );
+  });
+});
+
+test("TRON route-manifest readiness booleans reject malformed option values", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const baseOptions = {
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": routeHash("deployed-verifier-code"),
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+    };
+
+    for (const value of [" TRUE", "true ", "TRUE", "1", "yes", "on", true, false, 1, 0]) {
+      await assert.rejects(
+        () =>
+          buildTairaXorRouteManifestDraft({
+            ...baseOptions,
+            "production-ready": value,
+          }),
+        /--production-ready must be true or false/u,
+      );
+      await assert.rejects(
+        () =>
+          buildTairaXorRouteManifestDraft({
+            ...baseOptions,
+            "live-readback-checked": value,
+          }),
+        /--live-readback-checked must be true or false/u,
+      );
+    }
   });
 });
 
@@ -1588,8 +1722,18 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
       [{ assetKey: "xor " }, /assetKey.*without surrounding whitespace/u],
       [{ counterpartyDomain: 2 }, /counterpartyDomain/u],
       [{ verifierTarget: "EvmContract" }, /verifierTarget/u],
+      [{ productionReady: "true" }, /productionReady must be true or false/u],
+      [{ productionReady: 1 }, /productionReady must be true or false/u],
+      [{ disabledReason: " disabled" }, /disabledReason.*without surrounding whitespace/u],
+      [{ disabledReason: 1 }, /disabledReason.*without surrounding whitespace/u],
+      [
+        { disabledReason: "disabled", disabled_reason: "different" },
+        /disabledReason and disabled_reason must match/u,
+      ],
       [{ postDeployReadbackChecked: undefined }, /postDeployReadbackChecked true/u],
       [{ postDeployReadbackChecked: false }, /postDeployReadbackChecked true/u],
+      [{ postDeployReadbackChecked: "true" }, /postDeployReadbackChecked must be true or false/u],
+      [{ postDeployReadbackChecked: 1 }, /postDeployReadbackChecked must be true or false/u],
       [
         { post_deploy_readback_checked: false },
         /postDeployReadbackChecked and post_deploy_readback_checked must match/u,
@@ -1656,6 +1800,40 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
       [{ settlement: { submitPath: "/v1/transactions" } }, /settlement\.submitPath/u],
       [{ settlement: { mode: "diagnostic" } }, /settlement\.mode/u],
       [
+        { settlement: { contractAddress: " tron-settlement-v1" } },
+        /settlement\.contractAddress.*without surrounding whitespace/u,
+      ],
+      [
+        { settlement: { contractAddress: 1 } },
+        /settlement\.contractAddress.*without surrounding whitespace/u,
+      ],
+      [
+        {
+          settlement: {
+            contractAddress: "tron-settlement-v1",
+            contract_address: "tron-settlement-v2",
+          },
+        },
+        /settlement\.contractAddress aliases disagree/u,
+      ],
+      [
+        { settlement: { contractAlias: " taira-tron-xor" } },
+        /settlement\.contractAlias.*without surrounding whitespace/u,
+      ],
+      [
+        { settlement: { contractAlias: 1 } },
+        /settlement\.contractAlias.*without surrounding whitespace/u,
+      ],
+      [
+        {
+          settlement: {
+            contractAlias: "taira-tron-xor",
+            contract_alias: "taira-tron-xor-v2",
+          },
+        },
+        /settlement\.contractAlias aliases disagree/u,
+      ],
+      [
         {
           postDeployLiveEvidence: {
             sourceEventTransactionProductionBlockers: [
@@ -1688,6 +1866,14 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
       [
         { postDeployLiveEvidence: { full_toml_production_blockers: [123] } },
         /postDeployLiveEvidence\.full_toml_production_blockers\[0\].*without surrounding whitespace/u,
+      ],
+      [
+        { postDeployLiveEvidence: { fullTomlReady: "true" } },
+        /postDeployLiveEvidence\.fullTomlReady must be true or false/u,
+      ],
+      [
+        { postDeployLiveEvidence: { fullTomlReady: 1 } },
+        /postDeployLiveEvidence\.fullTomlReady must be true or false/u,
       ],
       [
         {

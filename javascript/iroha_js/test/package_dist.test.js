@@ -717,6 +717,7 @@ const DIST_INDEX_TEXT = readFileSync(new URL("../dist/index.js", import.meta.url
 const PACKAGE_JSON_TEXT = readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
+const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
 
 function publicSccpSourceExports() {
   return [...SCCP_SOURCE_TEXT.matchAll(/export\s+(?:const|function|class)\s+([A-Za-z0-9_]+)/gu)]
@@ -5986,7 +5987,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     no_wasm: true,
     remote_prover_required: false,
     browser_implementation: "pure-typescript",
-    cross_sdk_fixture_parity_artifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+    cross_sdk_fixture_parity_artifact: "artifacts/eth-mainnet/cross-sdk-parity.json",
     native_prover_self_test_artifact: "artifacts/eth-mainnet/native-prover-self-test.json",
     native_sdk_artifacts: Object.entries(
       SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
@@ -6001,12 +6002,16 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
     })),
     audit_hashes: {
-      circuit_security_audit: `0x${"a1".repeat(32)}`,
-      native_implementation_audit: `0x${"a2".repeat(32)}`,
-      reproducible_build_attestation: `0x${"a3".repeat(32)}`,
-      cross_sdk_fixture_parity: `0x${"a4".repeat(32)}`,
-      native_prover_self_test: `0x${"a5".repeat(32)}`,
-      no_wasm_no_remote_scan: `0x${"a6".repeat(32)}`,
+      circuit_security_audit: fixtureHash("dist eth circuit security audit"),
+      native_implementation_audit: fixtureHash(
+        "dist eth native implementation audit",
+      ),
+      reproducible_build_attestation: fixtureHash(
+        "dist eth reproducible build attestation",
+      ),
+      cross_sdk_fixture_parity: fixtureHash("dist eth cross-SDK parity audit"),
+      native_prover_self_test: fixtureHash("dist eth native self-test audit"),
+      no_wasm_no_remote_scan: fixtureHash("dist eth no-wasm no-remote scan"),
     },
   };
   const publicSignalWords = Array.from(
@@ -6030,6 +6035,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key_hash: provingKeyHash,
     verifier_key_hash: verifierKeyHash,
     destination_binding_hash: ethereumMainnetBinding.bindingHash,
+    production_attestation_hash: fixtureHash(
+      "dist eth native prover parity production attestation",
+    ),
     ...paritySdkResult,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
@@ -6063,6 +6071,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key_hash: provingKeyHash,
     verifier_key_hash: verifierKeyHash,
     destination_binding_hash: ethereumMainnetBinding.bindingHash,
+    production_attestation_hash: fixtureHash(
+      "dist eth native prover self-test production attestation",
+    ),
     ...selfTestSdkResult,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
@@ -6527,7 +6538,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     verifier_key: "artifacts/bsc-mainnet/verifier-key.bin",
     destination_binding_hash: bscMainnetBinding.bindingHash,
     cross_sdk_fixture_parity_artifact:
-      "artifacts/bsc-mainnet/cross-sdk-fixture-parity.json",
+      "artifacts/bsc-mainnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-mainnet/native-prover-self-test.json",
     native_sdk_artifacts: Object.entries(
@@ -6556,6 +6567,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key_hash: provingKeyHash,
     verifier_key_hash: verifierKeyHash,
     destination_binding_hash: bscMainnetBinding.bindingHash,
+    production_attestation_hash: fixtureHash(
+      "dist bsc mainnet native prover parity production attestation",
+    ),
     ...bscMainnetParitySdkResult,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
@@ -6577,6 +6591,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key_hash: provingKeyHash,
     verifier_key_hash: verifierKeyHash,
     destination_binding_hash: bscMainnetBinding.bindingHash,
+    production_attestation_hash: fixtureHash(
+      "dist bsc mainnet native prover self-test production attestation",
+    ),
     ...selfTestSdkResult,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
@@ -6651,7 +6668,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key: "artifacts/bsc-testnet/proving-key.zkey",
     verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
     destination_binding_hash: bscTestnetBinding.bindingHash,
-    cross_sdk_fixture_parity_artifact: "artifacts/bsc-testnet/cross-sdk-fixture-parity.json",
+    cross_sdk_fixture_parity_artifact: "artifacts/bsc-testnet/cross-sdk-parity.json",
     native_prover_self_test_artifact: "artifacts/bsc-testnet/native-prover-self-test.json",
     native_sdk_artifacts: Object.entries(
       SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
@@ -6679,6 +6696,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key_hash: provingKeyHash,
     verifier_key_hash: verifierKeyHash,
     destination_binding_hash: bscTestnetBinding.bindingHash,
+    production_attestation_hash: fixtureHash(
+      "dist bsc testnet native prover parity production attestation",
+    ),
     ...bscTestnetParitySdkResult,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
@@ -6700,6 +6720,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key_hash: provingKeyHash,
     verifier_key_hash: verifierKeyHash,
     destination_binding_hash: bscTestnetBinding.bindingHash,
+    production_attestation_hash: fixtureHash(
+      "dist bsc testnet native prover self-test production attestation",
+    ),
     ...selfTestSdkResult,
     sdk_results: Object.fromEntries(
       Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [

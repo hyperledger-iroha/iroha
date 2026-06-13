@@ -472,6 +472,11 @@ impl Sm2PrivateKey {
         for _ in 0..SM2_RANDOM_KEY_ATTEMPTS {
             rng.try_fill_bytes(secret.as_mut())
                 .map_err(|err| ParseError(format!("SM2 RNG failed: {err}")))?;
+            if secret.iter().all(|&byte| byte == 0) {
+                return Err(ParseError(
+                    "SM2 RNG returned all-zero seed material".to_owned(),
+                ));
+            }
             if let Ok(private) = Self::from_bytes(distid.clone(), secret.as_ref()) {
                 return Ok(private);
             }
@@ -511,6 +516,8 @@ impl Sm2PrivateKey {
     /// Returns [`ParseError`] when a valid key cannot be derived within the retry budget.
     pub fn from_seed(distid: impl Into<String>, seed: &[u8]) -> Result<Self, ParseError> {
         let distid = distid.into();
+        validate_distid(&distid)?;
+        validate_seed_material_not_all_zero(seed)?;
         let mut counter: u32 = 0;
         loop {
             let mut hasher = Sha512::new();
@@ -623,6 +630,15 @@ impl Sm2PrivateKey {
         bytes.zeroize();
         Self::from_bytes(distid, buf.as_ref())
     }
+}
+
+fn validate_seed_material_not_all_zero(seed: &[u8]) -> Result<(), ParseError> {
+    if !seed.is_empty() && seed.iter().all(|&byte| byte == 0) {
+        return Err(ParseError(
+            "SM2 seed material must not be all zero".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Encode an SM2 public key payload with an explicit distinguishing identifier.
@@ -3049,6 +3065,29 @@ mod tests {
 
     impl TryCryptoRng for FailingTryRng {}
 
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedTryRng {}
+
     struct IntrinsicPolicyGuard {
         previous: SmIntrinsicPolicy,
         _lock: std::sync::MutexGuard<'static, ()>,
@@ -3549,6 +3588,42 @@ mod tests {
             original.public_key().to_sec1_bytes(false),
             restored.public_key().to_sec1_bytes(false)
         );
+    }
+
+    #[test]
+    fn sm2_from_seed_rejects_all_zero_seed_material() {
+        match Sm2PrivateKey::from_seed(Sm2PublicKey::DEFAULT_DISTID, &[0u8; 32]) {
+            Err(err) => assert!(
+                err.to_string().contains("all zero"),
+                "unexpected all-zero seed error: {err:?}"
+            ),
+            Ok(_) => panic!("all-zero SM2 seed material must fail"),
+        }
+    }
+
+    #[test]
+    fn sm2_try_random_rejects_all_zero_rng_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+
+        match Sm2PrivateKey::try_random(Sm2PublicKey::DEFAULT_DISTID, &mut rng) {
+            Err(err) => assert!(
+                err.to_string().contains("all-zero seed material"),
+                "unexpected all-zero RNG error: {err:?}"
+            ),
+            Ok(_) => panic!("all-zero SM2 RNG material must fail"),
+        }
+    }
+
+    #[test]
+    fn sm2_from_seed_rejects_invalid_distid_before_derivation() {
+        let oversized_distid = "x".repeat((u16::MAX as usize / 8) + 1);
+        match Sm2PrivateKey::from_seed(&oversized_distid, b"valid-seed") {
+            Err(err) => assert!(
+                err.to_string().contains("exceeds 65535 bits"),
+                "unexpected distid error: {err:?}"
+            ),
+            Ok(_) => panic!("oversized SM2 distinguishing identifier must fail"),
+        }
     }
 
     #[test]

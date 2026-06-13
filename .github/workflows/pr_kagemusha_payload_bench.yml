@@ -611,6 +611,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-bridge-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-library-evidence-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-filter-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-verifier-backend-test-filter-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-workflow-inventory
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-archive-copy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-recursive-compact-verifier-unavailable

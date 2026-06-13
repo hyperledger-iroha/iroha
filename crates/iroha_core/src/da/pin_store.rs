@@ -40,7 +40,7 @@ impl DaPinStore {
     /// Insert a pin intent with its originating block location, updating alias mapping if present.
     ///
     /// Returns `true` when the intent was newly inserted and `false` when it was
-    /// dropped due to a duplicate `(lane, epoch, sequence)` key.
+    /// dropped due to a duplicate index key.
     pub fn insert(&mut self, intent: DaPinIntent, location: DaCommitmentLocation) -> bool {
         self.insert_with_location(DaPinIntentWithLocation { intent, location })
     }
@@ -51,9 +51,15 @@ impl DaPinStore {
     pub fn insert_with_location(&mut self, entry: DaPinIntentWithLocation) -> bool {
         let DaPinIntentWithLocation { intent, location } = entry;
         let key = (intent.lane_id.as_u32(), intent.epoch, intent.sequence);
-        if !self.seen_keys.insert(key) {
+        let location_key = (location.block_height, location.index_in_bundle);
+        if self.seen_keys.contains(&key)
+            || self.by_ticket.contains_key(&intent.storage_ticket)
+            || self.by_manifest.contains_key(&intent.manifest_hash)
+            || self.by_location.contains_key(&location_key)
+        {
             return false;
         }
+        self.seen_keys.insert(key);
 
         let stored = DaPinIntentWithLocation {
             intent: intent.clone(),
@@ -70,8 +76,7 @@ impl DaPinStore {
             (intent.lane_id.as_u32(), intent.epoch, intent.sequence),
             stored.clone(),
         );
-        self.by_location
-            .insert((location.block_height, location.index_in_bundle), stored);
+        self.by_location.insert(location_key, stored);
 
         true
     }
@@ -108,6 +113,18 @@ impl DaPinStore {
         sequence: u64,
     ) -> Option<&DaPinIntentWithLocation> {
         self.by_lane_epoch.get(&(lane_id, epoch, sequence))
+    }
+
+    /// Return whether a pin intent collides with any committed pin intent identity.
+    ///
+    /// Aliases are intentionally excluded: they are mutable shortcuts and may
+    /// be reassigned by later pin intents.
+    #[must_use]
+    pub fn contains_intent_identity(&self, intent: &DaPinIntent) -> bool {
+        self.get_by_lane_epoch_sequence(intent.lane_id.as_u32(), intent.epoch, intent.sequence)
+            .is_some()
+            || self.get_by_manifest(&intent.manifest_hash).is_some()
+            || self.get_by_ticket(&intent.storage_ticket).is_some()
     }
 
     /// Return all intents ordered by `(block_height, index_in_bundle)`.
@@ -251,6 +268,114 @@ mod tests {
         assert!(
             store.get_by_ticket(&second.intent.storage_ticket).is_none(),
             "conflicting ticket should be ignored"
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_ticket_without_index_skew() {
+        let mut store = DaPinStore::default();
+        let first = located(sample_intent(1, 1, None), 9, 0);
+        let mut second = located(sample_intent(2, 2, None), 10, 0);
+        second.intent.storage_ticket = first.intent.storage_ticket;
+
+        assert!(store.insert_with_location(first.clone()));
+        assert!(!store.insert_with_location(second.clone()));
+        assert_eq!(store.all_sorted().count(), 1);
+        assert!(store.get_by_ticket(&first.intent.storage_ticket).is_some());
+        assert!(
+            store
+                .get_by_lane_epoch_sequence(
+                    second.intent.lane_id.as_u32(),
+                    second.intent.epoch,
+                    second.intent.sequence
+                )
+                .is_none(),
+            "duplicate ticket must not leave a lane/epoch index entry"
+        );
+        assert!(
+            store
+                .get_by_manifest(&second.intent.manifest_hash)
+                .is_none(),
+            "duplicate ticket must not leave a manifest index entry"
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_manifest_without_index_skew() {
+        let mut store = DaPinStore::default();
+        let first = located(sample_intent(1, 1, None), 9, 0);
+        let mut second = located(sample_intent(2, 2, None), 10, 0);
+        second.intent.manifest_hash = first.intent.manifest_hash;
+
+        assert!(store.insert_with_location(first.clone()));
+        assert!(!store.insert_with_location(second.clone()));
+        assert_eq!(store.all_sorted().count(), 1);
+        assert!(store.get_by_manifest(&first.intent.manifest_hash).is_some());
+        assert!(
+            store.get_by_ticket(&second.intent.storage_ticket).is_none(),
+            "duplicate manifest must not leave a ticket index entry"
+        );
+        assert!(
+            store
+                .get_by_lane_epoch_sequence(
+                    second.intent.lane_id.as_u32(),
+                    second.intent.epoch,
+                    second.intent.sequence
+                )
+                .is_none(),
+            "duplicate manifest must not leave a lane/epoch index entry"
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_location_without_index_skew() {
+        let mut store = DaPinStore::default();
+        let first = located(sample_intent(1, 1, None), 9, 0);
+        let second = located(sample_intent(2, 2, None), 9, 0);
+
+        assert!(store.insert_with_location(first.clone()));
+        assert!(!store.insert_with_location(second.clone()));
+        assert_eq!(store.all_sorted().count(), 1);
+        assert!(store.get_by_ticket(&first.intent.storage_ticket).is_some());
+        assert!(
+            store.get_by_ticket(&second.intent.storage_ticket).is_none(),
+            "duplicate location must not leave a ticket index entry"
+        );
+        assert!(
+            store
+                .get_by_manifest(&second.intent.manifest_hash)
+                .is_none(),
+            "duplicate location must not leave a manifest index entry"
+        );
+    }
+
+    #[test]
+    fn contains_intent_identity_detects_key_manifest_and_ticket_collisions() {
+        let mut store = DaPinStore::default();
+        let first = located(sample_intent(1, 1, Some("first-alias")), 9, 0);
+        assert!(store.insert_with_location(first.clone()));
+
+        let mut duplicate_key = sample_intent(1, 1, Some("fresh-alias"));
+        duplicate_key.storage_ticket = StorageTicketId::new([0x90; 32]);
+        duplicate_key.manifest_hash = ManifestDigest::new([0x91; 32]);
+        assert!(store.contains_intent_identity(&duplicate_key));
+
+        let mut duplicate_ticket = sample_intent(2, 2, Some("fresh-ticket-alias"));
+        duplicate_ticket.storage_ticket = first.intent.storage_ticket;
+        duplicate_ticket.manifest_hash = ManifestDigest::new([0x92; 32]);
+        assert!(store.contains_intent_identity(&duplicate_ticket));
+
+        let mut duplicate_manifest = sample_intent(3, 3, Some("fresh-manifest-alias"));
+        duplicate_manifest.storage_ticket = StorageTicketId::new([0x93; 32]);
+        duplicate_manifest.manifest_hash = first.intent.manifest_hash;
+        assert!(store.contains_intent_identity(&duplicate_manifest));
+
+        let mut alias_reassignment = sample_intent(4, 4, Some("first-alias"));
+        alias_reassignment.storage_ticket = StorageTicketId::new([0x94; 32]);
+        alias_reassignment.manifest_hash = ManifestDigest::new([0x95; 32]);
+        assert!(
+            !store.contains_intent_identity(&alias_reassignment),
+            "alias reassignment alone should not be treated as an identity collision"
         );
     }
 }

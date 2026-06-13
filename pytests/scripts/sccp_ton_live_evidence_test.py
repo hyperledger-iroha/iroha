@@ -241,8 +241,36 @@ def test_live_ton_http_error_detail_is_bounded():
         assert message == "TON accountStates failed with HTTP 500"
         assert "secret-token" not in message
         assert len(message) < 100
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("oversized TON accountStates error body was accepted")
+
+
+def test_live_ton_account_states_redacts_invalid_json_parser_details():
+    module = load_live_module()
+    invalid_payload = b'{"secret-token invalid TON accountStates payload": '
+
+    def invalid_json_opener(_request, timeout):
+        assert timeout == 3.0
+        return RawResponse(invalid_payload)
+
+    try:
+        module.collect_live_evidence(
+            "https://toncenter.example",
+            verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+            opener=invalid_json_opener,
+            timeout=3.0,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "TON accountStates returned invalid JSON"
+        assert "secret-token" not in message
+        assert "accountStates payload" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("invalid TON accountStates JSON was accepted")
 
 
 def test_live_ton_account_states_json_rejects_duplicate_keys():
@@ -307,6 +335,8 @@ def test_live_ton_account_states_redacts_transport_and_error_response_details():
         message = str(exc)
         assert message == "TON accountStates request failed"
         assert "secret-token" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
     else:
         raise AssertionError("secret-bearing TON transport error was accepted")
 
@@ -566,8 +596,11 @@ def test_live_ton_evidence_rejects_mismatched_account_address():
     module = load_live_module()
     cases = [
         ("", "must be present"),
-        (" " + TON_VERIFIER_CONTRACT_ADDRESS + " ", "must not contain whitespace"),
-        ("-1:" + "22" * 32, "basechain 0"),
+        (
+            " " + TON_VERIFIER_CONTRACT_ADDRESS + " ",
+            "must be a canonical raw address",
+        ),
+        ("-1:" + "22" * 32, "must be a canonical raw address"),
         ("0:" + "22" * 32, "does not match verifier contract"),
         ("0:" + "AA" * 32, "canonical raw address"),
     ]
@@ -709,6 +742,7 @@ def test_live_ton_evidence_redacts_code_boc_parser_failures(monkeypatch):
             timeout=3.0,
         )
     except RuntimeError as exc:
+        live_exc = exc
         live_error = str(exc)
     else:
         raise AssertionError("TON live collection accepted parser failure")
@@ -716,6 +750,7 @@ def test_live_ton_evidence_redacts_code_boc_parser_failures(monkeypatch):
     try:
         module._summary(args, live)
     except ValueError as exc:
+        summary_exc = exc
         summary_error = str(exc)
     else:
         raise AssertionError("TON live summary accepted parser failure")
@@ -727,6 +762,29 @@ def test_live_ton_evidence_redacts_code_boc_parser_failures(monkeypatch):
     assert "parser detail" not in rendered
     assert "ValueError" not in rendered
     assert "is invalid:" not in rendered
+    assert live_exc.__cause__ is None
+    assert live_exc.__suppress_context__ is True
+    assert summary_exc.__cause__ is None
+    assert summary_exc.__suppress_context__ is True
+
+
+def test_live_ton_hash_decoder_redacts_base64_parser_causes():
+    module = load_live_module()
+
+    try:
+        module._decode_hash_text(
+            "secret-token hash base64",
+            label="verifier_code_hash",
+        )
+    except RuntimeError as exc:
+        rendered = str(exc)
+        assert rendered == "verifier_code_hash must be 32-byte hex or base64"
+        assert "secret-token" not in rendered
+        assert "hash base64" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("TON live hash decoder accepted invalid base64")
 
 
 def test_live_ton_evidence_redacts_account_address_parser_failures(monkeypatch):
@@ -748,6 +806,7 @@ def test_live_ton_evidence_redacts_account_address_parser_failures(monkeypatch):
         fail_account_address,
     )
 
+    caught_exc = None
     try:
         module.collect_live_evidence(
             "https://toncenter.example",
@@ -756,6 +815,7 @@ def test_live_ton_evidence_redacts_account_address_parser_failures(monkeypatch):
             timeout=3.0,
         )
     except RuntimeError as exc:
+        caught_exc = exc
         rendered = str(exc)
     else:
         raise AssertionError("TON live collection accepted parser failure")
@@ -764,6 +824,9 @@ def test_live_ton_evidence_redacts_account_address_parser_failures(monkeypatch):
     assert "secret-token" not in rendered
     assert "parser detail" not in rendered
     assert "canonical raw address:" not in rendered
+    assert caught_exc is not None
+    assert caught_exc.__cause__ is None
+    assert caught_exc.__suppress_context__ is True
 
 
 def test_live_ton_evidence_redacts_imported_parser_failures(monkeypatch):
@@ -1070,6 +1133,20 @@ def test_live_ton_evidence_uses_runtime_only_api_key(tmp_path):
         assert "--api-key-file" in str(exc)
     else:
         raise AssertionError("padded TON API key file token was accepted")
+
+    missing_token_file = tmp_path / "secret-token-ton-api-key-file"
+    try:
+        module._read_api_key(
+            SimpleNamespace(api_key=None, api_key_file=str(missing_token_file))
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "--api-key-file cannot be read"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("missing TON API key file was accepted")
 
     fake = fake_ton_opener(module, api_key="secret-token")
     live = module.collect_live_evidence(

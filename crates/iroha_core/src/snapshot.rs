@@ -1478,7 +1478,8 @@ fn try_write_snapshot(
     digest_file
         .sync_data()
         .map_err(|err| TryWriteError::IO(err, path_to_tmp_digest.clone()))?;
-    let signature = Signature::new(signing_key.private_key(), &digest_vec);
+    let signature = Signature::try_new(signing_key.private_key(), &digest_vec)
+        .map_err(TryWriteError::Signing)?;
     let signature_hex = hex::encode(signature.payload());
     let mut sig_file = std::fs::OpenOptions::new()
         .create(true)
@@ -1939,6 +1940,8 @@ enum TryWriteError {
     Serialization(norito::json::Error),
     /// Error (de)serializing snapshot Merkle metadata
     MerkleSerialization(norito::json::Error),
+    /// Error signing snapshot digest
+    Signing(#[source] iroha_crypto::Error),
     /// Refusing to write snapshot at state height `{state_height}` because durable Kura height is `{kura_height}`
     StateAheadOfKura {
         /// Height recorded by state/block-hash journal.
@@ -2426,7 +2429,8 @@ mod tests {
         )
         .expect("snapshot digest");
 
-        let signature = Signature::new(key_pair.private_key(), &digest_vec);
+        let signature = Signature::try_new(key_pair.private_key(), &digest_vec)
+            .expect("checked snapshot signature");
         std::fs::write(
             store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
             hex::encode(signature.payload()),
@@ -2498,6 +2502,64 @@ mod tests {
             canonical_state_snapshot_bytes_for_tests(&state),
             "snapshot roundtrip must preserve canonical WSV bytes"
         );
+    }
+
+    #[test]
+    async fn snapshot_write_signature_file_uses_checked_signing_and_verifies_digest() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
+
+        let digest_hex = std::fs::read_to_string(store_dir.join(SNAPSHOT_DIGEST_FILE_NAME))
+            .expect("snapshot digest");
+        let digest = hex::decode(digest_hex.trim()).expect("snapshot digest hex");
+        let signature_hex = std::fs::read_to_string(store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME))
+            .expect("snapshot signature");
+        let signature = Signature::from_hex(signature_hex.trim()).expect("snapshot signature hex");
+        signature
+            .verify(key_pair.public_key(), &digest)
+            .expect("checked snapshot signature must verify");
+    }
+
+    #[test]
+    async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
+
+        let digest_hex = std::fs::read_to_string(store_dir.join(SNAPSHOT_DIGEST_FILE_NAME))
+            .expect("snapshot digest");
+        let digest = hex::decode(digest_hex.trim()).expect("snapshot digest hex");
+        let wrong_key_pair = KeyPair::random();
+        let wrong_signature = Signature::try_new(wrong_key_pair.private_key(), &digest)
+            .expect("checked wrong-key snapshot signature");
+        std::fs::write(
+            store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
+            hex::encode(wrong_signature.payload()),
+        )
+        .expect("replace snapshot signature");
+
+        let Err(error) = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        ) else {
+            panic!("snapshot with wrong-key signature should be rejected")
+        };
+
+        assert!(matches!(error, TryReadError::SignatureInvalid(_)));
     }
 
     #[test]
@@ -2816,7 +2878,8 @@ mod tests {
             hex::encode(&digest_vec),
         )
         .expect("write corrupt digest");
-        let sig = Signature::new(key_pair.private_key(), &digest_vec);
+        let sig = Signature::try_new(key_pair.private_key(), &digest_vec)
+            .expect("checked corrupt snapshot signature");
         std::fs::write(
             store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
             hex::encode(sig.payload()),
@@ -3022,7 +3085,8 @@ mod tests {
         let digest_vec = digest_bytes.to_vec();
         let digest = hex::encode(&digest_vec);
         std::fs::write(store_dir.join(SNAPSHOT_DIGEST_FILE_NAME), digest).unwrap();
-        let sig = Signature::new(key_pair.private_key(), &digest_vec);
+        let sig = Signature::try_new(key_pair.private_key(), &digest_vec)
+            .expect("checked corrupt snapshot signature");
         std::fs::write(
             store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
             hex::encode(sig.payload()),

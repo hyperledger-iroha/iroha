@@ -21,7 +21,7 @@ use iroha_data_model::{
         OfflineNoteRecursiveProof, OfflineNoteRedeem,
     },
     proof::{ProofBox, VerifyingKeyId},
-    transaction::TransactionBuilder,
+    transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_primitives::numeric::Numeric;
 use norito::json::{self, Map, Value};
@@ -73,6 +73,16 @@ impl OfflineV2IssuerRuntime {
         let bytes = json::to_vec(payload)
             .map_err(|source| Error::SerializationFailure { context, source })?;
         Ok(BASE64_STANDARD.encode(self.sign_bytes(&bytes, context)?.payload()))
+    }
+
+    fn sign_transaction(
+        &self,
+        transaction: TransactionBuilder,
+        context: &'static str,
+    ) -> Result<SignedTransaction, Error> {
+        transaction
+            .try_sign(self.key_pair.private_key())
+            .map_err(|source| offline_v2_transaction_signing_error(context, source))
     }
 }
 
@@ -269,9 +279,11 @@ pub(crate) async fn handle_notes_issue(
         ),
         amount: amount.clone(),
     });
-    let tx = TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
-        .with_instructions([InstructionBox::from(issue)])
-        .sign(issuer.key_pair.private_key());
+    let tx = issuer.sign_transaction(
+        TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
+            .with_instructions([InstructionBox::from(issue)]),
+        "offline_v2_note_issue_transaction",
+    )?;
     let tx_hash = tx.hash().to_string();
     routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
@@ -378,9 +390,11 @@ pub(crate) async fn handle_notes_redeem(
     let amount = redemption.amount.to_string();
 
     let instruction = RedeemOfflineNoteV2::new(redemption);
-    let tx = TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
-        .with_instructions([InstructionBox::from(instruction)])
-        .sign(issuer.key_pair.private_key());
+    let tx = issuer.sign_transaction(
+        TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
+            .with_instructions([InstructionBox::from(instruction)]),
+        "offline_v2_note_redeem_transaction",
+    )?;
     let tx_hash = tx.hash().to_string();
     routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
@@ -469,6 +483,15 @@ fn require_issuer(app: &AppState) -> Result<Arc<OfflineV2IssuerRuntime>, Error> 
 }
 
 fn offline_v2_signing_error(context: &'static str, source: iroha_crypto::Error) -> Error {
+    Error::Query(ValidationFail::InternalError(format!(
+        "Offline Notes V2 issuer failed to sign {context}: {source}"
+    )))
+}
+
+fn offline_v2_transaction_signing_error(
+    context: &'static str,
+    source: impl std::fmt::Display,
+) -> Error {
     Error::Query(ValidationFail::InternalError(format!(
         "Offline Notes V2 issuer failed to sign {context}: {source}"
     )))
@@ -2023,6 +2046,25 @@ mod tests {
             },
             verifier_key_pair,
         )
+    }
+
+    #[test]
+    fn offline_v2_note_transaction_checked_signing_verifies() {
+        let (issuer, _) = sample_issuer();
+        let tx = issuer
+            .sign_transaction(
+                TransactionBuilder::new(
+                    iroha_data_model::ChainId::from("offline-v2-note-sign-test"),
+                    issuer.authority.clone().into(),
+                )
+                .with_instructions(Vec::<InstructionBox>::new()),
+                "offline_v2_note_transaction_test",
+            )
+            .expect("checked transaction signing should succeed");
+
+        tx.verify_signature()
+            .expect("checked offline v2 note transaction signature should verify");
+        assert_eq!(tx.authority(), &issuer.authority);
     }
 
     fn sample_request(

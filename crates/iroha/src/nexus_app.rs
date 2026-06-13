@@ -634,6 +634,21 @@ mod tests {
 
     const FIXTURE: &str = include_str!("../../../fixtures/sdk/nexus_connect_transfer_v1.json");
 
+    fn wallet_signature_for(
+        key_pair: &KeyPair,
+        signable: &NexusSignableTransaction,
+    ) -> NexusWalletSignature {
+        let signature = Signature::try_new(
+            key_pair.private_key(),
+            &signable.builder.payload_hash_bytes(),
+        )
+        .expect("Nexus app wallet signature fixture should sign");
+        NexusWalletSignature {
+            algorithm: NexusSignatureAlgorithm::Ed25519,
+            signature: signature.payload().to_vec(),
+        }
+    }
+
     #[derive(Debug, Clone)]
     struct FakeConnect {
         account: AccountId,
@@ -834,19 +849,13 @@ mod tests {
             hex::encode(draft.signable.builder.payload_hash_bytes())
         );
 
-        let signature = Signature::new(
-            key_pair.private_key(),
-            &draft.signable.builder.payload_hash_bytes(),
-        );
+        let wallet_signature = wallet_signature_for(&key_pair, &draft.signable);
         let submitter = FakeSubmitter::default();
         let client = NexusAppClient::new(config, UnsupportedConnectTransport, submitter.clone());
         let receipt = client
             .finalize_and_submit(
                 draft.signable,
-                NexusWalletSignature {
-                    algorithm: NexusSignatureAlgorithm::Ed25519,
-                    signature: signature.payload().to_vec(),
-                },
+                wallet_signature,
                 NexusFinalizeOptions::default(),
             )
             .expect("receipt");
@@ -869,13 +878,10 @@ mod tests {
         )
         .build_transfer_draft(sample_input(account.clone()))
         .expect("draft");
-        let signature = Signature::new(
-            key_pair.private_key(),
-            &draft.signable.builder.payload_hash_bytes(),
-        );
+        let signature = wallet_signature_for(&key_pair, &draft.signable).signature;
         let connect = FakeConnect {
             account: account.clone(),
-            signature: signature.payload().to_vec(),
+            signature,
             requested_payloads: Rc::new(RefCell::new(Vec::new())),
         };
         let submitter = FakeSubmitter::default();
@@ -1124,17 +1130,11 @@ mod tests {
         let draft = client
             .build_transfer_draft(sample_input(account))
             .expect("draft");
-        let signature = Signature::new(
-            key_pair.private_key(),
-            &draft.signable.builder.payload_hash_bytes(),
-        );
+        let wallet_signature = wallet_signature_for(&key_pair, &draft.signable);
         let error = client
             .finalize_and_submit(
                 draft.signable,
-                NexusWalletSignature {
-                    algorithm: NexusSignatureAlgorithm::Ed25519,
-                    signature: signature.payload().to_vec(),
-                },
+                wallet_signature,
                 NexusFinalizeOptions::default(),
             )
             .expect_err("hash mismatch");
@@ -1165,17 +1165,11 @@ mod tests {
             let draft = client
                 .build_transfer_draft(sample_input(account.clone()))
                 .expect("draft");
-            let signature = Signature::new(
-                key_pair.private_key(),
-                &draft.signable.builder.payload_hash_bytes(),
-            );
+            let wallet_signature = wallet_signature_for(&key_pair, &draft.signable);
             let error = client
                 .finalize_and_submit(
                     draft.signable,
-                    NexusWalletSignature {
-                        algorithm: NexusSignatureAlgorithm::Ed25519,
-                        signature: signature.payload().to_vec(),
-                    },
+                    wallet_signature,
                     NexusFinalizeOptions::default(),
                 )
                 .expect_err("submitter failure");

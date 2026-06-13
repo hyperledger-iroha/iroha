@@ -285,7 +285,12 @@ fn run() -> Result<(), String> {
     let mut fixtures = Vec::with_capacity(entries.len());
     for entry in entries {
         let builder = entry.payload.to_builder()?;
-        let signed = builder.sign(keypair.private_key());
+        let signed = builder.try_sign(keypair.private_key()).map_err(|err| {
+            format!(
+                "failed to sign Swift parity fixture `{}`: {err}",
+                entry.name
+            )
+        })?;
         let payload = signed.payload().clone();
         let payload_bytes = payload.encode();
         let signed_bytes = signed.encode();
@@ -486,7 +491,12 @@ mod tests {
             metadata: None,
         };
         let builder = payload.to_builder().expect("builder");
-        let signed = builder.sign(keypair.private_key());
+        let signed = builder
+            .try_sign(keypair.private_key())
+            .expect("checked fixture transaction signing should succeed");
+        signed
+            .verify_signature()
+            .expect("checked fixture transaction signature should verify");
         assert_eq!(signed.payload().nonce.map(|v| v.get()), Some(17));
         assert_eq!(
             signed.payload().time_to_live_ms.map(|v| v.get()),

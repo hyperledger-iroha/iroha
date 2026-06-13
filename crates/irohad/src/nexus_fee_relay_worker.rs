@@ -44,7 +44,7 @@ use iroha_data_model::{
         VerifiedNexusFeeBudgetRecord, lane_relay_fastpq_claim_digest,
         nexus_fee_budget_claim_digest,
     },
-    transaction::TransactionBuilder,
+    transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_primitives::{json::Json, numeric::Numeric};
@@ -657,10 +657,14 @@ impl NexusFeeRelayWorker {
         instruction: InstructionBox,
         endpoint: &'static str,
     ) -> Result<()> {
-        let tx = TransactionBuilder::new((*self.chain_id).clone(), self.authority.clone())
-            .with_instructions([instruction])
-            .with_metadata(worker_submission_metadata(endpoint))
-            .sign(self.key_pair.private_key());
+        let tx = sign_nexus_fee_relay_submission_transaction(
+            (*self.chain_id).clone(),
+            self.authority.clone(),
+            instruction,
+            worker_submission_metadata(endpoint),
+            &self.key_pair,
+            endpoint,
+        )?;
         let view = self.state.view();
         let params = view.world().parameters();
         let accepted = AcceptedTransaction::accept(
@@ -682,6 +686,21 @@ impl NexusFeeRelayWorker {
                 )
             })
     }
+}
+
+fn sign_nexus_fee_relay_submission_transaction(
+    chain_id: ChainId,
+    authority: AccountId,
+    instruction: InstructionBox,
+    metadata: Metadata,
+    key_pair: &KeyPair,
+    endpoint: &'static str,
+) -> Result<SignedTransaction> {
+    TransactionBuilder::new(chain_id, authority)
+        .with_instructions([instruction])
+        .with_metadata(metadata)
+        .try_sign(key_pair.private_key())
+        .wrap_err_with(|| format!("sign internal Nexus fee relay mutation at `{endpoint}`"))
 }
 
 fn durable_pending_relay_count(durable: &DurableWorkerState) -> usize {
@@ -1025,7 +1044,9 @@ mod tests {
     use std::num::NonZeroU64;
 
     use iroha_data_model::{
+        Level,
         block::{BlockHeader, consensus::LaneBlockCommitment},
+        isi::Log,
         nexus::{LaneId, LaneRelayEnvelope},
     };
 
@@ -1078,6 +1099,26 @@ mod tests {
         LaneRelayEnvelope::new(header, None, None, settlement_commitment, 0)
             .expect("valid envelope")
             .with_manifest_root(Some(manifest_root))
+    }
+
+    #[test]
+    fn fee_relay_submission_transaction_checked_signing_verifies() -> Result<()> {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let endpoint = "/internal/nexus/fee-relay/test";
+        let tx = sign_nexus_fee_relay_submission_transaction(
+            ChainId::from("nexus-fee-relay-sign-test"),
+            authority.clone(),
+            InstructionBox::from(Log::new(Level::INFO, "checked fee relay signing".into())),
+            worker_submission_metadata(endpoint),
+            &key_pair,
+            endpoint,
+        )?;
+
+        tx.verify_signature()
+            .wrap_err("verify checked Nexus fee relay submission signature")?;
+        assert_eq!(tx.authority(), &authority);
+        Ok(())
     }
 
     #[test]

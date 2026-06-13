@@ -961,7 +961,14 @@ fn fill_random<R: TryCryptoRng>(
         .map_err(|err| MintError::RandomBytes {
             operation,
             message: err.to_string(),
-        })
+        })?;
+    if dest.iter().all(|&byte| byte == 0) {
+        return Err(MintError::RandomBytes {
+            operation,
+            message: "rng returned all-zero material".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Verify a ticket using the local `PoW` parameters.
@@ -1399,6 +1406,29 @@ mod tests {
 
     impl TryCryptoRng for FailingTryRng {}
 
+    struct FixedTryRng {
+        byte: u8,
+    }
+
+    impl TryRngCore for FixedTryRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.byte; 4]))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.byte; 8]))
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            dest.fill(self.byte);
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedTryRng {}
+
     fn signed_ticket_with_expiry(expires_at: u64, signature_byte: u8) -> SignedTicket {
         SignedTicket {
             ticket: Ticket {
@@ -1592,6 +1622,23 @@ mod tests {
                 );
             }
             other => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fill_random_rejects_all_zero_nonce_material() {
+        let mut rng = FixedTryRng { byte: 0 };
+        let mut nonce = [0u8; 32];
+
+        let err = fill_random(&mut rng, "minting PoW solution nonce", &mut nonce)
+            .expect_err("all-zero PoW nonce material must fail");
+
+        match err {
+            MintError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "minting PoW solution nonce");
+                assert!(message.contains("all-zero material"));
+            }
+            other => panic!("expected all-zero nonce RandomBytes error, got {other:?}"),
         }
     }
 

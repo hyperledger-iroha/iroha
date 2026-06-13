@@ -186,6 +186,9 @@ fn list_from_store(
             Vec::new()
         };
     }
+    if request_targets_commitment(request) {
+        return Vec::new();
+    }
 
     store
         .all_sorted()
@@ -201,7 +204,8 @@ fn find_in_store(
     request: &DaCommitmentProofRequest,
 ) -> Option<DaCommitmentWithLocation> {
     if let Some(manifest) = request.manifest_hash {
-        return store.get_by_manifest(&manifest).cloned();
+        let target = store.get_by_manifest(&manifest)?.clone();
+        return request_matches_commitment(&target, request).then_some(target);
     }
 
     let (Some(lane_id), Some(epoch), Some(sequence)) =
@@ -213,6 +217,38 @@ fn find_in_store(
     store
         .get_by_lane_epoch_sequence(lane_id, epoch, sequence)
         .cloned()
+}
+
+fn request_targets_commitment(request: &DaCommitmentProofRequest) -> bool {
+    request.manifest_hash.is_some()
+        || request.lane_id.is_some()
+        || request.epoch.is_some()
+        || request.sequence.is_some()
+}
+
+fn request_matches_commitment(
+    target: &DaCommitmentWithLocation,
+    request: &DaCommitmentProofRequest,
+) -> bool {
+    if request
+        .lane_id
+        .is_some_and(|lane_id| target.commitment.lane_id.as_u32() != lane_id)
+    {
+        return false;
+    }
+    if request
+        .epoch
+        .is_some_and(|epoch| target.commitment.epoch != epoch)
+    {
+        return false;
+    }
+    if request
+        .sequence
+        .is_some_and(|sequence| target.commitment.sequence != sequence)
+    {
+        return false;
+    }
+    true
 }
 
 fn build_proof_from_store(
@@ -341,7 +377,7 @@ mod tests {
         let records = vec![
             sample_record(1, 1, 1),
             sample_record(1, 2, 0),
-            sample_record(2, 1, 5),
+            sample_record(2, 3, 5),
         ];
         DaCommitmentStore::from_bundle_at_height(&records, 9)
     }
@@ -483,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn list_manifest_filter_takes_precedence_over_conflicting_lane_tuple() {
+    fn list_manifest_filter_rejects_conflicting_lane_tuple() {
         let store = store_with_records();
         let manifest = ManifestDigest::new([2; 32]);
         let request = DaCommitmentProofRequest {
@@ -495,11 +531,19 @@ mod tests {
         };
 
         let items = list_from_store(&store, &request);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].commitment.manifest_hash, manifest);
-        assert_eq!(items[0].commitment.lane_id, LaneId::new(1));
-        assert_eq!(items[0].commitment.epoch, 2);
-        assert_eq!(items[0].commitment.sequence, 0);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn list_partial_tuple_filter_does_not_fall_back_to_full_list() {
+        let store = store_with_records();
+        let request = DaCommitmentProofRequest {
+            lane_id: Some(1),
+            ..DaCommitmentProofRequest::default()
+        };
+
+        let items = list_from_store(&store, &request);
+        assert!(items.is_empty());
     }
 
     #[test]
@@ -520,7 +564,7 @@ mod tests {
         let store = store_with_records();
         let request = DaCommitmentProofRequest {
             lane_id: Some(2),
-            epoch: Some(1),
+            epoch: Some(3),
             sequence: Some(5),
             ..DaCommitmentProofRequest::default()
         };
@@ -543,6 +587,51 @@ mod tests {
             (LaneId::new(1), DaProofScheme::MerkleSha256),
             (LaneId::new(2), DaProofScheme::MerkleSha256),
         ]);
+
+        assert!(verify_da_commitment_proof(&proof, bundle, &header, &config).is_ok());
+    }
+
+    #[test]
+    fn prove_builds_merkle_proof_when_stale_duplicate_is_filtered_from_index() {
+        let mut store = DaCommitmentStore::default();
+        let first = sample_record(1, 1, 1);
+        let mut stale_duplicate = first.clone();
+        stale_duplicate.manifest_hash = ManifestDigest::new([0x55; 32]);
+        stale_duplicate.storage_ticket = StorageTicketId::new([0x66; 32]);
+        let later = sample_record(2, 3, 4);
+
+        store.insert_bundle(7, DaCommitmentBundle::new(vec![first]));
+        store.insert_bundle(
+            8,
+            DaCommitmentBundle::new(vec![stale_duplicate.clone(), later.clone()]),
+        );
+
+        let request = DaCommitmentProofRequest {
+            lane_id: Some(2),
+            epoch: Some(3),
+            sequence: Some(4),
+            ..DaCommitmentProofRequest::default()
+        };
+        let proof = build_proof_from_store(&store, &request)
+            .expect("proof should use the raw committed bundle");
+        assert_eq!(proof.location.block_height, 8);
+        assert_eq!(proof.location.index_in_bundle, 1);
+        assert_eq!(proof.commitment, later);
+
+        let bundle = store
+            .bundle_at(proof.location.block_height)
+            .expect("committed bundle present");
+        assert_eq!(bundle.commitments.as_slice(), &[stale_duplicate, later]);
+        let mut header = BlockHeader::new(
+            NonZeroU64::new(proof.location.block_height).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        header.set_da_commitments_hash(Some(bundle.canonical_hash()));
+        let config = lane_config_with_entries(&[(LaneId::new(2), DaProofScheme::MerkleSha256)]);
 
         assert!(verify_da_commitment_proof(&proof, bundle, &header, &config).is_ok());
     }
@@ -630,7 +719,7 @@ mod tests {
         let records = vec![
             sample_record(1, 1, 1),
             sample_record(1, 2, 0),
-            sample_record(2, 1, 5),
+            sample_record(2, 3, 5),
         ];
         let manifest = records[2].manifest_hash;
         let app = app_with_da_commitment_bundle(records);
@@ -688,6 +777,47 @@ mod tests {
         .await
         .expect("proof handler should succeed");
         assert!(response.is_none());
+    }
+
+    #[tokio::test]
+    async fn prove_handler_returns_none_for_conflicting_commitment_selectors() {
+        let records = vec![sample_record(1, 1, 1), sample_record(2, 2, 2)];
+        let manifest = records[0].manifest_hash;
+        let app = app_with_da_commitment_bundle(records);
+
+        let JsonBody(response) = super::handler_prove_commitment(
+            State(app.clone()),
+            NoritoJson(DaCommitmentProofRequest {
+                manifest_hash: Some(manifest),
+                lane_id: Some(2),
+                epoch: Some(1),
+                sequence: Some(1),
+                ..DaCommitmentProofRequest::default()
+            }),
+        )
+        .await
+        .expect("proof handler should succeed");
+        assert!(
+            response.is_none(),
+            "manifest must not override a conflicting lane selector"
+        );
+
+        let JsonBody(response) = super::handler_prove_commitment(
+            State(app),
+            NoritoJson(DaCommitmentProofRequest {
+                manifest_hash: Some(manifest),
+                lane_id: Some(1),
+                epoch: Some(9),
+                sequence: Some(1),
+                ..DaCommitmentProofRequest::default()
+            }),
+        )
+        .await
+        .expect("proof handler should succeed");
+        assert!(
+            response.is_none(),
+            "manifest must not override a conflicting epoch selector"
+        );
     }
 
     #[tokio::test]
@@ -757,6 +887,17 @@ mod tests {
         proof.location.index_in_bundle = u32::MAX;
 
         verify_invalid(app, proof, "out of bounds").await;
+    }
+
+    #[tokio::test]
+    async fn verify_handler_rejects_bundle_len_mismatch() {
+        let records = vec![sample_record(1, 1, 1), sample_record(1, 2, 2)];
+        let manifest = records[1].manifest_hash;
+        let app = app_with_da_commitment_bundle(records);
+        let mut proof = prove_for_manifest(app.clone(), manifest).await;
+        proof.bundle_len = proof.bundle_len.saturating_add(1);
+
+        verify_invalid(app, proof, "bundle length").await;
     }
 
     #[tokio::test]

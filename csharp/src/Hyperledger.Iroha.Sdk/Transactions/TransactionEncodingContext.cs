@@ -82,19 +82,16 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeOptionalString(string? value)
     {
-        if (value is not null && value.Length > 0)
-        {
-            value = RequireExactNonBlank(value, nameof(value));
-        }
         var writer = new OfflineNoritoWriter();
-        if (string.IsNullOrEmpty(value))
+        if (value is null)
         {
             writer.WriteByte(0);
             return writer.ToArray();
         }
 
+        var exact = RequireExactNonBlank(value, nameof(value));
         writer.WriteByte(1);
-        writer.WriteField(EncodeString(value));
+        writer.WriteField(EncodeString(exact));
         return writer.ToArray();
     }
 
@@ -173,7 +170,6 @@ internal sealed class TransactionEncodingContext
     public byte[] EncodeNumeric(string value)
     {
         var trimmed = RequireExactNonBlank(value, nameof(value));
-
         var sign = 1;
         if (trimmed[0] == '-')
         {
@@ -280,17 +276,16 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeNftId(string nftId)
     {
-        var exactNftId = RequireExactNonBlank(nftId, nameof(nftId));
-
-        var separatorIndex = exactNftId.IndexOf('$');
-        if (separatorIndex <= 0 || separatorIndex != exactNftId.LastIndexOf('$') || separatorIndex == exactNftId.Length - 1)
+        var exact = RequireExactNonBlank(nftId, nameof(nftId));
+        var separatorIndex = exact.IndexOf('$');
+        if (separatorIndex <= 0 || separatorIndex != exact.LastIndexOf('$') || separatorIndex == exact.Length - 1)
         {
             throw new ArgumentException($"Invalid NFT id `{nftId}`.", nameof(nftId));
         }
 
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(EncodeName(exactNftId[(separatorIndex + 1)..]));
-        writer.WriteField(EncodeName(exactNftId[..separatorIndex]));
+        writer.WriteField(EncodeName(exact[(separatorIndex + 1)..]));
+        writer.WriteField(EncodeName(exact[..separatorIndex]));
         return writer.ToArray();
     }
 
@@ -402,13 +397,13 @@ internal sealed class TransactionEncodingContext
 
     private byte[] EncodeAssetDefinitionAddress(string literal)
     {
-        var exactLiteral = RequireExactNonBlank(literal, nameof(literal));
-        if (exactLiteral.IndexOfAny([':', '#', '@', '$']) >= 0)
+        var exact = RequireExactNonBlank(literal, nameof(literal));
+        if (exact.IndexOfAny([':', '#', '@', '$']) >= 0)
         {
             throw new ArgumentException($"Invalid asset definition id `{literal}`.", nameof(literal));
         }
 
-        var payload = DecodeBase58(exactLiteral);
+        var payload = DecodeBase58(exact);
         if (payload.Length != 21 || payload[0] != AssetDefinitionVersion)
         {
             throw new ArgumentException($"Invalid asset definition id `{literal}`.", nameof(literal));
@@ -550,14 +545,15 @@ internal sealed class TransactionEncodingContext
 
     private static string RequireExactNonBlank(string? value, string paramName)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (string.IsNullOrEmpty(value))
         {
-            throw new ArgumentException("Value cannot be null or whitespace.", paramName);
+            throw new ArgumentException($"{paramName} must not be empty", paramName);
         }
-        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        if (value != value.Trim() || value.Any(char.IsControl))
         {
-            throw new ArgumentException("Value must not contain surrounding whitespace.", paramName);
+            throw new ArgumentException($"{paramName} must not contain surrounding whitespace or control characters", paramName);
         }
+
         return value;
     }
 }

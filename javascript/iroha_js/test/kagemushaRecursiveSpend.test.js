@@ -1988,6 +1988,7 @@ test("Kagemusha recursive spend compact projection verifier probes and delegates
         [NaN, /blockHeight must be an integer/],
         [Infinity, /blockHeight must be an integer/],
         [-1, /blockHeight must be non-negative/],
+        [-0, /blockHeight must be non-negative/],
         [-1n, /blockHeight must be non-negative/],
         [
           Number.MAX_SAFE_INTEGER + 1,

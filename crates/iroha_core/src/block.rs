@@ -281,7 +281,10 @@ use crate::telemetry::{
     DataspacePipelineSummary, DataspaceTeuGaugeUpdate, LanePipelineSummary, LaneTeuGaugeUpdate,
     SchedulerLayerWidthBuckets,
 };
-use crate::{da::DaShardCursorError, fees::SwapEvidence};
+use crate::{
+    da::{DaCommitmentValidationError, DaPinIntentValidationError, DaShardCursorError},
+    fees::SwapEvidence,
+};
 
 #[derive(Default, Clone, Copy)]
 struct DetachedFallbackReasons {
@@ -2324,8 +2327,26 @@ pub enum BlockValidationError {
         /// Hash embedded in the incoming header.
         actual: Option<HashOf<DaProofPolicyBundle>>,
     },
+    /// DA commitment hash mismatch. Expected: {expected:?}, actual: {actual:?}
+    DaCommitmentHashMismatch {
+        /// Hash derived from the embedded DA commitment bundle.
+        expected: Option<HashOf<DaCommitmentBundle>>,
+        /// Hash embedded in the incoming header.
+        actual: Option<HashOf<DaCommitmentBundle>>,
+    },
+    /// DA pin-intent hash mismatch. Expected: {expected:?}, actual: {actual:?}
+    DaPinIntentHashMismatch {
+        /// Hash derived from the embedded DA pin-intent bundle.
+        expected: Option<HashOf<DaPinIntentBundle>>,
+        /// Hash embedded in the incoming header.
+        actual: Option<HashOf<DaPinIntentBundle>>,
+    },
     /// Previous-roster evidence is invalid: {0}
     PreviousRosterEvidenceInvalid(String),
+    /// DA commitment bundle failed validation: {0}
+    DaCommitmentBundle(#[from] DaCommitmentValidationError),
+    /// DA pin-intent bundle failed validation: {0}
+    DaPinIntentBundle(#[from] DaPinIntentValidationError),
     /// DA shard cursor gate failed: {0}
     DaShardCursor(#[from] DaShardCursorError),
     /// AXT envelope export contained invalid or inconsistent fragments: {0}
@@ -2458,10 +2479,7 @@ pub fn check_genesis_block(
     match (block.header().da_commitments_hash(), block.da_commitments()) {
         (None, None) => {}
         (Some(hash), Some(bundle)) => {
-            let expected = bundle
-                .merkle_root()
-                .map(HashOf::<DaCommitmentBundle>::from_untyped_unchecked);
-            if expected != Some(hash) {
+            if bundle.is_empty() || bundle.canonical_hash() != hash {
                 return Err(InvalidGenesisError::DaCommitmentMismatch);
             }
         }
@@ -2816,12 +2834,17 @@ mod chained {
             self
         }
 
-        /// Sign this block and get [`NewBlock`] using the provided validator index.
-        pub fn sign_with_index(
+        /// Fallibly sign this block and get [`NewBlock`] using the provided validator index.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`iroha_crypto::Error::Signing`] when the signing backend
+        /// rejects the private key or block-header payload.
+        pub fn try_sign_with_index(
             self,
             private_key: &PrivateKey,
             signatory_idx: u64,
-        ) -> WithEvents<NewBlock> {
+        ) -> Result<WithEvents<NewBlock>, iroha_crypto::Error> {
             let mut builder = self;
             if builder.0.da_proof_policies.is_none()
                 && builder.0.header.da_proof_policies_hash().is_none()
@@ -2851,10 +2874,10 @@ mod chained {
             }
             let signature = BlockSignature::new(
                 signatory_idx,
-                SignatureOf::from_hash(private_key, builder.0.header.hash()),
+                SignatureOf::try_from_hash(private_key, builder.0.header.hash())?,
             );
 
-            WithEvents::new(NewBlock {
+            Ok(WithEvents::new(NewBlock {
                 signature,
                 header: builder.0.header,
                 transactions: builder.0.transactions,
@@ -2864,12 +2887,36 @@ mod chained {
                 previous_roster_evidence: builder.0.previous_roster_evidence,
                 npos_consensus_effects: builder.0.npos_consensus_effects,
                 execution_context: builder.0.execution_context,
-            })
+            }))
+        }
+
+        /// Sign this block and get [`NewBlock`] using the provided validator index.
+        pub fn sign_with_index(
+            self,
+            private_key: &PrivateKey,
+            signatory_idx: u64,
+        ) -> WithEvents<NewBlock> {
+            self.try_sign_with_index(private_key, signatory_idx)
+                .expect("block signing should succeed for a valid private key and header hash")
+        }
+
+        /// Fallibly sign this block and get [`NewBlock`] using validator index 0.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`iroha_crypto::Error::Signing`] when the signing backend
+        /// rejects the private key or block-header payload.
+        pub fn try_sign(
+            self,
+            private_key: &PrivateKey,
+        ) -> Result<WithEvents<NewBlock>, iroha_crypto::Error> {
+            self.try_sign_with_index(private_key, 0)
         }
 
         /// Sign this block and get [`NewBlock`] using validator index 0.
         pub fn sign(self, private_key: &PrivateKey) -> WithEvents<NewBlock> {
-            self.sign_with_index(private_key, 0)
+            self.try_sign(private_key)
+                .expect("block signing should succeed for a valid private key and header hash")
         }
     }
 }
@@ -3062,6 +3109,33 @@ mod new {
                 .unpack(|_| {});
 
             assert_eq!(new_block.signature().index(), signatory_idx);
+        }
+
+        #[test]
+        fn block_builder_try_sign_with_index_sets_verifiable_signature() {
+            let chain: ChainId = "new-block-try-sign-index".parse().expect("valid chain id");
+            let (authority, keypair) = gen_account_in("wonderland");
+            let tx = TransactionBuilder::new(chain, authority)
+                .with_instructions([Log::new(Level::INFO, "try-signed".to_owned())])
+                .sign(keypair.private_key());
+
+            let accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))];
+            let builder = BlockBuilder::new(accepted);
+            let signer = KeyPair::random();
+            let signatory_idx = 11_u64;
+
+            let new_block = builder
+                .chain(0, None)
+                .try_sign_with_index(signer.private_key(), signatory_idx)
+                .expect("fallible block signing succeeds")
+                .unpack(|_| {});
+
+            assert_eq!(new_block.signature().index(), signatory_idx);
+            new_block
+                .signature()
+                .signature()
+                .verify_hash(signer.public_key(), new_block.header().hash())
+                .expect("fallibly signed block signature verifies");
         }
 
         #[test]
@@ -5630,6 +5704,8 @@ pub(crate) mod valid {
                 actual_prev_block_hash,
             )?;
             Self::validate_npos_effects_header(block)?;
+            Self::validate_da_sidecar_hashes(block)?;
+            Self::validate_da_pin_intent_bundle(block, state)?;
             Self::validate_execution_context_with_state(
                 block,
                 state,
@@ -5723,6 +5799,93 @@ pub(crate) mod valid {
 
         fn npos_effects_error(message: impl Into<String>) -> BlockValidationError {
             BlockValidationError::NposEffectsInvalid(message.into())
+        }
+
+        fn validate_da_sidecar_hashes(block: &SignedBlock) -> Result<(), BlockValidationError> {
+            let expected_commitments = block.da_commitments().and_then(|bundle| {
+                if bundle.is_empty() {
+                    None
+                } else {
+                    Some(bundle.canonical_hash())
+                }
+            });
+            let actual_commitments = block.header().da_commitments_hash();
+            if actual_commitments != expected_commitments {
+                return Err(BlockValidationError::DaCommitmentHashMismatch {
+                    expected: expected_commitments,
+                    actual: actual_commitments,
+                });
+            }
+
+            let expected_pin_intents = block
+                .da_pin_intents()
+                .and_then(|bundle| bundle.merkle_root().map(HashOf::from_untyped_unchecked));
+            let actual_pin_intents = block.header().da_pin_intents_hash();
+            if actual_pin_intents != expected_pin_intents {
+                return Err(BlockValidationError::DaPinIntentHashMismatch {
+                    expected: expected_pin_intents,
+                    actual: actual_pin_intents,
+                });
+            }
+
+            Ok(())
+        }
+
+        fn validate_da_pin_intent_bundle(
+            block: &SignedBlock,
+            state: &impl StateReadOnly,
+        ) -> Result<(), BlockValidationError> {
+            let Some(bundle) = block.da_pin_intents() else {
+                return Ok(());
+            };
+
+            let world = state.world();
+            crate::da::validate_pin_intent_bundle(bundle, &state.nexus().lane_config, |account| {
+                world.accounts().get(account).is_some()
+            })?;
+            for intent in &bundle.intents {
+                if world
+                    .da_pin_intents_by_lane_epoch()
+                    .get(&(intent.lane_id, intent.epoch, intent.sequence))
+                    .is_some()
+                {
+                    return Err(BlockValidationError::DaPinIntentBundle(
+                        DaPinIntentValidationError::DuplicateIntent {
+                            lane: intent.lane_id,
+                            epoch: intent.epoch,
+                            sequence: intent.sequence,
+                        },
+                    ));
+                }
+                if world
+                    .da_pin_intents_by_manifest()
+                    .get(&intent.manifest_hash)
+                    .is_some()
+                {
+                    return Err(BlockValidationError::DaPinIntentBundle(
+                        DaPinIntentValidationError::DuplicateManifest {
+                            lane: intent.lane_id,
+                            epoch: intent.epoch,
+                            sequence: intent.sequence,
+                        },
+                    ));
+                }
+                if world
+                    .da_pin_intents_by_ticket()
+                    .get(&intent.storage_ticket)
+                    .is_some()
+                {
+                    return Err(BlockValidationError::DaPinIntentBundle(
+                        DaPinIntentValidationError::DuplicateStorageTicket {
+                            lane: intent.lane_id,
+                            epoch: intent.epoch,
+                            sequence: intent.sequence,
+                        },
+                    ));
+                }
+            }
+
+            Ok(())
         }
 
         fn validate_npos_effects_header(block: &SignedBlock) -> Result<(), BlockValidationError> {
@@ -11681,14 +11844,30 @@ pub(crate) mod valid {
             Ok(())
         }
 
-        /// Add additional signatures for [`Self`].
-        pub fn sign(&mut self, key_pair: &KeyPair, topology: &Topology) {
+        /// Fallibly add additional signatures for [`Self`].
+        ///
+        /// # Errors
+        ///
+        /// Returns [`iroha_crypto::Error::Signing`] when the configured signing
+        /// backend rejects the private-key material or finalized block header hash.
+        pub fn try_sign(
+            &mut self,
+            key_pair: &KeyPair,
+            topology: &Topology,
+        ) -> Result<(), iroha_crypto::Error> {
             let signatory_idx = topology
                 .position(key_pair.public_key())
                 .expect("INTERNAL BUG: Node is not in topology");
 
-            self.block.sign(key_pair.private_key(), signatory_idx);
+            self.block.try_sign(key_pair.private_key(), signatory_idx)?;
             self.clear_signatures_verified();
+            Ok(())
+        }
+
+        /// Add additional signatures for [`Self`].
+        pub fn sign(&mut self, key_pair: &KeyPair, topology: &Topology) {
+            self.try_sign(key_pair, topology)
+                .expect("signing should succeed for a valid validator key and block header");
         }
 
         #[cfg(test)]
@@ -11788,9 +11967,9 @@ pub(crate) mod valid {
             },
             da::{
                 commitment::{
-                    DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment,
-                    RetentionClass,
+                    DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, RetentionClass,
                 },
+                pin_intent::{DaPinIntent, DaPinIntentBundle},
                 types::{BlobDigest, StorageTicketId},
             },
             isi::{InstructionBox, Log, error::Mismatch},
@@ -12167,7 +12346,7 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn signature_changes_clear_verified_flag() {
+        fn try_sign_adds_verifiable_signature_and_clears_verified_flag() {
             let key_pairs =
                 core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
                     .take(2)
@@ -12178,7 +12357,19 @@ pub(crate) mod valid {
             block.mark_signatures_verified();
             assert!(block.signatures_verified_for_tests());
 
-            block.sign(&key_pairs[1], &topology);
+            block
+                .try_sign(&key_pairs[1], &topology)
+                .expect("checked valid-block signing succeeds");
+
+            let signature = block
+                .as_ref()
+                .signatures()
+                .find(|signature| signature.index() == 1)
+                .expect("signature for requested validator is present");
+            signature
+                .signature()
+                .verify_hash(key_pairs[1].public_key(), block.as_ref().hash())
+                .expect("checked valid-block signature verifies");
             assert!(!block.signatures_verified_for_tests());
         }
 
@@ -14050,7 +14241,7 @@ pub(crate) mod valid {
                 ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                Some(KzgCommitment::new([0xDD; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -14079,11 +14270,584 @@ pub(crate) mod valid {
             .unpack(|_| {});
 
             let Err((_, err)) = result else {
-                panic!("expected DA shard cursor rejection");
+                panic!("expected DA commitment bundle rejection");
             };
             assert!(matches!(
                 err.as_ref(),
-                BlockValidationError::DaShardCursor(DaShardCursorError::UnknownLane { .. })
+                BlockValidationError::DaCommitmentBundle(DaCommitmentValidationError::ProofPolicy(
+                    crate::da::DaProofPolicyError::UnknownLane { .. }
+                ))
+            ));
+        }
+
+        #[test]
+        fn validate_keep_voting_block_rejects_duplicate_da_manifest() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let mut params = Parameters::default();
+            params.sumeragi.da_enabled = true;
+            world.parameters = Cell::new(params);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+
+            let make_record = |sequence: u64, tag: u8| {
+                DaCommitmentRecord::new(
+                    LaneId::new(0),
+                    1,
+                    sequence,
+                    BlobDigest::new([tag; 32]),
+                    ManifestDigest::new([0xBB; 32]),
+                    DaProofScheme::MerkleSha256,
+                    Hash::prehashed([tag; 32]),
+                    None,
+                    None,
+                    RetentionClass::default(),
+                    StorageTicketId::new([tag; 32]),
+                    Signature::from_bytes(&[tag; 64]),
+                )
+            };
+            let bundle = DaCommitmentBundle::new(vec![make_record(1, 0xC1), make_record(2, 0xC2)]);
+            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_commitments(Some(bundle))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected DA commitment duplicate-manifest rejection");
+            };
+            assert!(matches!(
+                err.as_ref(),
+                BlockValidationError::DaCommitmentBundle(
+                    DaCommitmentValidationError::DuplicateManifest { lane }
+                ) if *lane == LaneId::new(0)
+            ));
+        }
+
+        #[test]
+        fn validate_keep_voting_block_rejects_duplicate_da_storage_ticket() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let mut params = Parameters::default();
+            params.sumeragi.da_enabled = true;
+            world.parameters = Cell::new(params);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+
+            let make_record = |sequence: u64, tag: u8| {
+                DaCommitmentRecord::new(
+                    LaneId::new(0),
+                    1,
+                    sequence,
+                    BlobDigest::new([tag; 32]),
+                    ManifestDigest::new([tag; 32]),
+                    DaProofScheme::MerkleSha256,
+                    Hash::prehashed([tag; 32]),
+                    None,
+                    None,
+                    RetentionClass::default(),
+                    StorageTicketId::new([0xDD; 32]),
+                    Signature::from_bytes(&[tag; 64]),
+                )
+            };
+            let bundle = DaCommitmentBundle::new(vec![make_record(1, 0xC1), make_record(2, 0xC2)]);
+            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_commitments(Some(bundle))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected DA commitment duplicate-storage-ticket rejection");
+            };
+            assert!(matches!(
+                err.as_ref(),
+                BlockValidationError::DaCommitmentBundle(
+                    DaCommitmentValidationError::DuplicateStorageTicket { lane, epoch, sequence }
+                ) if *lane == LaneId::new(0) && *epoch == 1 && *sequence == 2
+            ));
+        }
+
+        #[test]
+        fn validate_keep_voting_block_rejects_da_commitment_hash_mismatch() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let mut params = Parameters::default();
+            params.sumeragi.da_enabled = true;
+            world.parameters = Cell::new(params);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+
+            let record = DaCommitmentRecord::new(
+                LaneId::new(0),
+                1,
+                1,
+                BlobDigest::new([0xAA; 32]),
+                ManifestDigest::new([0xBB; 32]),
+                DaProofScheme::MerkleSha256,
+                Hash::prehashed([0xCC; 32]),
+                None,
+                None,
+                RetentionClass::default(),
+                StorageTicketId::new([0xDD; 32]),
+                Signature::from_bytes(&[0xEE; 64]),
+            );
+            let bundle = DaCommitmentBundle::new(vec![record]);
+            let expected = Some(bundle.canonical_hash());
+            let forged = Some(HashOf::<DaCommitmentBundle>::from_untyped_unchecked(
+                Hash::prehashed([0xFA; 32]),
+            ));
+            let mut chained = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_commitments(Some(bundle));
+            chained.0.header.set_da_commitments_hash(forged);
+            let signed: SignedBlock = chained.sign(leader.private_key()).unpack(|_| {}).into();
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected DA commitment hash mismatch rejection");
+            };
+            assert!(matches!(
+                err.as_ref(),
+                BlockValidationError::DaCommitmentHashMismatch { expected: seen_expected, actual }
+                    if *seen_expected == expected && *actual == forged
+            ));
+        }
+
+        #[test]
+        fn validate_keep_voting_block_rejects_da_pin_intent_hash_mismatch() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+
+            let intent = DaPinIntent::new(
+                LaneId::new(0),
+                1,
+                1,
+                StorageTicketId::new([0xAA; 32]),
+                ManifestDigest::new([0xBB; 32]),
+            );
+            let bundle = DaPinIntentBundle::new(vec![intent]);
+            let expected = bundle
+                .merkle_root()
+                .map(HashOf::<DaPinIntentBundle>::from_untyped_unchecked);
+            let forged = Some(HashOf::<DaPinIntentBundle>::from_untyped_unchecked(
+                Hash::prehashed([0xFB; 32]),
+            ));
+            let mut chained = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_pin_intents(Some(bundle));
+            chained.0.header.set_da_pin_intents_hash(forged);
+            assert_ne!(expected, forged, "fixture forged hash must differ");
+            let signature = BlockSignature::new(
+                0,
+                SignatureOf::from_hash(leader.private_key(), chained.0.header.hash()),
+            );
+            let signed = SignedBlock::presigned_with_payload(
+                signature,
+                BlockPayload {
+                    header: chained.0.header,
+                    transactions: Vec::new(),
+                    external_entrypoints: Vec::new(),
+                    execution_context: chained.0.execution_context,
+                    da_commitments: chained.0.da_commitments,
+                    da_proof_policies: chained.0.da_proof_policies,
+                    da_pin_intents: chained.0.da_pin_intents,
+                    previous_roster_evidence: chained.0.previous_roster_evidence,
+                    npos_consensus_effects: chained.0.npos_consensus_effects,
+                },
+            );
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected DA pin-intent hash mismatch rejection");
+            };
+            match err.as_ref() {
+                BlockValidationError::DaPinIntentHashMismatch {
+                    expected: seen_expected,
+                    actual,
+                } if *seen_expected == expected && *actual == forged => {}
+                other => panic!("expected DA pin-intent hash mismatch, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn validate_keep_voting_block_rejects_duplicate_da_pin_intent_ticket() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+
+            let first = DaPinIntent::new(
+                LaneId::new(0),
+                1,
+                1,
+                StorageTicketId::new([0xAA; 32]),
+                ManifestDigest::new([0xB1; 32]),
+            );
+            let duplicate_ticket = DaPinIntent::new(
+                LaneId::new(0),
+                1,
+                2,
+                StorageTicketId::new([0xAA; 32]),
+                ManifestDigest::new([0xB2; 32]),
+            );
+            let bundle = DaPinIntentBundle::new(vec![first, duplicate_ticket]);
+            let signed: SignedBlock =
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                    .chain(0, state.view().latest_block().as_deref())
+                    .with_da_pin_intents(Some(bundle))
+                    .sign(leader.private_key())
+                    .unpack(|_| {})
+                    .into();
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected DA pin-intent duplicate-ticket rejection");
+            };
+            assert!(
+                matches!(
+                    err.as_ref(),
+                    BlockValidationError::DaPinIntentBundle(
+                        DaPinIntentValidationError::DuplicateStorageTicket {
+                            lane,
+                            epoch: 1,
+                            sequence: 2
+                        }
+                    ) if *lane == LaneId::new(0)
+                ),
+                "unexpected duplicate-ticket error: {err:?}"
+            );
+        }
+
+        #[test]
+        fn validate_keep_voting_block_rejects_committed_da_pin_intent_identity_reuse() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let mut params = Parameters::default();
+            params.sumeragi.da_enabled = true;
+            world.parameters = Cell::new(params);
+            let committed_intent = DaPinIntent::new(
+                LaneId::new(0),
+                1,
+                1,
+                StorageTicketId::new([0xA1; 32]),
+                ManifestDigest::new([0xB1; 32]),
+            );
+            let committed_with_location =
+                iroha_data_model::da::pin_intent::DaPinIntentWithLocation {
+                    intent: committed_intent.clone(),
+                    location: iroha_data_model::da::commitment::DaCommitmentLocation {
+                        block_height: 1,
+                        index_in_bundle: 0,
+                    },
+                };
+            world
+                .da_pin_intents_by_ticket
+                .insert(committed_intent.storage_ticket, committed_with_location);
+            world.da_pin_intents_by_manifest.insert(
+                committed_intent.manifest_hash,
+                committed_intent.storage_ticket,
+            );
+            world.da_pin_intents_by_lane_epoch.insert(
+                (
+                    committed_intent.lane_id,
+                    committed_intent.epoch,
+                    committed_intent.sequence,
+                ),
+                committed_intent.storage_ticket,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+
+            let validate_candidate = |intent: DaPinIntent,
+                                      now: Duration|
+             -> Box<BlockValidationError> {
+                let (_handle, time_source) = TimeSource::new_mock(now);
+                let signed: SignedBlock =
+                    BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                        .chain(0, state.view().latest_block().as_deref())
+                        .with_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])))
+                        .sign(leader.private_key())
+                        .unpack(|_| {})
+                        .into();
+                let mut voting_block = None;
+                let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+                let result = ValidBlock::validate_keep_voting_block(
+                    signed,
+                    &topology,
+                    &state.chain_id.clone(),
+                    &ALICE_ID,
+                    &time_source,
+                    &state,
+                    &mut voting_block,
+                    false,
+                )
+                .unpack(|_| {});
+                let Err((_, err)) = result else {
+                    panic!("expected DA pin-intent committed identity rejection");
+                };
+                err
+            };
+
+            let duplicate_ticket = DaPinIntent::new(
+                LaneId::new(0),
+                1,
+                2,
+                committed_intent.storage_ticket,
+                ManifestDigest::new([0xB2; 32]),
+            );
+            let err = validate_candidate(duplicate_ticket, Duration::from_millis(2));
+            assert!(
+                matches!(
+                    err.as_ref(),
+                    BlockValidationError::DaPinIntentBundle(
+                        DaPinIntentValidationError::DuplicateStorageTicket {
+                            lane,
+                            epoch: 1,
+                            sequence: 2
+                        }
+                    ) if *lane == LaneId::new(0)
+                ),
+                "unexpected committed ticket reuse error: {err:?}"
+            );
+
+            let duplicate_manifest = DaPinIntent::new(
+                LaneId::new(0),
+                1,
+                3,
+                StorageTicketId::new([0xA3; 32]),
+                committed_intent.manifest_hash,
+            );
+            let err = validate_candidate(duplicate_manifest, Duration::from_millis(3));
+            assert!(
+                matches!(
+                    err.as_ref(),
+                    BlockValidationError::DaPinIntentBundle(
+                        DaPinIntentValidationError::DuplicateManifest {
+                            lane,
+                            epoch: 1,
+                            sequence: 3
+                        }
+                    ) if *lane == LaneId::new(0)
+                ),
+                "unexpected committed manifest reuse error: {err:?}"
+            );
+        }
+
+        #[test]
+        fn validate_keep_voting_block_rejects_unsupported_da_pin_intent_version() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+
+            let intent = DaPinIntent::new(
+                LaneId::new(0),
+                1,
+                1,
+                StorageTicketId::new([0xAA; 32]),
+                ManifestDigest::new([0xBB; 32]),
+            );
+            let mut bundle = DaPinIntentBundle::new(vec![intent]);
+            bundle.version = DaPinIntentBundle::VERSION_V1 + 1;
+            let signed: SignedBlock =
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                    .chain(0, state.view().latest_block().as_deref())
+                    .with_da_pin_intents(Some(bundle))
+                    .sign(leader.private_key())
+                    .unpack(|_| {})
+                    .into();
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected DA pin-intent version rejection");
+            };
+            assert!(matches!(
+                err.as_ref(),
+                BlockValidationError::DaPinIntentBundle(
+                    DaPinIntentValidationError::UnsupportedVersion { version }
+                ) if *version == DaPinIntentBundle::VERSION_V1 + 1
             ));
         }
 
@@ -14119,7 +14883,7 @@ pub(crate) mod valid {
                 ManifestDigest::new([0xBC; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCD; 32]),
-                Some(KzgCommitment::new([0xDE; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEF; 32]),
@@ -14150,7 +14914,7 @@ pub(crate) mod valid {
                 ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                Some(KzgCommitment::new([0xDD; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -14723,7 +15487,7 @@ pub(crate) mod valid {
                 ManifestDigest::new([0xBB; 32]),
                 DaProofScheme::MerkleSha256,
                 Hash::prehashed([0xCC; 32]),
-                Some(KzgCommitment::new([0xDD; 48])),
+                None,
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
@@ -15563,6 +16327,45 @@ pub(crate) mod valid {
                 None,
             );
 
+            assert!(check_genesis_block(&block, &genesis_account, &chain_id).is_ok());
+        }
+
+        #[test]
+        fn genesis_block_with_da_commitments_uses_canonical_bundle_hash() {
+            use iroha_data_model::prelude::*;
+            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+            let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+
+            let tx = TransactionBuilder::new(chain_id.clone(), genesis_account.clone())
+                .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let record = DaCommitmentRecord::new(
+                LaneId::new(0),
+                1,
+                1,
+                BlobDigest::new([0xAA; 32]),
+                ManifestDigest::new([0xBB; 32]),
+                DaProofScheme::MerkleSha256,
+                Hash::prehashed([0xCC; 32]),
+                None,
+                None,
+                RetentionClass::default(),
+                StorageTicketId::new([0xDD; 32]),
+                Signature::from_bytes(&[0xEE; 64]),
+            );
+            let bundle = DaCommitmentBundle::new(vec![record]);
+            let canonical_hash = bundle.canonical_hash();
+
+            let block = SignedBlock::genesis(
+                vec![tx],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                None,
+                Some(bundle),
+            );
+
+            assert_eq!(block.header().da_commitments_hash(), Some(canonical_hash));
             assert!(check_genesis_block(&block, &genesis_account, &chain_id).is_ok());
         }
 
@@ -17725,7 +18528,16 @@ mod event {
                 Reason::ConfidentialFeatureDigestMismatch
             }
             BlockValidationError::ProofPolicyHashMismatch { .. } => Reason::DaProofPolicyMismatch,
+            BlockValidationError::DaCommitmentHashMismatch { .. }
+            | BlockValidationError::DaPinIntentHashMismatch { .. } => {
+                Reason::DaShardCursorViolation
+            }
             BlockValidationError::PreviousRosterEvidenceInvalid(_) => Reason::TopologyMismatch,
+            BlockValidationError::DaCommitmentBundle(
+                crate::da::DaCommitmentValidationError::ProofPolicy(_),
+            ) => Reason::DaProofPolicyMismatch,
+            BlockValidationError::DaCommitmentBundle(_) => Reason::DaShardCursorViolation,
+            BlockValidationError::DaPinIntentBundle(_) => Reason::DaShardCursorViolation,
             BlockValidationError::DaShardCursor(_) => Reason::DaShardCursorViolation,
             BlockValidationError::AxtEnvelopeValidationFailed(_) => {
                 Reason::TransactionValidationFailed

@@ -103,6 +103,28 @@ def test_receipt_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     assert "private-path" not in captured.err
 
 
+def test_receipt_hex_parser_redacts_parser_causes():
+    """Invalid EVM receipt hex inputs must not chain parser payloads."""
+
+    module = load_module()
+    payload = "secret-token-evm-receipt-hex"
+
+    try:
+        module.parse_hex_bytes(
+            "0x" + payload + ("a" * (64 - len(payload))),
+            label="transaction hash",
+            byte_length=32,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        rendered = str(exc)
+        assert rendered == "transaction hash must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("invalid EVM receipt transaction hash hex was accepted")
+
+
 def source_log(module, *, duplicate=False, **overrides):
     log = {
         "address": "0x" + "33" * 20,
@@ -525,6 +547,32 @@ def test_collect_receipt_proof_rejects_duplicate_json_receipt_fields():
     assert calls == ["eth_chainId", "eth_getTransactionReceipt"]
 
 
+def test_receipt_json_rpc_redacts_invalid_json_parser_details():
+    module = load_module()
+
+    def invalid_json_opener(_request, timeout=15.0):
+        del timeout
+        return FakeRawResponse('{"secret-token invalid EVM receipt JSON-RPC payload": ')
+
+    try:
+        module._json_rpc(
+            "https://rpc.example",
+            "eth_chainId",
+            [],
+            opener=invalid_json_opener,
+            timeout=3.0,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert message == "JSON-RPC eth_chainId returned invalid JSON"
+        assert "secret-token" not in message
+        assert "receipt JSON-RPC payload" not in message
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("invalid receipt JSON-RPC payload was accepted")
+
+
 def test_receipt_json_rpc_redacts_transport_and_error_response_details():
     module = load_module()
 
@@ -588,6 +636,9 @@ def test_receipt_json_rpc_redacts_transport_and_error_response_details():
             assert message == expected_message
             assert "secret-token" not in message
             assert "error object" not in message
+            assert exc.__cause__ is None
+            if expected_message != "JSON-RPC eth_chainId returned error response":
+                assert exc.__suppress_context__ is True
         else:
             raise AssertionError(failure)
 

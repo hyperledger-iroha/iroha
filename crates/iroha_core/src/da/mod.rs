@@ -96,6 +96,9 @@ pub enum DaCommitmentValidationError {
     /// Underlying proof policy validation failed.
     #[error(transparent)]
     ProofPolicy(#[from] DaProofPolicyError),
+    /// Confidential-compute policy validation failed.
+    #[error(transparent)]
+    ConfidentialCompute(#[from] ConfidentialComputeError),
     /// Duplicate `(lane, epoch, sequence)` commitment found.
     #[error(
         "duplicate DA commitment detected for lane {key_lane}, epoch {epoch}, sequence {sequence}"
@@ -114,9 +117,67 @@ pub enum DaCommitmentValidationError {
         /// Lane identifier that failed validation.
         lane: LaneId,
     },
+    /// Manifest hash already exists in a previously committed DA record.
+    #[error(
+        "DA manifest hash for lane {lane}, epoch {epoch}, sequence {sequence} was already committed at lane {existing_lane}, epoch {existing_epoch}, sequence {existing_sequence}"
+    )]
+    CommittedManifest {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+        /// Lane identifier of the already committed record.
+        existing_lane: LaneId,
+        /// Epoch of the already committed record.
+        existing_epoch: u64,
+        /// Sequence number of the already committed record.
+        existing_sequence: u64,
+    },
+    /// Duplicate storage ticket detected within the bundle.
+    #[error(
+        "duplicate DA storage ticket detected for lane {lane}, epoch {epoch}, sequence {sequence}"
+    )]
+    DuplicateStorageTicket {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+    },
+    /// Storage ticket already exists in a previously committed DA record.
+    #[error(
+        "DA storage ticket for lane {lane}, epoch {epoch}, sequence {sequence} was already committed at lane {existing_lane}, epoch {existing_epoch}, sequence {existing_sequence}"
+    )]
+    CommittedStorageTicket {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+        /// Lane identifier of the already committed record.
+        existing_lane: LaneId,
+        /// Epoch of the already committed record.
+        existing_epoch: u64,
+        /// Sequence number of the already committed record.
+        existing_sequence: u64,
+    },
     /// Manifest hash must be non-zero.
     #[error("lane {lane} carries a zeroed manifest hash at epoch {epoch}, sequence {sequence}")]
     ZeroManifestHash {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence that failed validation.
+        sequence: u64,
+    },
+    /// Storage ticket must be non-zero.
+    #[error("lane {lane} carries a zeroed storage ticket at epoch {epoch}, sequence {sequence}")]
+    ZeroStorageTicket {
         /// Lane identifier that failed validation.
         lane: LaneId,
         /// Epoch that failed validation.
@@ -129,6 +190,12 @@ pub enum DaCommitmentValidationError {
 /// Errors returned when a DA pin intent violates invariants.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DaPinIntentValidationError {
+    /// Pin intent bundle version is unsupported.
+    #[error("unsupported DA pin-intent bundle version {version}")]
+    UnsupportedVersion {
+        /// Version carried by the bundle.
+        version: u16,
+    },
     /// Lane referenced by the pin intent is not present in the configured catalog.
     #[error("lane {lane} not present in the configured lane catalog")]
     UnknownLane {
@@ -152,6 +219,30 @@ pub enum DaPinIntentValidationError {
     /// Duplicate `(lane, epoch, sequence)` pin intent found.
     #[error("duplicate DA pin intent detected for lane {lane}, epoch {epoch}, sequence {sequence}")]
     DuplicateIntent {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+    },
+    /// Duplicate storage ticket found.
+    #[error(
+        "duplicate DA pin-intent storage ticket detected for lane {lane}, epoch {epoch}, sequence {sequence}"
+    )]
+    DuplicateStorageTicket {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+    },
+    /// Duplicate manifest hash found.
+    #[error(
+        "duplicate DA pin-intent manifest hash detected for lane {lane}, epoch {epoch}, sequence {sequence}"
+    )]
+    DuplicateManifest {
         /// Lane identifier that failed validation.
         lane: LaneId,
         /// Epoch that failed validation.
@@ -268,6 +359,8 @@ pub fn sanitize_pin_intents(
     Vec<DaPinIntentValidationError>,
 ) {
     let mut seen = BTreeSet::new();
+    let mut seen_tickets = BTreeSet::new();
+    let mut seen_manifests = BTreeSet::new();
     let mut kept = Vec::new();
     let mut rejected = Vec::new();
 
@@ -361,17 +454,63 @@ pub fn sanitize_pin_intents(
             continue;
         }
 
+        if !seen_tickets.insert(intent.storage_ticket) {
+            rejected.push(DaPinIntentValidationError::DuplicateStorageTicket {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+            });
+            continue;
+        }
+
+        if !seen_manifests.insert(intent.manifest_hash) {
+            rejected.push(DaPinIntentValidationError::DuplicateManifest {
+                lane: intent.lane_id,
+                epoch: intent.epoch,
+                sequence: intent.sequence,
+            });
+            continue;
+        }
+
         kept.push(intent);
     }
 
     (kept, rejected)
 }
 
+/// Validate a DA pin-intent bundle before accepting an inbound block.
+///
+/// Unlike local spool ingestion, inbound block validation is fail-closed:
+/// invalid pin intents reject the block instead of being dropped during apply.
+///
+/// # Errors
+///
+/// Returns the first [`DaPinIntentValidationError`] observed in the bundle.
+pub fn validate_pin_intent_bundle(
+    bundle: &iroha_data_model::da::pin_intent::DaPinIntentBundle,
+    lane_config: &LaneConfig,
+    account_exists: impl Fn(&AccountId) -> bool,
+) -> Result<(), DaPinIntentValidationError> {
+    if bundle.version != iroha_data_model::da::pin_intent::DaPinIntentBundle::VERSION_V1 {
+        return Err(DaPinIntentValidationError::UnsupportedVersion {
+            version: bundle.version,
+        });
+    }
+
+    let (_kept, rejected) =
+        sanitize_pin_intents(bundle.intents.clone(), lane_config, account_exists);
+    if let Some(error) = rejected.into_iter().next() {
+        return Err(error);
+    }
+
+    Ok(())
+}
+
 /// Validate commitment bundle invariants before embedding into a block.
 ///
-/// Enforces unique `(lane, epoch, sequence)` tuples, unique manifest
-/// hashes within the bundle, non-zero manifest hashes, and lane proof policy
-/// compatibility.
+/// Enforces unique `(lane, epoch, sequence)` tuples, unique manifest hashes and
+/// storage tickets within the bundle, non-zero manifest hashes and storage
+/// tickets, and lane proof policy compatibility.
 ///
 /// # Errors
 ///
@@ -382,6 +521,7 @@ pub fn validate_commitment_bundle(
 ) -> Result<(), DaCommitmentValidationError> {
     let mut seen_keys = BTreeSet::new();
     let mut seen_manifests = BTreeSet::new();
+    let mut seen_tickets = BTreeSet::new();
 
     for record in &bundle.commitments {
         if record
@@ -391,6 +531,14 @@ pub fn validate_commitment_bundle(
             .all(|byte| *byte == 0)
         {
             return Err(DaCommitmentValidationError::ZeroManifestHash {
+                lane: record.lane_id,
+                epoch: record.epoch,
+                sequence: record.sequence,
+            });
+        }
+
+        if record.storage_ticket.as_ref().iter().all(|byte| *byte == 0) {
+            return Err(DaCommitmentValidationError::ZeroStorageTicket {
                 lane: record.lane_id,
                 epoch: record.epoch,
                 sequence: record.sequence,
@@ -412,7 +560,16 @@ pub fn validate_commitment_bundle(
             });
         }
 
+        if !seen_tickets.insert(record.storage_ticket) {
+            return Err(DaCommitmentValidationError::DuplicateStorageTicket {
+                lane: record.lane_id,
+                epoch: record.epoch,
+                sequence: record.sequence,
+            });
+        }
+
         enforce_lane_proof_policy(record, lane_config)?;
+        validate_confidential_compute_record(lane_config, record)?;
     }
 
     Ok(())
@@ -421,7 +578,10 @@ pub fn validate_commitment_bundle(
 #[cfg(test)]
 mod proof_policy_tests {
     use iroha_data_model::{
-        da::{pin_intent::DaPinIntent, types::StorageTicketId},
+        da::{
+            pin_intent::{DaPinIntent, DaPinIntentBundle},
+            types::StorageTicketId,
+        },
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
@@ -496,6 +656,76 @@ mod proof_policy_tests {
             DaPinIntentValidationError::DuplicateIntent { lane, epoch, sequence }
                 if *lane == lane_id && *epoch == 2 && *sequence == 4
         )));
+    }
+
+    #[test]
+    fn sanitize_pin_intents_rejects_duplicate_ticket_and_manifest() {
+        let lane_config = LaneConfig::default();
+        let lane = lane_config.primary().lane_id;
+        let first = intent(lane, 1, 1, [0x11; 32], [0x21; 32]);
+        let duplicate_ticket = intent(lane, 1, 2, [0x12; 32], [0x21; 32]);
+        let duplicate_manifest = intent(lane, 1, 3, [0x11; 32], [0x23; 32]);
+
+        let (kept, rejected) = sanitize_pin_intents(
+            [first.clone(), duplicate_ticket, duplicate_manifest],
+            &lane_config,
+            |_| true,
+        );
+
+        assert_eq!(kept, vec![first]);
+        assert!(rejected.iter().any(|err| matches!(
+            err,
+            DaPinIntentValidationError::DuplicateStorageTicket {
+                lane: seen_lane,
+                epoch: 1,
+                sequence: 2
+            } if *seen_lane == lane
+        )));
+        assert!(rejected.iter().any(|err| matches!(
+            err,
+            DaPinIntentValidationError::DuplicateManifest {
+                lane: seen_lane,
+                epoch: 1,
+                sequence: 3
+            } if *seen_lane == lane
+        )));
+    }
+
+    #[test]
+    fn validate_pin_intent_bundle_rejects_unsupported_version() {
+        let lane_config = LaneConfig::default();
+        let lane = lane_config.primary().lane_id;
+        let mut bundle = DaPinIntentBundle::new(vec![intent(lane, 1, 1, [1; 32], [2; 32])]);
+        bundle.version = DaPinIntentBundle::VERSION_V1 + 1;
+
+        let err = validate_pin_intent_bundle(&bundle, &lane_config, |_| true)
+            .expect_err("unsupported pin intent bundle version must fail");
+        assert!(matches!(
+            err,
+            DaPinIntentValidationError::UnsupportedVersion { version }
+                if version == DaPinIntentBundle::VERSION_V1 + 1
+        ));
+    }
+
+    #[test]
+    fn validate_pin_intent_bundle_rejects_duplicate_ticket() {
+        let lane_config = LaneConfig::default();
+        let lane = lane_config.primary().lane_id;
+        let bundle = DaPinIntentBundle::new(vec![
+            intent(lane, 1, 1, [0x31; 32], [0x41; 32]),
+            intent(lane, 1, 2, [0x32; 32], [0x41; 32]),
+        ]);
+
+        let err = validate_pin_intent_bundle(&bundle, &lane_config, |_| true)
+            .expect_err("duplicate pin intent ticket must fail");
+        assert!(matches!(
+            err,
+            DaPinIntentValidationError::DuplicateStorageTicket {
+                lane: seen_lane,
+                epoch: 1,
+                sequence: 2
+            } if seen_lane == lane
+        ));
     }
 
     #[test]
@@ -600,7 +830,7 @@ pub fn proof_policy_bundle_hash(lane_config: &LaneConfig) -> HashOf<DaProofPolic
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{collections::BTreeMap, num::NonZeroU32};
 
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
@@ -608,7 +838,7 @@ mod tests {
             commitment::RetentionClass,
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig},
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneStorageProfile},
     };
     use norito::to_bytes;
 
@@ -840,6 +1070,24 @@ mod tests {
     }
 
     #[test]
+    fn validate_commitment_bundle_rejects_duplicate_storage_ticket() {
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
+        let first = merkle_record(0);
+        let mut second = merkle_record(0);
+        second.sequence = 9;
+        second.manifest_hash =
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x77; 32]);
+        let bundle = DaCommitmentBundle::new(vec![first.clone(), second.clone()]);
+
+        let err =
+            validate_commitment_bundle(&bundle, &lane_config).expect_err("duplicate must fail");
+        assert!(matches!(
+            err,
+            DaCommitmentValidationError::DuplicateStorageTicket { .. }
+        ));
+    }
+
+    #[test]
     fn validate_commitment_bundle_rejects_zero_manifest_hash() {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let mut record = merkle_record(0);
@@ -851,6 +1099,46 @@ mod tests {
         assert!(matches!(
             err,
             DaCommitmentValidationError::ZeroManifestHash { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_commitment_bundle_rejects_zero_storage_ticket() {
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
+        let mut record = merkle_record(0);
+        record.storage_ticket = StorageTicketId::new([0; 32]);
+        let bundle = DaCommitmentBundle::new(vec![record]);
+
+        let err =
+            validate_commitment_bundle(&bundle, &lane_config).expect_err("zero ticket must fail");
+        assert!(matches!(
+            err,
+            DaCommitmentValidationError::ZeroStorageTicket { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_commitment_bundle_rejects_confidential_lane_without_policy() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("confidential_compute".to_string(), "true".to_string());
+        metadata.insert(
+            "confidential_mechanism".to_string(),
+            "encryption".to_string(),
+        );
+        let lane_config = lane_config_with(vec![ModelLaneConfig {
+            storage: LaneStorageProfile::SplitReplica,
+            metadata,
+            ..ModelLaneConfig::default()
+        }]);
+        let bundle = DaCommitmentBundle::new(vec![merkle_record(0)]);
+
+        let err = validate_commitment_bundle(&bundle, &lane_config)
+            .expect_err("confidential lane without key policy must fail");
+        assert!(matches!(
+            err,
+            DaCommitmentValidationError::ConfidentialCompute(
+                ConfidentialComputeError::MissingPolicy
+            )
         ));
     }
 

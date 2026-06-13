@@ -65,6 +65,26 @@ class AccountAddressTest {
     }
 
     @Test
+    fun fromAccountRejectsBlankOrPaddedCurveAlgorithmAliases() {
+        val key = ByteArray(32) { 0x11 }
+        for (algorithm in listOf(
+            "",
+            " ",
+            " ed25519",
+            "ed25519 ",
+            "\ted25519",
+            "ed25519\n",
+            "\u00A0ed25519",
+            "ed25519\u00A0",
+        )) {
+            val error = assertFailsWith<AccountAddressException> {
+                AccountAddress.fromAccount(key, algorithm)
+            }
+            assertEquals(AccountAddressErrorCode.UNSUPPORTED_ALGORITHM, error.code)
+        }
+    }
+
+    @Test
     fun fromAccountRejectsControlAndUnicodeConfusableCurveAlgorithmAliases() {
         val key = ByteArray(32) { 0x11 }
         for (algorithm in listOf(

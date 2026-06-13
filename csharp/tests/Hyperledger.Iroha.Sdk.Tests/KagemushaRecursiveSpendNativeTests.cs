@@ -406,22 +406,21 @@ public sealed class KagemushaRecursiveSpendNativeTests
                     KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
                     duplicateCidVerifierKey,
                     initProvingKeyArchive)).Message);
-        var whitespaceCidVerifierKey = KagemushaLineageVerifierKey(
+        var paddedCidVerifierKey = KagemushaLineageVerifierKey(
             $" {KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1} ",
             0xb2);
-        var whitespaceCidProvingKeyArchive = KagemushaLineageProvingKeyArchiveRaw(
-            1,
+        var archiveCommittedToPaddedCidVerifierKey = KagemushaLineageProvingKeyArchive(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
-            KagemushaVerifierKeyCommitment(whitespaceCidVerifierKey),
-            Enumerable.Repeat((byte)0xb3, 64).ToArray());
+            paddedCidVerifierKey,
+            0xb3);
         Assert.Contains(
             "lineage_verifier_key",
             Assert.Throws<ArgumentException>(
                 () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
                     128,
                     KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
-                    whitespaceCidVerifierKey,
-                    whitespaceCidProvingKeyArchive)).Message);
+                    paddedCidVerifierKey,
+                    archiveCommittedToPaddedCidVerifierKey)).Message);
         Assert.Contains(
             "lineage_proving_key_archive",
             Assert.Throws<ArgumentException>(

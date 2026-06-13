@@ -61,11 +61,12 @@ fn sign_transaction(
     private_key: &PrivateKey,
     metadata: Metadata,
     instructions: impl IntoIterator<Item = InstructionBox>,
-) -> SignedTransaction {
+) -> Result<SignedTransaction> {
     TransactionBuilder::new(chain.clone(), authority.clone())
         .with_instructions(instructions)
         .with_metadata(metadata)
-        .sign(private_key)
+        .try_sign(private_key)
+        .wrap_err("failed to sign split contract deploy transaction")
 }
 
 fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathBuf, usize)> {
@@ -113,7 +114,10 @@ fn main() -> Result<()> {
         fs::read(&args.code_file).wrap_err_with(|| format!("read {}", args.code_file.display()))?;
     let verified = ivm::verify_contract_artifact(&code)
         .map_err(|err| eyre!("verify contract artifact: {err}"))?;
-    let manifest = verified.manifest.signed(&signer);
+    let manifest = verified
+        .manifest
+        .try_signed(&signer)
+        .wrap_err("failed to sign contract manifest")?;
     let code_hash = verified.code_hash;
     let nonce_key = Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY)
         .expect("static contract deploy nonce metadata key is valid");
@@ -142,7 +146,7 @@ fn main() -> Result<()> {
                 code_hash,
                 code: code.clone(),
             })]),
-    );
+    )?;
     let register_manifest_tx = sign_transaction(
         &client.chain,
         &authority,
@@ -152,7 +156,7 @@ fn main() -> Result<()> {
             .clone()
             .into_iter()
             .chain([InstructionBox::from(RegisterSmartContractCode { manifest })]),
-    );
+    )?;
     let activate_tx = sign_transaction(
         &client.chain,
         &authority,
@@ -169,7 +173,7 @@ fn main() -> Result<()> {
                 Json::new(next_nonce),
             )),
         ],
-    );
+    )?;
 
     let register_bytes_hash = register_bytes_tx.hash();
     let register_manifest_hash = register_manifest_tx.hash();
@@ -247,4 +251,28 @@ fn main() -> Result<()> {
     let result = norito::json::Value::Object(fields);
     println!("{}", norito::json::to_json_pretty(&result)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sign_transaction_checked_helper_verifies() -> Result<()> {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+
+        let tx = sign_transaction(
+            &ChainId::from("split-contract-deploy-sign-test"),
+            &authority,
+            key_pair.private_key(),
+            Metadata::default(),
+            Vec::<InstructionBox>::new(),
+        )?;
+
+        tx.verify_signature()
+            .wrap_err("verify split contract deploy helper signature")?;
+        assert_eq!(tx.authority(), &authority);
+        Ok(())
+    }
 }

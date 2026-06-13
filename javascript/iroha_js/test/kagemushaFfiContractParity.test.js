@@ -1982,6 +1982,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
         "native.kagemushaRecursiveSpendCompactPaymentTokenFromBundle(",
         "native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(",
         "native.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(",
+        "Object.is(blockHeight, -0)",
         "/\\b(?:archive|Norito|probe)\\b/i.test(error.message)",
         "toOwnedKagemushaArchiveBuffer",
         'const compactToken = toOwnedKagemushaArchiveBuffer(',
@@ -4731,6 +4732,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-sdk-native-bridge-script",
     "--negative-control-csharp-sdk-native-library-evidence-script",
     "--negative-control-csharp-sdk-test-filter-script",
+    "--negative-control-csharp-sdk-verifier-backend-test-filter-script",
     "--negative-control-csharp-sdk-workflow-inventory",
     "--negative-control-csharp-archive-copy",
     "--negative-control-csharp-recursive-compact-verifier-unavailable",
@@ -6891,6 +6893,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmRunner,
+    /--tests org\.hyperledger\.iroha\.sdk\.nexus\.NexusAppClientTest[\s\S]*--tests org\.hyperledger\.iroha\.android\.nexus\.NexusAppClientTest/,
+    "Kagemusha JVM SDK runner must exercise Kotlin and Android Nexus wallet signature-algorithm exactness tests",
+  );
+  assert.match(
+    jvmRunner,
     /--tests org\.hyperledger\.iroha\.sdk\.client\.stream\.ToriiEventStreamClientTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.client\.stream\.ToriiEventStreamClientTests/,
     "Kagemusha JVM SDK runner must exercise Kotlin and Android Torii event-stream verifier filter exactness tests",
   );
@@ -6912,6 +6919,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   for (const swiftOfflinePath of [
     "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
     "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
+    "IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiCanonicalRequest.swift",
     "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
@@ -6921,6 +6929,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTextTransferContractTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift",
@@ -6951,14 +6960,81 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "Kagemusha C# SDK runner must print host and bridge digest evidence",
   );
   assert.match(
+    csharpRunner,
+    /FullyQualifiedName~KagemushaRecursiveSpendNativeTests[\s\S]*FullyQualifiedName~PrivacyNativeTests[\s\S]*FullyQualifiedName~TransactionBuilderTests[\s\S]*FullyQualifiedName~CanonicalRequestTests[\s\S]*FullyQualifiedName~ToriiClientTests[\s\S]*FullyQualifiedName~SignedQueryBuilderTests[\s\S]*FullyQualifiedName~SignedIterableQueryBuilderTests[\s\S]*FullyQualifiedName~VerifyingKeyBackendTagTests/,
+    "Kagemusha C# SDK runner must exercise canonical request, signed query, and verifier backend exactness tests",
+  );
+  const csharpVerifyingKeyBackendTests = source(
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/VerifyingKeyBackendTagTests.cs",
+  );
+  for (const requiredCsharpVerifierBackendTest of [
+    "ProductionVerifierBackendClassifierMirrorsNativeAllowlist",
+    "ProductionVerifierBackendClassifierRejectsUnsafeLabels",
+    "CatalogAliasesRejectNonAsciiConfusablesBeforeCompaction",
+    "AdversarialPendingAliasSplicesStayUnsupported",
+  ]) {
+    assert.ok(
+      csharpVerifyingKeyBackendTests.includes(requiredCsharpVerifierBackendTest),
+      `Kagemusha C# verifier backend tests must keep ${requiredCsharpVerifierBackendTest}`,
+    );
+  }
+  for (const requiredCsharpVerifierBackendFixture of [
+    '" halo2/ipa"',
+    '"halo2/ipa "',
+    '"stark/fri/sha256-goldilocks "',
+    '"halo2\\uFF0Fipa"',
+    '"halo2/\\u200Bipa"',
+    '"h\\u0430lo2/ipa"',
+    '"halo2/ipa\\0"',
+    '"halo2/ipa:production-ready"',
+    '"stark/fri/S.e.c.u.r.i.t.yReviewPassed"',
+  ]) {
+    assert.ok(
+      csharpVerifyingKeyBackendTests.includes(requiredCsharpVerifierBackendFixture),
+      `Kagemusha C# verifier backend tests must keep fixture ${requiredCsharpVerifierBackendFixture}`,
+    );
+  }
+  const csharpToriiTests = source("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs");
+  for (const requiredCsharpIdentifierReceiptTest of [
+    "ResolveIdentifierAsyncRejectsPaddedSignatureReceiptFields",
+    "ResolveIdentifierAsyncRejectsNonExactPolicyIdBeforeDispatch",
+    "ResolveIdentifierAsyncRejectsNonExactTopLevelPolicyId",
+    "ResolveIdentifierAsyncRejectsNonExactSignaturePayloadPolicyIds",
+    "ResolveIdentifierAsyncAcceptsExactProofAttestationReceipt",
+    "ResolveIdentifierAsyncRejectsNonExactAttestationSelectors",
+    "ResolveIdentifierAsyncAcceptsExactNestedReceiptPayloadFields",
+    "ResolveIdentifierAsyncRejectsNonExactNestedReceiptPayloadFields",
+    "GetIdentifierPoliciesAsyncRejectsNonExactPolicySummaryFields",
+  ]) {
+    assert.ok(
+      csharpToriiTests.includes(requiredCsharpIdentifierReceiptTest),
+      `Kagemusha C# Torii tests must keep ${requiredCsharpIdentifierReceiptTest}`,
+    );
+  }
+  for (const requiredCsharpIdentifierReceiptField of [
+    "identifier resolve response.signature_payload.attestation.proof_b64",
+    "identifier resolve response.signature_payload.payload.policy_id",
+    "identifier resolve response.signature_payload.payload.execution.program_id",
+    "identifier resolve response.signature_payload.payload.account_id",
+    "identifier resolve response.signature_payload.payload.receipt_hash",
+    "identifier resolve response.signature_payload.payload.execution.executed_at_ms",
+    "identifier policies response.items[0].policy_id",
+    "identifier policies response.items[0].resolver_public_key",
+  ]) {
+    assert.ok(
+      csharpToriiTests.includes(requiredCsharpIdentifierReceiptField),
+      `Kagemusha C# Torii tests must keep ${requiredCsharpIdentifierReceiptField}`,
+    );
+  }
+  assert.match(
     pythonRunner,
     /PYTHON_OVERRIDE="\$\{KAGEMUSHA_RECURSIVE_SPEND_PYTHON_BIN:-\}"[\s\S]*resolve_python_311_bin\(\)[\s\S]*python3\.11[\s\S]*PYTHON_BIN="\$\(resolve_python_311_bin\)"/,
     "Kagemusha Python SDK runner must keep the documented Python override variable",
   );
   assert.match(
     pythonRunner,
-    /export VIRTUAL_ENV="\$\{VENV_DIR\}"[\s\S]*export PATH="\$\{VENV_DIR\}\/bin:\$\{PATH\}"[\s\S]*"\$\{VENV_DIR\}\/bin\/python" -m maturin develop --release[\s\S]*tests\/offline_cash_test\.py[\s\S]*tests\/test_address_format\.py/,
-    "Kagemusha Python SDK runner must activate the selected venv before maturin and run offline cash issuer-key exactness tests",
+    /export VIRTUAL_ENV="\$\{VENV_DIR\}"[\s\S]*export PATH="\$\{VENV_DIR\}\/bin:\$\{PATH\}"[\s\S]*"\$\{VENV_DIR\}\/bin\/python" -m maturin develop --release[\s\S]*tests\/test_nexus_app\.py[\s\S]*tests\/offline_cash_test\.py[\s\S]*tests\/test_address_format\.py/,
+    "Kagemusha Python SDK runner must activate the selected venv before maturin and run Nexus wallet signature and offline cash issuer-key exactness tests",
   );
   assert.match(
     pythonRunner,
@@ -6975,6 +7051,33 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /tests\/client_ledger_helpers_test\.py[\s\S]*zk_event_filters_reject_unsupported_backends_before_request[\s\S]*zk_verifying_key_event_filters_reject_malformed_names_before_request[\s\S]*zk_proof_event_filters_reject_malformed_hashes_before_request[\s\S]*zk_raw_event_filters_reject_malformed_privacy_matchers_before_request[\s\S]*zk_raw_event_filters_canonicalize_privacy_matchers_before_request/,
     "Kagemusha Python SDK runner must exercise Torii event-filter verifier/proof exactness tests",
   );
+  const pythonCryptoAlgorithmTests = source("python/iroha_python/tests/crypto_algorithms_test.py");
+  for (const requiredPythonCryptoExactnessTest of [
+    "test_algorithm_labels_reject_empty_strings_across_public_api",
+    "test_algorithm_labels_reject_surrounding_whitespace_across_public_api",
+    "test_algorithm_labels_reject_empty_and_padded_native_inputs",
+    "test_algorithm_labels_reject_control_and_confusable_native_inputs",
+  ]) {
+    assert.ok(
+      pythonCryptoAlgorithmTests.includes(requiredPythonCryptoExactnessTest),
+      `Kagemusha Python crypto tests must keep ${requiredPythonCryptoExactnessTest}`,
+    );
+  }
+  for (const requiredPythonNativeCryptoCall of [
+    "crypto_module._crypto.normalize_crypto_algorithm(label)",
+    "crypto_module._crypto.generate_keypair(label)",
+    "crypto_module._crypto.derive_keypair_from_seed(",
+    "crypto_module._crypto.load_keypair(keypair.private_key, label)",
+    "crypto_module._crypto.public_key_multihash(label, keypair.public_key, False)",
+    "crypto_module._crypto.private_key_multihash(label, keypair.private_key, False)",
+    "crypto_module._crypto.sign(label, keypair.private_key, payload)",
+    "crypto_module._crypto.verify(label, keypair.public_key, payload, signature)",
+  ]) {
+    assert.ok(
+      pythonCryptoAlgorithmTests.includes(requiredPythonNativeCryptoCall),
+      `Kagemusha Python crypto tests must keep direct native exactness call ${requiredPythonNativeCryptoCall}`,
+    );
+  }
   assert.match(
     jsRunner,
     /NODE_OVERRIDE="\$\{KAGEMUSHA_RECURSIVE_SPEND_JS_SDK_NODE_BIN:-\}"[\s\S]*is_node_20_bin\(\)[\s\S]*resolve_node_20_bin\(\)[\s\S]*NODE_BIN="\$\(resolve_node_20_bin\)"/,
@@ -6992,7 +7095,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRunner,
-    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives\|fromAccount rejects control and Unicode-confusable curve algorithm aliases\|offline cash configuration snapshot requires cached issuer key and ABI\|canonical request signing: rejects padded auth fields\|streamEvents rejects unsupported production backend event filters before fetch\|streamEvents rejects malformed verifying key event names before fetch\|streamEvents rejects malformed proof event hashes before fetch\|ZK-ACE verifier-key references reject padded selector metadata\|privacy proof envelopes preserve pending production backend tags\|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations\|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags\|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend\|verifyIdentifierResolutionReceipt matches shared receipt vectors[\s\S]*test\/address\.test\.js[\s\S]*test\/canonicalRequest\.test\.js[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/instructionBuilders\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/offlineCashLifecycle\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/toriiClient\.identifier\.test\.js[\s\S]*test\/toriiClient\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
-    "Kagemusha JavaScript SDK runner must exercise recursive spend, address exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, verifier-key exactness, identifier receipt exactness, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
+    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives\|fromAccount rejects control and Unicode-confusable curve algorithm aliases\|offline cash configuration snapshot requires cached issuer key and ABI\|canonical request signing: rejects padded auth fields\|streamEvents rejects unsupported production backend event filters before fetch\|streamEvents rejects malformed verifying key event names before fetch\|streamEvents rejects malformed proof event hashes before fetch\|ZK-ACE verifier-key references reject padded selector metadata\|privacy proof envelopes preserve pending production backend tags\|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations\|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags\|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend\|verifyIdentifierResolutionReceipt matches shared receipt vectors\|NexusAppClient rejects non-Ed25519 wallet signatures\|NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags[\s\S]*test\/address\.test\.js[\s\S]*test\/canonicalRequest\.test\.js[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/instructionBuilders\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/nexusAppClient\.test\.js[\s\S]*test\/offlineCashLifecycle\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/toriiClient\.identifier\.test\.js[\s\S]*test\/toriiClient\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
+    "Kagemusha JavaScript SDK runner must exercise recursive spend, address exactness, Nexus wallet signature exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, verifier-key exactness, identifier receipt exactness, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
   );
 });

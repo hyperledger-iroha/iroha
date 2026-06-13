@@ -3097,7 +3097,8 @@ impl Network {
                 &time_source,
             )
             .with_instructions(param_instructions)
-            .sign(self.genesis_key_pair.private_key());
+            .try_sign(self.genesis_key_pair.private_key())
+            .expect("sign cached genesis consensus metadata transaction");
 
             let mut transactions = cached_genesis.0.transactions_vec().clone();
             transactions.push(param_tx);
@@ -3120,7 +3121,11 @@ impl Network {
                 .unwrap_or(0);
             let placeholder_sig = iroha_data_model::block::BlockSignature::new(
                 signer_index,
-                SignatureOf::from_hash(self.genesis_key_pair.private_key(), header.hash()),
+                iroha_crypto::SignatureOf::try_from_hash(
+                    self.genesis_key_pair.private_key(),
+                    header.hash(),
+                )
+                .expect("sign cached genesis placeholder header"),
             );
             let mut working = iroha_data_model::block::SignedBlock::presigned(
                 placeholder_sig,
@@ -3142,7 +3147,11 @@ impl Network {
 
             let sig = iroha_data_model::block::BlockSignature::new(
                 signer_index,
-                SignatureOf::from_hash(self.genesis_key_pair.private_key(), working.hash()),
+                iroha_crypto::SignatureOf::try_from_hash(
+                    self.genesis_key_pair.private_key(),
+                    working.hash(),
+                )
+                .expect("sign cached genesis rebuilt header"),
             );
             let mut rebuilt = iroha_data_model::block::SignedBlock::presigned(
                 sig,

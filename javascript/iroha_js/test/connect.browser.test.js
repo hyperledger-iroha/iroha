@@ -180,6 +180,9 @@ test("Connect browser wallet signature encoder validates algorithm labels before
   for (const target of ["../src/connect.browser.js", "../dist/connect.browser.js"]) {
     const source = readFileSync(new URL(target, import.meta.url), "utf8");
     assert.match(source, /normalizeWalletSignatureAlgorithmTag/);
+    assert.match(source, /algorithm !== algorithm\.trim\(\)/);
+    assert.match(source, /must not contain surrounding whitespace/);
+    assert.doesNotMatch(source, /const normalized = algorithm\.trim\(\)/);
     assert.doesNotMatch(source, /Uint8Array\.of\(signature\.algorithm\)/);
   }
 });
