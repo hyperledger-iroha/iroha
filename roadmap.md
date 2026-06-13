@@ -92,7 +92,7 @@ and completed history lives in [`status.md`](./status.md).
   alignment padding remain pinned by SDK and Rust golden-vector tests.
 - Kagemusha C# SDK validation now passes on this macOS host with .NET SDK
   8.0.128 through `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, including
-  a freshly built `connect_norito_bridge` native library and 103 focused SDK
+  a freshly built `connect_norito_bridge` native library and 683 focused SDK
   tests across recursive spend, privacy native, transaction builder, canonical
   request, and Torii identifier receipt surfaces. The focused pass covers
   `csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs`,
@@ -104,6 +104,11 @@ and completed history lives in [`status.md`](./status.md).
   platform-specific native library name, fails if the freshly built artifact is
   missing, prints the selected native bridge path, and prepends that directory
   to the macOS, Linux, and Windows loader paths before invoking `dotnet test`.
+  C# Torii identifier resolve parsing now also accepts the nested
+  `payload`/`attestation` receipt envelope while rejecting mixed legacy/nested
+  envelopes, missing nested objects, malformed signed/proof attestation
+  combinations, invalid proof base64, and non-exact receipt execution fields
+  before callers consume receipt data.
   Windows remains a separate host-certification follow-up so the same C# lane
   is proven against `connect_norito_bridge.dll`, Windows loader paths, RID, and
   architecture. The Windows pass must also pin the C# negative controls for
@@ -232,11 +237,16 @@ and completed history lives in [`status.md`](./status.md).
   and privacy native bridge tests, while the Android Java harness runs
   recursive spend, canonical request auth, Offline Cash lifecycle, Offline Note
   V2, Offline Note, privacy native bridge, and transaction-builder archive
-  tests. Kotlin/JVM and Android Java privacy capability APIs must continue
-  deriving bridge readiness from the native Norito capability archive when the
-  bridge is loaded, while malformed, duplicate, incomplete, or absent evidence
-  keeps the SDK capability surface fail-closed. Privacy proof dispatch must keep
-  the `privacy-production-enabled` feature opt-in, preserve default
+  tests. Swift, Kotlin/JVM, and Android Java privacy capability APIs must
+  continue deriving bridge readiness from the native Norito capability archive
+  when the bridge is loaded, while malformed, duplicate, incomplete, or absent
+  evidence keeps the SDK capability surface fail-closed. Native ready rows must
+  match the audited production-gate contract exactly before the SDK exposes
+  `productionReady`: exact gate version, required-gate ordering, per-gate pass
+  state, no missing or planned entrypoints, and the full ordered audit-reference
+  set with canonical lowercase SHA-256 and Ed25519 evidence values. Privacy
+  proof dispatch must keep the `privacy-production-enabled` feature opt-in,
+  preserve default
   production-disabled serialized results, and retain focused coverage for real
   confidential-transfer-v2/unshield proving, verification, and checked unshield
   input-sum overflow rejection. The production-enabled bridge must also reject
@@ -260,8 +270,13 @@ and completed history lives in [`status.md`](./status.md).
   `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>` count matches the record-bundle
   fold-step count, previous-proof open-envelope archives with the same exact
   native schema and exactly one Pallas envelope with nonzero verifier metadata,
-  malformed/trailing archive rejection, and nonnegative block-height guards
+  native bridge C/JNI builders for both archive shapes, release-package
+  validation with a rebuilt `dist/NoritoBridge.xcframework` and
+  `KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_CHECK_DIST=1`, malformed/trailing
+  archive rejection, and nonnegative block-height guards
   pinned in the focused JVM SDK runner and parity inventory. Kotlin/JVM and
+  Android Java request tests must also keep malformed redeem `publicAmount`
+  values rejected at construction before native dispatch. Kotlin/JVM and
   Android Java now also expose typed
   `RegisterZkAsset`, `Shield`, and `Unshield` builders plus native
   signed-transaction wrappers that preserve private change outputs and return
@@ -278,6 +293,10 @@ and completed history lives in [`status.md`](./status.md).
   Torii event-filter verifier/proof exactness, verifier-key selector exactness,
   identifier-receipt adversarial and shared-vector exactness, package/browser,
   privacy native bridge, and transaction-builder archive test names together.
+  The typed recursive-spend request codecs must continue rejecting padded or
+  signed decimal-string `blockHeight` values and numeric negative zero across
+  init, append, verify, and redeem before native dispatch, while still allowing
+  canonical non-negative `u64` heights.
 - Kagemusha Swift SDK validation must keep the macOS parse runner aligned with
   the parity inventory by parsing every Kagemusha/Offline Note source and test
   file tracked for Swift, including canonical request auth helpers, recursive
@@ -287,6 +306,11 @@ and completed history lives in [`status.md`](./status.md).
   wallet/redeem/QR helpers, signing-algorithm discriminants,
   verifier-backend labels, Torii verifier-key request/event validation, and
   Offline Cash/Kagemusha ABI-7 support files. The
+  Swift typed recursive-spend request tests must keep malformed redeem
+  `publicAmount` values rejected before native dispatch. Swift recursive-spend
+  wrappers must also keep native bridge builders for current-hop and
+  previous-proof Pallas open-envelope archives exposed and covered by the same
+  input/output Norito archive guard tests. The
   payload-bench workflow path inventory and JavaScript parity meta-test must
   stay in lockstep with that expanded Swift parse surface.
 - Kagemusha Python SDK validation must keep the focused Python 3.11 runner on
@@ -305,6 +329,10 @@ and completed history lives in [`status.md`](./status.md).
   the public Python wrapper. Python crypto tests and the JavaScript parity
   meta-test must pin empty/padded labels across key generation, key loading,
   multihash, sign, verify, key-pair construction, and direct `_crypto` calls.
+  Python typed recursive-spend request constructors must keep adversarial
+  coverage for non-integer, boolean, negative, and overflowing `block_height`
+  values across init, append, verify, and redeem, plus malformed redeem
+  `public_amount` values before native dispatch.
   Python Torii
   identifier receipt helpers must keep
   `encode_identifier_resolution_receipt_payload`,

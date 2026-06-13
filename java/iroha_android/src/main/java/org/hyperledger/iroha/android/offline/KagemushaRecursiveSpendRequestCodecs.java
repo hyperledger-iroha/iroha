@@ -105,12 +105,22 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         Objects.requireNonNull(request, "request"), SCHEMA_REDEEM_REQUEST, REDEEM_REQUEST_ADAPTER, REQUEST_FLAGS);
   }
 
-  public static byte[] buildPallasOpenEnvelopesArchive(final List<byte[]> proofOutputArchives) {
-    require(proofOutputArchives != null && !proofOutputArchives.isEmpty(),
-        "proofOutputArchives must not be empty");
-    throw new IllegalArgumentException(
-        "Pallas IPA opening envelopes cannot be derived from privacy proof outputs; "
-            + "pass the prover-emitted Norito archive of Vec<iroha_zkp_halo2::OpenVerifyEnvelope>");
+  public static byte[] buildPallasOpenEnvelopesArchive(final List<VerifiedFoldHopEvidence> hops) {
+    require(hops != null && !hops.isEmpty(), "hops must not be empty");
+    return buildPallasOpenEnvelopesArchiveForRecordBundle(buildVerifiedFoldRecordBundle(hops));
+  }
+
+  public static byte[] buildPallasOpenEnvelopesArchiveForRecordBundle(
+      final byte[] recordBundle) {
+    require(recordBundle != null, "recordBundle is required");
+    compactPayloadForRequest(recordBundle, SCHEMA_RECORD_BUNDLE, "recordBundle");
+    return KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundle);
+  }
+
+  public static byte[] buildPreviousProofOpenEnvelopesArchive(final byte[] previousBundle) {
+    require(previousBundle != null, "previousBundle is required");
+    decodeBundle(previousBundle);
+    return KagemushaRecursiveSpendProver.buildPreviousProofOpenEnvelopesArchive(previousBundle);
   }
 
   public static byte[] buildVerifiedFoldRecordBundle(
@@ -198,6 +208,27 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
   public static byte[] buildRecursiveSpendInitRequest(
       final VerifiedFoldHopEvidence hop,
+      final SpendableNoteDescriptor spendableNote,
+      final byte[] lineageVerifierKey,
+      final byte[] lineageProvingKeyArchive,
+      final Long blockHeight) {
+    require(hop != null, "hop is required");
+    require(spendableNote != null, "spendableNote is required");
+    final byte[] recordBundle = buildVerifiedFoldRecordBundle(Arrays.asList(hop));
+    final byte[] pallasOpenEnvelopes =
+        buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);
+    return encodeInitRequest(
+        new InitSpendRequest(
+            recordBundle,
+            pallasOpenEnvelopes,
+            spendableNote,
+            lineageVerifierKey,
+            lineageProvingKeyArchive,
+            blockHeight));
+  }
+
+  public static byte[] buildRecursiveSpendInitRequest(
+      final VerifiedFoldHopEvidence hop,
       final byte[] pallasOpenEnvelopes,
       final SpendableNoteDescriptor spendableNote,
       final KagemushaRecursiveSpendProver.LineageKeyArtifacts lineageKeyArtifacts,
@@ -208,6 +239,25 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     return encodeInitRequest(
         new InitSpendRequest(
             buildVerifiedFoldRecordBundle(Arrays.asList(hop)),
+            pallasOpenEnvelopes,
+            spendableNote,
+            lineageKeyArtifacts,
+            blockHeight));
+  }
+
+  public static byte[] buildRecursiveSpendInitRequest(
+      final VerifiedFoldHopEvidence hop,
+      final SpendableNoteDescriptor spendableNote,
+      final KagemushaRecursiveSpendProver.LineageKeyArtifacts lineageKeyArtifacts,
+      final Long blockHeight) {
+    require(hop != null, "hop is required");
+    require(spendableNote != null, "spendableNote is required");
+    final byte[] recordBundle = buildVerifiedFoldRecordBundle(Arrays.asList(hop));
+    final byte[] pallasOpenEnvelopes =
+        buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);
+    return encodeInitRequest(
+        new InitSpendRequest(
+            recordBundle,
             pallasOpenEnvelopes,
             spendableNote,
             lineageKeyArtifacts,
@@ -260,6 +310,38 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   public static byte[] buildRecursiveSpendAppendRequest(
       final byte[] previousBundle,
       final VerifiedFoldHopEvidence hop,
+      final SpendableNoteDescriptor spendableNote,
+      final String outputCircuitId,
+      final VerifierRecordRef previousLineageVerifierRecord,
+      final byte[] previousProofOpenEnvelopes,
+      final byte[] lineageVerifierKey,
+      final byte[] lineageProvingKeyArchive,
+      final Long blockHeight) {
+    require(previousBundle != null, "previousBundle is required");
+    require(hop != null, "hop is required");
+    require(spendableNote != null, "spendableNote is required");
+    final byte[] recordBundle = buildVerifiedFoldRecordBundle(Arrays.asList(hop));
+    final byte[] pallasOpenEnvelopes =
+        buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);
+    final byte[] previousOpenEnvelopes =
+        previousProofOpenEnvelopesOrGenerated(previousBundle, outputCircuitId, previousProofOpenEnvelopes);
+    return encodeAppendRequest(
+        new AppendSpendRequest(
+            previousBundle,
+            recordBundle,
+            pallasOpenEnvelopes,
+            spendableNote,
+            outputCircuitId,
+            previousLineageVerifierRecord,
+            previousOpenEnvelopes,
+            lineageVerifierKey,
+            lineageProvingKeyArchive,
+            blockHeight));
+  }
+
+  public static byte[] buildRecursiveSpendAppendRequest(
+      final byte[] previousBundle,
+      final VerifiedFoldHopEvidence hop,
       final byte[] pallasOpenEnvelopes,
       final SpendableNoteDescriptor spendableNote,
       final String outputCircuitId,
@@ -280,6 +362,36 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             outputCircuitId,
             previousLineageVerifierRecord,
             previousProofOpenEnvelopes,
+            lineageKeyArtifacts,
+            blockHeight));
+  }
+
+  public static byte[] buildRecursiveSpendAppendRequest(
+      final byte[] previousBundle,
+      final VerifiedFoldHopEvidence hop,
+      final SpendableNoteDescriptor spendableNote,
+      final String outputCircuitId,
+      final VerifierRecordRef previousLineageVerifierRecord,
+      final byte[] previousProofOpenEnvelopes,
+      final KagemushaRecursiveSpendProver.LineageKeyArtifacts lineageKeyArtifacts,
+      final Long blockHeight) {
+    require(previousBundle != null, "previousBundle is required");
+    require(hop != null, "hop is required");
+    require(spendableNote != null, "spendableNote is required");
+    final byte[] recordBundle = buildVerifiedFoldRecordBundle(Arrays.asList(hop));
+    final byte[] pallasOpenEnvelopes =
+        buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);
+    final byte[] previousOpenEnvelopes =
+        previousProofOpenEnvelopesOrGenerated(previousBundle, outputCircuitId, previousProofOpenEnvelopes);
+    return encodeAppendRequest(
+        new AppendSpendRequest(
+            previousBundle,
+            recordBundle,
+            pallasOpenEnvelopes,
+            spendableNote,
+            outputCircuitId,
+            previousLineageVerifierRecord,
+            previousOpenEnvelopes,
             lineageKeyArtifacts,
             blockHeight));
   }
@@ -384,9 +496,22 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
   private static byte[] failClosedProofOnlyRecursiveSpendRequest() {
     throw new IllegalArgumentException(
-        "recursive spend requests require explicit VerifiedFoldHopEvidence and a prover-emitted "
+        "recursive spend requests require explicit VerifiedFoldHopEvidence and a bridge-generated or explicit "
             + "Pallas open-envelopes archive; privacy proof outputs alone do not carry "
             + "Pallas IPA opening envelopes, chainId, asset, or rootAfter");
+  }
+
+  private static byte[] previousProofOpenEnvelopesOrGenerated(
+      final byte[] previousBundle, final String outputCircuitId, final byte[] provided) {
+    if (provided != null) {
+      return provided;
+    }
+    final SpendBundleSummary previousSummary = decodeBundle(previousBundle);
+    if (KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
+        outputCircuitId, previousSummary.hopCount)) {
+      return buildPreviousProofOpenEnvelopesArchive(previousBundle);
+    }
+    return null;
   }
 
   static final class ArchivePayload {

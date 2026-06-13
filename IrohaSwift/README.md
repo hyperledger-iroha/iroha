@@ -784,11 +784,15 @@ tells wallet code whether the selected append output circuit requires the
 request to carry the previous recursive proof opening archive. The
 `outputCircuitId` argument is the append request's `output_proof_circuit_id`;
 missing or empty request values preserve semantic compatibility append. The
-`previous_recursive_proof_open_envelopes_archive` field is opaque native prover
-material: Swift wallet code must pass it through Norito unchanged and must not
-construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
-`public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
-before proving or returning output bytes.
+`KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive:)`
+and `buildPreviousProofOpenEnvelopesArchive(previousBundleArchive:)` helpers ask
+the native bridge to generate the opaque Pallas opening archives for the current
+record bundle and the previous recursive proof. The
+`previous_recursive_proof_open_envelopes_archive` field remains opaque native
+prover material: Swift wallet code must pass it through Norito unchanged and
+must not construct, rewrite, or mutate it. The native bridge validates
+`vk_commitment`, `public_inputs_schema_hash`, and `domain_tag` against the exact
+previous bundle before proving or returning output bytes.
 Native append streams the previous recursive proof bytes and per-hop accumulator
 material into native-owned accumulator digests (`recursive_proof_chain_digest`,
 lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,

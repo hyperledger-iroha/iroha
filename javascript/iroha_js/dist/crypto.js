@@ -3756,8 +3756,17 @@ function kagemushaNormalizeBlockHeight(value, field) {
     if (!Number.isSafeInteger(value)) {
       throw kagemushaFieldCodecError(field, `${field} must be a non-negative u64`);
     }
+    if (value < 0 || Object.is(value, -0)) {
+      throw kagemushaFieldCodecError(field, `${field} must be non-negative`);
+    }
     height = BigInt(value);
-  } else if (typeof value === "string" && /^\d+$/.test(value)) {
+  } else if (typeof value === "string") {
+    if (!/^(0|[1-9]\d*)$/.test(value)) {
+      throw kagemushaFieldCodecError(
+        field,
+        `${field} must be a canonical unsigned decimal u64`,
+      );
+    }
     height = BigInt(value);
   } else {
     throw kagemushaFieldCodecError(field, `${field} must be a non-negative u64`);

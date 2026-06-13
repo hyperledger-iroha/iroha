@@ -2010,6 +2010,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var kagemushaRecursiveSpendCompactPaymentTokenFromBundleFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionFn: KagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionFn? = nil
     private var kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeightFn: KagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeightFn? = nil
+    private var kagemushaBuildPallasOpenEnvelopesArchiveFn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaBuildPreviousProofOpenEnvelopesArchiveFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendInitFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendAppendFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendTransitionProfileInitFn: KagemushaRecursiveSpendArchiveFn? = nil
@@ -2150,6 +2152,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let kagemushaRecursiveSpendCompactPaymentTokenFromBundleFn: Any? = nil
     private let kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionFn: Any? = nil
     private let kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeightFn: Any? = nil
+    private let kagemushaBuildPallasOpenEnvelopesArchiveFn: Any? = nil
+    private let kagemushaBuildPreviousProofOpenEnvelopesArchiveFn: Any? = nil
     private let kagemushaRecursiveSpendInitFn: Any? = nil
     private let kagemushaRecursiveSpendAppendFn: Any? = nil
     private let kagemushaRecursiveSpendTransitionProfileInitFn: Any? = nil
@@ -2330,6 +2334,26 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             )
         } else {
             self.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeightFn = nil
+        }
+        if let kagemushaBuildPallasOpenEnvelopesArchiveSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_build_pallas_open_envelopes_archive")
+        }) {
+            self.kagemushaBuildPallasOpenEnvelopesArchiveFn = unsafeBitCast(
+                kagemushaBuildPallasOpenEnvelopesArchiveSymbol,
+                to: KagemushaRecursiveSpendArchiveFn.self
+            )
+        } else {
+            self.kagemushaBuildPallasOpenEnvelopesArchiveFn = nil
+        }
+        if let kagemushaBuildPreviousProofOpenEnvelopesArchiveSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive")
+        }) {
+            self.kagemushaBuildPreviousProofOpenEnvelopesArchiveFn = unsafeBitCast(
+                kagemushaBuildPreviousProofOpenEnvelopesArchiveSymbol,
+                to: KagemushaRecursiveSpendArchiveFn.self
+            )
+        } else {
+            self.kagemushaBuildPreviousProofOpenEnvelopesArchiveFn = nil
         }
         if let kagemushaRecursiveSpendInitSymbol = staticHandle.flatMap({
             dlsym($0, "connect_norito_kagemusha_recursive_spend_init")
@@ -3072,6 +3096,28 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeightFn = nil
             }
+            if let kagemushaBuildPallasOpenEnvelopesArchiveSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_build_pallas_open_envelopes_archive"
+            ) {
+                self.kagemushaBuildPallasOpenEnvelopesArchiveFn = unsafeBitCast(
+                    kagemushaBuildPallasOpenEnvelopesArchiveSymbol,
+                    to: KagemushaRecursiveSpendArchiveFn.self
+                )
+            } else {
+                self.kagemushaBuildPallasOpenEnvelopesArchiveFn = nil
+            }
+            if let kagemushaBuildPreviousProofOpenEnvelopesArchiveSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive"
+            ) {
+                self.kagemushaBuildPreviousProofOpenEnvelopesArchiveFn = unsafeBitCast(
+                    kagemushaBuildPreviousProofOpenEnvelopesArchiveSymbol,
+                    to: KagemushaRecursiveSpendArchiveFn.self
+                )
+            } else {
+                self.kagemushaBuildPreviousProofOpenEnvelopesArchiveFn = nil
+            }
             if let kagemushaRecursiveSpendInitSymbol = dlsym(
                 handle,
                 "connect_norito_kagemusha_recursive_spend_init"
@@ -3312,6 +3358,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.kagemushaRecursiveSpendCompactPaymentTokenFromBundleFn = nil
             self.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionFn = nil
             self.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeightFn = nil
+            self.kagemushaBuildPallasOpenEnvelopesArchiveFn = nil
+            self.kagemushaBuildPreviousProofOpenEnvelopesArchiveFn = nil
             self.kagemushaRecursiveSpendInitFn = nil
             self.kagemushaRecursiveSpendAppendFn = nil
             self.kagemushaRecursiveSpendTransitionProfileInitFn = nil
@@ -3480,6 +3528,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             )
 
         var recursiveSpendOk = true
+        recursiveSpendOk = probeKagemushaArchiveFunction(kagemushaBuildPallasOpenEnvelopesArchiveFn) && recursiveSpendOk
+        recursiveSpendOk = probeKagemushaArchiveFunction(kagemushaBuildPreviousProofOpenEnvelopesArchiveFn) && recursiveSpendOk
         recursiveSpendOk = probeKagemushaArchiveFunction(kagemushaRecursiveSpendInitFn) && recursiveSpendOk
         recursiveSpendOk = probeKagemushaArchiveFunction(kagemushaRecursiveSpendAppendFn) && recursiveSpendOk
         recursiveSpendOk =
@@ -3939,6 +3989,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return kagemushaRecursiveSpendInitFn != nil
+            && kagemushaBuildPallasOpenEnvelopesArchiveFn != nil
+            && kagemushaBuildPreviousProofOpenEnvelopesArchiveFn != nil
             && kagemushaRecursiveSpendAppendFn != nil
             && kagemushaRecursiveSpendTransitionProfileInitFn != nil
             && kagemushaRecursiveSpendTransitionProfileAppendFn != nil
@@ -7214,6 +7266,20 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #else
         return nil
         #endif
+    }
+
+    func kagemushaBuildPallasOpenEnvelopesArchive(recordBundleArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: recordBundleArchive,
+            function: kagemushaBuildPallasOpenEnvelopesArchiveFn
+        )
+    }
+
+    func kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundleArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: previousBundleArchive,
+            function: kagemushaBuildPreviousProofOpenEnvelopesArchiveFn
+        )
     }
 
     func kagemushaRecursiveSpendInit(requestArchive: Data) throws -> Data? {

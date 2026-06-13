@@ -44,6 +44,11 @@ REQUIRED_RECORD_BACKED_KAGEMUSHA_C_SYMBOLS = (
     "connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes",
 )
 
+REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_C_SYMBOLS = (
+    "connect_norito_kagemusha_build_pallas_open_envelopes_archive",
+    "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive",
+)
+
 REQUIRED_JS_NATIVE_METHODS = (
     "kagemushaRecursiveSpendInit",
     "kagemushaRecursiveSpendAppend",
@@ -1245,6 +1250,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-recursive-spend-native-output-headers",
     ),
     (
+        "Mobile privacy production-gate exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness",
+    ),
+    (
         "JVM Offline Note V2 decoder placeholder negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-decoder-placeholder",
     ),
@@ -2248,6 +2257,40 @@ def check_c_bridge(texts, errors):
         header_record_exports,
         REQUIRED_RECORD_BACKED_KAGEMUSHA_C_SYMBOLS,
         "C header record-backed Kagemusha prover declarations",
+        errors,
+    )
+    rust_pallas_builder_exports = names_from_matches(
+        rust,
+        r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+        r"(connect_norito_kagemusha_build_(?:pallas_open_envelopes|previous_proof_open_envelopes)_archive)\s*\(",
+    )
+    header_pallas_builder_exports = names_from_matches(
+        header,
+        r"int32_t\s+"
+        r"(connect_norito_kagemusha_build_(?:pallas_open_envelopes|previous_proof_open_envelopes)_archive)\s*\(",
+    )
+    require_same_set(
+        rust_pallas_builder_exports,
+        REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_C_SYMBOLS,
+        "Rust C Kagemusha Pallas open-envelope builder exports",
+        errors,
+    )
+    require_same_set(
+        header_pallas_builder_exports,
+        REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_C_SYMBOLS,
+        "C header Kagemusha Pallas open-envelope builder declarations",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/connect_norito_bridge/include/connect_norito_bridge.h",
+        (
+            "Build metadata-bound Pallas open envelopes",
+            "one envelope per hop",
+            "Build the one-envelope Pallas opening archive required for reserved-lineage append",
+            "KagemushaRecursiveSpendBundleV1",
+        ),
+        "C header Kagemusha Pallas open-envelope builder contract",
         errors,
     )
     require(
@@ -3355,6 +3398,30 @@ def check_recursive_compact_surface(texts, errors):
         "Android Java recursive compact verifier tests",
         errors,
     )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+        (
+            "RedeemSpendRequest(",
+            "publicAmount = amount",
+            "U128_MAX_PLUS_ONE",
+            "KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT",
+        ),
+        "Kotlin typed recursive spend public amount tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        (
+            "new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(",
+            "sampleRecipient(),\n                  amount,",
+            "340282366920938463463374607431768211456",
+            "KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT",
+        ),
+        "Android Java typed recursive spend public amount tests",
+        errors,
+    )
 
     csharp = "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
     require_contains(
@@ -3919,6 +3986,122 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
     )
 
 
+def check_mobile_privacy_production_gate_exactness(texts, errors):
+    swift_bridge = "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"
+    java_bridge = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java"
+    kotlin_bridge = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"
+    require_contains(
+        texts,
+        swift_bridge,
+        (
+            "rows.contains(where: { !nativeCapabilityRowIsExact($0) })",
+            "private static func nativeCapabilityRowIsExact(",
+            "row.productionReady != gate.ready",
+            "gate.requiredGates != requiredGateKeys",
+            "gate.gates.map(\\.key) != requiredGateKeys",
+            "gate.gates.contains(where: { $0.passed != gate.ready })",
+            "row.plannedEntrypoints.isEmpty",
+            "readyAuditReferencesAreExact(gate.auditReferences)",
+            "Set(references).count != references.count",
+            "productionHashIsValid(value)",
+            "productionSignatureIsValid(value)",
+            "code < 0x20 || code > 0x7E || code == 0x5C",
+            "compact.contains(\"devprooffixture\")",
+            "localnet_lifecycle_recursive_append_verify_hash:",
+            "static func privacyCapabilities(\n        fromArchive archive: Data,",
+        ),
+        "Swift privacy production-gate exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_bridge,
+        (
+            "rows.any { !nativeCapabilityRowIsExact(it) }",
+            "private fun nativeCapabilityRowIsExact(row: NativeCapability): Boolean",
+            "row.productionReady != gate.ready",
+            "gate.requiredGates != REQUIRED_GATES",
+            "gate.gates.map { it.key } != REQUIRED_GATES",
+            "gate.gates.any { it.passed != gate.ready }",
+            "row.plannedEntrypoints.isEmpty()",
+            "readyAuditReferencesAreExact(gate.auditReferences)",
+            "references.distinct().size != references.size",
+            "productionHashIsValid(reference.removePrefix(prefix))",
+            "productionSignatureIsValid(reference.removePrefix(prefix))",
+            "value.any { it.code !in 0x20..0x7e || it == '\\\\' }",
+            "compact.contains(\"devprooffixture\")",
+            "localnet_lifecycle_recursive_append_verify_hash:",
+        ),
+        "Kotlin privacy production-gate exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_bridge,
+        (
+            "if (!nativeCapabilityRowIsExact(row))",
+            "private static boolean nativeCapabilityRowIsExact(final NativeCapability row)",
+            "row.productionReady != gate.ready",
+            "!gate.requiredGates.equals(PRODUCTION_GATE_REQUIRED)",
+            "gate.gates.size() != PRODUCTION_GATE_REQUIRED.size()",
+            "status.passed != gate.ready",
+            "row.plannedEntrypoints.isEmpty()",
+            "readyAuditReferencesAreExact(gate.auditReferences)",
+            "new LinkedHashSet<>(references).size() != references.size()",
+            "productionHashIsValid(value)",
+            "productionSignatureIsValid(value)",
+            "ch < 0x20 || ch > 0x7e",
+            "normalized.contains(\"devprooffixture\")",
+            "localnet_lifecycle_recursive_append_verify_hash:",
+        ),
+        "Android Java privacy production-gate exactness",
+        errors,
+    )
+    for relative, label in (
+        (kotlin_test, "Kotlin privacy production-gate exactness tests"),
+        (java_test, "Android Java privacy production-gate exactness tests"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "productionReadyCapabilitiesRequireExactNativeGateEvidence",
+                "forgedProductionReadyCapabilityRowsFailClosed",
+                "empty required gates",
+                "missing gate status",
+                "duplicate audit reference",
+                "bad audit hash",
+                "uppercase audit signature",
+                "mock localnet marker",
+                "planned entrypoint",
+                "production ready mismatch",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            "testProductionReadyCapabilitiesRequireExactNativeGateEvidence",
+            "testForgedProductionReadyCapabilityRowsFailClosed",
+            "empty required gates",
+            "missing gate status",
+            "duplicate audit reference",
+            "bad audit hash",
+            "uppercase audit signature",
+            "mock localnet marker",
+            "planned entrypoint",
+            "production ready mismatch",
+        ),
+        "Swift privacy production-gate exactness tests",
+        errors,
+    )
+
+
 def check_javascript(texts, errors):
     torii_identifier_test = "javascript/iroha_js/test/toriiClient.identifier.test.js"
     constants = (
@@ -3968,6 +4151,9 @@ def check_javascript(texts, errors):
                 "AccountAddress.parseEncoded(recipient)",
                 "kagemushaCanonicalU128Decimal",
                 "kagemushaNormalizeBlockHeight",
+                "Object.is(value, -0)",
+                "must be a canonical unsigned decimal u64",
+                "/^(0|[1-9]\\d*)$/.test(value)",
                 "previousLineageVerifierRecord",
                 "previousProofOpenEnvelopes",
                 "requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend",
@@ -4015,6 +4201,10 @@ def check_javascript(texts, errors):
             "previousLineageVerifierRecord",
             "previousProofOpenEnvelopes",
             "alice@wonderland",
+            "blockHeightEncoders",
+            "Object.is(invalidBlockHeights.at(-1), -0)",
+            "accepted non-canonical blockHeight",
+            "\"18446744073709551616\"",
             "String(1n << 128n)",
             "calls.at(-1)",
         ),
@@ -5041,6 +5231,10 @@ def check_python(texts, errors):
             "KagemushaRecursiveSpendRedeemRequest",
             "previous_lineage_verifier_record",
             "previous_proof_open_envelopes",
+            "invalid_block_heights",
+            "block_height_request_builders",
+            "invalid_public_amounts",
+            "1 << 64",
             "alice@wonderland",
             "str(1 << 128)",
             "native.calls[-1]",
@@ -5473,6 +5667,9 @@ def check_swift(texts, errors):
             "KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult",
             "lineageVerifierKey: nil",
             "u128MaxPlusOne",
+            "KagemushaRecursiveSpendRedeemRequest(",
+            "publicAmount: amount",
+            "proofAttachmentWireName",
             "previousProofOpenEnvelopes",
             "readFixedArrayPayload",
             "optionSomePayload",
@@ -6133,6 +6330,10 @@ def check_swift(texts, errors):
         texts,
         prover,
         (
+            "public static func buildPallasOpenEnvelopesArchive(",
+            "public static func buildPreviousProofOpenEnvelopesArchive(",
+            "kagemushaBuildPallasOpenEnvelopesArchive(",
+            "kagemushaBuildPreviousProofOpenEnvelopesArchive(",
             "invalidInputArchive",
             "oversizedInputArchive",
             "emptyInputPayload",
@@ -6152,8 +6353,27 @@ def check_swift(texts, errors):
     )
     require_contains(
         texts,
+        bridge,
+        REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_C_SYMBOLS
+        + (
+            "kagemushaBuildPallasOpenEnvelopesArchiveFn",
+            "kagemushaBuildPreviousProofOpenEnvelopesArchiveFn",
+            "func kagemushaBuildPallasOpenEnvelopesArchive(recordBundleArchive: Data)",
+            "func kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundleArchive: Data)",
+            "probeKagemushaArchiveFunction(kagemushaBuildPallasOpenEnvelopesArchiveFn)",
+            "probeKagemushaArchiveFunction(kagemushaBuildPreviousProofOpenEnvelopesArchiveFn)",
+            "kagemushaBuildPallasOpenEnvelopesArchiveFn != nil",
+            "kagemushaBuildPreviousProofOpenEnvelopesArchiveFn != nil",
+        ),
+        "Swift recursive spend Pallas open-envelope builder bridge",
+        errors,
+    )
+    require_contains(
+        texts,
         test,
         (
+            "buildPallasOpenEnvelopesArchive",
+            "buildPreviousProofOpenEnvelopesArchive",
             "testRejectsMalformedInputArchivesBeforeBridgeCall",
             "testRejectsOversizedInputArchivesBeforeBridgeCall",
             "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
@@ -9662,6 +9882,7 @@ def run_checks(texts):
     check_rust_policy_constants(texts, errors)
     check_node_host(texts, errors)
     check_jvm_sdk_script_pins_jdk21(texts, errors)
+    check_mobile_privacy_production_gate_exactness(texts, errors)
     check_javascript(texts, errors)
     check_python(texts, errors)
     check_swift(texts, errors)
@@ -11257,6 +11478,54 @@ if mode == "--negative-control-mobile-recursive-spend-native-output-headers":
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile native output header drift was not detected")
+
+if mode == "--negative-control-mobile-privacy-production-gate-exactness":
+    mutated_texts = dict(texts)
+    swift_bridge = "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
+    kotlin_bridge = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
+    java_bridge = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
+    swift_mutated = read(swift_bridge).replace(
+        "rows.contains(where: { !nativeCapabilityRowIsExact($0) })",
+        "rows.contains(where: { $0.productionGate.version != version })",
+        1,
+    )
+    kotlin_mutated = read(kotlin_bridge).replace(
+        "rows.any { !nativeCapabilityRowIsExact(it) }",
+        "rows.any { it.productionGate.version != PRODUCTION_GATE_VERSION }",
+        1,
+    )
+    java_mutated = read(java_bridge).replace(
+        "if (!nativeCapabilityRowIsExact(row))",
+        "if (!PRODUCTION_GATE_VERSION.equals(row.productionGate.version))",
+        1,
+    )
+    if (
+        swift_mutated == read(swift_bridge)
+        or kotlin_mutated == read(kotlin_bridge)
+        or java_mutated == read(java_bridge)
+    ):
+        raise SystemExit("negative control failed: unable to mutate mobile privacy production-gate exactness")
+    mutated_texts[swift_bridge] = swift_mutated
+    mutated_texts[kotlin_bridge] = kotlin_mutated
+    mutated_texts[java_bridge] = java_mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        for label in (
+            "Swift privacy production-gate exactness",
+            "Kotlin privacy production-gate exactness",
+            "Android Java privacy production-gate exactness",
+        ):
+            if label not in message:
+                raise SystemExit(
+                    "negative control failed: mobile privacy production-gate drift was not detected for "
+                    + label
+                )
+        print("negative control rejected mobile privacy production-gate exactness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile privacy production-gate exactness drift was not detected")
 
 if mode == "--negative-control-jvm-sdk-android-harness-script":
     target = JVM_SDK_TEST_COMMAND
@@ -16558,13 +16827,35 @@ print("recursive Kagemusha ABI-6/ABI-7 SDK parity is consistent")
 PY
 
 if [[ -z "$MODE" && "$(uname -s)" == "Darwin" ]]; then
+  CHECK_DIST="${KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_CHECK_DIST:-auto}"
   BRIDGE_ROOT="$ROOT_DIR/dist/NoritoBridge.xcframework"
+  case "$CHECK_DIST" in
+    1|true|TRUE|yes|YES)
+      ;;
+    0|false|FALSE|no|NO)
+      echo "Skipping NoritoBridge XCFramework recursive Kagemusha symbol check"
+      exit 0
+      ;;
+    auto|"")
+      if [[ -d "$BRIDGE_ROOT" ]]; then
+        echo "Skipping ignored NoritoBridge XCFramework symbol check; set KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_CHECK_DIST=1 to validate dist artifacts"
+      fi
+      exit 0
+      ;;
+    *)
+      echo "[-] Unknown KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_CHECK_DIST value: $CHECK_DIST" >&2
+      exit 1
+      ;;
+  esac
+
   if [[ -d "$BRIDGE_ROOT" ]]; then
     REQUIRED_BRIDGE_SYMBOLS=(
       "connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes"
       "connect_norito_kagemusha_verify_recursive_compact_payment_token"
       "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle"
       "connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection"
+      "connect_norito_kagemusha_build_pallas_open_envelopes_archive"
+      "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive"
     )
     BRIDGE_LIBS=(
       "$BRIDGE_ROOT/ios-arm64/libNoritoBridge.a"
@@ -16587,5 +16878,8 @@ if [[ -z "$MODE" && "$(uname -s)" == "Darwin" ]]; then
       done
     done
     echo "NoritoBridge XCFramework recursive Kagemusha symbols are present"
+  else
+    echo "[-] NoritoBridge artifact missing directory: $BRIDGE_ROOT" >&2
+    exit 1
   fi
 fi

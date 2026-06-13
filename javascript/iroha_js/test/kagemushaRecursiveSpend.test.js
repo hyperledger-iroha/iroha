@@ -1281,6 +1281,71 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
   );
   const pallasOpenEnvelopes = syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x72);
   const note = recursiveSpendNote();
+  const verifierRecord = recursiveSpendVerifierRecord();
+  const redeemProof = syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x77);
+  const lineageWitness = syntheticKagemushaArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+    0x78,
+  );
+  const blockHeightEncoders = [
+    [
+      "init",
+      (blockHeight) =>
+        encodeKagemushaRecursiveSpendInitRequest({
+          recordBundle,
+          pallasOpenEnvelopes,
+          currentNote: note,
+          lineageVerifierKey: Buffer.from("vk"),
+          lineageProvingKeyArchive: syntheticKagemushaArchive("test::Key", 0x79),
+          blockHeight,
+        }),
+    ],
+    [
+      "append",
+      (blockHeight) =>
+        encodeKagemushaRecursiveSpendAppendRequest({
+          previousBundle: sharedRecursiveSpendArchive("init_bundle"),
+          recordBundle,
+          pallasOpenEnvelopes,
+          currentNote: note,
+          previousLineageVerifierRecord: verifierRecord,
+          blockHeight,
+        }),
+    ],
+    [
+      "verify",
+      (blockHeight) =>
+        encodeKagemushaRecursiveSpendVerifyRequest({
+          bundle: sharedRecursiveSpendArchive("init_bundle"),
+          lineageVerifierRecord: verifierRecord,
+          blockHeight,
+        }),
+    ],
+    [
+      "redeem",
+      (blockHeight) =>
+        encodeKagemushaRecursiveSpendRedeemRequest({
+          bundle: sharedRecursiveSpendArchive("init_bundle"),
+          recipient: recursiveSpendRecipient(),
+          publicAmount: "7",
+          redeemProof,
+          lineageWitness,
+          lineageVerifierRecord: verifierRecord,
+          blockHeight,
+        }),
+    ],
+  ];
+  const invalidBlockHeights = ["00", "01", "0007", "-0", "+7", "7 ", "18446744073709551616", -0];
+  assert.equal(Object.is(invalidBlockHeights.at(-1), -0), true);
+  for (const [name, encode] of blockHeightEncoders) {
+    for (const blockHeight of invalidBlockHeights) {
+      assert.throws(
+        () => encode(blockHeight),
+        /blockHeight/,
+        `${name} accepted non-canonical blockHeight ${JSON.stringify(blockHeight)}`,
+      );
+    }
+  }
   assert.throws(
     () =>
       encodeKagemushaRecursiveSpendInitRequest({

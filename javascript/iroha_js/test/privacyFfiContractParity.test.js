@@ -6149,7 +6149,7 @@ test("SDK privacy native availability probes reject adversarial native output ar
       "Swift privacy native tests",
       source("IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"),
       "func testPrivacyNativeProbeResultRequiresSuccessfulNonemptyArchive",
-      "func testPrivacyCapabilitiesRemainFailClosedWithBridgeAvailable",
+      "func testProductionReadyCapabilitiesRequireExactNativeGateEvidence",
       [
         "invalidPrivacyNoritoFrame(offset: 5, value: 1)",
         "invalidPrivacyNoritoDeclaredPayloadLength()",

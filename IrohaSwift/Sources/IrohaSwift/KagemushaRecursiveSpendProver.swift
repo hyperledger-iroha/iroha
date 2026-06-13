@@ -661,6 +661,32 @@ public enum KagemushaRecursiveSpendProver {
             && previousHopCount >= 1
     }
 
+    public static func buildPallasOpenEnvelopesArchive(
+        recordBundleArchive: Data
+    ) throws -> Data {
+        try call(
+            requestArchive: recordBundleArchive,
+            bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
+        ) {
+            try NoritoNativeBridge.shared.kagemushaBuildPallasOpenEnvelopesArchive(
+                recordBundleArchive: $0
+            )
+        }
+    }
+
+    public static func buildPreviousProofOpenEnvelopesArchive(
+        previousBundleArchive: Data
+    ) throws -> Data {
+        try call(
+            requestArchive: previousBundleArchive,
+            bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
+        ) {
+            try NoritoNativeBridge.shared.kagemushaBuildPreviousProofOpenEnvelopesArchive(
+                previousBundleArchive: $0
+            )
+        }
+    }
+
     public static func initSpend(requestArchive: Data) throws -> Data {
         try call(
             requestArchive: requestArchive,

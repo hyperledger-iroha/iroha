@@ -33,6 +33,131 @@ Last updated: 2026-06-13
     (`1` passed, `5304` filtered out)
   - `cargo fmt --all`
 
+## 2026-06-13 Kagemusha bridge-generated Pallas envelope archives
+
+- Added native bridge builders for current-hop Pallas open-envelope archives
+  from `KagemushaVerifiedFoldRecordBundle` and the one-envelope
+  previous-proof archive required by Reserved-lineage append.
+- Exposed the builders through the C header, Swift public wrappers, and
+  Kotlin/JVM plus Android Java JNI wrappers, and updated typed recursive-spend
+  request codecs so init and append requests can derive required Pallas
+  archives from typed evidence instead of asking SDK callers to fabricate
+  native envelope bytes.
+- Added Rust coverage that verifies generated Pallas openings and feeds them
+  through recursive aggregation and append-opening preflight validation.
+- Kept source parity deterministic in normal worktrees: the SDK parity guard
+  now skips ignored local `dist/NoritoBridge.xcframework` artifacts unless
+  `KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_CHECK_DIST=1` is set. The forced check
+  still fails closed on the stale ignored local XCFramework until release
+  packaging rebuilds `dist/`.
+- Focused validation passed:
+  - `cargo test -p connect_norito_bridge production_ -- --nocapture`
+  - `./gradlew :core-jvm:test --tests '*KagemushaRecursiveSpendRequestCodecsTest*' --console=plain --rerun-tasks` from `kotlin`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain` from `java/iroha_android`
+  - `bash ci/check_connect_norito_bridge_header.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests` from `IrohaSwift`
+  - `env PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python /tmp/iroha-kagemusha-python-adversarial-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k 'typed_request_codecs_reject_malformed_inputs'`
+
+## 2026-06-13 Kagemusha non-C# typed request adversarial coverage
+
+- Extended Python typed recursive-spend request negative coverage so init,
+  append, verify, and redeem constructors reject boolean, non-integer,
+  negative, and overflowing `block_height` values at the SDK boundary.
+- Added Python, Swift, Kotlin/JVM, and Android Java redeem amount adversarial
+  coverage for empty, zero, padded, signed, fractional, scientific-notation,
+  and `u128 + 1` values before native dispatch.
+- Pinned the new non-C# adversarial markers in the recursive-spend SDK parity
+  guard.
+- Focused validation passed:
+  - `env PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python /tmp/iroha-kagemusha-python-adversarial-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k 'typed_request_codecs_reject_malformed_inputs'`
+  - `/tmp/iroha-kagemusha-python-adversarial-venv/bin/python -m py_compile python/iroha_python/tests/kagemusha_test.py`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `env JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain` from `kotlin`
+  - `javac -sourcepath java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java -d /tmp/iroha-kagemusha-java-sdk-test.yzC0IT java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java`
+  - `java -ea -cp /tmp/iroha-kagemusha-java-sdk-test.yzC0IT org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest`
+  - `env KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt python/iroha_python/tests/kagemusha_test.py ci/check_kagemusha_recursive_spend_sdk_parity.sh roadmap.md status.md`
+
+## 2026-06-13 Kagemusha JS typed request block-height exactness
+
+- Hardened JavaScript typed recursive-spend request codecs so string
+  `blockHeight` inputs must be canonical unsigned decimal `u64` values. Padded
+  strings such as `"01"`, signed strings such as `"+7"` or `"-0"`, trailing
+  whitespace, `u64 + 1` values, and numeric negative zero now reject before
+  Norito request encoding or native dispatch.
+- Added adversarial coverage across init, append, verify, and redeem typed
+  request encoders, and extended the recursive-spend SDK parity guard to pin
+  the JS source parser plus the padded block-height regression inventory.
+- Focused validation passed:
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-13 Kagemusha SDK production-gate exactness
+
+- Hardened Swift, Kotlin/JVM, and Android Java privacy capability aggregation
+  so native Norito capability rows can only mark the SDK production-ready when
+  both audited rows expose the exact production-gate version, required-gate list,
+  per-gate pass state, empty missing/planned fields, and the full ordered
+  audit-reference set.
+- Swift now decodes the native `PrivacyCapabilitiesV1` Norito archive,
+  including compact lengths, delimited/packed sequences, and packed-struct
+  field-bitset layouts, before aggregating the public production-gate snapshot.
+- Added fail-closed validation for forged ready rows with missing or duplicate
+  audit references, malformed SHA-256 or Ed25519 evidence values, mock/local-only
+  evidence markers, non-empty planned entrypoints, missing gate statuses, and
+  mismatched `production_ready` state.
+- Pinned the exact-row aggregation predicates in the recursive-spend SDK parity
+  guard and workflow, with a negative control that rewrites Swift, Kotlin/JVM,
+  and Android Java back to the old version-only row check and requires the guard
+  to reject that drift.
+- Focused validation passed:
+  - `cd IrohaSwift && swift test --filter PrivacyNativeBridgeTests`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --rerun-tasks --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "SDK privacy native availability probes reject adversarial native output archives" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `git diff --check`
+
+## 2026-06-13 C# nested identifier receipt hardening
+
+- Added C# Torii support for the nested identifier resolve receipt envelope
+  shape with top-level `payload` and `attestation` objects while preserving the
+  legacy flat receipt response. Nested signed receipts expose the signed
+  attestation signature, nested proof receipts expose an empty legacy
+  signature, and both keep the original nested payload/attestation JSON for
+  downstream verification.
+- Hardened the C# parser to reject mixed nested/legacy receipt shapes, missing
+  payload or attestation objects, invalid signed/proof attestation combinations,
+  malformed proof base64, non-exact policy/backend/signature fields, and
+  negative or non-integer execution timestamps before callers consume receipt
+  data.
+- Fixed the default native bridge unshield encoder unit test to unwrap the
+  checked `encode_asset_transaction` result, keeping the production
+  transaction-signing error path compile-checked in test builds.
+- Validation passed:
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~ToriiClientTests|FullyQualifiedName~ToriiIdentifierReceiptTests" --logger "console;verbosity=minimal"`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.core.model.instructions.ZkAssetInstructionsTest --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest --tests org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClientTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test -Dandroid.test.mains=org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests,org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,org.hyperledger.iroha.android.privacy.ConfidentialNoteTests,org.hyperledger.iroha.android.privacy.ZkAssetMerklePathTests,org.hyperledger.iroha.android.model.instructions.ZkAssetInstructionsTest --console=plain`
+  - `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-identifier-receipt-exactness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-proof-base64-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-kind-exactness-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-proof-base64-exactness-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-signature-exactness-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-policy-id-exactness-guard`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `cargo test -p connect_norito_bridge --features privacy-production-enabled privacy_production -- --nocapture`
+  - `cargo test -p connect_norito_bridge unshield_encoder_path_preserves_private_change_outputs -- --nocapture`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
 ## 2026-06-13 SCCP EVM source-bridge hex TypeError redaction
 
 - Hardened the ETH and BSC source-bridge fixed-width and runtime-bytecode hex
@@ -497,7 +622,6 @@ Last updated: 2026-06-13
     (`8` passed, `360` deselected)
   - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -q -k 'native_evm_prover_sdk_artifact or native_evm_prover_report_sdk_artifact or copied_native_evm_sdk_artifact'`
     (`11` passed, `621` deselected)
-
 ## 2026-06-13 Core native AMX vote fixture checked signing
 
 - Routed native AMX BLS vote fixtures through checked seeded/random key
