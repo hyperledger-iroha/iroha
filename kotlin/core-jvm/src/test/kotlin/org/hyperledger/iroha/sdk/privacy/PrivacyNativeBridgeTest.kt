@@ -74,6 +74,108 @@ class PrivacyNativeBridgeTest {
     }
 
     @Test
+    fun productionReadyCapabilitiesRequireExactNativeGateEvidence() {
+        val capabilities = PrivacyNativeBridge.PrivacyCapabilities.fromNative(
+            nativeCapabilities(
+                nativeCapability("confidential-transfer-v2", ready = true),
+                nativeCapability("unshield", ready = true),
+            ),
+            bridgeAvailable = true,
+        )
+
+        assertTrue(capabilities.productionReady)
+        assertTrue(capabilities.productionGate.ready)
+        assertTrue(capabilities.productionGate.realProving)
+        assertTrue(capabilities.productionGate.externalAudit)
+        assertEquals(emptyList(), capabilities.productionGate.missing)
+        assertEquals(19, capabilities.productionGate.auditReferences.size)
+    }
+
+    @Test
+    fun forgedProductionReadyCapabilityRowsFailClosed() {
+        val cases = listOf<Pair<String, (PrivacyNativeBridge.Companion.NativeCapability) -> PrivacyNativeBridge.Companion.NativeCapability>>(
+            "empty required gates" to { row ->
+                row.copy(productionGate = row.productionGate.copy(requiredGates = emptyList()))
+            },
+            "missing gate status" to { row ->
+                row.copy(productionGate = row.productionGate.copy(gates = row.productionGate.gates.dropLast(1)))
+            },
+            "unpassed gate status" to { row ->
+                row.copy(
+                    productionGate = row.productionGate.copy(
+                        gates = row.productionGate.gates.toMutableList().also {
+                            it[0] = it[0].copy(passed = false)
+                        },
+                    ),
+                )
+            },
+            "nonempty missing reasons" to { row ->
+                row.copy(productionGate = row.productionGate.copy(missing = listOf("external audit omitted")))
+            },
+            "missing audit references" to { row ->
+                row.copy(productionGate = row.productionGate.copy(auditReferences = emptyList()))
+            },
+            "single audit reference" to { row ->
+                row.copy(productionGate = row.productionGate.copy(auditReferences = listOf("chain_id:boi-privacy-4peer-chain")))
+            },
+            "duplicate audit reference" to { row ->
+                row.copy(
+                    productionGate = row.productionGate.copy(
+                        auditReferences = productionAuditReferences().toMutableList().also {
+                            it[18] = it[17]
+                        },
+                    ),
+                )
+            },
+            "bad audit hash" to { row ->
+                row.copy(
+                    productionGate = row.productionGate.copy(
+                        auditReferences = productionAuditReferences().toMutableList().also {
+                            it[2] = "review_artifact_hash:sha256:not-a-hex-digest"
+                        },
+                    ),
+                )
+            },
+            "uppercase audit signature" to { row ->
+                row.copy(
+                    productionGate = row.productionGate.copy(
+                        auditReferences = productionAuditReferences().toMutableList().also {
+                            it[3] = "review_artifact_signature:ed25519:${"B".repeat(128)}"
+                        },
+                    ),
+                )
+            },
+            "mock localnet marker" to { row ->
+                row.copy(
+                    productionGate = row.productionGate.copy(
+                        auditReferences = productionAuditReferences().toMutableList().also {
+                            it[6] = "localnet_run_id:mock-privacy-4peer-localnet-2026-06-13"
+                        },
+                    ),
+                )
+            },
+            "planned entrypoint" to { row ->
+                row.copy(plannedEntrypoints = listOf("buildFuturePrivacyProofV2"))
+            },
+            "production ready mismatch" to { row ->
+                row.copy(productionReady = false)
+            },
+        )
+
+        for ((case, mutate) in cases) {
+            val capabilities = PrivacyNativeBridge.PrivacyCapabilities.fromNative(
+                nativeCapabilities(
+                    mutate(nativeCapability("confidential-transfer-v2", ready = true)),
+                    nativeCapability("unshield", ready = true),
+                ),
+                bridgeAvailable = true,
+            )
+
+            assertFailClosedProductionGate(capabilities, case)
+        }
+    }
+
+    @Test
     fun rejectsEmptyRequestsBeforeNativeDispatch() {
         val helpers = listOf<(ByteArray?) -> ByteArray>(
             PrivacyNativeBridge::buildProof,
@@ -892,10 +994,11 @@ class PrivacyNativeBridgeTest {
 
     private fun assertFailClosedProductionGate(
         capabilities: PrivacyNativeBridge.PrivacyCapabilities,
+        case: String = "privacy capability",
     ) {
-        assertFalse(capabilities.productionReady)
+        assertFalse(capabilities.productionReady, case)
         assertEquals(PrivacyNativeBridge.PRODUCTION_GATE_VERSION, capabilities.productionGate.version)
-        assertFalse(capabilities.productionGate.ready)
+        assertFalse(capabilities.productionGate.ready, case)
         assertFalse(capabilities.productionGate.realProving)
         assertFalse(capabilities.productionGate.realVerification)
         assertFalse(capabilities.productionGate.chainAdmission)
@@ -1128,6 +1231,63 @@ class PrivacyNativeBridgeTest {
         privacyNoritoFrameWithSchemaOverride(0x52, 6, 0x42),
         privacyNoritoFrameWithSchemaOverride(0x52, 21, 0x56),
     )
+
+    private fun nativeCapabilities(
+        vararg rows: PrivacyNativeBridge.Companion.NativeCapability,
+    ): PrivacyNativeBridge.Companion.NativeCapabilities =
+        PrivacyNativeBridge.Companion.NativeCapabilities(
+            version = PrivacyNativeBridge.PRIVACY_FFI_VERSION_V1,
+            gateVersion = PrivacyNativeBridge.PRODUCTION_GATE_VERSION,
+            algorithms = rows.toList(),
+        )
+
+    private fun nativeCapability(
+        algorithmId: String,
+        ready: Boolean,
+    ): PrivacyNativeBridge.Companion.NativeCapability =
+        PrivacyNativeBridge.Companion.NativeCapability(
+            algorithmId = algorithmId,
+            proofFamily = "halo2-ipa",
+            backendFamily = "halo2-ipa",
+            sdkEntrypoints = listOf("buildConfidentialTransferProofV2"),
+            plannedEntrypoints = emptyList(),
+            productionReady = ready,
+            productionGate = PrivacyNativeBridge.Companion.NativeProductionGate(
+                version = PrivacyNativeBridge.PRODUCTION_GATE_VERSION,
+                ready = ready,
+                gates = PrivacyNativeBridge.PrivacyProductionGate.REQUIRED_GATES.map {
+                    PrivacyNativeBridge.Companion.NativeGateStatus(it, ready)
+                },
+                requiredGates = PrivacyNativeBridge.PrivacyProductionGate.REQUIRED_GATES,
+                missing = if (ready) emptyList() else PrivacyNativeBridge.PrivacyProductionGate.MISSING_REASONS,
+                auditReferences = if (ready) productionAuditReferences() else emptyList(),
+            ),
+        )
+
+    private fun productionAuditReferences(): List<String> = listOf(
+        "chain_id:boi-privacy-4peer-chain",
+        "reviewer:security-reviewer",
+        "review_artifact_hash:${productionHash(1)}",
+        "review_artifact_signature:ed25519:${"b".repeat(128)}",
+        "fuzz_artifact_hash:${productionHash(2)}",
+        "performance_artifact_hash:${productionHash(3)}",
+        "localnet_run_id:boi-privacy-4peer-localnet-2026-06-13",
+        "localnet_smoke_tx_hash:${productionHash(4)}",
+        "localnet_replay_rejection_hash:${productionHash(5)}",
+        "localnet_restart_replay_rejection_hash:${productionHash(6)}",
+        "localnet_state_recovery_hash:${productionHash(7)}",
+        "localnet_lifecycle_shield_tx_hash:${productionHash(8)}",
+        "localnet_lifecycle_hop_proof_hash:${productionHash(9)}",
+        "localnet_lifecycle_recursive_init_hash:${productionHash(10)}",
+        "localnet_lifecycle_recursive_init_verify_hash:${productionHash(11)}",
+        "localnet_lifecycle_recursive_append_hash:${productionHash(12)}",
+        "localnet_lifecycle_recursive_append_verify_hash:${productionHash(13)}",
+        "localnet_lifecycle_unshield_proof_hash:${productionHash(14)}",
+        "localnet_lifecycle_redeem_tx_hash:${productionHash(15)}",
+    )
+
+    private fun productionHash(value: Int): String =
+        "sha256:${value.toString(16).padStart(64, '0')}"
 
     private fun sampleTransferWitness(): PrivacyConfidentialWitnessV1 =
         PrivacyConfidentialWitnessV1(

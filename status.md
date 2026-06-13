@@ -2,6 +2,22 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Kagemusha SDK production-gate exactness
+
+- Hardened Kotlin/JVM and Android Java privacy capability aggregation so native
+  Norito capability rows can only mark the SDK production-ready when both
+  audited rows expose the exact production-gate version, required-gate list,
+  per-gate pass state, empty missing/planned fields, and the full ordered
+  audit-reference set.
+- Added fail-closed validation for forged ready rows with missing or duplicate
+  audit references, malformed SHA-256 or Ed25519 evidence values, mock/local-only
+  evidence markers, non-empty planned entrypoints, missing gate statuses, and
+  mismatched `production_ready` state.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --rerun-tasks --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+  - `git diff --check`
+
 ## 2026-06-13 C# nested identifier receipt hardening
 
 - Added C# Torii support for the nested identifier resolve receipt envelope

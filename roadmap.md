@@ -240,8 +240,13 @@ and completed history lives in [`status.md`](./status.md).
   tests. Kotlin/JVM and Android Java privacy capability APIs must continue
   deriving bridge readiness from the native Norito capability archive when the
   bridge is loaded, while malformed, duplicate, incomplete, or absent evidence
-  keeps the SDK capability surface fail-closed. Privacy proof dispatch must keep
-  the `privacy-production-enabled` feature opt-in, preserve default
+  keeps the SDK capability surface fail-closed. Native ready rows must match the
+  audited production-gate contract exactly before the SDK exposes
+  `productionReady`: exact gate version, required-gate ordering, per-gate pass
+  state, no missing or planned entrypoints, and the full ordered audit-reference
+  set with canonical lowercase SHA-256 and Ed25519 evidence values. Privacy
+  proof dispatch must keep the `privacy-production-enabled` feature opt-in,
+  preserve default
   production-disabled serialized results, and retain focused coverage for real
   confidential-transfer-v2/unshield proving, verification, and checked unshield
   input-sum overflow rejection. The production-enabled bridge must also reject
