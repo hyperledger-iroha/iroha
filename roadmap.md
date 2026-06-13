@@ -13,6 +13,12 @@ and completed history lives in [`status.md`](./status.md).
 
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- Privacy production readiness now requires a 4-peer localnet
+  shield-to-redeem lifecycle evidence set: shield tx, hop proof, recursive
+  init/verify, recursive append/verify, unshield proof, redeem tx, replay
+  rejection, restart replay rejection, and state recovery must each have
+  distinct production artifact hashes in the ready-gate audit references.
+  Generic smoke-only localnet evidence is not sufficient for release signoff.
 - ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
   endpoint for current confidential-v2 commitment inclusion paths, and the
   Kotlin/JVM plus Android Java Torii Merkle providers call it directly.

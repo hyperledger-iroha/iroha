@@ -2,6 +2,23 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Privacy localnet lifecycle evidence gate
+
+- Tightened the privacy production evidence gate so localnet acceptance must
+  include an explicit successful shield-to-redeem lifecycle, not only a generic
+  smoke transaction.
+- Ready gate audit references now carry distinct hashes for shield tx, hop
+  proof, recursive init/verify, recursive append/verify, unshield proof, redeem
+  tx, replay rejection, restart replay rejection, and state recovery evidence.
+- Added adversarial evidence tests that reject false lifecycle status,
+  malformed lifecycle hashes, and reused lifecycle artifact hashes.
+- Focused validation passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p connect_norito_bridge privacy_capabilities_accept_exact_internal_evidence_for_all_rows --lib`
+  - `cargo test -p connect_norito_bridge privacy_production_evidence_rejects_adversarial_bindings_for_all_rows --lib`
+  - `cargo test -p connect_norito_bridge privacy_production_evidence_rejects_adversarial_zk_ace_bindings --lib`
+  - `git diff --check -- crates/connect_norito_bridge/src/lib.rs`
+
 ## 2026-06-13 Privacy production witness-shape validation
 
 - Hardened the `privacy-production-enabled` bridge dispatch so decoded
