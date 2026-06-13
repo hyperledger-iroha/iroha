@@ -461,7 +461,7 @@ impl ChunkStore {
             return Ok(None);
         };
         if selected.is_temp {
-            let _ = promote_temp_session(&selected.path, &selected.main_path);
+            promote_temp_session(&selected.path, &selected.main_path)?;
         } else {
             let _ = Self::delete_path(&tmp_path);
         }
@@ -631,14 +631,10 @@ impl ChunkStore {
         }
         for (_, candidate) in candidates {
             if candidate.is_temp {
-                let path = if promote_temp_session(&candidate.path, &candidate.main_path) {
-                    candidate.main_path
-                } else {
-                    candidate.path
-                };
+                promote_temp_session(&candidate.path, &candidate.main_path)?;
                 out.push(Entry {
                     persisted: candidate.persisted,
-                    path,
+                    path: candidate.main_path,
                 });
             } else {
                 out.push(Entry {
@@ -975,45 +971,23 @@ fn read_session_bytes(path: &Path) -> io::Result<Option<Vec<u8>>> {
     }
 }
 
-fn promote_temp_session(tmp_path: &Path, main_path: &Path) -> bool {
-    let promoted = match fs::rename(tmp_path, main_path) {
-        Ok(()) => true,
+fn promote_temp_session(tmp_path: &Path, main_path: &Path) -> io::Result<()> {
+    match fs::rename(tmp_path, main_path) {
+        Ok(()) => {}
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-            if let Err(remove_err) = fs::remove_file(main_path) {
-                warn!(
-                    ?remove_err,
-                    ?main_path,
-                    "failed to remove RBC session before temp promotion"
-                );
-                false
-            } else if let Err(rename_err) = fs::rename(tmp_path, main_path) {
-                warn!(
-                    ?rename_err,
-                    ?tmp_path,
-                    "failed to promote RBC temp session after removal"
-                );
-                false
-            } else {
-                true
-            }
+            fs::remove_file(main_path)?;
+            fs::rename(tmp_path, main_path)?;
         }
-        Err(err) => {
-            warn!(?err, ?tmp_path, "failed to promote RBC temp session");
-            false
-        }
+        Err(err) => return Err(err),
     };
 
-    if promoted {
-        if let Some(parent) = main_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                if let Err(err) = fs::File::open(parent).and_then(|file| file.sync_all()) {
-                    warn!(?err, ?parent, "failed to sync RBC session directory");
-                }
-            }
+    if let Some(parent) = main_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::File::open(parent).and_then(|file| file.sync_all())?;
         }
     }
 
-    promoted
+    Ok(())
 }
 
 struct EnforceOutcome {
@@ -2046,6 +2020,58 @@ mod tests {
         assert!(loaded.is_some(), "temp session should load");
         assert!(path.exists(), "temp session should be promoted");
         assert!(!tmp_path.exists(), "temp session should be removed");
+    }
+
+    #[test]
+    fn load_session_from_dir_rejects_unpromotable_temp() {
+        let dir = tempdir().unwrap();
+        let key = session_key(49);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::create_dir(&path).expect("block main session path");
+        fs::write(
+            &tmp_path,
+            to_bytes(&persisted).expect("encode persisted session"),
+        )
+        .expect("write temp session");
+
+        let err = match ChunkStore::load_session_from_dir(dir.path(), &key, &chain_hash, &manifest)
+        {
+            Ok(_) => panic!("unpromotable temp session should fail direct recovery"),
+            Err(err) => err,
+        };
+        assert_ne!(err.kind(), io::ErrorKind::NotFound);
+        assert!(tmp_path.exists(), "failed promotion should leave temp file");
+    }
+
+    #[test]
+    fn scan_entries_rejects_unpromotable_temp_session() {
+        let dir = tempdir().unwrap();
+        let store = store_for_tests(dir.path());
+        let key = session_key(50);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::create_dir(&path).expect("block main session path");
+        fs::write(
+            &tmp_path,
+            to_bytes(&persisted).expect("encode persisted session"),
+        )
+        .expect("write temp session");
+
+        let err = match store.load(&chain_hash, &manifest) {
+            Ok(_) => panic!("unpromotable temp session should fail store recovery"),
+            Err(err) => err,
+        };
+        assert_ne!(err.kind(), io::ErrorKind::NotFound);
+        assert!(tmp_path.exists(), "failed promotion should leave temp file");
     }
 
     #[test]

@@ -5,14 +5,17 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
-    io::ErrorKind,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use eyre::{WrapErr, eyre};
 use iroha_core::da::{LaneEpoch, ReplayFingerprint};
-use iroha_crypto::{PublicKey, Signature};
+use iroha_crypto::{Hash, PublicKey, Signature};
 use iroha_data_model::{da::prelude::*, nexus::LaneId};
 use iroha_logger::{debug, warn};
 use norito::{
@@ -29,6 +32,7 @@ pub(crate) const RECEIPT_SIGNATURE_PLACEHOLDER: [u8; 64] = [0; 64];
 pub(super) const STORED_RECEIPT_VERSION: u16 = 1;
 const RECEIPT_SIGNING_PAYLOAD_VERSION: u16 = 1;
 const DA_COMMITMENT_SCHEDULE_ENTRY_VERSION: u16 = 1;
+static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Persistent store tracking the highest sequence observed per `(lane, epoch)`.
 pub struct ReplayCursorStore {
@@ -54,6 +58,14 @@ struct CursorEntry {
     highest_sequence: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CursorSnapshotRelation {
+    Equal,
+    CandidateAhead,
+    CandidateBehind,
+    Conflicting,
+}
+
 impl ReplayCursorStore {
     /// Load the replay cursor store from disk, returning an empty store when no snapshot exists.
     pub fn open(path: PathBuf) -> eyre::Result<Self> {
@@ -61,18 +73,80 @@ impl ReplayCursorStore {
             format!("failed to create DA replay directory at {}", path.display())
         })?;
         let file_path = path.join(CURSOR_FILE_NAME);
-        let state = if file_path.exists() {
-            let data = fs::read(&file_path).wrap_err_with(|| {
-                format!(
-                    "failed to read DA replay snapshot at {}",
-                    file_path.display()
-                )
-            })?;
-            let snapshot: CursorSnapshot =
-                json::from_slice(&data).wrap_err("failed to decode DA replay snapshot")?;
-            ReplayCursorState::from_snapshot(snapshot)
-        } else {
-            ReplayCursorState::default()
+        let tmp_path = replay_cursor_temp_path(&file_path);
+        let state = match read_cursor_snapshot(&file_path) {
+            Ok(Some(snapshot)) => match read_cursor_snapshot(&tmp_path) {
+                Ok(Some(tmp_snapshot)) => {
+                    match compare_cursor_snapshots(&snapshot, &tmp_snapshot) {
+                        CursorSnapshotRelation::CandidateAhead => {
+                            warn!(
+                                path = %tmp_path.display(),
+                                "recovering newer DA replay cursor temp snapshot"
+                            );
+                            promote_replay_cursor_temp(&tmp_path, &file_path)?;
+                            ReplayCursorState::from_snapshot(tmp_snapshot)
+                        }
+                        CursorSnapshotRelation::Equal | CursorSnapshotRelation::CandidateBehind => {
+                            remove_replay_cursor_temp(&tmp_path);
+                            ReplayCursorState::from_snapshot(snapshot)
+                        }
+                        CursorSnapshotRelation::Conflicting => {
+                            warn!(
+                                path = %tmp_path.display(),
+                                "discarding conflicting DA replay cursor temp snapshot"
+                            );
+                            remove_replay_cursor_temp(&tmp_path);
+                            ReplayCursorState::from_snapshot(snapshot)
+                        }
+                    }
+                }
+                Ok(None) => ReplayCursorState::from_snapshot(snapshot),
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %tmp_path.display(),
+                        "discarding unreadable DA replay cursor temp snapshot"
+                    );
+                    remove_replay_cursor_temp(&tmp_path);
+                    ReplayCursorState::from_snapshot(snapshot)
+                }
+            },
+            Ok(None) => match read_cursor_snapshot(&tmp_path) {
+                Ok(Some(snapshot)) => {
+                    promote_replay_cursor_temp(&tmp_path, &file_path)?;
+                    ReplayCursorState::from_snapshot(snapshot)
+                }
+                Ok(None) => ReplayCursorState::default(),
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %tmp_path.display(),
+                        "discarding unreadable DA replay cursor temp snapshot"
+                    );
+                    remove_replay_cursor_temp(&tmp_path);
+                    ReplayCursorState::default()
+                }
+            },
+            Err(err) => match read_cursor_snapshot(&tmp_path) {
+                Ok(Some(snapshot)) => {
+                    warn!(
+                        ?err,
+                        path = %file_path.display(),
+                        "DA replay cursor snapshot invalid; recovering from temp snapshot"
+                    );
+                    promote_replay_cursor_temp(&tmp_path, &file_path)?;
+                    ReplayCursorState::from_snapshot(snapshot)
+                }
+                Ok(None) => return Err(err),
+                Err(tmp_err) => {
+                    warn!(
+                        ?tmp_err,
+                        path = %tmp_path.display(),
+                        "failed to read DA replay cursor temp snapshot"
+                    );
+                    return Err(err);
+                }
+            },
         };
 
         Ok(Self::with_state(path, state))
@@ -113,35 +187,72 @@ impl ReplayCursorStore {
 
     /// Record a newly observed sequence for the provided `(lane, epoch)` window.
     pub fn record(&self, lane_epoch: LaneEpoch, sequence: u64) -> eyre::Result<()> {
+        use std::collections::hash_map::Entry;
+
         let mut guard = self.inner.lock().expect("mutex poisoned");
-        let entry = guard.highest.entry(lane_epoch).or_insert(0);
-        if *entry >= sequence {
-            return Ok(());
+        let previous = match guard.highest.entry(lane_epoch) {
+            Entry::Occupied(mut entry) => {
+                if *entry.get() >= sequence {
+                    return Ok(());
+                }
+                let previous = *entry.get();
+                *entry.get_mut() = sequence;
+                Some(previous)
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(sequence);
+                None
+            }
+        };
+        let snapshot = guard.to_snapshot();
+        if let Err(err) = self.persist_snapshot(&snapshot) {
+            match previous {
+                Some(previous) => {
+                    guard.highest.insert(lane_epoch, previous);
+                }
+                None => {
+                    guard.highest.remove(&lane_epoch);
+                }
+            }
+            return Err(err);
         }
-        *entry = sequence;
-        drop(guard);
-        self.persist_snapshot()
+        Ok(())
     }
 
-    fn persist_snapshot(&self) -> eyre::Result<()> {
+    fn persist_snapshot(&self, snapshot: &CursorSnapshot) -> eyre::Result<()> {
         if self.dir.as_os_str().is_empty() {
             // Persistence disabled; operate in-memory only.
             return Ok(());
         }
-        let snapshot = {
-            let guard = self.inner.lock().expect("mutex poisoned");
-            guard.to_snapshot()
-        };
 
-        let data = json::to_vec(&snapshot).wrap_err("failed to encode DA replay snapshot")?;
+        let data = json::to_vec(snapshot).wrap_err("failed to encode DA replay snapshot")?;
         let file_path = self.dir.join(CURSOR_FILE_NAME);
         let tmp_path = replay_cursor_temp_path(&file_path);
-        fs::write(&tmp_path, data).wrap_err_with(|| {
-            format!(
-                "failed to write DA replay snapshot temp file at {}",
-                tmp_path.display()
-            )
-        })?;
+        {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp_path)
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to create DA replay snapshot temp file at {}",
+                        tmp_path.display()
+                    )
+                })?;
+            file.write_all(&data).wrap_err_with(|| {
+                format!(
+                    "failed to write DA replay snapshot temp file at {}",
+                    tmp_path.display()
+                )
+            })?;
+            file.sync_all().wrap_err_with(|| {
+                format!(
+                    "failed to sync DA replay snapshot temp file at {}",
+                    tmp_path.display()
+                )
+            })?;
+        }
         fs::rename(&tmp_path, &file_path).wrap_err_with(|| {
             format!(
                 "failed to move DA replay snapshot temp file {} into place {}",
@@ -149,12 +260,169 @@ impl ReplayCursorStore {
                 file_path.display()
             )
         })?;
+        if let Some(parent) = file_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                sync_dir(parent).wrap_err_with(|| {
+                    format!(
+                        "failed to sync DA replay snapshot directory at {}",
+                        parent.display()
+                    )
+                })?;
+            }
+        }
         Ok(())
     }
 }
 
 pub(super) fn replay_cursor_temp_path(path: &Path) -> PathBuf {
     path.with_added_extension("tmp")
+}
+
+fn sync_dir(path: &Path) -> std::io::Result<()> {
+    let file = fs::File::open(path)?;
+    file.sync_all()
+}
+
+fn read_cursor_snapshot(path: &Path) -> eyre::Result<Option<CursorSnapshot>> {
+    let data = match fs::read(path) {
+        Ok(data) => data,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(eyre!(err)).wrap_err_with(|| {
+                format!("failed to read DA replay snapshot at {}", path.display())
+            });
+        }
+    };
+    let snapshot: CursorSnapshot = json::from_slice(&data)
+        .wrap_err_with(|| format!("failed to decode DA replay snapshot at {}", path.display()))?;
+    validate_cursor_snapshot(path, &snapshot)?;
+    Ok(Some(snapshot))
+}
+
+fn validate_cursor_snapshot(path: &Path, snapshot: &CursorSnapshot) -> eyre::Result<()> {
+    if snapshot.version != 1 {
+        return Err(eyre!(
+            "unsupported DA replay snapshot version {} at {}",
+            snapshot.version,
+            path.display()
+        ));
+    }
+
+    let mut seen = BTreeMap::new();
+    for entry in &snapshot.entries {
+        let lane_epoch = LaneEpoch::new(LaneId::from(entry.lane_id), entry.epoch);
+        if seen.insert(lane_epoch, entry.highest_sequence).is_some() {
+            return Err(eyre!(
+                "duplicate DA replay cursor entry for lane {} epoch {} at {}",
+                entry.lane_id,
+                entry.epoch,
+                path.display()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn compare_cursor_snapshots(
+    current: &CursorSnapshot,
+    candidate: &CursorSnapshot,
+) -> CursorSnapshotRelation {
+    let current_entries = cursor_snapshot_map(current);
+    let candidate_entries = cursor_snapshot_map(candidate);
+    let mut ahead = false;
+    let mut behind = false;
+
+    for key in current_entries.keys().chain(candidate_entries.keys()) {
+        match (current_entries.get(key), candidate_entries.get(key)) {
+            (Some(current), Some(candidate)) if candidate > current => ahead = true,
+            (Some(current), Some(candidate)) if candidate < current => behind = true,
+            (None, Some(_)) => ahead = true,
+            (Some(_), None) => behind = true,
+            _ => {}
+        }
+        if ahead && behind {
+            return CursorSnapshotRelation::Conflicting;
+        }
+    }
+
+    match (ahead, behind) {
+        (false, false) => CursorSnapshotRelation::Equal,
+        (true, false) => CursorSnapshotRelation::CandidateAhead,
+        (false, true) => CursorSnapshotRelation::CandidateBehind,
+        (true, true) => CursorSnapshotRelation::Conflicting,
+    }
+}
+
+fn cursor_snapshot_map(snapshot: &CursorSnapshot) -> BTreeMap<LaneEpoch, u64> {
+    let mut entries = BTreeMap::new();
+    for entry in &snapshot.entries {
+        let key = LaneEpoch::new(LaneId::from(entry.lane_id), entry.epoch);
+        entries
+            .entry(key)
+            .and_modify(|current| {
+                if entry.highest_sequence > *current {
+                    *current = entry.highest_sequence;
+                }
+            })
+            .or_insert(entry.highest_sequence);
+    }
+    entries
+}
+
+fn remove_replay_cursor_temp(tmp_path: &Path) {
+    match fs::remove_file(tmp_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => {
+            warn!(
+                ?err,
+                path = %tmp_path.display(),
+                "failed to remove DA replay cursor temp snapshot"
+            );
+        }
+    }
+}
+
+fn promote_replay_cursor_temp(tmp_path: &Path, file_path: &Path) -> eyre::Result<()> {
+    match fs::rename(tmp_path, file_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+            fs::remove_file(file_path).wrap_err_with(|| {
+                format!(
+                    "failed to remove DA replay cursor snapshot before promoting temp {}",
+                    file_path.display()
+                )
+            })?;
+            fs::rename(tmp_path, file_path).wrap_err_with(|| {
+                format!(
+                    "failed to promote DA replay cursor temp snapshot {} after removal",
+                    tmp_path.display()
+                )
+            })?;
+        }
+        Err(err) => {
+            return Err(eyre!(err)).wrap_err_with(|| {
+                format!(
+                    "failed to promote DA replay cursor temp snapshot {} into {}",
+                    tmp_path.display(),
+                    file_path.display()
+                )
+            });
+        }
+    };
+
+    if let Some(parent) = file_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            sync_dir(parent).wrap_err_with(|| {
+                format!(
+                    "failed to sync DA replay cursor directory after temp promotion at {}",
+                    parent.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 /// Receipt entry captured in the durable receipt log.
@@ -268,9 +536,9 @@ impl DaReceiptLog {
 
         let (index, highest_map) = Self::load_existing(&dir, &signer_public_key)?;
         for (lane_epoch, highest) in highest_map {
-            if let Err(err) = cursor_store.record(lane_epoch, highest) {
-                warn!(?err, ?lane_epoch, "failed to seed receipt cursor from disk");
-            }
+            cursor_store.record(lane_epoch, highest).wrap_err_with(|| {
+                format!("failed to seed receipt cursor from disk for {lane_epoch:?}")
+            })?;
         }
 
         Ok(Self {
@@ -395,28 +663,15 @@ impl DaReceiptLog {
             if !Self::is_receipt_file(&path) {
                 continue;
             }
-            let stored = match Self::decode_receipt(&path) {
-                Ok(stored) => stored,
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        path = %path.display(),
-                        "skipping DA receipt with invalid encoding"
-                    );
-                    continue;
-                }
-            };
+            let stored = Self::decode_receipt(&path).wrap_err_with(|| {
+                format!("failed to load durable DA receipt {}", path.display())
+            })?;
             let StoredDaReceipt {
                 sequence, receipt, ..
             } = stored;
-            if let Err(err) = verify_receipt_signature(&receipt, sequence, signer_public_key) {
-                warn!(
-                    ?err,
-                    path = %path.display(),
-                    "skipping DA receipt with invalid operator signature"
-                );
-                continue;
-            }
+            verify_receipt_signature(&receipt, sequence, signer_public_key).wrap_err_with(
+                || format!("failed to verify durable DA receipt {}", path.display()),
+            )?;
             let lane_epoch = LaneEpoch::new(receipt.lane_id, receipt.epoch);
             let manifest_hash = receipt.manifest_hash;
             let lane_map = index.entry(lane_epoch).or_default();
@@ -574,13 +829,6 @@ fn validate_receipt_filename(path: &Path, stored: &StoredDaReceipt) -> eyre::Res
 
 impl ReplayCursorState {
     fn from_snapshot(snapshot: CursorSnapshot) -> Self {
-        if snapshot.version != 1 {
-            warn!(
-                version = snapshot.version,
-                "unknown DA replay snapshot version; treating as v1"
-            );
-        }
-
         let mut highest = HashMap::new();
         for entry in snapshot.entries {
             let lane_epoch = LaneEpoch::new(LaneId::from(entry.lane_id), entry.epoch);
@@ -636,17 +884,54 @@ fn install_artifact_without_overwrite(
 ) -> std::io::Result<()> {
     match fs::hard_link(tmp_path, target_path) {
         Ok(()) => {
-            let _ = fs::remove_file(tmp_path);
-            Ok(())
+            let sync_result = sync_parent_dir(target_path);
+            let remove_result = remove_temp_artifact(tmp_path);
+            sync_result?;
+            remove_result
         }
         Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-            let _ = fs::remove_file(tmp_path);
-            existing_artifact_path_if_matching(target_path, expected, artifact).map(|_| ())
+            let existing_result =
+                existing_artifact_path_if_matching(target_path, expected, artifact).map(|_| ());
+            let remove_result = remove_temp_artifact(tmp_path);
+            existing_result?;
+            remove_result
         }
         Err(err) => {
             let _ = fs::remove_file(tmp_path);
             Err(err)
         }
+    }
+}
+
+fn write_temp_artifact(tmp_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(tmp_path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+fn artifact_temp_suffix() -> String {
+    let counter = ARTIFACT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{counter:016x}", std::process::id())
+}
+
+fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        sync_dir(parent)?;
+    }
+    Ok(())
+}
+
+fn remove_temp_artifact(tmp_path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(tmp_path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
     }
 }
 
@@ -684,12 +969,12 @@ pub(super) fn persist_da_receipt(
 
     let tmp_name = format!(
         ".{RECEIPT_FILE_PREFIX}-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-        std::process::id(),
+        artifact_temp_suffix(),
         epoch = receipt.epoch,
     );
     let tmp_path = spool_dir.join(tmp_name);
 
-    match fs::write(&tmp_path, &encoded) {
+    match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
             let _ = fs::remove_file(&tmp_path);
@@ -697,12 +982,7 @@ pub(super) fn persist_da_receipt(
         }
     }
 
-    install_artifact_without_overwrite(
-        &tmp_path,
-        &target_path,
-        &encoded,
-        "DA receipt artifact",
-    )?;
+    install_artifact_without_overwrite(&tmp_path, &target_path, &encoded, "DA receipt artifact")?;
 
     debug!(
         path = ?target_path,
@@ -731,17 +1011,12 @@ pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDa
         if !name.starts_with(RECEIPT_FILE_PREFIX) || !name.ends_with(".norito") {
             continue;
         }
-        let stored = match DaReceiptLog::decode_receipt(&path) {
-            Ok(stored) => stored,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %path.display(),
-                    "failed to load DA receipt; skipping"
-                );
-                continue;
-            }
-        };
+        let stored = DaReceiptLog::decode_receipt(&path).map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("failed to load DA receipt {}: {err}", path.display()),
+            )
+        })?;
         receipts.push(stored);
     }
 
@@ -791,7 +1066,9 @@ pub(super) fn load_pdp_commitment_from_spool(
         "PDP commitment not found for storage ticket",
         "multiple PDP commitments found for storage ticket",
     )?;
-    fs::read(path)
+    let bytes = fs::read(path)?;
+    validate_pdp_commitment_spool_body(&bytes)?;
+    Ok(bytes)
 }
 
 fn load_single_spool_artifact_path_by_ticket(
@@ -876,6 +1153,129 @@ fn validate_manifest_spool_body(bytes: &[u8], key: &SpoolArtifactFileKey) -> std
     Ok(())
 }
 
+fn validate_pdp_commitment_spool_body(bytes: &[u8]) -> std::io::Result<()> {
+    let commitment = decode_from_bytes::<PdpCommitmentV1>(bytes).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("PDP commitment spool body is not a PDP commitment: {err}"),
+        )
+    })?;
+    commitment.validate().map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("PDP commitment spool body is invalid: {err}"),
+        )
+    })
+}
+
+fn invalid_artifact_input(message: &'static str) -> std::io::Error {
+    std::io::Error::new(ErrorKind::InvalidInput, message)
+}
+
+fn spool_artifact_key_from_inputs(
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+    fingerprint: &ReplayFingerprint,
+) -> SpoolArtifactFileKey {
+    SpoolArtifactFileKey {
+        lane_id: lane_id.as_u32(),
+        epoch,
+        sequence,
+        storage_ticket: *storage_ticket,
+        fingerprint: *fingerprint.as_bytes(),
+    }
+}
+
+fn validate_manifest_artifact_inputs(
+    manifest_bytes: &[u8],
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+    fingerprint: &ReplayFingerprint,
+) -> std::io::Result<()> {
+    let key = spool_artifact_key_from_inputs(lane_id, epoch, sequence, storage_ticket, fingerprint);
+    validate_manifest_spool_body(manifest_bytes, &key).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("DA manifest artifact inputs do not match body: {err}"),
+        )
+    })
+}
+
+fn validate_pdp_commitment_artifact_inputs(commitment: &PdpCommitmentV1) -> std::io::Result<()> {
+    commitment.validate().map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("PDP commitment artifact body is invalid: {err}"),
+        )
+    })
+}
+
+fn validate_da_commitment_artifact_inputs(
+    record: &DaCommitmentRecord,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+) -> std::io::Result<()> {
+    if record.lane_id != lane_id
+        || record.epoch != epoch
+        || record.sequence != sequence
+        || &record.storage_ticket != storage_ticket
+    {
+        return Err(invalid_artifact_input(
+            "DA commitment artifact filename tuple does not match record body",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_da_schedule_artifact_inputs(
+    record: &DaCommitmentRecord,
+    pdp_commitment_bytes: &[u8],
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+) -> std::io::Result<()> {
+    validate_da_commitment_artifact_inputs(record, lane_id, epoch, sequence, storage_ticket)?;
+    validate_pdp_commitment_spool_body(pdp_commitment_bytes).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("DA commitment schedule PDP body is invalid: {err}"),
+        )
+    })?;
+    let pdp_digest = Hash::new(pdp_commitment_bytes);
+    if record.proof_digest.as_ref() != Some(&pdp_digest) {
+        return Err(invalid_artifact_input(
+            "DA commitment schedule PDP bytes do not match record proof digest",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_pin_intent_artifact_inputs(
+    intent: &DaPinIntent,
+    lane_id: LaneId,
+    epoch: u64,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+) -> std::io::Result<()> {
+    if intent.lane_id != lane_id
+        || intent.epoch != epoch
+        || intent.sequence != sequence
+        || &intent.storage_ticket != storage_ticket
+    {
+        return Err(invalid_artifact_input(
+            "DA pin-intent artifact filename tuple does not match intent body",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct SpoolArtifactFileKey {
     lane_id: u32,
@@ -943,6 +1343,14 @@ pub(super) fn persist_manifest_for_sorafs(
     if spool_dir.as_os_str().is_empty() {
         return Ok(None);
     }
+    validate_manifest_artifact_inputs(
+        manifest_bytes,
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+        fingerprint,
+    )?;
 
     fs::create_dir_all(spool_dir)?;
 
@@ -961,11 +1369,11 @@ pub(super) fn persist_manifest_for_sorafs(
 
     let tmp_name = format!(
         ".manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-        std::process::id()
+        artifact_temp_suffix()
     );
     let tmp_path = spool_dir.join(tmp_name);
 
-    match fs::write(&tmp_path, manifest_bytes) {
+    match write_temp_artifact(&tmp_path, manifest_bytes) {
         Ok(()) => {}
         Err(err) => {
             let _ = fs::remove_file(&tmp_path);
@@ -1004,6 +1412,7 @@ pub(super) fn persist_pdp_commitment(
     if spool_dir.as_os_str().is_empty() {
         return Ok(None);
     }
+    validate_pdp_commitment_artifact_inputs(commitment)?;
 
     fs::create_dir_all(spool_dir)?;
 
@@ -1024,11 +1433,11 @@ pub(super) fn persist_pdp_commitment(
 
     let tmp_name = format!(
         ".pdp-commitment-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-        std::process::id()
+        artifact_temp_suffix()
     );
     let tmp_path = spool_dir.join(tmp_name);
 
-    match fs::write(&tmp_path, &encoded) {
+    match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
             let _ = fs::remove_file(&tmp_path);
@@ -1067,6 +1476,7 @@ pub(super) fn persist_da_commitment_record(
     if spool_dir.as_os_str().is_empty() {
         return Ok(None);
     }
+    validate_da_commitment_artifact_inputs(record, lane_id, epoch, sequence, storage_ticket)?;
 
     fs::create_dir_all(spool_dir)?;
 
@@ -1087,11 +1497,11 @@ pub(super) fn persist_da_commitment_record(
 
     let tmp_name = format!(
         ".da-commitment-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-        std::process::id()
+        artifact_temp_suffix()
     );
     let tmp_path = spool_dir.join(tmp_name);
 
-    match fs::write(&tmp_path, &encoded) {
+    match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
             let _ = fs::remove_file(&tmp_path);
@@ -1143,6 +1553,14 @@ pub(super) fn persist_da_commitment_schedule_entry(
     if spool_dir.as_os_str().is_empty() {
         return Ok(None);
     }
+    validate_da_schedule_artifact_inputs(
+        record,
+        pdp_commitment_bytes,
+        lane_id,
+        epoch,
+        sequence,
+        storage_ticket,
+    )?;
 
     fs::create_dir_all(spool_dir)?;
 
@@ -1170,11 +1588,11 @@ pub(super) fn persist_da_commitment_schedule_entry(
 
     let tmp_name = format!(
         ".da-commitment-schedule-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-        std::process::id()
+        artifact_temp_suffix()
     );
     let tmp_path = spool_dir.join(tmp_name);
 
-    match fs::write(&tmp_path, &encoded) {
+    match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
             let _ = fs::remove_file(&tmp_path);
@@ -1213,6 +1631,7 @@ pub(super) fn persist_da_pin_intent(
     if spool_dir.as_os_str().is_empty() {
         return Ok(None);
     }
+    validate_pin_intent_artifact_inputs(intent, lane_id, epoch, sequence, storage_ticket)?;
 
     fs::create_dir_all(spool_dir)?;
 
@@ -1233,11 +1652,11 @@ pub(super) fn persist_da_pin_intent(
 
     let tmp_name = format!(
         ".da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-        std::process::id()
+        artifact_temp_suffix()
     );
     let tmp_path = spool_dir.join(tmp_name);
 
-    match fs::write(&tmp_path, &encoded) {
+    match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => {
             let _ = fs::remove_file(&tmp_path);

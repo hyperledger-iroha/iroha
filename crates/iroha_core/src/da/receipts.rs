@@ -57,6 +57,15 @@ pub enum DaReceiptSpoolError {
         #[source]
         source: std::io::Error,
     },
+    /// Failed to read a directory entry while scanning the spool.
+    #[error("failed to read DA receipt spool entry in `{path}`: {source}")]
+    ReadEntry {
+        /// Spool path being scanned.
+        path: PathBuf,
+        /// Source error from the filesystem.
+        #[source]
+        source: std::io::Error,
+    },
     /// Failed to read a receipt file.
     #[error("failed to read DA receipt `{path}`: {source}")]
     ReadFile {
@@ -236,6 +245,36 @@ pub enum DaReceiptQueueError {
     },
 }
 
+/// Summary of a DA receipt spool cleanup pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DaReceiptPruneReport {
+    /// Receipt-shaped files considered by the cleanup pass.
+    pub scanned_receipts: usize,
+    /// Stale receipt files removed successfully.
+    pub removed_stale: usize,
+    /// Receipt-shaped files skipped because their filename or body was invalid.
+    pub skipped_invalid: usize,
+    /// Directory entries that could not be read.
+    pub entry_failures: usize,
+    /// Receipt-shaped files that could not be read.
+    pub read_failures: usize,
+    /// Stale receipt files that could not be removed.
+    pub remove_failures: usize,
+    /// True when the spool directory itself could not be opened.
+    pub read_dir_failed: bool,
+}
+
+impl DaReceiptPruneReport {
+    /// Return true when cleanup encountered filesystem failures.
+    #[must_use]
+    pub const fn has_failures(self) -> bool {
+        self.read_dir_failed
+            || self.entry_failures > 0
+            || self.read_failures > 0
+            || self.remove_failures > 0
+    }
+}
+
 /// Error encountered while advancing the receipt cursor index.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum DaReceiptCursorError {
@@ -362,8 +401,9 @@ impl DaReceiptCursorIndex {
 ///
 /// # Errors
 ///
-/// Returns a [`DaReceiptSpoolError`] if the directory cannot be read. Individual
-/// receipt files that fail to read or decode are skipped with a warning.
+/// Returns a [`DaReceiptSpoolError`] if the spool directory or any matching
+/// receipt file cannot be read, decoded, or matched against its advertised
+/// filename tuple.
 pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaReceiptSpoolError> {
     if !spool_dir.exists() {
         return Ok(Vec::new());
@@ -377,40 +417,20 @@ pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaR
         })?;
 
     for entry in dir_entries {
-        let entry = match entry {
-            Ok(value) => value,
-            Err(source) => {
-                iroha_logger::warn!(?source, "failed to read DA receipt spool entry");
-                continue;
-            }
-        };
+        let entry = entry.map_err(|source| DaReceiptSpoolError::ReadEntry {
+            path: spool_dir.to_path_buf(),
+            source,
+        })?;
         let path = entry.path();
         if !is_da_receipt_file(&path) {
             continue;
         }
 
-        let data = match std::fs::read(&path) {
-            Ok(buf) => buf,
-            Err(source) => {
-                iroha_logger::warn!(
-                    ?source,
-                    path = %path.display(),
-                    "failed to read DA receipt file; skipping"
-                );
-                continue;
-            }
-        };
-
-        match decode_receipt(&data, &path) {
-            Ok(entry) => receipts.push(entry),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    path = %path.display(),
-                    "failed to decode DA receipt file; skipping"
-                );
-            }
-        }
+        let data = std::fs::read(&path).map_err(|source| DaReceiptSpoolError::ReadFile {
+            path: path.clone(),
+            source,
+        })?;
+        receipts.push(decode_receipt(&data, &path)?);
     }
 
     receipts.sort_by(|a, b| {
@@ -569,8 +589,9 @@ fn decode_receipt(data: &[u8], path: &Path) -> Result<DaReceiptEntry, DaReceiptS
 ///
 /// # Errors
 ///
-/// Returns a [`DaReceiptQueueError`] when lanes are unknown, manifests conflict,
-/// or a sequence gap is detected after the current cursor.
+/// Returns a [`DaReceiptQueueError`] when manifests conflict or a sequence gap
+/// is detected after the current cursor. Receipts for lanes no longer present in
+/// the configured catalog are treated as stale local spool data and skipped.
 pub fn plan_committable_receipts(
     lane_config: &LaneConfig,
     cursor_snapshot: &BTreeMap<LaneEpoch, u64>,
@@ -589,9 +610,13 @@ pub fn plan_committable_receipts(
     let mut grouped: BTreeMap<LaneEpoch, BTreeMap<u64, DaReceiptEntry>> = BTreeMap::new();
     for entry in receipts {
         if lane_config.entry(entry.lane_epoch.lane_id).is_none() {
-            return Err(DaReceiptQueueError::UnknownLane {
-                lane: entry.lane_epoch.lane_id,
-            });
+            iroha_logger::warn!(
+                lane = entry.lane_epoch.lane_id.as_u32(),
+                epoch = entry.lane_epoch.epoch,
+                sequence = entry.sequence,
+                "skipping stale DA receipt for lane not present in the configured catalog"
+            );
+            continue;
         }
 
         let key = iroha_data_model::da::commitment::DaCommitmentKey {
@@ -740,39 +765,86 @@ pub fn align_commitments_for_receipts(
 
 /// Remove stale receipts from the spool based on the committed cursor snapshot.
 ///
-/// This is a best-effort cleanup used to keep the spool bounded; failures are
-/// logged but do not abort callers.
-pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) {
+/// Cleanup failures are reported and logged, but they do not abort callers.
+/// Proposal assembly must continue to rely on validated receipt loading and
+/// cursor checks rather than on cleanup success.
+pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) -> DaReceiptPruneReport {
+    let mut report = DaReceiptPruneReport::default();
     if !spool_dir.exists() {
-        return;
+        return report;
     }
 
-    let Ok(entries) = std::fs::read_dir(spool_dir) else {
-        return;
+    let entries = match std::fs::read_dir(spool_dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            report.read_dir_failed = true;
+            iroha_logger::warn!(
+                ?err,
+                path = %spool_dir.display(),
+                "failed to open DA receipt spool for stale cleanup"
+            );
+            return report;
+        }
     };
-    for entry in entries.flatten() {
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                report.entry_failures = report.entry_failures.saturating_add(1);
+                iroha_logger::warn!(
+                    ?err,
+                    path = %spool_dir.display(),
+                    "failed to read DA receipt spool entry during stale cleanup"
+                );
+                continue;
+            }
+        };
         let path = entry.path();
         if !is_da_receipt_file(&path) {
             continue;
         }
-        let Ok(data) = std::fs::read(&path) else {
-            continue;
+        report.scanned_receipts = report.scanned_receipts.saturating_add(1);
+        let data = match std::fs::read(&path) {
+            Ok(data) => data,
+            Err(err) => {
+                report.read_failures = report.read_failures.saturating_add(1);
+                iroha_logger::warn!(
+                    ?err,
+                    path = %path.display(),
+                    "failed to read DA receipt during stale cleanup"
+                );
+                continue;
+            }
         };
-        let Ok(entry) = decode_receipt(&data, &path) else {
-            continue;
+        let entry = match decode_receipt(&data, &path) {
+            Ok(entry) => entry,
+            Err(err) => {
+                report.skipped_invalid = report.skipped_invalid.saturating_add(1);
+                iroha_logger::warn!(
+                    ?err,
+                    path = %path.display(),
+                    "skipping invalid DA receipt during stale cleanup"
+                );
+                continue;
+            }
         };
         if let Some(highest) = cursors.get(&entry.lane_epoch) {
             if entry.sequence <= *highest {
                 if let Err(err) = std::fs::remove_file(&path) {
-                    iroha_logger::debug!(
+                    report.remove_failures = report.remove_failures.saturating_add(1);
+                    iroha_logger::warn!(
                         ?err,
                         path = %path.display(),
                         "failed to prune stale DA receipt file"
                     );
+                } else {
+                    report.removed_stale = report.removed_stale.saturating_add(1);
                 }
             }
         }
     }
+    report
 }
 
 /// Extract a deterministic fingerprint for replay cache usage.
@@ -934,7 +1006,7 @@ mod tests {
     }
 
     #[test]
-    fn load_receipt_entries_skips_corrupt_files() {
+    fn load_receipt_entries_rejects_corrupt_files() {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
@@ -951,13 +1023,17 @@ mod tests {
         std::fs::write(&ok_path, bytes).expect("write ok");
         std::fs::write(&bad_path, b"corrupt").expect("write corrupt");
 
-        let entries = load_receipt_entries(dir.path()).expect("load entries");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].receipt, receipt);
+        assert!(
+            matches!(
+                load_receipt_entries(dir.path()),
+                Err(DaReceiptSpoolError::Decode { .. })
+            ),
+            "corrupt receipt artifacts must reject the whole spool load"
+        );
     }
 
     #[test]
-    fn load_receipt_entries_skips_unsupported_versions() {
+    fn load_receipt_entries_rejects_unsupported_versions() {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
@@ -969,12 +1045,18 @@ mod tests {
         let path = dir.path().join(receipt_file_name(&receipt, 3, [0x99; 32]));
         std::fs::write(&path, bytes).expect("write");
 
-        let entries = load_receipt_entries(dir.path()).expect("load entries");
-        assert!(entries.is_empty());
+        assert!(
+            matches!(
+                load_receipt_entries(dir.path()),
+                Err(DaReceiptSpoolError::UnsupportedVersion { version, .. })
+                    if version == STORED_RECEIPT_VERSION + 1
+            ),
+            "unsupported receipt versions must reject the whole spool load"
+        );
     }
 
     #[test]
-    fn load_receipt_entries_skips_malformed_filenames() {
+    fn load_receipt_entries_rejects_malformed_filenames() {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
@@ -986,12 +1068,17 @@ mod tests {
         let path = dir.path().join("da-receipt-malformed.norito");
         std::fs::write(&path, bytes).expect("write malformed filename");
 
-        let entries = load_receipt_entries(dir.path()).expect("load entries");
-        assert!(entries.is_empty());
+        assert!(
+            matches!(
+                load_receipt_entries(dir.path()),
+                Err(DaReceiptSpoolError::MalformedFilename { .. })
+            ),
+            "malformed receipt filenames must reject the whole spool load"
+        );
     }
 
     #[test]
-    fn load_receipt_entries_skips_filename_body_tuple_mismatch() {
+    fn load_receipt_entries_rejects_filename_body_tuple_mismatch() {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
@@ -1003,12 +1090,17 @@ mod tests {
         let path = dir.path().join(receipt_file_name(&receipt, 4, [0x99; 32]));
         std::fs::write(&path, bytes).expect("write mismatched receipt");
 
-        let entries = load_receipt_entries(dir.path()).expect("load entries");
-        assert!(entries.is_empty());
+        assert!(
+            matches!(
+                load_receipt_entries(dir.path()),
+                Err(DaReceiptSpoolError::FilenameMismatch { .. })
+            ),
+            "receipt filename/body tuple mismatches must reject the whole spool load"
+        );
     }
 
     #[test]
-    fn load_receipt_entries_skips_filename_ticket_mismatch() {
+    fn load_receipt_entries_rejects_filename_ticket_mismatch() {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
@@ -1024,8 +1116,13 @@ mod tests {
             .join(receipt_file_name(&filename_receipt, 3, [0x88; 32]));
         std::fs::write(&path, bytes).expect("write mismatched receipt");
 
-        let entries = load_receipt_entries(dir.path()).expect("load entries");
-        assert!(entries.is_empty());
+        assert!(
+            matches!(
+                load_receipt_entries(dir.path()),
+                Err(DaReceiptSpoolError::FilenameMismatch { .. })
+            ),
+            "receipt filename/body ticket mismatches must reject the whole spool load"
+        );
     }
 
     #[test]
@@ -1041,9 +1138,17 @@ mod tests {
         std::fs::write(&path, to_bytes(&stored).expect("encode receipt")).expect("write receipt");
         let cursors = cursor_snapshot(LaneId::new(1), 2, 3);
 
-        prune_spool(dir.path(), &cursors);
+        let report = prune_spool(dir.path(), &cursors);
 
         assert!(!path.exists(), "valid stale receipt should be removed");
+        assert_eq!(
+            report,
+            DaReceiptPruneReport {
+                scanned_receipts: 1,
+                removed_stale: 1,
+                ..DaReceiptPruneReport::default()
+            }
+        );
     }
 
     #[test]
@@ -1060,12 +1165,61 @@ mod tests {
             .expect("write mismatched receipt");
         let cursors = cursor_snapshot(LaneId::new(1), 2, 3);
 
-        prune_spool(dir.path(), &cursors);
+        let report = prune_spool(dir.path(), &cursors);
 
         assert!(
             path.exists(),
             "mismatched receipt filename/body must not be trusted during prune"
         );
+        assert_eq!(
+            report,
+            DaReceiptPruneReport {
+                scanned_receipts: 1,
+                skipped_invalid: 1,
+                ..DaReceiptPruneReport::default()
+            }
+        );
+        assert!(!report.has_failures());
+    }
+
+    #[test]
+    fn prune_spool_reports_receipt_shaped_read_failures() {
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let path = dir.path().join(receipt_file_name(&receipt, 3, [0x99; 32]));
+        std::fs::create_dir(&path).expect("create unreadable receipt-shaped directory");
+        let cursors = cursor_snapshot(LaneId::new(1), 2, 3);
+
+        let report = prune_spool(dir.path(), &cursors);
+
+        assert_eq!(
+            report,
+            DaReceiptPruneReport {
+                scanned_receipts: 1,
+                read_failures: 1,
+                ..DaReceiptPruneReport::default()
+            }
+        );
+        assert!(report.has_failures());
+    }
+
+    #[test]
+    fn prune_spool_reports_read_dir_failures() {
+        let dir = tempdir().expect("tempdir");
+        let spool_path = dir.path().join("not-a-directory");
+        std::fs::write(&spool_path, b"file").expect("write non-directory spool path");
+        let cursors = BTreeMap::new();
+
+        let report = prune_spool(&spool_path, &cursors);
+
+        assert_eq!(
+            report,
+            DaReceiptPruneReport {
+                read_dir_failed: true,
+                ..DaReceiptPruneReport::default()
+            }
+        );
+        assert!(report.has_failures());
     }
 
     #[test]
@@ -1089,15 +1243,22 @@ mod tests {
     }
 
     #[test]
-    fn plan_committable_receipts_rejects_unknown_lane() {
+    fn plan_committable_receipts_skips_unknown_lane() {
         let known_lane = LaneId::new(0);
         let unknown_lane = LaneId::new(7);
-        let receipt = sample_receipt(unknown_lane.as_u32(), 1, 1);
-        let entry = DaReceiptEntry {
+        let unknown_receipt = sample_receipt(unknown_lane.as_u32(), 1, 1);
+        let known_receipt = sample_receipt(known_lane.as_u32(), 1, 1);
+        let unknown_entry = DaReceiptEntry {
             lane_epoch: LaneEpoch::new(unknown_lane, 1),
             sequence: 1,
-            manifest_hash: ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
-            receipt,
+            manifest_hash: ManifestDigest::new(*unknown_receipt.manifest_hash.as_bytes()),
+            receipt: unknown_receipt,
+        };
+        let known_entry = DaReceiptEntry {
+            lane_epoch: LaneEpoch::new(known_lane, 1),
+            sequence: 1,
+            manifest_hash: ManifestDigest::new(*known_receipt.manifest_hash.as_bytes()),
+            receipt: known_receipt,
         };
         let lane_config = lane_config_for(known_lane);
 
@@ -1105,12 +1266,11 @@ mod tests {
             &lane_config,
             &BTreeMap::new(),
             &BTreeSet::new(),
-            vec![entry],
-        );
-        assert!(matches!(
-            result,
-            Err(DaReceiptQueueError::UnknownLane { lane }) if lane == unknown_lane
-        ));
+            vec![unknown_entry, known_entry],
+        )
+        .expect("unknown lane receipts should be skipped");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].lane_epoch.lane_id, known_lane);
     }
 
     #[test]

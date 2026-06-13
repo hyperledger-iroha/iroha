@@ -323,6 +323,14 @@ struct PersistedShardCursors {
     entries: Vec<LaneShardCursor>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JournalRelation {
+    Equal,
+    CandidateAhead,
+    CandidateBehind,
+    Conflicting,
+}
+
 /// Errors returned when loading or persisting shard cursors.
 #[derive(Debug, Error)]
 pub enum ShardCursorJournalError {
@@ -356,6 +364,14 @@ pub enum ShardCursorJournalError {
     /// Failed to encode the journal payload.
     #[error("failed to encode DA shard cursor journal: {0}")]
     Encode(#[source] norito::core::Error),
+    /// Persisted journal contents were structurally invalid.
+    #[error("invalid DA shard cursor journal {path}: {reason}")]
+    InvalidEntry {
+        /// Path for the journal.
+        path: PathBuf,
+        /// Structural validation failure.
+        reason: String,
+    },
     /// Lane was not present in the lane catalog mapping.
     #[error("lane {lane_id} is not present in the shard mapping")]
     UnknownLane {
@@ -407,7 +423,9 @@ impl DaShardCursorJournal {
     ///
     /// # Errors
     ///
-    /// Returns [`ShardCursorJournalError::Read`] or [`ShardCursorJournalError::Decode`] when persistence fails.
+    /// Returns [`ShardCursorJournalError::Read`], [`ShardCursorJournalError::Decode`], or
+    /// [`ShardCursorJournalError::InvalidEntry`] when persistence cannot be read or trusted, or
+    /// [`ShardCursorJournalError::Write`] when a recovered temp journal cannot be promoted durably.
     pub fn load(
         lane_config: &LaneConfig,
         path: impl Into<PathBuf>,
@@ -416,21 +434,44 @@ impl DaShardCursorJournal {
         let mut journal = Self::new(lane_config, path.clone());
         let tmp_path = Self::temp_path(&path);
         let persisted = match Self::read_persisted(&path) {
-            Ok(Some(persisted)) => {
-                if let Ok(Some(_)) = Self::read_persisted(&tmp_path) {
-                    if let Err(err) = fs::remove_file(&tmp_path) {
+            Ok(Some(persisted)) => match Self::read_persisted(&tmp_path) {
+                Ok(Some(tmp_persisted)) => match Self::compare_journals(&persisted, &tmp_persisted)
+                {
+                    JournalRelation::CandidateAhead => {
                         warn!(
-                            ?err,
                             path = %tmp_path.display(),
-                            "failed to remove stale DA shard cursor journal temp file"
+                            "recovering newer DA shard cursor journal temp file"
                         );
+                        Self::promote_temp(&tmp_path, &path)?;
+                        Some(tmp_persisted)
                     }
+                    JournalRelation::Equal | JournalRelation::CandidateBehind => {
+                        Self::remove_temp(&tmp_path);
+                        Some(persisted)
+                    }
+                    JournalRelation::Conflicting => {
+                        warn!(
+                            path = %tmp_path.display(),
+                            "discarding conflicting DA shard cursor journal temp file"
+                        );
+                        Self::remove_temp(&tmp_path);
+                        Some(persisted)
+                    }
+                },
+                Ok(None) => Some(persisted),
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %tmp_path.display(),
+                        "discarding unreadable DA shard cursor journal temp file"
+                    );
+                    Self::remove_temp(&tmp_path);
+                    Some(persisted)
                 }
-                Some(persisted)
-            }
+            },
             Ok(None) => match Self::read_persisted(&tmp_path) {
                 Ok(Some(persisted)) => {
-                    Self::promote_temp(&tmp_path, &path);
+                    Self::promote_temp(&tmp_path, &path)?;
                     Some(persisted)
                 }
                 Ok(None) => None,
@@ -451,7 +492,7 @@ impl DaShardCursorJournal {
                         path = %path.display(),
                         "DA shard cursor journal invalid; recovering from temp file"
                     );
-                    Self::promote_temp(&tmp_path, &path);
+                    Self::promote_temp(&tmp_path, &path)?;
                     Some(persisted)
                 }
                 Ok(None) => return Err(err),
@@ -699,55 +740,123 @@ impl DaShardCursorJournal {
                 version: persisted.version,
             });
         }
+        Self::validate_persisted(path, &persisted)?;
 
         Ok(Some(persisted))
     }
 
-    fn promote_temp(tmp_path: &Path, path: &Path) {
-        let promoted = match fs::rename(tmp_path, path) {
-            Ok(()) => true,
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                if let Err(remove_err) = fs::remove_file(path) {
-                    warn!(
-                        ?remove_err,
-                        path = %path.display(),
-                        "failed to remove DA shard cursor journal before temp promotion"
-                    );
-                    false
-                } else if let Err(rename_err) = fs::rename(tmp_path, path) {
-                    warn!(
-                        ?rename_err,
-                        path = %tmp_path.display(),
-                        "failed to promote DA shard cursor journal temp file after removal"
-                    );
-                    false
-                } else {
-                    true
-                }
+    fn validate_persisted(
+        path: &Path,
+        persisted: &PersistedShardCursors,
+    ) -> Result<(), ShardCursorJournalError> {
+        let mut seen = BTreeSet::new();
+        for entry in &persisted.entries {
+            if !seen.insert((entry.shard_id, entry.lane_id)) {
+                return Err(ShardCursorJournalError::InvalidEntry {
+                    path: path.to_path_buf(),
+                    reason: format!(
+                        "duplicate cursor entry for shard {} lane {}",
+                        entry.shard_id.as_u32(),
+                        entry.lane_id.as_u32()
+                    ),
+                });
             }
+        }
+        Ok(())
+    }
+
+    fn compare_journals(
+        current: &PersistedShardCursors,
+        candidate: &PersistedShardCursors,
+    ) -> JournalRelation {
+        let current_entries = Self::journal_entry_map(current);
+        let candidate_entries = Self::journal_entry_map(candidate);
+        let mut ahead = false;
+        let mut behind = false;
+
+        for key in current_entries.keys().chain(candidate_entries.keys()) {
+            match (current_entries.get(key), candidate_entries.get(key)) {
+                (Some(current), Some(candidate)) if candidate > current => ahead = true,
+                (Some(current), Some(candidate)) if candidate < current => behind = true,
+                (None, Some(_)) => ahead = true,
+                (Some(_), None) => behind = true,
+                _ => {}
+            }
+            if ahead && behind {
+                return JournalRelation::Conflicting;
+            }
+        }
+
+        match (ahead, behind) {
+            (false, false) => JournalRelation::Equal,
+            (true, false) => JournalRelation::CandidateAhead,
+            (false, true) => JournalRelation::CandidateBehind,
+            (true, true) => JournalRelation::Conflicting,
+        }
+    }
+
+    fn journal_entry_map(
+        persisted: &PersistedShardCursors,
+    ) -> BTreeMap<(ShardId, LaneId), (u64, u64, u64)> {
+        let mut entries = BTreeMap::new();
+        for entry in &persisted.entries {
+            let value = (entry.epoch, entry.sequence, entry.last_block_height);
+            entries
+                .entry((entry.shard_id, entry.lane_id))
+                .and_modify(|current| {
+                    if value > *current {
+                        *current = value;
+                    }
+                })
+                .or_insert(value);
+        }
+        entries
+    }
+
+    fn remove_temp(tmp_path: &Path) {
+        match fs::remove_file(tmp_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => {
                 warn!(
                     ?err,
                     path = %tmp_path.display(),
-                    "failed to promote DA shard cursor journal temp file"
+                    "failed to remove DA shard cursor journal temp file"
                 );
-                false
+            }
+        }
+    }
+
+    fn promote_temp(tmp_path: &Path, path: &Path) -> Result<(), ShardCursorJournalError> {
+        match fs::rename(tmp_path, path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                fs::remove_file(path).map_err(|source| ShardCursorJournalError::Write {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+                fs::rename(tmp_path, path).map_err(|source| ShardCursorJournalError::Write {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            }
+            Err(err) => {
+                return Err(ShardCursorJournalError::Write {
+                    path: path.to_path_buf(),
+                    source: err,
+                });
             }
         };
 
-        if promoted {
-            if let Some(parent) = path.parent() {
-                if !parent.as_os_str().is_empty() {
-                    if let Err(err) = sync_dir(parent) {
-                        warn!(
-                            ?err,
-                            path = %parent.display(),
-                            "failed to sync DA shard cursor journal directory"
-                        );
-                    }
-                }
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                sync_dir(parent).map_err(|source| ShardCursorJournalError::Write {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
             }
         }
+        Ok(())
     }
 }
 
@@ -758,7 +867,11 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZeroU32, path::PathBuf};
+    use std::{
+        collections::BTreeMap,
+        num::NonZeroU32,
+        path::{Path, PathBuf},
+    };
 
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Hash, Signature};
@@ -800,23 +913,61 @@ mod tests {
         )
     }
 
-    fn lane_config_with_mapping(lane_id: u32, shard_id: u32) -> ConfigLaneConfig {
-        let mut metadata = BTreeMap::new();
-        metadata.insert("da_shard_id".to_string(), shard_id.to_string());
-        let lane_count = NonZeroU32::new(lane_id.saturating_add(1)).expect("lane count");
+    fn lane_config_with_mappings(mappings: &[(u32, u32)]) -> ConfigLaneConfig {
+        let lane_count = mappings
+            .iter()
+            .map(|(lane_id, _)| lane_id.saturating_add(1))
+            .max()
+            .unwrap_or(1);
         let catalog = LaneCatalog::new(
-            lane_count,
-            vec![ModelLaneConfig {
-                id: LaneId::new(lane_id),
-                dataspace_id: DataSpaceId::UNIVERSAL,
-                alias: format!("lane{lane_id}"),
-                metadata,
-                ..ModelLaneConfig::default()
-            }],
+            NonZeroU32::new(lane_count).expect("lane count"),
+            mappings
+                .iter()
+                .map(|(lane_id, shard_id)| {
+                    let mut metadata = BTreeMap::new();
+                    metadata.insert("da_shard_id".to_string(), shard_id.to_string());
+                    ModelLaneConfig {
+                        id: LaneId::new(*lane_id),
+                        dataspace_id: DataSpaceId::UNIVERSAL,
+                        alias: format!("lane{lane_id}"),
+                        metadata,
+                        ..ModelLaneConfig::default()
+                    }
+                })
+                .collect(),
         )
         .expect("lane catalog");
 
         ConfigLaneConfig::from_catalog(&catalog)
+    }
+
+    fn lane_config_with_mapping(lane_id: u32, shard_id: u32) -> ConfigLaneConfig {
+        lane_config_with_mappings(&[(lane_id, shard_id)])
+    }
+
+    fn journal_entry(
+        lane_id: u32,
+        shard_id: u32,
+        epoch: u64,
+        sequence: u64,
+        last_block_height: u64,
+    ) -> LaneShardCursor {
+        LaneShardCursor {
+            shard_id: ShardId::new(shard_id),
+            lane_id: LaneId::new(lane_id),
+            epoch,
+            sequence,
+            last_block_height,
+        }
+    }
+
+    fn write_journal_payload(path: &Path, entries: Vec<LaneShardCursor>) {
+        let payload = PersistedShardCursors {
+            version: DaShardCursorJournal::JOURNAL_VERSION,
+            entries,
+        };
+        fs::write(path, to_bytes(&payload).expect("encode cursor journal"))
+            .expect("write cursor journal");
     }
 
     #[test]
@@ -1077,6 +1228,109 @@ mod tests {
     }
 
     #[test]
+    fn journal_load_promotes_newer_temp_when_main_valid() {
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let tmp_path = DaShardCursorJournal::temp_path(&path);
+
+        write_journal_payload(&path, vec![journal_entry(0, 0, 1, 2, 1)]);
+        write_journal_payload(&tmp_path, vec![journal_entry(0, 0, 2, 0, 2)]);
+
+        let loaded = DaShardCursorJournal::load(&config, path.clone()).expect("load");
+        assert!(path.exists(), "expected newer temp promoted to main");
+        assert!(!tmp_path.exists(), "newer temp should be consumed");
+
+        let cursor = loaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
+        assert_eq!(
+            (cursor.epoch, cursor.sequence, cursor.last_block_height),
+            (2, 0, 2)
+        );
+
+        let reloaded = DaShardCursorJournal::load(&config, path).expect("reload");
+        let persisted = reloaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
+        assert_eq!(
+            (
+                persisted.epoch,
+                persisted.sequence,
+                persisted.last_block_height
+            ),
+            (2, 0, 2)
+        );
+    }
+
+    #[test]
+    fn journal_load_discards_older_temp_when_main_valid() {
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let tmp_path = DaShardCursorJournal::temp_path(&path);
+
+        write_journal_payload(&path, vec![journal_entry(0, 0, 3, 1, 4)]);
+        write_journal_payload(&tmp_path, vec![journal_entry(0, 0, 2, 9, 3)]);
+
+        let loaded = DaShardCursorJournal::load(&config, path).expect("load");
+        assert!(!tmp_path.exists(), "older temp should be removed");
+
+        let cursor = loaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
+        assert_eq!(
+            (cursor.epoch, cursor.sequence, cursor.last_block_height),
+            (3, 1, 4)
+        );
+    }
+
+    #[test]
+    fn journal_load_discards_conflicting_temp_when_main_valid() {
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mappings(&[(0, 0), (1, 1)]);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let tmp_path = DaShardCursorJournal::temp_path(&path);
+
+        write_journal_payload(
+            &path,
+            vec![journal_entry(0, 0, 4, 0, 4), journal_entry(1, 1, 4, 0, 4)],
+        );
+        write_journal_payload(
+            &tmp_path,
+            vec![journal_entry(0, 0, 5, 0, 5), journal_entry(1, 1, 3, 9, 3)],
+        );
+
+        let loaded = DaShardCursorJournal::load(&config, path).expect("load");
+        assert!(!tmp_path.exists(), "conflicting temp should be removed");
+
+        let lane0 = loaded.cursor_for_lane(LaneId::new(0)).expect("lane 0");
+        let lane1 = loaded.cursor_for_lane(LaneId::new(1)).expect("lane 1");
+        assert_eq!(
+            (lane0.epoch, lane0.sequence, lane0.last_block_height),
+            (4, 0, 4)
+        );
+        assert_eq!(
+            (lane1.epoch, lane1.sequence, lane1.last_block_height),
+            (4, 0, 4)
+        );
+    }
+
+    #[test]
+    fn journal_load_removes_corrupt_temp_when_main_valid() {
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let tmp_path = DaShardCursorJournal::temp_path(&path);
+
+        write_journal_payload(&path, vec![journal_entry(0, 0, 1, 2, 1)]);
+        fs::write(&tmp_path, b"corrupt").expect("write corrupt temp");
+
+        let loaded = DaShardCursorJournal::load(&config, path).expect("load");
+        assert!(!tmp_path.exists(), "corrupt temp should be removed");
+
+        let cursor = loaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
+        assert_eq!(
+            (cursor.epoch, cursor.sequence, cursor.last_block_height),
+            (1, 2, 1)
+        );
+    }
+
+    #[test]
     fn journal_load_falls_back_to_temp_on_corrupt_main() {
         let dir = tempdir().expect("tempdir");
         let config = lane_config_with_mapping(0, 0);
@@ -1100,6 +1354,24 @@ mod tests {
 
         let cursor = loaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
         assert_eq!((cursor.epoch, cursor.sequence), (2, 3));
+    }
+
+    #[test]
+    fn journal_load_rejects_unpromotable_temp_file() {
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let tmp_path = DaShardCursorJournal::temp_path(&path);
+        fs::create_dir(&path).expect("block main journal path");
+        write_journal_payload(&tmp_path, vec![journal_entry(0, 0, 2, 3, 4)]);
+
+        let err = DaShardCursorJournal::load(&config, path.clone())
+            .expect_err("unpromotable temp journal should fail closed");
+
+        match err {
+            ShardCursorJournalError::Write { path: err_path, .. } => assert_eq!(err_path, path),
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
@@ -1201,6 +1473,31 @@ mod tests {
         match DaShardCursorJournal::load(&config, path).expect_err("version mismatch") {
             ShardCursorJournalError::UnsupportedVersion { version, .. } => {
                 assert_eq!(version, DaShardCursorJournal::JOURNAL_VERSION + 1);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_journal_entries() {
+        let dir = tempdir().expect("tempdir");
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let config = lane_config_with_mapping(0, 0);
+        write_journal_payload(
+            &path,
+            vec![journal_entry(0, 0, 1, 2, 3), journal_entry(0, 0, 4, 5, 6)],
+        );
+
+        match DaShardCursorJournal::load(&config, path.clone()).expect_err("duplicate entry") {
+            ShardCursorJournalError::InvalidEntry {
+                path: err_path,
+                reason,
+            } => {
+                assert_eq!(err_path, path);
+                assert!(
+                    reason.contains("duplicate cursor entry"),
+                    "unexpected reason: {reason}"
+                );
             }
             other => panic!("unexpected error: {other:?}"),
         }

@@ -408,12 +408,13 @@ const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_mil
 pub(super) struct InternalProposalWork {
     pub(super) time_triggers: bool,
     pub(super) da_commitments: bool,
+    pub(super) da_receipts: bool,
     pub(super) da_pin_intents: bool,
 }
 
 impl InternalProposalWork {
     pub(super) const fn has_work(self) -> bool {
-        self.time_triggers || self.da_commitments || self.da_pin_intents
+        self.time_triggers || self.da_commitments || self.da_receipts || self.da_pin_intents
     }
 }
 
@@ -755,13 +756,15 @@ impl Actor {
             return InternalProposalWork {
                 time_triggers,
                 da_commitments: false,
+                da_receipts: false,
                 da_pin_intents: false,
             };
         }
-        let (da_commitments, da_pin_intents) = self.proposal_da_spool_work();
+        let (da_commitments, da_receipts, da_pin_intents) = self.proposal_da_spool_work();
         InternalProposalWork {
             time_triggers,
             da_commitments,
+            da_receipts,
             da_pin_intents,
         }
     }
@@ -820,7 +823,7 @@ impl Actor {
             })
     }
 
-    fn proposal_da_spool_work(&mut self) -> (bool, bool) {
+    fn proposal_da_spool_work(&mut self) -> (bool, bool, bool) {
         let da_rbc = &mut self.subsystems.da_rbc;
         let commitment_has = match da_rbc.spool_cache.load_commitment_bundle(&da_rbc.spool_dir) {
             Ok((value, cache_outcome)) => {
@@ -845,9 +848,53 @@ impl Actor {
                 warn!(
                     ?err,
                     spool = %da_rbc.spool_dir.display(),
-                    "failed to load DA commitments from spool; proceeding without DA bundle"
+                    "failed to load DA commitments during proposal preflight; scheduling assembly to surface the error"
                 );
+                true
+            }
+        };
+
+        let receipt_has = {
+            let nexus = self.state.nexus_snapshot();
+            if !nexus.enabled {
                 false
+            } else {
+                let cursor_snapshot = self.state.da_receipt_cursor_snapshot();
+                match da_rbc.spool_cache.load_receipt_entries(&da_rbc.spool_dir) {
+                    Ok((entries, cache_outcome)) => {
+                        #[cfg(feature = "telemetry")]
+                        self.telemetry.note_da_spool_cache(
+                            crate::telemetry::DaSpoolCacheKind::Receipts,
+                            cache_outcome.as_telemetry(),
+                        );
+                        #[cfg(not(feature = "telemetry"))]
+                        let _ = cache_outcome;
+                        match crate::da::receipts::plan_committable_receipts(
+                            &nexus.lane_config,
+                            &cursor_snapshot,
+                            &da_rbc.da.sealed_commitments,
+                            entries,
+                        ) {
+                            Ok(plan) => !plan.is_empty(),
+                            Err(err) => {
+                                warn!(
+                                    ?err,
+                                    spool = %da_rbc.spool_dir.display(),
+                                    "failed to plan DA receipts during proposal preflight; scheduling assembly to surface the error"
+                                );
+                                true
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            spool = %da_rbc.spool_dir.display(),
+                            "failed to load DA receipts during proposal preflight; scheduling assembly to surface the error"
+                        );
+                        true
+                    }
+                }
             }
         };
 
@@ -875,13 +922,13 @@ impl Actor {
                 warn!(
                     ?err,
                     spool = %da_rbc.spool_dir.display(),
-                    "failed to load DA pin intents from spool; proceeding without pin bundle"
+                    "failed to load DA pin intents during proposal preflight; scheduling assembly to surface the error"
                 );
-                false
+                true
             }
         };
 
-        (commitment_has, pin_intent_has)
+        (commitment_has, receipt_has, pin_intent_has)
     }
 
     pub(super) fn max_tx_budget(
@@ -3026,7 +3073,15 @@ impl Actor {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot();
                     let (receipts, cache_outcome) = {
                         let da_rbc = &mut self.subsystems.da_rbc;
-                        crate::da::receipts::prune_spool(&da_rbc.spool_dir, &cursor_snapshot);
+                        let prune_report =
+                            crate::da::receipts::prune_spool(&da_rbc.spool_dir, &cursor_snapshot);
+                        if prune_report.has_failures() {
+                            warn!(
+                                ?prune_report,
+                                path = %da_rbc.spool_dir.display(),
+                                "DA receipt spool cleanup encountered filesystem failures"
+                            );
+                        }
                         da_rbc
                             .spool_cache
                             .load_receipt_entries(&da_rbc.spool_dir)
@@ -3064,12 +3119,10 @@ impl Actor {
                             value
                         }
                         Err(err) => {
-                            warn!(
-                                ?err,
-                                spool = %da_rbc.spool_dir.display(),
-                                "failed to load DA commitments from spool; proceeding without DA bundle"
-                            );
-                            None
+                            return Err(eyre!(
+                                "failed to load DA commitments from spool `{}`: {err}",
+                                da_rbc.spool_dir.display()
+                            ));
                         }
                     }
                 };
@@ -3156,29 +3209,22 @@ impl Actor {
                         ) {
                             Ok(journal) => journal,
                             Err(err) => {
-                                warn!(
-                                    ?err,
-                                    path = %shard_cursor_path.display(),
-                                    "failed to load DA shard cursor journal; rebuilding from scratch"
-                                );
-                                crate::da::DaShardCursorJournal::new(
-                                    &lane_config,
-                                    shard_cursor_path.clone(),
-                                )
+                                return Err(eyre!(
+                                    "failed to load DA shard cursor journal `{}` before sealing DA bundle: {err}",
+                                    shard_cursor_path.display()
+                                ));
                             }
                         };
 
                         if let Err(err) = shard_journal.record_bundle(proposal_height, bundle) {
-                            warn!(
-                                ?err,
-                                "failed to update shard cursors from DA bundle; leaving journal unchanged"
-                            );
+                            return Err(eyre!(
+                                "failed to update DA shard cursors before sealing DA bundle: {err}"
+                            ));
                         } else if let Err(err) = shard_journal.persist() {
-                            warn!(
-                                ?err,
-                                path = %shard_cursor_path.display(),
-                                "failed to persist DA shard cursor journal"
-                            );
+                            return Err(eyre!(
+                                "failed to persist DA shard cursor journal `{}` before sealing DA bundle: {err}",
+                                shard_cursor_path.display()
+                            ));
                         }
                     }
                 }
@@ -3211,12 +3257,10 @@ impl Actor {
                             value
                         }
                         Err(err) => {
-                            warn!(
-                                ?err,
-                                spool = %da_rbc.spool_dir.display(),
-                                "failed to load DA pin intents from spool; proceeding without pin bundle"
-                            );
-                            None
+                            return Err(eyre!(
+                                "failed to load DA pin intents from spool `{}`: {err}",
+                                da_rbc.spool_dir.display()
+                            ));
                         }
                     }
                 };

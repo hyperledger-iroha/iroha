@@ -15,7 +15,7 @@ use std::{
     fs,
     net::SocketAddr,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -59,8 +59,9 @@ use iroha_data_model::{
             DaCommitmentBundle, DaCommitmentRecord, DaProofPolicy, DaProofPolicyBundle,
             DaProofScheme, KzgCommitment, RetentionClass,
         },
+        ingest::{DaIngestReceipt, DaStripeLayout},
         pin_intent::{DaPinIntent, DaPinIntentBundle},
-        types::{BlobDigest, RetentionPolicy, StorageTicketId},
+        types::{BlobDigest, DaRentQuote, RetentionPolicy, StorageTicketId},
     },
     domain::DomainId,
     identifier::IdentifierPolicyId,
@@ -2226,6 +2227,143 @@ fn sample_da_record(proof_digest: Option<Hash>) -> DaCommitmentRecord {
         StorageTicketId::new([0x55; 32]),
         Signature::from_bytes(&[0x66; 64]),
     )
+}
+
+fn sample_da_record_for_default_lane(proof_digest: Option<Hash>) -> DaCommitmentRecord {
+    let mut record = sample_da_record(proof_digest);
+    record.lane_id = LaneId::new(0);
+    record
+}
+
+#[derive(Clone, Debug, norito::derive::NoritoSerialize)]
+struct StoredDaReceiptFixture {
+    version: u16,
+    sequence: u64,
+    receipt: DaIngestReceipt,
+}
+
+fn sample_da_receipt_for_record(record: &DaCommitmentRecord) -> DaIngestReceipt {
+    DaIngestReceipt {
+        client_blob_id: record.client_blob_id,
+        lane_id: record.lane_id,
+        epoch: record.epoch,
+        blob_hash: BlobDigest::new([0x12; 32]),
+        chunk_root: BlobDigest::new([0x34; 32]),
+        manifest_hash: BlobDigest::new(*record.manifest_hash.as_bytes()),
+        storage_ticket: record.storage_ticket,
+        pdp_commitment: Some(vec![0x56]),
+        stripe_layout: DaStripeLayout::default(),
+        queued_at_unix: 1,
+        rent_quote: DaRentQuote::default(),
+        operator_signature: Signature::from_bytes(&[0x78; 64]),
+    }
+}
+
+fn da_commitment_spool_file_name(record: &DaCommitmentRecord, fingerprint: [u8; 32]) -> String {
+    format!(
+        "da-commitment-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
+        lane = record.lane_id.as_u32(),
+        epoch = record.epoch,
+        sequence = record.sequence,
+        ticket = hex::encode(record.storage_ticket.as_ref()),
+        fingerprint = hex::encode(fingerprint)
+    )
+}
+
+fn da_pin_intent_spool_file_name(intent: &DaPinIntent, fingerprint: [u8; 32]) -> String {
+    format!(
+        "da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
+        lane = intent.lane_id.as_u32(),
+        epoch = intent.epoch,
+        sequence = intent.sequence,
+        ticket = hex::encode(intent.storage_ticket.as_ref()),
+        fingerprint = hex::encode(fingerprint)
+    )
+}
+
+fn da_manifest_spool_file_name(record: &DaCommitmentRecord, fingerprint: [u8; 32]) -> String {
+    format!(
+        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
+        lane = record.lane_id.as_u32(),
+        epoch = record.epoch,
+        sequence = record.sequence,
+        ticket = hex::encode(record.storage_ticket.as_ref()),
+        fingerprint = hex::encode(fingerprint)
+    )
+}
+
+fn da_receipt_spool_file_name(
+    receipt: &DaIngestReceipt,
+    sequence: u64,
+    fingerprint: [u8; 32],
+) -> String {
+    format!(
+        "da-receipt-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{fingerprint}.norito",
+        lane = receipt.lane_id.as_u32(),
+        epoch = receipt.epoch,
+        ticket = hex::encode(receipt.storage_ticket.as_ref()),
+        fingerprint = hex::encode(fingerprint)
+    )
+}
+
+fn write_da_commitment_spool_file(
+    spool_dir: &Path,
+    record: &DaCommitmentRecord,
+    fingerprint: [u8; 32],
+) -> PathBuf {
+    let path = spool_dir.join(da_commitment_spool_file_name(record, fingerprint));
+    let bytes = to_bytes(record).expect("encode DA commitment");
+    fs::write(&path, bytes).expect("write DA commitment to spool");
+    path
+}
+
+fn write_da_pin_intent_spool_file(
+    spool_dir: &Path,
+    intent: &DaPinIntent,
+    fingerprint: [u8; 32],
+) -> PathBuf {
+    let path = spool_dir.join(da_pin_intent_spool_file_name(intent, fingerprint));
+    let bytes = to_bytes(intent).expect("encode DA pin intent");
+    fs::write(&path, bytes).expect("write DA pin intent to spool");
+    path
+}
+
+fn write_da_manifest_spool_file(
+    spool_dir: &Path,
+    record: &DaCommitmentRecord,
+    content: &[u8],
+    fingerprint: [u8; 32],
+) -> PathBuf {
+    let path = spool_dir.join(da_manifest_spool_file_name(record, fingerprint));
+    fs::write(&path, content).expect("write DA manifest to spool");
+    path
+}
+
+fn write_da_receipt_spool_file(
+    spool_dir: &Path,
+    receipt: &DaIngestReceipt,
+    sequence: u64,
+    fingerprint: [u8; 32],
+) -> PathBuf {
+    let path = spool_dir.join(da_receipt_spool_file_name(receipt, sequence, fingerprint));
+    let stored = StoredDaReceiptFixture {
+        version: 1,
+        sequence,
+        receipt: receipt.clone(),
+    };
+    let bytes = to_bytes(&stored).expect("encode DA receipt");
+    fs::write(&path, bytes).expect("write DA receipt to spool");
+    path
+}
+
+fn push_sample_transaction(actor: &Actor) {
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push sample transaction");
 }
 
 #[test]
@@ -65397,15 +65535,8 @@ fn manifest_guard_rejects_hash_mismatch() {
     let expected_digest = ManifestDigest::new(*blake3_hash(b"expected-manifest").as_bytes());
     record.manifest_hash = expected_digest;
 
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let file_name = format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-deadbeef.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    );
-    let path = dir.path().join(file_name);
-    fs::write(&path, b"mismatched-manifest").expect("write manifest to spool");
+    let path =
+        write_da_manifest_spool_file(dir.path(), &record, b"mismatched-manifest", [0xde; 32]);
 
     let (_, result) =
         super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
@@ -65431,15 +65562,7 @@ fn manifest_guard_accepts_matching_manifest() {
     let content = b"manifest-bytes-for-guard";
     let digest = ManifestDigest::new(*blake3_hash(content).as_bytes());
     record.manifest_hash = digest;
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let file_name = format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-deadbeef.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    );
-    let path = dir.path().join(file_name);
-    fs::write(&path, content).expect("write manifest to spool");
+    write_da_manifest_spool_file(dir.path(), &record, content, [0xdf; 32]);
 
     let (_, result) =
         super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
@@ -65450,19 +65573,50 @@ fn manifest_guard_accepts_matching_manifest() {
 }
 
 #[test]
+fn manifest_guard_ignores_non_production_manifest_filenames() {
+    let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut cache = super::ManifestSpoolCache::default();
+    let content = b"manifest-with-malformed-spool-name";
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(content).as_bytes());
+
+    let lane = record.lane_id.as_u32();
+    let epoch = record.epoch;
+    let sequence = record.sequence;
+    let ticket = hex::encode(record.storage_ticket.as_ref());
+    let full_fingerprint = hex::encode([0xf1; 32]);
+    for name in [
+        format!("manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}.norito"),
+        format!("manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-deadbeef.norito"),
+        format!(
+            "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket}-{full_fingerprint}-extra.norito"
+        ),
+        format!(
+            "manifest-{lane:x}-{epoch:016x}-{sequence:016x}-{ticket}-{full_fingerprint}.norito"
+        ),
+    ] {
+        fs::write(dir.path().join(name), content).expect("write malformed-name manifest");
+    }
+
+    let (_, result) =
+        super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
+    assert!(
+        matches!(result, Err(super::ManifestGuardError::Missing { .. })),
+        "malformed manifest filenames must not satisfy a strict manifest guard"
+    );
+}
+
+#[test]
 fn manifest_guard_prefers_matching_manifest() {
     let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
     let dir = tempfile::tempdir().expect("tempdir");
     let mut cache = super::ManifestSpoolCache::default();
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let prefix = format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-",
-        epoch = record.epoch,
-        sequence = record.sequence
-    );
-    let first_path = dir.path().join(format!("{prefix}aaa.norito"));
-    let second_path = dir.path().join(format!("{prefix}zzz.norito"));
+    let first_path = dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0xaa; 32]));
+    let second_path = dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0xbb; 32]));
     let first_content = b"manifest-lex-first";
     let second_content = b"manifest-lex-second";
 
@@ -65486,15 +65640,7 @@ fn manifest_cache_hits_on_repeated_lookup() {
     let content = b"manifest-cache-hit";
     record.manifest_hash = ManifestDigest::new(*blake3_hash(content).as_bytes());
 
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let file_name = format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-cache.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    );
-    let path = dir.path().join(file_name);
-    fs::write(&path, content).expect("write manifest to spool");
+    write_da_manifest_spool_file(dir.path(), &record, content, [0xca; 32]);
 
     let (outcome, result) =
         super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
@@ -65513,11 +65659,8 @@ fn da_spool_cache_hits_on_repeated_load() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut cache = super::DaSpoolCache::default();
 
-    let bytes = to_bytes(&record).expect("encode commitment");
-    let path = dir
-        .path()
-        .join("da-commitment-00000001-0000000000000001-0000000000000001-cache.norito");
-    fs::write(&path, bytes).expect("write commitment");
+    let path = write_da_commitment_spool_file(dir.path(), &record, [0xca; 32]);
+    assert!(path.exists(), "commitment fixture should be written");
 
     let (bundle, outcome) = cache
         .load_commitment_bundle(dir.path())
@@ -65615,14 +65758,12 @@ fn manifest_block_guard_rejects_hash_mismatch_on_audit_lane() {
     let dir = tempfile::tempdir().expect("tempdir");
     let lane_config = lane_config_with_manifest_policy(DaManifestPolicy::AuditOnly);
     let mut cache = super::ManifestSpoolCache::default();
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let path = dir.path().join(format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-bad.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    ));
-    fs::write(&path, b"mismatched-audit-manifest").expect("write mismatched manifest");
+    write_da_manifest_spool_file(
+        dir.path(),
+        &record,
+        b"mismatched-audit-manifest",
+        [0xba; 32],
+    );
 
     let mut cache_outcome = super::CacheOutcome::Hit;
     let err = super::manifests_available_for_block(
@@ -65676,14 +65817,7 @@ fn manifest_block_guard_accepts_matching_manifest() {
     let lane_config = LaneConfigSnapshot::default();
     let mut cache = super::ManifestSpoolCache::default();
 
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let path = dir.path().join(format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-ok.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    ));
-    fs::write(&path, content).expect("write manifest to spool");
+    write_da_manifest_spool_file(dir.path(), &record, content, [0x61; 32]);
 
     let mut cache_outcome = super::CacheOutcome::Hit;
     assert!(
@@ -65741,14 +65875,7 @@ fn manifest_gate_clears_after_manifest_arrives() {
         .and_then(|bundle| bundle.commitments.first())
         .cloned()
         .expect("commitment present");
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let path = dir.path().join(format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-ok.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    ));
-    fs::write(&path, content).expect("write manifest");
+    write_da_manifest_spool_file(dir.path(), &record, content, [0x62; 32]);
 
     let gate = Actor::compute_da_gate_status(
         &mut pending,
@@ -65821,14 +65948,7 @@ fn manifest_gate_recovers_after_spool_error() {
         .and_then(|bundle| bundle.commitments.first())
         .cloned()
         .expect("commitment present");
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let path = spool_dir.path().join(format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-ok.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    ));
-    fs::write(&path, content).expect("write manifest");
+    write_da_manifest_spool_file(spool_dir.path(), &record, content, [0x63; 32]);
 
     let gate = Actor::compute_da_gate_status(
         &mut pending,
@@ -65968,14 +66088,7 @@ fn manifest_gate_reports_manifest_recovery_when_payload_still_missing() {
         .and_then(|bundle| bundle.commitments.first())
         .cloned()
         .expect("commitment present");
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let path = dir.path().join(format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-ok.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    ));
-    fs::write(&path, content).expect("write manifest");
+    write_da_manifest_spool_file(dir.path(), &record, content, [0x64; 32]);
 
     let gate = Actor::compute_da_gate_status(
         &mut pending,
@@ -66081,14 +66194,7 @@ fn manifest_block_guard_allows_after_manifest_arrives() {
         .and_then(|bundle| bundle.commitments.first())
         .cloned()
         .expect("commitment present");
-    let lane = record.lane_id.as_u32();
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-    let path = dir.path().join(format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-late.norito",
-        epoch = record.epoch,
-        sequence = record.sequence
-    ));
-    std::fs::write(&path, content).expect("write late manifest");
+    write_da_manifest_spool_file(dir.path(), &record, content, [0x65; 32]);
 
     let warnings = super::manifests_available_for_block(
         &mut cache,
@@ -66702,35 +66808,238 @@ async fn init_collector_plan_uses_activation_height_collectors() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn internal_proposal_work_detects_da_commitments() {
-    use iroha_crypto::{Hash, Signature};
-    use iroha_data_model::da::commitment::{DaCommitmentRecord, DaProofScheme, KzgCommitment};
-    use iroha_data_model::da::types::{BlobDigest, RetentionPolicy, StorageTicketId};
-    use iroha_data_model::nexus::LaneId;
-    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
-    use norito::to_bytes;
+async fn assemble_proposal_rejects_unreadable_da_spool() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    push_sample_transaction(actor);
 
+    let broken_spool = actor.subsystems.da_rbc.spool_dir.join("not-a-directory");
+    fs::write(&broken_spool, b"not a directory").expect("write broken spool placeholder");
+    actor.subsystems.da_rbc.spool_dir = broken_spool.clone();
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("unreadable DA spool must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to load DA commitments from spool"),
+        "expected DA commitment spool failure, got {message}"
+    );
+    assert!(
+        message.contains(&broken_spool.display().to_string()),
+        "error should identify the broken spool path: {message}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_corrupt_da_commitment_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x71; 32])));
+    let path = spool_dir.join(da_commitment_spool_file_name(&record, [0x72; 32]));
+    fs::write(&path, b"corrupt commitment").expect("write corrupt DA commitment");
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("corrupt DA commitment must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to load DA commitments from spool"),
+        "expected DA commitment spool failure, got {message}"
+    );
+    assert!(
+        message.contains(&path.display().to_string()),
+        "error should identify the corrupt commitment path: {message}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_corrupt_da_pin_intent_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let intent = DaPinIntent::new(
+        LaneId::new(0),
+        1,
+        1,
+        StorageTicketId::new([0x73; 32]),
+        ManifestDigest::new([0x74; 32]),
+    );
+    let path = spool_dir.join(da_pin_intent_spool_file_name(&intent, [0x75; 32]));
+    fs::write(&path, b"corrupt pin intent").expect("write corrupt DA pin intent");
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("corrupt DA pin intent must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to load DA pin intents from spool"),
+        "expected DA pin-intent spool failure, got {message}"
+    );
+    assert!(
+        message.contains(&path.display().to_string()),
+        "error should identify the corrupt pin-intent path: {message}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_corrupt_da_receipt_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = true;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x76; 32])));
+    let receipt = sample_da_receipt_for_record(&record);
+    let path = spool_dir.join(da_receipt_spool_file_name(
+        &receipt,
+        record.sequence,
+        [0x77; 32],
+    ));
+    fs::write(&path, b"corrupt receipt").expect("write corrupt DA receipt");
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("corrupt DA receipt must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to decode DA receipt"),
+        "expected DA receipt spool failure, got {message}"
+    );
+    assert!(
+        message.contains(&path.display().to_string()),
+        "error should identify the corrupt receipt path: {message}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_unreadable_da_shard_cursor_journal() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.da.max_commitments_per_block = 1;
+    actor.config.da.max_proof_openings_per_block = 1;
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let manifest = b"manifest-for-blocked-shard-cursor-journal";
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x88; 32])));
+    record.kzg_commitment = None;
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(manifest).as_bytes());
+    write_da_commitment_spool_file(&spool_dir, &record, [0x89; 32]);
+    write_da_manifest_spool_file(&spool_dir, &record, manifest, [0x8A; 32]);
+
+    let shard_cursor_path = crate::da::DaShardCursorJournal::journal_path(&spool_dir);
+    fs::create_dir(&shard_cursor_path).expect("block shard cursor journal path with directory");
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("unreadable DA shard cursor journal must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to load DA shard cursor journal"),
+        "expected shard cursor journal load failure, got {message}"
+    );
+    assert!(
+        message.contains(&shard_cursor_path.display().to_string()),
+        "error should identify the blocked journal path: {message}"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_detects_da_commitments() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
 
-    let record = DaCommitmentRecord::new(
-        LaneId::new(0),
-        1,
-        1,
-        BlobDigest::new([0x11; 32]),
-        ManifestDigest::new([0x22; 32]),
-        DaProofScheme::MerkleSha256,
-        Hash::prehashed([0x33; 32]),
-        Some(KzgCommitment::new([0x44; 48])),
-        Some(Hash::prehashed([0x55; 32])),
-        RetentionPolicy::default(),
-        StorageTicketId::new([0x66; 32]),
-        Signature::from_bytes(&[0x77; 64]),
-    );
-    let bytes = to_bytes(&record).expect("encode commitment");
-    let path = spool_dir.join("da-commitment-00000000-0000000000000001-0000000000000001.norito");
-    std::fs::write(&path, bytes).expect("write spool commitment");
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x55; 32])));
+    write_da_commitment_spool_file(&spool_dir, &record, [0x78; 32]);
 
     let proposal_height = actor.state.view().height() as u64 + 1;
     let work = actor.internal_proposal_work(proposal_height, None);
@@ -66741,35 +67050,88 @@ async fn internal_proposal_work_detects_da_commitments() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn internal_proposal_work_ignores_committed_da_commitments() {
-    use iroha_crypto::{Hash, Signature};
-    use iroha_data_model::da::commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme};
-    use iroha_data_model::da::types::{BlobDigest, RetentionPolicy, StorageTicketId};
-    use iroha_data_model::nexus::LaneId;
-    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
-    use norito::to_bytes;
-
+async fn internal_proposal_work_treats_commitment_spool_errors_as_work() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
 
-    let record = DaCommitmentRecord::new(
-        LaneId::new(0),
-        1,
-        1,
-        BlobDigest::new([0x91; 32]),
-        ManifestDigest::new([0x92; 32]),
-        DaProofScheme::MerkleSha256,
-        Hash::prehashed([0x93; 32]),
-        None,
-        Some(Hash::prehashed([0x94; 32])),
-        RetentionPolicy::default(),
-        StorageTicketId::new([0x95; 32]),
-        Signature::from_bytes(&[0x96; 64]),
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0xA5; 32])));
+    let path = spool_dir.join(da_commitment_spool_file_name(&record, [0xA6; 32]));
+    fs::write(&path, b"corrupt commitment").expect("write corrupt DA commitment");
+
+    let proposal_height = actor.state.view().height() as u64 + 1;
+    let work = actor.internal_proposal_work(proposal_height, None);
+    assert!(
+        work.da_commitments,
+        "commitment spool errors must keep DA proposal work visible"
     );
-    let bytes = to_bytes(&record).expect("encode commitment");
-    let path = spool_dir.join("da-commitment-00000000-0000000000000001-0000000000000001.norito");
-    std::fs::write(&path, bytes).expect("write spool commitment");
+    assert!(work.has_work());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_detects_da_receipts() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = true;
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x44; 32])));
+    let receipt = sample_da_receipt_for_record(&record);
+    write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x45; 32]);
+
+    let proposal_height = actor.state.view().height() as u64 + 1;
+    let work = actor.internal_proposal_work(proposal_height, None);
+    assert!(
+        work.da_receipts,
+        "pending DA receipts must keep proposal work visible"
+    );
+    assert!(work.has_work());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_treats_receipt_spool_errors_as_work() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.state.nexus.write().enabled = true;
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x46; 32])));
+    let receipt = sample_da_receipt_for_record(&record);
+    let path = spool_dir.join(da_receipt_spool_file_name(
+        &receipt,
+        record.sequence,
+        [0x47; 32],
+    ));
+    fs::write(&path, b"corrupt receipt").expect("write corrupt DA receipt");
+
+    let proposal_height = actor.state.view().height() as u64 + 1;
+    let work = actor.internal_proposal_work(proposal_height, None);
+    assert!(
+        work.da_receipts,
+        "receipt spool errors must keep DA proposal work visible"
+    );
+    assert!(work.has_work());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_ignores_committed_da_commitments() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let mut record = sample_da_record_for_default_lane(Some(Hash::prehashed([0x94; 32])));
+    record.client_blob_id = BlobDigest::new([0x91; 32]);
+    record.manifest_hash = ManifestDigest::new([0x92; 32]);
+    record.chunk_root = Hash::prehashed([0x93; 32]);
+    record.storage_ticket = StorageTicketId::new([0x95; 32]);
+    record.acknowledgement_sig = Signature::from_bytes(&[0x96; 64]);
+    write_da_commitment_spool_file(&spool_dir, &record, [0x97; 32]);
 
     let _ = actor.state.da_commitments();
     actor
@@ -66790,12 +67152,6 @@ async fn internal_proposal_work_ignores_committed_da_commitments() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn internal_proposal_work_detects_da_pin_intents() {
-    use iroha_data_model::da::pin_intent::DaPinIntent;
-    use iroha_data_model::da::types::StorageTicketId;
-    use iroha_data_model::nexus::LaneId;
-    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
-    use norito::to_bytes;
-
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
@@ -66807,9 +67163,7 @@ async fn internal_proposal_work_detects_da_pin_intents() {
         StorageTicketId::new([0xA1; 32]),
         ManifestDigest::new([0xB1; 32]),
     );
-    let bytes = to_bytes(&intent).expect("encode pin intent");
-    let path = spool_dir.join("da-pin-intent-00000000-0000000000000001-0000000000000001.norito");
-    std::fs::write(&path, bytes).expect("write spool pin intent");
+    write_da_pin_intent_spool_file(&spool_dir, &intent, [0xB2; 32]);
 
     let proposal_height = actor.state.view().height() as u64 + 1;
     let work = actor.internal_proposal_work(proposal_height, None);
@@ -66820,13 +67174,35 @@ async fn internal_proposal_work_detects_da_pin_intents() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn internal_proposal_work_treats_pin_spool_errors_as_work() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+
+    let intent = DaPinIntent::new(
+        LaneId::new(0),
+        1,
+        1,
+        StorageTicketId::new([0xA7; 32]),
+        ManifestDigest::new([0xA8; 32]),
+    );
+    let path = spool_dir.join(da_pin_intent_spool_file_name(&intent, [0xA9; 32]));
+    fs::write(&path, b"corrupt pin intent").expect("write corrupt DA pin intent");
+
+    let proposal_height = actor.state.view().height() as u64 + 1;
+    let work = actor.internal_proposal_work(proposal_height, None);
+    assert!(
+        work.da_pin_intents,
+        "pin-intent spool errors must keep DA proposal work visible"
+    );
+    assert!(work.has_work());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn internal_proposal_work_ignores_committed_da_pin_intent_identities() {
-    use iroha_data_model::da::{
-        commitment::DaCommitmentLocation, pin_intent::DaPinIntent, types::StorageTicketId,
-    };
-    use iroha_data_model::nexus::LaneId;
-    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
-    use norito::to_bytes;
+    use iroha_data_model::da::commitment::DaCommitmentLocation;
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -66863,14 +67239,7 @@ async fn internal_proposal_work_ignores_committed_da_pin_intent_identities() {
         committed.manifest_hash,
     );
     for intent in [duplicate_ticket, duplicate_manifest] {
-        let bytes = to_bytes(&intent).expect("encode pin intent");
-        let path = spool_dir.join(format!(
-            "da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}.norito",
-            lane = intent.lane_id.as_u32(),
-            epoch = intent.epoch,
-            sequence = intent.sequence,
-        ));
-        std::fs::write(&path, bytes).expect("write spool pin intent");
+        write_da_pin_intent_spool_file(&spool_dir, &intent, [0xE1; 32]);
     }
 
     let proposal_height = actor.state.view().height() as u64 + 1;

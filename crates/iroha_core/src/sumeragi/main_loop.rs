@@ -46475,16 +46475,35 @@ impl ManifestSpoolCache {
 fn parse_manifest_spool_key(name: &str) -> Option<ManifestSpoolKey> {
     let name = name.strip_suffix(".norito")?;
     let rest = name.strip_prefix("manifest-")?;
-    let mut parts = rest.splitn(5, '-');
+    let mut parts = rest.split('-');
     let lane_hex = parts.next()?;
     let epoch_hex = parts.next()?;
     let sequence_hex = parts.next()?;
     let ticket_hex = parts.next()?;
+    let fingerprint_hex = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    if lane_hex.len() != 8
+        || epoch_hex.len() != 16
+        || sequence_hex.len() != 16
+        || ticket_hex.len() != 64
+        || fingerprint_hex.len() != 64
+        || !lane_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !epoch_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !sequence_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !ticket_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !fingerprint_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
     let lane = u32::from_str_radix(lane_hex, 16).ok()?;
     let epoch = u64::from_str_radix(epoch_hex, 16).ok()?;
     let sequence = u64::from_str_radix(sequence_hex, 16).ok()?;
     let mut ticket_bytes = [0u8; 32];
+    let mut fingerprint_bytes = [0u8; 32];
     hex::decode_to_slice(ticket_hex, &mut ticket_bytes).ok()?;
+    hex::decode_to_slice(fingerprint_hex, &mut fingerprint_bytes).ok()?;
     Some(ManifestSpoolKey {
         lane,
         epoch,

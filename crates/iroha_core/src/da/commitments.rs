@@ -13,7 +13,6 @@ use iroha_data_model::{
     },
     nexus::LaneId,
 };
-use iroha_logger::warn;
 use norito::decode_from_bytes;
 use thiserror::Error;
 
@@ -26,6 +25,15 @@ pub enum DaSpoolError {
     #[error("failed to read DA spool directory `{path}`: {source}")]
     ReadDir {
         /// Path that failed.
+        path: PathBuf,
+        /// Source error from the filesystem.
+        #[source]
+        source: std::io::Error,
+    },
+    /// Failed to read a directory entry while scanning the spool.
+    #[error("failed to read DA spool entry in `{path}`: {source}")]
+    ReadEntry {
+        /// Spool path being scanned.
         path: PathBuf,
         /// Source error from the filesystem.
         #[source]
@@ -90,8 +98,9 @@ pub enum DaSpoolError {
 ///
 /// # Errors
 ///
-/// Returns a [`DaSpoolError`] if the spool directory cannot be read. Individual
-/// commitment files that fail to read or decode are skipped with a warning.
+/// Returns a [`DaSpoolError`] if the spool directory or any matching commitment
+/// file cannot be read, decoded, or matched against its advertised filename
+/// tuple.
 pub fn load_commitment_bundle(
     spool_dir: &Path,
 ) -> Result<Option<DaCommitmentBundle>, DaSpoolError> {
@@ -106,40 +115,20 @@ pub fn load_commitment_bundle(
     })?;
 
     for entry in dir_entries {
-        let entry = match entry {
-            Ok(value) => value,
-            Err(source) => {
-                warn!(?source, "failed to read DA spool entry");
-                continue;
-            }
-        };
+        let entry = entry.map_err(|source| DaSpoolError::ReadEntry {
+            path: spool_dir.to_path_buf(),
+            source,
+        })?;
         let path = entry.path();
         if !is_da_commitment_file(&path) {
             continue;
         }
 
-        let bytes = match std::fs::read(&path) {
-            Ok(buf) => buf,
-            Err(source) => {
-                warn!(
-                    ?source,
-                    path = %path.display(),
-                    "failed to read DA commitment file; skipping"
-                );
-                continue;
-            }
-        };
-
-        match decode_commitment_record(&bytes, &path) {
-            Ok(record) => records.push(record),
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %path.display(),
-                    "failed to decode DA commitment file; skipping"
-                );
-            }
-        }
+        let bytes = std::fs::read(&path).map_err(|source| DaSpoolError::ReadFile {
+            path: path.clone(),
+            source,
+        })?;
+        records.push(decode_commitment_record(&bytes, &path)?);
     }
 
     if records.is_empty() {
@@ -372,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn commitment_bundle_skips_corrupt_entries() {
+    fn commitment_bundle_rejects_corrupt_entries() {
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let bytes = to_bytes(&record).expect("encode record");
@@ -387,15 +376,17 @@ mod tests {
         std::fs::write(valid_path, bytes).expect("write valid");
         std::fs::write(corrupt_path, b"corrupt").expect("write corrupt");
 
-        let bundle = load_commitment_bundle(dir.path())
-            .expect("load bundle")
-            .expect("bundle present");
-        assert_eq!(bundle.commitments.len(), 1);
-        assert_eq!(bundle.commitments[0], record);
+        assert!(
+            matches!(
+                load_commitment_bundle(dir.path()),
+                Err(DaSpoolError::Decode { .. })
+            ),
+            "corrupt commitment artifacts must reject the whole spool load"
+        );
     }
 
     #[test]
-    fn commitment_bundle_skips_malformed_filenames() {
+    fn commitment_bundle_rejects_malformed_filenames() {
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let bytes = to_bytes(&record).expect("encode record");
@@ -406,14 +397,16 @@ mod tests {
         std::fs::write(malformed_path, bytes).expect("write malformed filename record");
 
         assert!(
-            load_commitment_bundle(dir.path())
-                .expect("load bundle")
-                .is_none()
+            matches!(
+                load_commitment_bundle(dir.path()),
+                Err(DaSpoolError::MalformedFilename { .. })
+            ),
+            "malformed commitment filenames must reject the whole spool load"
         );
     }
 
     #[test]
-    fn commitment_bundle_skips_filename_tuple_mismatches() {
+    fn commitment_bundle_rejects_filename_tuple_mismatches() {
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let bytes = to_bytes(&record).expect("encode record");
@@ -424,14 +417,16 @@ mod tests {
         std::fs::write(mismatch_path, bytes).expect("write mismatch record");
 
         assert!(
-            load_commitment_bundle(dir.path())
-                .expect("load bundle")
-                .is_none()
+            matches!(
+                load_commitment_bundle(dir.path()),
+                Err(DaSpoolError::FilenameMismatch { .. })
+            ),
+            "commitment filename/body tuple mismatches must reject the whole spool load"
         );
     }
 
     #[test]
-    fn commitment_bundle_skips_filename_ticket_mismatches() {
+    fn commitment_bundle_rejects_filename_ticket_mismatches() {
         let dir = tempdir().expect("tempdir");
         let record = sample_record(1, 1);
         let bytes = to_bytes(&record).expect("encode record");
@@ -442,9 +437,11 @@ mod tests {
         std::fs::write(mismatch_path, bytes).expect("write ticket mismatch record");
 
         assert!(
-            load_commitment_bundle(dir.path())
-                .expect("load bundle")
-                .is_none()
+            matches!(
+                load_commitment_bundle(dir.path()),
+                Err(DaSpoolError::FilenameMismatch { .. })
+            ),
+            "commitment filename/body ticket mismatches must reject the whole spool load"
         );
     }
 }

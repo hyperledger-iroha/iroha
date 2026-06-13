@@ -89,11 +89,14 @@ pub(crate) mod taikai_ingest {
     use std::{
         io::{self, Write},
         str::FromStr,
+        sync::atomic::{AtomicU64, Ordering},
     };
 
     use sorafs_car::{CarBuildPlan, CarWriter};
 
     use super::*;
+
+    static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     pub(crate) const STREAM_LABEL_FALLBACK: &str = "<unknown>";
 
@@ -114,6 +117,8 @@ pub(crate) mod taikai_ingest {
         pub ingest_latency_ms: Option<u32>,
         pub live_edge_drift_ms: Option<i32>,
     }
+
+    const TAIKAI_TRM_LINEAGE_VERSION: u64 = 1;
 
     #[derive(Clone, Debug)]
     struct TrmLineageRecord {
@@ -160,6 +165,15 @@ pub(crate) mod taikai_ingest {
                     record_path.display()
                 ))
             })?;
+            if let Some(previous) = &previous {
+                validate_lineage_alias(previous, &alias.namespace, &alias.name, &record_path)
+                    .map_err(|err| {
+                        internal_error(format!(
+                            "failed to validate Taikai routing manifest lineage `{}`: {err}",
+                            record_path.display()
+                        ))
+                    })?;
+            }
             Ok(Some(Self {
                 manifest_store_dir: spool_dir.to_path_buf(),
                 base_dir,
@@ -248,6 +262,11 @@ pub(crate) mod taikai_ingest {
             window: TaikaiSegmentWindow,
             manifest_digest_hex: &str,
         ) -> Result<(), (StatusCode, String)> {
+            validate_manifest_digest_hex(manifest_digest_hex).map_err(|err| {
+                internal_error(format!(
+                    "failed to validate Taikai routing manifest digest before lineage commit: {err}"
+                ))
+            })?;
             let record = TrmLineageRecord {
                 alias_namespace: self.alias_namespace.clone(),
                 alias_name: self.alias_name.clone(),
@@ -393,6 +412,14 @@ pub(crate) mod taikai_ingest {
                 "Taikai routing manifest lineage record must be a JSON object",
             )
         })?;
+        let version = map.get("version").and_then(Value::as_u64).ok_or_else(|| {
+            invalid_lineage_record("Taikai routing manifest lineage record missing version")
+        })?;
+        if version != TAIKAI_TRM_LINEAGE_VERSION {
+            return Err(invalid_lineage_record(format!(
+                "unsupported Taikai routing manifest lineage record version {version}"
+            )));
+        }
         let alias_namespace = map
             .get("alias_namespace")
             .and_then(Value::as_str)
@@ -423,6 +450,7 @@ pub(crate) mod taikai_ingest {
                 )
             })?
             .to_owned();
+        validate_manifest_digest_hex(&manifest_digest_hex)?;
         let window_start_sequence = map
             .get("window_start_sequence")
             .and_then(Value::as_u64)
@@ -441,10 +469,19 @@ pub(crate) mod taikai_ingest {
                     "Taikai routing manifest lineage record missing window_end_sequence",
                 )
             })?;
+        if window_start_sequence > window_end_sequence {
+            return Err(invalid_lineage_record(
+                "Taikai routing manifest lineage record window_start_sequence exceeds window_end_sequence",
+            ));
+        }
         let updated_unix = map
             .get("updated_unix")
             .and_then(Value::as_u64)
-            .unwrap_or_else(current_unix_seconds);
+            .ok_or_else(|| {
+                invalid_lineage_record(
+                    "Taikai routing manifest lineage record missing updated_unix",
+                )
+            })?;
         Ok(Some(TrmLineageRecord {
             alias_namespace,
             alias_name,
@@ -457,7 +494,7 @@ pub(crate) mod taikai_ingest {
 
     fn write_lineage_record(path: &Path, record: &TrmLineageRecord) -> io::Result<()> {
         let mut map = Map::new();
-        map.insert("version".into(), Value::from(1));
+        map.insert("version".into(), Value::from(TAIKAI_TRM_LINEAGE_VERSION));
         map.insert(
             "alias_namespace".into(),
             Value::from(record.alias_namespace.clone()),
@@ -478,9 +515,23 @@ pub(crate) mod taikai_ingest {
         map.insert("updated_unix".into(), Value::from(record.updated_unix));
         let rendered = json::to_json_pretty(&Value::Object(map))
             .map_err(|err| io::Error::new(ErrorKind::Other, err.to_string()))?;
-        let tmp_path = path.with_extension(format!("tmp-{}", std::process::id()));
-        match fs::write(&tmp_path, rendered.as_bytes()) {
-            Ok(()) => {}
+        let tmp_path = path.with_extension(format!("tmp-{}", artifact_temp_suffix()));
+        match OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp_path)
+        {
+            Ok(mut file) => {
+                if let Err(err) = file.write_all(rendered.as_bytes()) {
+                    let _ = fs::remove_file(&tmp_path);
+                    return Err(err);
+                }
+                if let Err(err) = file.sync_all() {
+                    let _ = fs::remove_file(&tmp_path);
+                    return Err(err);
+                }
+            }
             Err(err) => {
                 let _ = fs::remove_file(&tmp_path);
                 return Err(err);
@@ -490,7 +541,55 @@ pub(crate) mod taikai_ingest {
             let _ = fs::remove_file(&tmp_path);
             return Err(err);
         }
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                sync_dir(parent)?;
+            }
+        }
         Ok(())
+    }
+
+    fn validate_lineage_alias(
+        record: &TrmLineageRecord,
+        expected_namespace: &str,
+        expected_name: &str,
+        path: &Path,
+    ) -> io::Result<()> {
+        if record.alias_namespace != expected_namespace || record.alias_name != expected_name {
+            return Err(invalid_lineage_record(format!(
+                "Taikai routing manifest lineage record `{}` belongs to alias {}.{} instead of {}.{}",
+                path.display(),
+                record.alias_name,
+                record.alias_namespace,
+                expected_name,
+                expected_namespace
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_manifest_digest_hex(digest: &str) -> io::Result<()> {
+        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid_lineage_record(
+                "Taikai routing manifest lineage record manifest_digest_hex must be 32-byte hex",
+            ));
+        }
+        let bytes = hex::decode(digest).map_err(|err| invalid_lineage_record(err.to_string()))?;
+        if bytes.len() != 32 {
+            return Err(invalid_lineage_record(
+                "Taikai routing manifest lineage record manifest_digest_hex must decode to 32 bytes",
+            ));
+        }
+        Ok(())
+    }
+
+    fn invalid_lineage_record(message: impl Into<String>) -> io::Error {
+        io::Error::new(ErrorKind::InvalidData, message.into())
+    }
+
+    fn sync_dir(path: &Path) -> io::Result<()> {
+        let file = fs::File::open(path)?;
+        file.sync_all()
     }
 
     fn build_lineage_hint_bytes(
@@ -815,28 +914,86 @@ pub(crate) mod taikai_ingest {
     ) -> io::Result<()> {
         match fs::hard_link(tmp_path, target_path) {
             Ok(()) => {
-                let _ = fs::remove_file(tmp_path);
-                Ok(())
+                let sync_result = sync_parent_dir(target_path);
+                let remove_result = remove_temp_artifact(tmp_path);
+                sync_result?;
+                remove_result
             }
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-                let _ = fs::remove_file(tmp_path);
-                let existing = fs::read(target_path)?;
-                if existing == expected {
-                    Ok(())
-                } else {
-                    Err(io::Error::new(
+                let existing_result = match fs::read(target_path) {
+                    Ok(existing) if existing == expected => Ok(()),
+                    Ok(_) => Err(io::Error::new(
                         ErrorKind::InvalidData,
                         format!(
                             "Taikai artifact {prefix} already exists at {} with different bytes",
                             target_path.display()
                         ),
-                    ))
-                }
+                    )),
+                    Err(err) => Err(err),
+                };
+                let remove_result = remove_temp_artifact(tmp_path);
+                existing_result?;
+                remove_result
             }
             Err(err) => {
                 let _ = fs::remove_file(tmp_path);
                 Err(err)
             }
+        }
+    }
+
+    fn write_temp_artifact(tmp_path: &Path, bytes: &[u8]) -> io::Result<()> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(tmp_path)?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    }
+
+    fn artifact_temp_suffix() -> String {
+        let counter = ARTIFACT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        format!("{}-{counter:016x}", std::process::id())
+    }
+
+    fn sync_parent_dir(path: &Path) -> io::Result<()> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            sync_dir(parent)?;
+        }
+        Ok(())
+    }
+
+    fn remove_temp_artifact(tmp_path: &Path) -> io::Result<()> {
+        match fs::remove_file(tmp_path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn existing_taikai_artifact_path_if_matching(
+        target_path: &Path,
+        expected: &[u8],
+        prefix: &str,
+    ) -> io::Result<Option<PathBuf>> {
+        if !target_path.exists() {
+            return Ok(None);
+        }
+
+        let existing = fs::read(target_path)?;
+        if existing == expected {
+            Ok(Some(target_path.to_path_buf()))
+        } else {
+            Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Taikai artifact {prefix} already exists at {} with different bytes",
+                    target_path.display()
+                ),
+            ))
         }
     }
 
@@ -866,27 +1023,18 @@ pub(crate) mod taikai_ingest {
             "{prefix}-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.{extension}"
         );
         let target_path = base_dir.join(&file_name);
-        if target_path.exists() {
-            let existing = fs::read(&target_path)?;
-            if existing == bytes {
-                return Ok(Some(target_path));
-            }
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "Taikai artifact {prefix} already exists at {} with different bytes",
-                    target_path.display()
-                ),
-            ));
+        if let Some(path) = existing_taikai_artifact_path_if_matching(&target_path, bytes, prefix)?
+        {
+            return Ok(Some(path));
         }
 
         let tmp_name = format!(
             ".{prefix}-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-            std::process::id()
+            artifact_temp_suffix()
         );
         let tmp_path = base_dir.join(tmp_name);
 
-        match fs::write(&tmp_path, bytes) {
+        match write_temp_artifact(&tmp_path, bytes) {
             Ok(()) => {}
             Err(err) => {
                 let _ = fs::remove_file(&tmp_path);
@@ -1170,8 +1318,31 @@ pub(crate) mod taikai_ingest {
         let request_path = spool_dir.join(format!(
             "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
         ));
-        if async_fs::metadata(&request_path).await.is_ok() {
-            return Ok(());
+        match async_fs::metadata(&request_path).await {
+            Ok(metadata) => {
+                if !metadata.is_file() {
+                    return Err(io::Error::new(
+                        ErrorKind::AlreadyExists,
+                        format!(
+                            "Taikai anchor request capture path is not a file: {}",
+                            request_path.display()
+                        ),
+                    ));
+                }
+                let existing = async_fs::read_to_string(&request_path).await?;
+                if existing == body {
+                    return Ok(());
+                }
+                return Err(io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "Taikai anchor request capture already exists with different contents: {}",
+                        request_path.display()
+                    ),
+                ));
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
         }
         async_fs::write(&request_path, body).await
     }
@@ -1400,15 +1571,18 @@ pub(crate) mod taikai_ingest {
                 }
             };
 
-            if let Err(err) = persist_anchor_request_capture(spool_dir, base_id, &body).await {
-                iroha_logger::warn!(
-                    ?err,
-                    path = ?spool_dir.join(format!(
-                        "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
-                    )),
-                    "failed to persist Taikai anchor request payload for governance bundle"
-                );
-            }
+            persist_anchor_request_capture(spool_dir, base_id, &body)
+                .await
+                .map_err(|err| {
+                    format!(
+                        "failed to persist Taikai anchor request payload `{}`: {err}",
+                        spool_dir
+                            .join(format!(
+                                "{TAIKAI_ANCHOR_REQUEST_PREFIX}{base_id}{TAIKAI_ANCHOR_REQUEST_SUFFIX}"
+                            ))
+                            .display()
+                    )
+                })?;
 
             result.push(PendingUpload {
                 base_id: base_id.to_string(),

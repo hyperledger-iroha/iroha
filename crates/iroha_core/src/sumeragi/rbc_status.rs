@@ -125,11 +125,20 @@ impl Handle {
         match config {
             Some(cfg) => match DiskStore::new(&cfg) {
                 Ok(disk) => {
-                    load_into_map(&disk, &mut inner.map);
-                    inner.disk = Some(DiskPersistenceState::new(disk));
-                    inner.persistence_unavailable = false;
-                    set_persistence_disabled_metric(false);
-                    persist_if_needed(&mut inner, "configure");
+                    if let Err(err) = load_into_map(&disk, &mut inner.map) {
+                        warn!(
+                            ?err,
+                            "failed to recover RBC session store; persistence unavailable"
+                        );
+                        inner.disk = None;
+                        inner.persistence_unavailable = true;
+                        set_persistence_disabled_metric(true);
+                    } else {
+                        inner.disk = Some(DiskPersistenceState::new(disk));
+                        inner.persistence_unavailable = false;
+                        set_persistence_disabled_metric(false);
+                        persist_if_needed(&mut inner, "configure");
+                    }
                 }
                 Err(err) => {
                     warn!(
@@ -477,10 +486,17 @@ pub fn sessions_active() -> u64 {
 pub fn read_persisted_snapshot(dir: impl AsRef<Path>) -> Vec<Summary> {
     let _suppressor = panic_hook::ScopedSuppressor::new();
     let file = dir.as_ref().join(FILE_NAME);
-    read_entries_with_fallback(&file)
-        .into_iter()
-        .map(|stored| stored.summary)
-        .collect()
+    match read_entries_with_fallback(&file) {
+        Ok(entries) => entries.into_iter().map(|stored| stored.summary).collect(),
+        Err(err) => {
+            warn!(
+                ?err,
+                path = %file.display(),
+                "failed to recover persisted RBC session snapshot"
+            );
+            Vec::new()
+        }
+    }
 }
 
 const FILE_NAME: &str = "sessions.norito";
@@ -625,8 +641,11 @@ fn temp_store_path(path: &Path) -> PathBuf {
     path.with_added_extension("tmp")
 }
 
-fn load_into_map(disk: &DiskStore, map: &mut BTreeMap<(HashOf<BlockHeader>, u64, u64), Entry>) {
-    let mut entries = read_entries_with_fallback(&disk.file);
+fn load_into_map(
+    disk: &DiskStore,
+    map: &mut BTreeMap<(HashOf<BlockHeader>, u64, u64), Entry>,
+) -> io::Result<()> {
+    let mut entries = read_entries_with_fallback(&disk.file)?;
     enforce_limits(&mut entries, disk.ttl, disk.capacity);
     for stored in entries {
         let Some(updated_at) = ms_to_system_time(stored.updated_at_ms) else {
@@ -642,9 +661,10 @@ fn load_into_map(disk: &DiskStore, map: &mut BTreeMap<(HashOf<BlockHeader>, u64,
             },
         );
     }
+    Ok(())
 }
 
-fn read_entries_with_fallback(path: &Path) -> Vec<StoredEntry> {
+fn read_entries_with_fallback(path: &Path) -> io::Result<Vec<StoredEntry>> {
     let tmp_path = temp_store_path(path);
     let tmp_bytes = match read_store_bytes(&tmp_path) {
         Ok(bytes) => bytes,
@@ -662,7 +682,7 @@ fn read_entries_with_fallback(path: &Path) -> Vec<StoredEntry> {
     };
 
     if tmp_bytes.is_none() && main_bytes.is_none() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let had_tmp = tmp_bytes.is_some();
@@ -714,14 +734,14 @@ fn read_entries_with_fallback(path: &Path) -> Vec<StoredEntry> {
                 path = %tmp_path.display(),
                 "recovered RBC session store from temp file"
             );
-            promote_temp_store(&tmp_path, path);
+            promote_temp_store(&tmp_path, path)?;
         } else if had_tmp {
             let _ = fs::remove_file(&tmp_path);
         }
-        return selected.entries;
+        return Ok(selected.entries);
     }
 
-    Vec::new()
+    Ok(Vec::new())
 }
 
 struct StoreCandidate {
@@ -758,11 +778,32 @@ fn decode_entries(buf: &[u8]) -> Result<Vec<StoredEntry>, norito::Error> {
 
 fn retain_valid_entries(entries: Vec<StoredEntry>, path: &Path) -> Vec<StoredEntry> {
     let now = SystemTime::now();
-    entries
+    let mut valid = Vec::new();
+    let mut key_counts = BTreeMap::new();
+    for stored in entries {
+        if valid_entry_timestamp(&stored, path, now).is_some()
+            && valid_persisted_summary(&stored, path)
+        {
+            let key = persisted_summary_key(&stored.summary);
+            *key_counts.entry(key).or_insert(0usize) += 1;
+            valid.push(stored);
+        }
+    }
+    valid
         .into_iter()
         .filter(|stored| {
-            valid_entry_timestamp(stored, path, now).is_some()
-                && valid_persisted_summary(stored, path)
+            let key = persisted_summary_key(&stored.summary);
+            if key_counts.get(&key).copied().unwrap_or_default() > 1 {
+                warn!(
+                    ?path,
+                    block_hash = ?stored.summary.block_hash,
+                    height = stored.summary.height,
+                    view = stored.summary.view,
+                    "dropping duplicate RBC session status key"
+                );
+                return false;
+            }
+            true
         })
         .collect()
 }
@@ -805,6 +846,10 @@ fn valid_persisted_summary(stored: &StoredEntry, path: &Path) -> bool {
         return false;
     }
     true
+}
+
+fn persisted_summary_key(summary: &Summary) -> (HashOf<BlockHeader>, u64, u64) {
+    (summary.block_hash, summary.height, summary.view)
 }
 
 fn session_summary_chunk_shape_valid(summary: &Summary) -> bool {
@@ -919,43 +964,22 @@ fn valid_entry_timestamp(stored: &StoredEntry, path: &Path, now: SystemTime) -> 
     Some(updated_at)
 }
 
-fn promote_temp_store(tmp_path: &Path, main_path: &Path) {
-    let promoted = match fs::rename(tmp_path, main_path) {
-        Ok(()) => true,
+fn promote_temp_store(tmp_path: &Path, main_path: &Path) -> io::Result<()> {
+    match fs::rename(tmp_path, main_path) {
+        Ok(()) => {}
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-            if let Err(remove_err) = fs::remove_file(main_path) {
-                warn!(
-                    ?remove_err,
-                    ?main_path,
-                    "failed to remove RBC session store before temp promotion"
-                );
-                false
-            } else if let Err(rename_err) = fs::rename(tmp_path, main_path) {
-                warn!(
-                    ?rename_err,
-                    ?tmp_path,
-                    "failed to promote RBC session temp store after removal"
-                );
-                false
-            } else {
-                true
-            }
+            fs::remove_file(main_path)?;
+            fs::rename(tmp_path, main_path)?;
         }
-        Err(err) => {
-            warn!(?err, ?tmp_path, "failed to promote RBC session temp store");
-            false
-        }
+        Err(err) => return Err(err),
     };
 
-    if promoted {
-        if let Some(parent) = main_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                if let Err(err) = sync_dir(parent) {
-                    warn!(?err, ?parent, "failed to sync RBC session store directory");
-                }
-            }
+    if let Some(parent) = main_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            sync_dir(parent)?;
         }
     }
+    Ok(())
 }
 
 fn sync_dir(path: &Path) -> io::Result<()> {
@@ -1213,6 +1237,108 @@ mod tests {
         let promoted = decode_entries(&fs::read(&file).expect("read promoted store"))
             .expect("decode promoted store");
         assert_eq!(promoted[0].updated_at_ms, 200);
+    }
+
+    #[test]
+    fn persisted_snapshot_rejects_unpromotable_temp_store() {
+        let dir = tempdir().expect("tempdir");
+        let tmp_summary = summary(10, 10, 2, 1, false, Some(b"tmp"));
+        let file = dir.path().join(FILE_NAME);
+        let tmp = temp_store_path(&file);
+        fs::create_dir(&file).expect("block main store path");
+        fs::write(
+            &tmp,
+            to_bytes(&vec![StoredEntry {
+                summary: tmp_summary,
+                updated_at_ms: 200,
+            }])
+            .expect("encode temp store"),
+        )
+        .expect("write temp store");
+
+        let snapshot = read_persisted_snapshot(dir.path());
+
+        assert!(
+            snapshot.is_empty(),
+            "temp-only snapshot must not load when promotion fails"
+        );
+        assert!(tmp.exists(), "failed promotion should leave temp store");
+    }
+
+    #[test]
+    fn configure_rejects_unpromotable_temp_store() {
+        let dir = tempdir().expect("tempdir");
+        let tmp_summary = summary(11, 11, 2, 1, false, Some(b"tmp"));
+        let file = dir.path().join(FILE_NAME);
+        let tmp = temp_store_path(&file);
+        fs::create_dir(&file).expect("block main store path");
+        fs::write(
+            &tmp,
+            to_bytes(&vec![StoredEntry {
+                summary: tmp_summary,
+                updated_at_ms: 200,
+            }])
+            .expect("encode temp store"),
+        )
+        .expect("write temp store");
+        let handle = Handle::new();
+
+        handle.configure(Some(StoreConfig {
+            dir: dir.path().to_path_buf(),
+            ttl: Duration::ZERO,
+            capacity: 8,
+        }));
+
+        assert!(
+            handle.snapshot().is_empty(),
+            "runtime configure must not seed temp-only status"
+        );
+        let inner = handle.store.lock_inner();
+        assert!(
+            inner.persistence_unavailable,
+            "promotion failure should mark persistence unavailable"
+        );
+        assert!(
+            inner.disk.is_none(),
+            "promotion failure should leave disk persistence disabled"
+        );
+        assert!(tmp.exists(), "failed promotion should leave temp store");
+    }
+
+    #[test]
+    fn persisted_snapshot_drops_duplicate_session_keys() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join(FILE_NAME);
+        let duplicate_a = summary(12, 12, 1, 0, false, Some(b"duplicate-a"));
+        let duplicate_b = summary(12, 12, 2, 1, false, Some(b"duplicate-b"));
+        let unique = summary(13, 13, 3, 2, false, Some(b"unique"));
+        fs::write(
+            &file,
+            to_bytes(&vec![
+                StoredEntry {
+                    summary: duplicate_a,
+                    updated_at_ms: 100,
+                },
+                StoredEntry {
+                    summary: duplicate_b,
+                    updated_at_ms: 200,
+                },
+                StoredEntry {
+                    summary: unique.clone(),
+                    updated_at_ms: 300,
+                },
+            ])
+            .expect("encode status store"),
+        )
+        .expect("write status store");
+
+        let snapshot = read_persisted_snapshot(dir.path());
+
+        assert_eq!(
+            snapshot,
+            vec![unique],
+            "duplicate session keys should be dropped without discarding unrelated entries"
+        );
     }
 
     #[test]

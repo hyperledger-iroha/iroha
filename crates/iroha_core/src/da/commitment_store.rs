@@ -1,8 +1,9 @@
 //! Ledger-derived in-memory DA commitment index.
 //!
 //! This store keeps a deterministic view of commitments keyed by manifest hash
-//! and `(lane_id, epoch, sequence)` for Torii/query paths. Committed block bodies
-//! in Kura are the recovery source of truth; [`crate::state::State`] hydrates this
+//! and `(lane_id, epoch, sequence)` for Torii/query paths, plus retained
+//! committed-identity indexes for consensus validation. Committed block bodies in
+//! Kura are the recovery source of truth; [`crate::state::State`] hydrates this
 //! projection from those DA commitment bundles during access or rewind.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,7 +25,9 @@ pub struct DaCommitmentStore {
     by_ticket: BTreeMap<StorageTicketId, DaCommitmentWithLocation>,
     by_lane_epoch: BTreeMap<(u32, u64, u64), DaCommitmentWithLocation>,
     by_block: BTreeMap<u64, DaCommitmentBundle>,
-    seen_keys: BTreeSet<DaCommitmentKey>,
+    committed_by_key: BTreeMap<DaCommitmentKey, DaCommitmentWithLocation>,
+    committed_by_manifest: BTreeMap<ManifestDigest, DaCommitmentWithLocation>,
+    committed_by_ticket: BTreeMap<StorageTicketId, DaCommitmentWithLocation>,
 }
 
 impl DaCommitmentStore {
@@ -65,7 +68,7 @@ impl DaCommitmentStore {
     /// Returns `true` if the record was inserted into the index.
     pub fn insert(&mut self, record: &DaCommitmentRecord, location: DaCommitmentLocation) -> bool {
         let key = DaCommitmentKey::from_record(record);
-        if !self.seen_keys.insert(key) {
+        if self.committed_by_key.contains_key(&key) {
             return false;
         }
 
@@ -73,6 +76,13 @@ impl DaCommitmentStore {
             commitment: record.clone(),
             location,
         };
+        self.committed_by_key.insert(key, with_location.clone());
+        self.committed_by_manifest
+            .entry(record.manifest_hash)
+            .or_insert_with(|| with_location.clone());
+        self.committed_by_ticket
+            .entry(record.storage_ticket)
+            .or_insert_with(|| with_location.clone());
         self.by_manifest
             .entry(record.manifest_hash)
             .or_insert_with(|| with_location.clone());
@@ -112,13 +122,41 @@ impl DaCommitmentStore {
         self.by_lane_epoch.get(&(lane_id, epoch, sequence))
     }
 
+    /// Lookup any committed record by `(lane_id, epoch, sequence)`, including retired lanes.
+    #[must_use]
+    pub fn get_committed_by_key(&self, key: &DaCommitmentKey) -> Option<&DaCommitmentWithLocation> {
+        self.committed_by_key.get(key)
+    }
+
+    /// Lookup any committed record by manifest hash, including retired lanes.
+    #[must_use]
+    pub fn get_committed_by_manifest(
+        &self,
+        digest: &ManifestDigest,
+    ) -> Option<&DaCommitmentWithLocation> {
+        self.committed_by_manifest.get(digest)
+    }
+
+    /// Lookup any committed record by storage ticket, including retired lanes.
+    #[must_use]
+    pub fn get_committed_by_storage_ticket(
+        &self,
+        ticket: &StorageTicketId,
+    ) -> Option<&DaCommitmentWithLocation> {
+        self.committed_by_ticket.get(ticket)
+    }
+
     /// Return whether a record collides with any committed commitment identity.
     #[must_use]
     pub fn contains_record_identity(&self, record: &DaCommitmentRecord) -> bool {
-        self.get_by_lane_epoch_sequence(record.lane_id.as_u32(), record.epoch, record.sequence)
-            .is_some()
-            || self.get_by_manifest(&record.manifest_hash).is_some()
-            || self.get_by_storage_ticket(&record.storage_ticket).is_some()
+        let key = DaCommitmentKey::from_record(record);
+        self.get_committed_by_key(&key).is_some()
+            || self
+                .get_committed_by_manifest(&record.manifest_hash)
+                .is_some()
+            || self
+                .get_committed_by_storage_ticket(&record.storage_ticket)
+                .is_some()
     }
 
     /// Return all commitments ordered by `(lane_id, epoch, sequence)`.
@@ -143,6 +181,8 @@ impl DaCommitmentStore {
     ///
     /// Stored block bundles remain byte-for-byte committed bundle snapshots so
     /// proof construction continues to match the block header commitment hash.
+    /// Committed identity indexes are retained so validation continues to reject
+    /// key, manifest, and storage-ticket reuse after lane retirement.
     pub fn prune_lanes(&mut self, retired: &BTreeSet<LaneId>) {
         if retired.is_empty() {
             return;
@@ -153,7 +193,6 @@ impl DaCommitmentStore {
             .retain(|_, entry| !retired.contains(&entry.commitment.lane_id));
         self.by_lane_epoch
             .retain(|(lane, _, _), _| !retired.contains(&LaneId::new(*lane)));
-        self.seen_keys.retain(|key| !retired.contains(&key.lane_id));
     }
 }
 
@@ -281,8 +320,13 @@ mod tests {
     #[test]
     fn prunes_retired_lanes() {
         let mut store = DaCommitmentStore::default();
-        let record_a = sample_record(0, 1, 1);
-        let record_b = sample_record(1, 1, 2);
+        let mut record_a = sample_record(0, 1, 1);
+        record_a.manifest_hash = ManifestDigest::new([0xA0; 32]);
+        record_a.storage_ticket = StorageTicketId::new([0xA1; 32]);
+        let mut record_b = sample_record(1, 1, 2);
+        record_b.manifest_hash = ManifestDigest::new([0xB0; 32]);
+        record_b.storage_ticket = StorageTicketId::new([0xB1; 32]);
+        let retired_key = DaCommitmentKey::from_record(&record_b);
         store.insert_bundle(
             1,
             DaCommitmentBundle::new(vec![record_b.clone(), record_a.clone()]),
@@ -300,6 +344,47 @@ mod tests {
             store.get_by_lane_epoch_sequence(1, 1, 2).is_none(),
             "retired lane removed"
         );
+        assert!(
+            store.get_by_manifest(&record_b.manifest_hash).is_none(),
+            "retired lane manifest query entry removed"
+        );
+        assert!(
+            store
+                .get_by_storage_ticket(&record_b.storage_ticket)
+                .is_none(),
+            "retired lane ticket query entry removed"
+        );
+        assert!(
+            store.get_committed_by_key(&retired_key).is_some(),
+            "retired lane key history retained"
+        );
+        assert!(
+            store
+                .get_committed_by_manifest(&record_b.manifest_hash)
+                .is_some(),
+            "retired lane manifest history retained"
+        );
+        assert!(
+            store
+                .get_committed_by_storage_ticket(&record_b.storage_ticket)
+                .is_some(),
+            "retired lane ticket history retained"
+        );
+        let mut duplicate_key = record_b.clone();
+        duplicate_key.manifest_hash = ManifestDigest::new([0xC0; 32]);
+        duplicate_key.storage_ticket = StorageTicketId::new([0xC1; 32]);
+        assert!(store.contains_record_identity(&duplicate_key));
+
+        let mut duplicate_manifest = sample_record(2, 2, 0);
+        duplicate_manifest.manifest_hash = record_b.manifest_hash;
+        duplicate_manifest.storage_ticket = StorageTicketId::new([0xC2; 32]);
+        assert!(store.contains_record_identity(&duplicate_manifest));
+
+        let mut duplicate_ticket = sample_record(2, 2, 1);
+        duplicate_ticket.manifest_hash = ManifestDigest::new([0xC3; 32]);
+        duplicate_ticket.storage_ticket = record_b.storage_ticket;
+        assert!(store.contains_record_identity(&duplicate_ticket));
+
         let bundle = store.bundle_at(1).expect("committed bundle retained");
         assert_eq!(bundle.commitments.as_slice(), &[record_b, record_a]);
     }

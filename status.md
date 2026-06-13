@@ -1,12 +1,163 @@
 # Status
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
+
+## 2026-06-13 DA/RBC Cursor and Temp Recovery Hardening
+
+- Made Torii DA replay cursor recording transactional with respect to snapshot
+  persistence: if a temp-file write, sync, rename, or directory sync fails, the
+  in-memory sequence floor is rolled back so a retry of the same sequence still
+  attempts durable persistence instead of being swallowed as a duplicate.
+- Tightened Torii DA replay cursor snapshot decoding so unsupported snapshot
+  versions and duplicate `(lane, epoch)` entries fail closed. If the main
+  snapshot is invalid but a valid temp snapshot exists, restart recovery still
+  promotes the temp snapshot.
+- Made Torii DA replay cursor temp promotion fail closed when the temp snapshot
+  cannot be renamed into place or the replay directory cannot be synced, so
+  restart no longer seeds memory from a floor that failed to become durable.
+- Applied the same fail-closed temp promotion rule to the core DA shard cursor
+  journal. Restart recovery now returns a write error when a temp journal cannot
+  be promoted durably instead of loading the temp cursor state only in memory.
+- Hardened core DA shard cursor journal decoding so duplicate `(shard, lane)`
+  entries are rejected as invalid persisted state instead of being normalized by
+  picking the newest cursor tuple.
+- Hardened RBC chunk-store temp session recovery so both direct session loads
+  and scan-based store loads return an I/O error when a temp snapshot cannot be
+  promoted durably, instead of accepting temp-only recovered session state.
+- Hardened RBC status temp-store recovery so read-only persisted snapshot
+  inspection returns an empty snapshot on unpromotable temp files and runtime
+  `Handle::configure` marks persistence unavailable instead of seeding
+  temp-only status state.
+- Hardened RBC status persisted snapshot decoding so duplicate
+  `(block_hash, height, view)` session keys are dropped instead of being
+  normalized by last-writer-wins map insertion.
+- Hardened Taikai TRM lineage state recovery so persisted state must declare
+  version `1`, match the requested alias namespace/name, carry a 32-byte
+  manifest digest encoded as hex, use a non-inverted window, and include an
+  update timestamp before it can influence the next TRM hint.
+- Hardened Taikai TRM lineage state writes by syncing the temporary file before
+  rename and syncing the parent directory after promotion, so a successful
+  lineage update no longer depends on temp-only filesystem state.
+- Hardened Torii DA spool artifact installation for manifests, PDP
+  commitments, commitment records, schedule entries, pin intents, and receipts
+  so temp files use a process-local unique suffix, are fully written and
+  `sync_all`ed before hard-link install, and the destination directory is
+  synced after the link becomes visible.
+- Hardened Torii durable DA receipt-log recovery and receipt listing so
+  receipt-shaped files with invalid Norito, unsupported versions,
+  filename/body mismatches, or invalid operator signatures reject recovery/load
+  instead of being skipped. Receipt-log open now also fails closed if seeding
+  the replay cursor from recovered receipts cannot be persisted.
+- Applied the same unique-temp, synced-write, and post-link directory sync path
+  to Taikai envelope/index/SSM/TRM artifact installation, including the TRM
+  lineage state temp writer.
+- Hardened Taikai anchor request-capture handling so an existing capture must
+  be a file with matching payload bytes, and collection fails closed if the
+  governance/audit request payload cannot be recorded before upload.
+- Hardened core DA receipt spool cleanup observability: stale-receipt pruning
+  now returns a structured report for scanned, removed, invalid, read-failed,
+  entry-failed, remove-failed, and unreadable-spool cases, and the proposal path
+  logs filesystem cleanup failures without turning non-consensus stale-file
+  cleanup into a block-assembly abort.
+- Hardened DA proposal assembly to fail closed when commitment or pin-intent
+  spool loading fails, and when the DA shard cursor journal cannot be loaded,
+  advanced, or persisted before sealing a DA commitment bundle.
+- Hardened core DA commitment and pin-intent spool loading further so any
+  matching production-shaped artifact that fails directory-entry read, file
+  read, Norito decode, or filename/body tuple validation rejects the whole spool
+  load instead of silently sealing a partial proposal bundle.
+- Hardened core DA receipt spool loading the same way: any matching
+  production-shaped receipt file that fails directory-entry read, file read,
+  Norito decode, version validation, or filename/body tuple validation now
+  rejects the whole receipt load instead of being skipped.
+- Hardened DA proposal preflight so commitment, receipt, and pin-intent spool
+  loader/planner errors keep DA work visible to an otherwise idle leader,
+  forcing proposal assembly to surface the fail-closed error instead of
+  suppressing the corrupt artifact as "no work".
+- Hardened the core DA manifest spool guard so `manifest-*` files must carry
+  the full production lane/epoch/sequence/ticket/fingerprint filename tuple
+  before they can satisfy a strict manifest guard.
+- Added adversarial replay cursor coverage for blocked temp snapshot paths,
+  duplicate main snapshot entries, valid-temp recovery from an unsupported main
+  snapshot version, and unpromotable temp snapshots.
+- Added adversarial shard cursor journal coverage for unpromotable temp
+  journals and duplicate persisted entries.
+- Added adversarial RBC chunk-store coverage for unpromotable temp sessions in
+  both direct recovery and full store scan recovery.
+- Added adversarial RBC status coverage for unpromotable temp stores through
+  both the public read-only snapshot helper and runtime configure path.
+  Duplicate persisted session keys are also covered while preserving unrelated
+  valid entries.
+- Added adversarial Taikai TRM lineage coverage for unsupported persisted
+  versions, alias mismatches, malformed manifest digests, and inverted windows.
+- Added adversarial Taikai anchor collection coverage for blocked request
+  capture paths and stale request-capture files with mismatched payload bytes,
+  while preserving the malformed-base-id skip for stray spool files.
+- Added same-process concurrent writer coverage for DA receipt and Taikai
+  envelope artifact persistence, verifying exact-byte idempotent convergence
+  and no leftover temp artifacts.
+- Added durable receipt-log recovery coverage for corrupt entries,
+  sequence-rebound signatures, filename/body mismatches, filename/ticket
+  mismatches, and replay-cursor seed persistence failures.
+- Added receipt-prune coverage for successful stale removal, filename/body
+  mismatch preservation, receipt-shaped read failures, and non-directory spool
+  paths.
+- Added actor-level proposal assembly regressions for unreadable DA spool state
+  and unreadable shard cursor journal state, and updated DA spool cache/proposal
+  work fixtures to use production lane/epoch/sequence/ticket/fingerprint
+  filenames.
+- Added adversarial commitment and pin-intent spool coverage for corrupt,
+  malformed, and filename/body-mismatched artifacts, including actor-level
+  proposal assembly regressions that prove corrupt individual artifacts abort
+  block assembly even when the external transaction queue is empty.
+- Added adversarial receipt spool coverage for corrupt, unsupported-version,
+  malformed, and filename/body-mismatched artifacts, plus preflight regressions
+  for pending receipts and corrupt receipt files with an empty external
+  transaction queue.
+- Added adversarial manifest guard coverage proving matching manifest bytes
+  under missing, short, extra-field, or width-mismatched filename tuples are
+  ignored and still surface as missing manifests on strict lanes.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib shard_cursor -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_status -- --nocapture`
+  - `cargo test -p iroha_core --lib commitments -- --nocapture`
+  - `cargo test -p iroha_core --lib pin_intents -- --nocapture`
+  - `cargo test -p iroha_core --lib prune_spool -- --nocapture`
+  - `cargo test -p iroha_core --lib receipts -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_unreadable_da_spool -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_unreadable_da_shard_cursor_journal -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_corrupt_da -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_guard -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_block_guard -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_gate -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests internal_proposal_work -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests da_spool_cache_hits_on_repeated_load -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_trm_lineage --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_collection --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_processing_generates_payload_and_sentinel --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii converges_under_same_process_writers --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii persist_ --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_ --features app_api -- --nocapture`
 
 ## 2026-06-12 Torii DA Replay and Receipt Persistence Hardening
 
 - Fixed DA replay-cache pruning so a restart-primed lane/epoch floor survives
   TTL eviction of cached fingerprints. Replayed sequences at or below the
   persisted cursor now remain stale after the live cache window expires.
+- Hardened Torii DA replay cursor snapshot recovery so completed temp snapshots
+  are promoted when they monotonically advance the main snapshot, temp-only
+  snapshots recover after interrupted writes, and stale, corrupt, or
+  mixed-direction temp snapshots are removed without lowering sequence floors.
+- Fixed Torii DA replay cursor recording for first sequence `0`; a new
+  lane/epoch floor at zero is now persisted and survives restart instead of
+  being mistaken for an already-stored default.
+- Hardened Torii DA replay cursor snapshot writes by syncing the temporary
+  snapshot file before replacement and syncing the parent directory after
+  promotion, reducing crash windows around durable sequence floors.
 - Hardened Torii DA ingest responses so durable receipt-log stale-sequence,
   manifest-conflict, missing-outcome, and spool-write failures fail closed
   instead of returning `202 Accepted` after artifact spool execution.
@@ -38,16 +189,35 @@ Last updated: 2026-06-12
   manifest body and verifying the filename lane, epoch, storage ticket, and
   zero-ticket replay fingerprint against the body before returning bytes to
   SoraFS clients.
+- Hardened Torii DA PDP commitment readback further by decoding the matched
+  Norito body and running PDP structural validation before returning bytes to
+  SoraFS clients.
 - Hardened Torii DA spool artifact writers so idempotent target-file collisions
   are accepted only when the existing bytes exactly match the expected
   manifest, PDP commitment, DA commitment, schedule entry, pin intent, or
   receipt payload. Mismatched pre-existing files now return `InvalidData`.
+- Hardened Torii DA spool artifact writers to reject mismatched self-describing
+  bodies before writing: manifest bodies must match lane/epoch/ticket/fingerprint
+  inputs, PDP commitments must pass structural validation, commitment and
+  pin-intent bodies must match the filename tuple inputs, and commitment
+  schedule PDP bytes must structurally validate and hash to the record proof
+  digest.
+- Switched Torii DA artifact installation from overwrite-capable `rename` to a
+  no-clobber hard-link install path with existing-target byte validation,
+  closing the race where a concurrent target file could be overwritten between
+  the idempotence check and final install.
 - Hardened Taikai DA anchor collection so pending `taikai-envelope-*` sidecars
   must use the fixed production lane/epoch/sequence/ticket/fingerprint base id
   before an anchor request body is assembled.
 - Hardened Taikai DA artifact persistence so envelope/index/SSM/TRM target-file
   collisions are idempotent only when existing bytes match exactly; mismatched
   pre-existing Taikai artifacts now return `InvalidData`.
+- Applied the same no-clobber install pattern to Taikai envelope/index/SSM/TRM
+  artifacts so concurrent target creation is validated instead of overwritten.
+- Hardened DA shard cursor journal recovery so completed temp snapshots are
+  promoted only when they monotonically advance the main cursor snapshot, while
+  stale, corrupt, or mixed-direction temp files are removed without regressing
+  any lane.
 - Bound Torii DA operator receipt signatures to the durable sequence wrapper by
   signing a versioned `(sequence, receipt-with-placeholder-signature)` payload.
   Live append and restart rehydration now reject sequence-rebound receipts even
@@ -67,8 +237,11 @@ Last updated: 2026-06-12
   - `cargo test -p iroha_core --lib load_receipt_entries -- --nocapture`
   - `cargo test -p iroha_core --lib prune_spool -- --nocapture`
   - `cargo test -p iroha_core --lib receipts -- --nocapture`
+  - `cargo test -p iroha_core --lib shard_cursor -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store --features app_api -- --nocapture`
   - `cargo test -p iroha_torii load_manifest_from_spool --features app_api -- --nocapture`
   - `cargo test -p iroha_torii load_pdp_commitment_from_spool --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii persist_spool_artifacts_reject_body_tuple_mismatches --features app_api -- --nocapture`
   - `cargo test -p iroha_torii persist_spool_artifacts_reject_existing_mismatched_targets --features app_api -- --nocapture`
   - `cargo test -p iroha_torii persist_ --features app_api -- --nocapture`
   - `cargo test -p iroha_torii taikai_anchor_collection_skips_malformed_base_id --features app_api -- --nocapture`
