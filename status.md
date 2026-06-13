@@ -173830,3 +173830,18 @@ Last updated: 2026-06-13
 - Focused validation passed:
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Confidential Note Owner-Tag Binding
+
+- Hardened Kotlin/JVM and Java Android confidential note decryption so the
+  default decrypt path rejects payloads whose plaintext owner tag does not
+  match the owner tag derived from the supplied spend key.
+- Added explicit diversified-owner-tag decrypt overloads and diversified
+  opening constructors, keeping diversified confidential-v2 outputs supported
+  without silently accepting an owner tag chosen by the sender.
+- Moved recipient-private-key handling under the decrypt cleanup path so
+  malformed payload versions or low-order peer keys cannot skip zeroization of
+  copied private material.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.ConfidentialNoteTests ./gradlew :jvm:test --rerun-tasks --console=plain`

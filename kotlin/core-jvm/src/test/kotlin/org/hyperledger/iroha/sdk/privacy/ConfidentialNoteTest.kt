@@ -47,6 +47,17 @@ class ConfidentialNoteTest {
             hex("5c7dd75a2bb565931e3cc4badba834e976e251e63bc9dbb911b884a27250b53a"),
             ConfidentialOwnerTag.deriveFromSpendKeyWithDiversifier(spendKey, diversifier),
         )
+        assertContentEquals(
+            ConfidentialOwnerTag.deriveFromSpendKeyWithDiversifier(spendKey, diversifier),
+            ConfidentialNoteOpening.fromSpendKeyWithDiversifier(
+                rho,
+                spendKey,
+                diversifier,
+                "rose#wonderland",
+                "confidential-sdk-chain",
+                "7",
+            ).ownerTag,
+        )
     }
 
     @Test
@@ -226,6 +237,57 @@ class ConfidentialNoteTest {
         assertFailsWith<IllegalArgumentException> {
             ConfidentialNoteDecryption.decryptNote(payload, ByteArray(32), spendKey)
         }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialNoteDecryption.decryptNote(
+                payload,
+                recipientPrivateKey,
+                repeated(0x12, 32),
+                "confidential-sdk-chain",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialNoteDecryption.decryptNoteWithOwnerTag(
+                payload,
+                recipientPrivateKey,
+                spendKey,
+                ConfidentialOwnerTag.deriveFromSpendKey(repeated(0x12, 32)),
+                "confidential-sdk-chain",
+            )
+        }
+
+        val diversifier = ConfidentialOwnerTag.deriveDiversifier("invoice-1".encodeToByteArray())
+        val diversifiedOpening = ConfidentialNoteOpening.fromSpendKeyWithDiversifier(
+            repeated(0x24, 32),
+            spendKey,
+            diversifier,
+            "rose#wonderland",
+            "confidential-sdk-chain",
+            "11",
+        )
+        val diversifiedPayload = ConfidentialNoteEncryption.encryptNote(
+            diversifiedOpening,
+            recipientPublicKey,
+            repeated(0x68, 32),
+            repeated(0x79, 24),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            ConfidentialNoteDecryption.decryptNote(
+                diversifiedPayload,
+                recipientPrivateKey,
+                spendKey,
+                "confidential-sdk-chain",
+            )
+        }
+        assertOpeningEquals(
+            diversifiedOpening,
+            ConfidentialNoteDecryption.decryptNoteWithOwnerTag(
+                diversifiedPayload,
+                recipientPrivateKey,
+                spendKey,
+                diversifiedOpening.ownerTag,
+                "confidential-sdk-chain",
+            ),
+        )
     }
 
     private fun assertOpeningEquals(expected: ConfidentialNoteOpening, actual: ConfidentialNoteOpening) {

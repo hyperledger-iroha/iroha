@@ -19,6 +19,29 @@ public final class ConfidentialNoteDecryption {
       final byte[] spendKey,
       final String expectedChainId) {
     return ConfidentialNoteCrypto.decryptNote(
-        encryptedPayload, recipientPrivateKey, spendKey, expectedChainId);
+        encryptedPayload,
+        recipientPrivateKey,
+        spendKey,
+        ConfidentialOwnerTag.deriveFromSpendKey(spendKey),
+        expectedChainId);
+  }
+
+  public static ConfidentialNoteOpening decryptNoteWithOwnerTag(
+      final ConfidentialEncryptedPayload encryptedPayload,
+      final byte[] recipientPrivateKey,
+      final byte[] spendKey,
+      final byte[] expectedOwnerTag) {
+    return decryptNoteWithOwnerTag(
+        encryptedPayload, recipientPrivateKey, spendKey, expectedOwnerTag, null);
+  }
+
+  public static ConfidentialNoteOpening decryptNoteWithOwnerTag(
+      final ConfidentialEncryptedPayload encryptedPayload,
+      final byte[] recipientPrivateKey,
+      final byte[] spendKey,
+      final byte[] expectedOwnerTag,
+      final String expectedChainId) {
+    return ConfidentialNoteCrypto.decryptNote(
+        encryptedPayload, recipientPrivateKey, spendKey, expectedOwnerTag, expectedChainId);
   }
 }

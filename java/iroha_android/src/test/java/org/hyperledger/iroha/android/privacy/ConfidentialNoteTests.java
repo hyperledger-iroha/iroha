@@ -50,6 +50,17 @@ public final class ConfidentialNoteTests {
     assertBytes("diversified owner tag",
         "5c7dd75a2bb565931e3cc4badba834e976e251e63bc9dbb911b884a27250b53a",
         ConfidentialOwnerTag.deriveFromSpendKeyWithDiversifier(spendKey, diversifier));
+    assert Arrays.equals(
+            ConfidentialOwnerTag.deriveFromSpendKeyWithDiversifier(spendKey, diversifier),
+            ConfidentialNoteOpening.fromSpendKeyWithDiversifier(
+                    rho,
+                    spendKey,
+                    diversifier,
+                    "rose#wonderland",
+                    "confidential-sdk-chain",
+                    "7")
+                .ownerTag())
+        : "diversified opening ownerTag mismatch";
   }
 
   private static void constructorsAndAccessorsAreDefensive() {
@@ -181,6 +192,41 @@ public final class ConfidentialNoteTests {
             payload, recipientPrivateKey, spendKey, "other-chain"));
     expectThrows(
         () -> ConfidentialNoteDecryption.decryptNote(payload, new byte[32], spendKey));
+    expectThrows(
+        () -> ConfidentialNoteDecryption.decryptNote(
+            payload, recipientPrivateKey, repeated(0x12, 32), "confidential-sdk-chain"));
+    expectThrows(
+        () -> ConfidentialNoteDecryption.decryptNoteWithOwnerTag(
+            payload,
+            recipientPrivateKey,
+            spendKey,
+            ConfidentialOwnerTag.deriveFromSpendKey(repeated(0x12, 32)),
+            "confidential-sdk-chain"));
+
+    final byte[] diversifier =
+        ConfidentialOwnerTag.deriveDiversifier("invoice-1".getBytes(StandardCharsets.UTF_8));
+    final ConfidentialNoteOpening diversifiedOpening =
+        ConfidentialNoteOpening.fromSpendKeyWithDiversifier(
+            repeated(0x24, 32),
+            spendKey,
+            diversifier,
+            "rose#wonderland",
+            "confidential-sdk-chain",
+            "11");
+    final ConfidentialEncryptedPayload diversifiedPayload =
+        ConfidentialNoteEncryption.encryptNote(
+            diversifiedOpening, recipientPublicKey, repeated(0x68, 32), repeated(0x79, 24));
+    expectThrows(
+        () -> ConfidentialNoteDecryption.decryptNote(
+            diversifiedPayload, recipientPrivateKey, spendKey, "confidential-sdk-chain"));
+    assertOpeningEquals(
+        diversifiedOpening,
+        ConfidentialNoteDecryption.decryptNoteWithOwnerTag(
+            diversifiedPayload,
+            recipientPrivateKey,
+            spendKey,
+            diversifiedOpening.ownerTag(),
+            "confidential-sdk-chain"));
   }
 
   private static void assertOpeningEquals(

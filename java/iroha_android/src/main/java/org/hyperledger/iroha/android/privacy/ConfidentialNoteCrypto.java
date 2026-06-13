@@ -104,6 +104,7 @@ final class ConfidentialNoteCrypto {
       final ConfidentialEncryptedPayload encryptedPayload,
       final byte[] recipientPrivateKey,
       final byte[] spendKey,
+      final byte[] expectedOwnerTag,
       final String expectedChainId) {
     if (encryptedPayload == null) {
       throw new IllegalArgumentException("encryptedPayload must be provided");
@@ -112,17 +113,20 @@ final class ConfidentialNoteCrypto {
       throw new IllegalArgumentException(
           "encryptedPayload version must be " + ConfidentialEncryptedPayload.VERSION_V1);
     }
+    final byte[] expectedOwnerTagBytes =
+        ConfidentialNoteScalars.fixedScalar(expectedOwnerTag, "expectedOwnerTag");
     final byte[] recipientPrivate =
         fixedNonZeroBytes(recipientPrivateKey, KEY_LENGTH, "recipientPrivateKey");
-    final byte[] recipientPublic = publicKeyFromPrivateKey(recipientPrivate);
-    final byte[] key =
-        derivePayloadKey(
-            recipientPrivate,
-            encryptedPayload.ephemeralPublicKey(),
-            encryptedPayload.ephemeralPublicKey(),
-            recipientPublic);
+    byte[] key = null;
     byte[] plaintext = null;
     try {
+      final byte[] recipientPublic = publicKeyFromPrivateKey(recipientPrivate);
+      key =
+          derivePayloadKey(
+              recipientPrivate,
+              encryptedPayload.ephemeralPublicKey(),
+              encryptedPayload.ephemeralPublicKey(),
+              recipientPublic);
       plaintext =
           runXChaCha20Poly1305(
               false,
@@ -139,10 +143,16 @@ final class ConfidentialNoteCrypto {
               "confidential note chainId does not match expectedChainId");
         }
       }
+      if (!Arrays.equals(decoded.ownerTag, expectedOwnerTagBytes)) {
+        throw new IllegalArgumentException(
+            "confidential note ownerTag does not match expectedOwnerTag");
+      }
       return new ConfidentialNoteOpening(
           decoded.rho, spendKey, decoded.ownerTag, decoded.asset, decoded.chainId, decoded.amount);
     } finally {
-      Arrays.fill(key, (byte) 0);
+      if (key != null) {
+        Arrays.fill(key, (byte) 0);
+      }
       if (plaintext != null) {
         Arrays.fill(plaintext, (byte) 0);
       }

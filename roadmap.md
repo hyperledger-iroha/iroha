@@ -22,10 +22,11 @@ and completed history lives in [`status.md`](./status.md).
   note commitments, nullifiers, asset tags, and chain tags, Rust-fixture parity
   for the `ConfidentialEncryptedPayload` wire envelope, low-order X25519
   public-key rejection parity, canonical ciphertext-length rejection parity,
-  and a shared
-  deterministic X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext vector. Keep
-  the higher-level wallet flows pinned to this contract when wiring shield-note
-  recovery into production clients.
+  and a shared deterministic X25519/HKDF-SHA256/XChaCha20-Poly1305 plaintext
+  vector. Default decryption binds the plaintext owner tag to the supplied
+  spend key, while diversified notes must use the explicit expected-owner-tag
+  overload. Keep the higher-level wallet flows pinned to this contract when
+  wiring shield-note recovery into production clients.
 - Kagemusha SDK parity must keep ABI-7 compact projection verifier surfaces
   aligned across package roots and native hosts. Python now exposes both the
   optional-height verifier and the explicit

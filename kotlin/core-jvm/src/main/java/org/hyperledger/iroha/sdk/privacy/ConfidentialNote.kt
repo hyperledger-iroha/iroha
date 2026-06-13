@@ -70,6 +70,24 @@ class ConfidentialNoteOpening(
                 chainId,
                 amount,
             )
+
+        @JvmStatic
+        fun fromSpendKeyWithDiversifier(
+            rho: ByteArray,
+            spendKey: ByteArray,
+            diversifier: ByteArray,
+            asset: String,
+            chainId: String,
+            amount: String,
+        ): ConfidentialNoteOpening =
+            ConfidentialNoteOpening(
+                rho,
+                spendKey,
+                ConfidentialOwnerTag.deriveFromSpendKeyWithDiversifier(spendKey, diversifier),
+                asset,
+                chainId,
+                amount,
+            )
     }
 }
 
@@ -238,23 +256,51 @@ object ConfidentialNoteDecryption {
         recipientPrivateKey: ByteArray,
         spendKey: ByteArray,
         expectedChainId: String?,
+    ): ConfidentialNoteOpening =
+        decryptNoteWithOwnerTag(
+            encryptedPayload,
+            recipientPrivateKey,
+            spendKey,
+            ConfidentialOwnerTag.deriveFromSpendKey(spendKey),
+            expectedChainId,
+        )
+
+    @JvmStatic
+    fun decryptNoteWithOwnerTag(
+        encryptedPayload: ConfidentialEncryptedPayload,
+        recipientPrivateKey: ByteArray,
+        spendKey: ByteArray,
+        expectedOwnerTag: ByteArray,
+    ): ConfidentialNoteOpening =
+        decryptNoteWithOwnerTag(encryptedPayload, recipientPrivateKey, spendKey, expectedOwnerTag, null)
+
+    @JvmStatic
+    fun decryptNoteWithOwnerTag(
+        encryptedPayload: ConfidentialEncryptedPayload,
+        recipientPrivateKey: ByteArray,
+        spendKey: ByteArray,
+        expectedOwnerTag: ByteArray,
+        expectedChainId: String?,
     ): ConfidentialNoteOpening {
-        val recipientPrivate = fixedNonZeroBytes(recipientPrivateKey, 32, "recipientPrivateKey")
-        val recipientPublic = ConfidentialNoteEncryption.publicKeyFromPrivateKey(recipientPrivate)
         require(encryptedPayload.version == ConfidentialEncryptedPayload.VERSION_V1) {
             "encryptedPayload version must be ${ConfidentialEncryptedPayload.VERSION_V1}"
         }
-        val key = derivePayloadKey(
-            localPrivateKey = recipientPrivate,
-            peerPublicKey = encryptedPayload.ephemeralPublicKey,
-            ephemeralPublicKey = encryptedPayload.ephemeralPublicKey,
-            recipientPublicKey = recipientPublic,
-        )
+        val expectedOwnerTagBytes = fixedScalar(expectedOwnerTag, "expectedOwnerTag")
+        val recipientPrivate = fixedNonZeroBytes(recipientPrivateKey, 32, "recipientPrivateKey")
+        var key: ByteArray? = null
         var plaintext: ByteArray? = null
         return try {
+            val recipientPublic = ConfidentialNoteEncryption.publicKeyFromPrivateKey(recipientPrivate)
+            val derivedKey = derivePayloadKey(
+                localPrivateKey = recipientPrivate,
+                peerPublicKey = encryptedPayload.ephemeralPublicKey,
+                ephemeralPublicKey = encryptedPayload.ephemeralPublicKey,
+                recipientPublicKey = recipientPublic,
+            )
+            key = derivedKey
             val plaintextBytes = runXChaCha20Poly1305(
                 encrypt = false,
-                key = key,
+                key = derivedKey,
                 nonce = encryptedPayload.nonce,
                 aad = payloadAad(encryptedPayload.ephemeralPublicKey, recipientPublic),
                 input = encryptedPayload.ciphertext,
@@ -266,6 +312,9 @@ object ConfidentialNoteDecryption {
                     "confidential note chainId does not match expectedChainId"
                 }
             }
+            require(decoded.ownerTag.contentEquals(expectedOwnerTagBytes)) {
+                "confidential note ownerTag does not match expectedOwnerTag"
+            }
             ConfidentialNoteOpening(
                 decoded.rho,
                 spendKey,
@@ -275,7 +324,7 @@ object ConfidentialNoteDecryption {
                 decoded.amount,
             )
         } finally {
-            Arrays.fill(key, 0.toByte())
+            key?.let { Arrays.fill(it, 0.toByte()) }
             plaintext?.let { Arrays.fill(it, 0.toByte()) }
             Arrays.fill(recipientPrivate, 0.toByte())
         }

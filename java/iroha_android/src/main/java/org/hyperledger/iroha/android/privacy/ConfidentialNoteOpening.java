@@ -36,6 +36,22 @@ public final class ConfidentialNoteOpening {
         rho, spendKey, ConfidentialOwnerTag.deriveFromSpendKey(spendKey), asset, chainId, amount);
   }
 
+  public static ConfidentialNoteOpening fromSpendKeyWithDiversifier(
+      final byte[] rho,
+      final byte[] spendKey,
+      final byte[] diversifier,
+      final String asset,
+      final String chainId,
+      final String amount) {
+    return new ConfidentialNoteOpening(
+        rho,
+        spendKey,
+        ConfidentialOwnerTag.deriveFromSpendKeyWithDiversifier(spendKey, diversifier),
+        asset,
+        chainId,
+        amount);
+  }
+
   public byte[] rho() {
     return rho.clone();
   }
