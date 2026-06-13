@@ -75,32 +75,16 @@ class OfflineToriiClientReadinessTest {
 
     @Test
     fun readinessRejectsConflictingAbi7AliasesAndVerboseValues() {
-        val error = assertFailsWith<CompletionException> {
-            readinessFromBody(
-                """
-                {
-                  "offline_telemetry": true,
-                  "offline_kagemusha_abi7": false,
-                  "offline_kagemusha_recursive_compact_available": true,
-                  "offline_kagemusha_abi7_mode": "short-mode",
-                  "offline_kagemusha_recursive_compact_mode": "verbose-mode",
-                  "offline_kagemusha_abi7_bridge_abi_version": 7,
-                  "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 99,
-                  "offline_kagemusha_abi7_circuit_id": "short-circuit",
-                  "offline_kagemusha_recursive_compact_circuit_id": "verbose-circuit",
-                  "offline_kagemusha_abi7_artifacts": false,
-                  "offline_kagemusha_recursive_compact_artifacts_available": true
-                }
-                """.trimIndent(),
-            )
+        for ((body, message) in conflictingAliasBodies()) {
+            assertReadinessFails(body, message)
         }
-        val cause = error.cause
-        assertTrue(cause is OfflineToriiException)
-        assertTrue(
-            cause.cause?.message?.contains(
-                "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available must match",
-            ) == true,
-        )
+    }
+
+    @Test
+    fun readinessRejectsMalformedPresentAliasValues() {
+        for ((body, message) in malformedAliasBodies()) {
+            assertReadinessFails(body, message)
+        }
     }
 
     @Test
@@ -136,6 +120,70 @@ class OfflineToriiClientReadinessTest {
         .build()
         .getOfflineReadiness()
         .join()
+
+    private fun assertReadinessFails(responseBody: String, expectedMessage: String) {
+        val error = assertFailsWith<CompletionException> { readinessFromBody(responseBody) }
+        val cause = error.cause
+        assertTrue(cause is OfflineToriiException)
+        assertTrue(cause.cause?.message?.contains(expectedMessage) == true, cause.cause?.message)
+    }
+
+    private fun conflictingAliasBodies(): List<Pair<String, String>> = listOf(
+        aliasReadinessBody(abi7 = "false") to
+            "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available must match",
+        aliasReadinessBody(abi7Mode = "\"legacy-mode\"") to
+            "offline_kagemusha_abi7_mode and offline_kagemusha_recursive_compact_mode must match",
+        aliasReadinessBody(abi7Bridge = "8") to
+            "offline_kagemusha_abi7_bridge_abi_version and offline_kagemusha_recursive_compact_required_native_bridge_abi_version must match",
+        aliasReadinessBody(abi7Circuit = "\"legacy-circuit\"") to
+            "offline_kagemusha_abi7_circuit_id and offline_kagemusha_recursive_compact_circuit_id must match",
+        aliasReadinessBody(abi7Artifacts = "false") to
+            "offline_kagemusha_abi7_artifacts and offline_kagemusha_recursive_compact_artifacts_available must match",
+    )
+
+    private fun malformedAliasBodies(): List<Pair<String, String>> = listOf(
+        aliasReadinessBody(abi7 = "\"true\"") to
+            "offline_kagemusha_abi7 must be a boolean",
+        aliasReadinessBody(abi7Mode = "{}") to
+            "offline_kagemusha_abi7_mode must be a string",
+        aliasReadinessBody(compactMode = "\" recursive_compact_v1\"") to
+            "offline_kagemusha_recursive_compact_mode must be an exact non-empty string",
+        aliasReadinessBody(abi7Bridge = "\" 7\"") to
+            "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string",
+        aliasReadinessBody(compactBridge = "7.5") to
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer",
+        aliasReadinessBody(compactCircuit = "\"\"") to
+            "offline_kagemusha_recursive_compact_circuit_id must be an exact non-empty string",
+        aliasReadinessBody(compactArtifacts = "\"true\"") to
+            "offline_kagemusha_recursive_compact_artifacts_available must be a boolean",
+    )
+
+    private fun aliasReadinessBody(
+        abi7: String = "true",
+        compactAvailable: String = "true",
+        abi7Mode: String = "\"recursive_compact_v1\"",
+        compactMode: String = "\"recursive_compact_v1\"",
+        abi7Bridge: String = "7",
+        compactBridge: String = "7",
+        abi7Circuit: String = "\"kagemusha-recursive-compact-v1\"",
+        compactCircuit: String = "\"kagemusha-recursive-compact-v1\"",
+        abi7Artifacts: String = "true",
+        compactArtifacts: String = "true",
+    ): String = """
+        {
+          "offline_telemetry": true,
+          "offline_kagemusha_abi7": $abi7,
+          "offline_kagemusha_recursive_compact_available": $compactAvailable,
+          "offline_kagemusha_abi7_mode": $abi7Mode,
+          "offline_kagemusha_recursive_compact_mode": $compactMode,
+          "offline_kagemusha_abi7_bridge_abi_version": $abi7Bridge,
+          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": $compactBridge,
+          "offline_kagemusha_abi7_circuit_id": $abi7Circuit,
+          "offline_kagemusha_recursive_compact_circuit_id": $compactCircuit,
+          "offline_kagemusha_abi7_artifacts": $abi7Artifacts,
+          "offline_kagemusha_recursive_compact_artifacts_available": $compactArtifacts
+        }
+    """.trimIndent()
 
     private class CapturingExecutor(
         private val responseBody: String,

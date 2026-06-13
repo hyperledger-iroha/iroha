@@ -57,6 +57,9 @@ and completed history lives in [`status.md`](./status.md).
   derived node signal. Legacy-only and recursive-compact-only bodies remain
   supported, but when both families are present their enablement, mode, bridge
   ABI, circuit-id, and artifact values must match or parsing fails closed.
+  Present alias values must also keep their expected exact types: booleans as
+  JSON booleans, strings as non-empty unpadded strings, and bridge ABI values as
+  exact integers or exact integer strings.
 - Confidential-v2 JVM/Android proof assembly now has typed transfer and
   unshield witness/request codecs for the production native bridge. Keep wallet
   integrations on these builders instead of raw witness bytes so canonical

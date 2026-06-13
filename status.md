@@ -173972,3 +173972,16 @@ Last updated: 2026-06-13
 - Focused validation passed:
   - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest --console=plain`
   - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineJsonParserTest,org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :jvm:test --rerun-tasks --console=plain`
+
+## 2026-06-13 - Kagemusha Readiness Alias Type Hardening
+
+- Tightened the Kotlin/JVM and Java Android Offline/Offline V2 readiness alias
+  parsers so present alias values must be typed and exact: booleans must be
+  JSON booleans, string aliases must be exact non-empty strings, and bridge ABI
+  aliases must be exact integers or exact integer strings.
+- Expanded adversarial readiness coverage so each aliased field conflicts
+  independently, and malformed present values fail before clients can treat
+  them as absent defaults.
+- Focused validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineJsonParserTest,org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :jvm:test --rerun-tasks --console=plain`

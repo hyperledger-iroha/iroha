@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -120,39 +122,14 @@ public final class OfflineJsonParser {
     return value instanceof Boolean bool ? bool.booleanValue() : defaultValue;
   }
 
-  private static Integer asOptionalInteger(final Object value) {
-    if (value == null) {
-      return null;
-    }
-    if (value instanceof Number number) {
-      return Integer.valueOf(number.intValue());
-    }
-    if (value instanceof String string) {
-      final String trimmed = string.trim();
-      return trimmed.isEmpty() ? null : Integer.valueOf(Integer.parseInt(trimmed));
-    }
-    return null;
-  }
-
-  private static String asNullableString(final Object value) {
-    if (value == null) {
-      return null;
-    }
-    if (value instanceof String string) {
-      return string;
-    }
-    if (value instanceof Number || value instanceof Boolean) {
-      return value.toString();
-    }
-    return null;
-  }
-
   private static String matchingNullableStringAlias(
       final Map<String, Object> object, final String legacyKey, final String compactKey) {
     final boolean hasLegacy = object.containsKey(legacyKey);
     final boolean hasCompact = object.containsKey(compactKey);
-    final String legacy = hasLegacy ? asNullableString(object.get(legacyKey)) : null;
-    final String compact = hasCompact ? asNullableString(object.get(compactKey)) : null;
+    final String legacy =
+        hasLegacy ? asPresentAliasString(object.get(legacyKey), legacyKey) : null;
+    final String compact =
+        hasCompact ? asPresentAliasString(object.get(compactKey), compactKey) : null;
     if (hasLegacy && hasCompact && !valuesEqual(legacy, compact)) {
       throw new IllegalStateException(legacyKey + " and " + compactKey + " must match");
     }
@@ -163,8 +140,10 @@ public final class OfflineJsonParser {
       final Map<String, Object> object, final String legacyKey, final String compactKey) {
     final boolean hasLegacy = object.containsKey(legacyKey);
     final boolean hasCompact = object.containsKey(compactKey);
-    final Integer legacy = hasLegacy ? asOptionalInteger(object.get(legacyKey)) : null;
-    final Integer compact = hasCompact ? asOptionalInteger(object.get(compactKey)) : null;
+    final Integer legacy =
+        hasLegacy ? Integer.valueOf(asPresentAliasInteger(object.get(legacyKey), legacyKey)) : null;
+    final Integer compact =
+        hasCompact ? Integer.valueOf(asPresentAliasInteger(object.get(compactKey), compactKey)) : null;
     if (hasLegacy && hasCompact && !valuesEqual(legacy, compact)) {
       throw new IllegalStateException(legacyKey + " and " + compactKey + " must match");
     }
@@ -178,8 +157,10 @@ public final class OfflineJsonParser {
       final boolean defaultValue) {
     final boolean hasLegacy = object.containsKey(legacyKey);
     final boolean hasCompact = object.containsKey(compactKey);
-    final Boolean legacy = hasLegacy ? Boolean.valueOf(asBoolean(object.get(legacyKey), legacyKey)) : null;
-    final Boolean compact = hasCompact ? Boolean.valueOf(asBoolean(object.get(compactKey), compactKey)) : null;
+    final Boolean legacy =
+        hasLegacy ? Boolean.valueOf(asBoolean(object.get(legacyKey), legacyKey)) : null;
+    final Boolean compact =
+        hasCompact ? Boolean.valueOf(asBoolean(object.get(compactKey), compactKey)) : null;
     if (hasLegacy && hasCompact && !valuesEqual(legacy, compact)) {
       throw new IllegalStateException(legacyKey + " and " + compactKey + " must match");
     }
@@ -187,6 +168,50 @@ public final class OfflineJsonParser {
       return legacy.booleanValue();
     }
     return compact != null ? compact.booleanValue() : defaultValue;
+  }
+
+  private static String asPresentAliasString(final Object value, final String path) {
+    if (!(value instanceof String string)) {
+      throw new IllegalStateException(path + " must be a string");
+    }
+    if (string.isEmpty() || !string.equals(string.trim())) {
+      throw new IllegalStateException(path + " must be an exact non-empty string");
+    }
+    return string;
+  }
+
+  private static int asPresentAliasInteger(final Object value, final String path) {
+    if (value instanceof String string) {
+      if (string.isEmpty() || !string.equals(string.trim())) {
+        throw new IllegalStateException(path + " must be an exact integer string");
+      }
+      try {
+        return Integer.parseInt(string);
+      } catch (final NumberFormatException ex) {
+        throw new IllegalStateException(path + " must be an integer", ex);
+      }
+    }
+    if (value instanceof BigInteger bigInteger) {
+      try {
+        return bigInteger.intValueExact();
+      } catch (final ArithmeticException ex) {
+        throw new IllegalStateException(path + " must fit in signed 32-bit range", ex);
+      }
+    }
+    if (value instanceof BigDecimal bigDecimal) {
+      try {
+        return bigDecimal.toBigIntegerExact().intValueExact();
+      } catch (final ArithmeticException ex) {
+        throw new IllegalStateException(path + " must be an integer", ex);
+      }
+    }
+    if (value instanceof Byte
+        || value instanceof Short
+        || value instanceof Integer
+        || value instanceof Long) {
+      return Math.toIntExact(((Number) value).longValue());
+    }
+    throw new IllegalStateException(path + " must be an integer");
   }
 
   private static boolean valuesEqual(final Object left, final Object right) {

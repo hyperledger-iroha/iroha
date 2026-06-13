@@ -434,8 +434,8 @@ object OfflineJsonParser {
     private fun matchingOptionalStringAlias(obj: Map<String, Any>, legacyKey: String, compactKey: String): String? {
         val hasLegacy = obj.containsKey(legacyKey)
         val hasCompact = obj.containsKey(compactKey)
-        val legacy = if (hasLegacy) asOptionalString(obj[legacyKey]) else null
-        val compact = if (hasCompact) asOptionalString(obj[compactKey]) else null
+        val legacy = if (hasLegacy) asPresentAliasString(obj[legacyKey], legacyKey) else null
+        val compact = if (hasCompact) asPresentAliasString(obj[compactKey], compactKey) else null
         if (hasLegacy && hasCompact) {
             check(legacy == compact) { "$legacyKey and $compactKey must match" }
         }
@@ -445,8 +445,8 @@ object OfflineJsonParser {
     private fun matchingOptionalIntAlias(obj: Map<String, Any>, legacyKey: String, compactKey: String): Int? {
         val hasLegacy = obj.containsKey(legacyKey)
         val hasCompact = obj.containsKey(compactKey)
-        val legacy = if (hasLegacy) asOptionalInt(obj[legacyKey], legacyKey) else null
-        val compact = if (hasCompact) asOptionalInt(obj[compactKey], compactKey) else null
+        val legacy = if (hasLegacy) asPresentAliasInt(obj[legacyKey], legacyKey) else null
+        val compact = if (hasCompact) asPresentAliasInt(obj[compactKey], compactKey) else null
         if (hasLegacy && hasCompact) {
             check(legacy == compact) { "$legacyKey and $compactKey must match" }
         }
@@ -469,6 +469,23 @@ object OfflineJsonParser {
         return legacy ?: compact ?: default
     }
 
+    private fun asPresentAliasString(value: Any?, path: String): String {
+        check(value is String) { "$path must be a string" }
+        check(value.isNotEmpty() && value == value.trim()) { "$path must be an exact non-empty string" }
+        return value
+    }
+
+    private fun asPresentAliasInt(value: Any?, path: String): Int {
+        val parsed = if (value is String) {
+            check(value.isNotEmpty() && value == value.trim()) { "$path must be an exact integer string" }
+            value.toLong()
+        } else {
+            JsonNumbers.asLong(value, path)
+        }
+        check(parsed in Int.MIN_VALUE..Int.MAX_VALUE) { "$path is outside Int range" }
+        return parsed.toInt()
+    }
+
     private fun asLong(value: Any?, path: String): Long {
         return JsonNumbers.asLong(value, path)
     }
@@ -480,19 +497,6 @@ object OfflineJsonParser {
 
     private fun asOptionalBoolean(value: Any?, default: Boolean): Boolean {
         return if (value is Boolean) value else default
-    }
-
-    private fun asOptionalInt(value: Any?, path: String): Int? {
-        if (value == null) return null
-        val parsed = if (value is String) {
-            val trimmed = value.trim()
-            if (trimmed.isEmpty()) return null
-            trimmed.toLong()
-        } else {
-            JsonNumbers.asLong(value, path)
-        }
-        check(parsed in Int.MIN_VALUE..Int.MAX_VALUE) { "$path is outside Int range" }
-        return parsed.toInt()
     }
 
     private fun asBytes(value: Any?, path: String): ByteArray {
