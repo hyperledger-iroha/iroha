@@ -282,7 +282,10 @@ use crate::telemetry::{
     SchedulerLayerWidthBuckets,
 };
 use crate::{
-    da::{DaCommitmentValidationError, DaPinIntentValidationError, DaShardCursorError},
+    da::{
+        DaCommitmentValidationError, DaPinIntentValidationError, DaShardCursorError,
+        receipts::DaReceiptCursorError,
+    },
     fees::SwapEvidence,
 };
 
@@ -2347,12 +2350,25 @@ pub enum BlockValidationError {
     DaCommitmentBundle(#[from] DaCommitmentValidationError),
     /// DA pin-intent bundle failed validation: {0}
     DaPinIntentBundle(#[from] DaPinIntentValidationError),
+    /// DA receipt cursor gate failed: {0}
+    DaReceiptCursor(#[from] DaReceiptCursorError),
     /// DA shard cursor gate failed: {0}
     DaShardCursor(#[from] DaShardCursorError),
     /// AXT envelope export contained invalid or inconsistent fragments: {0}
     AxtEnvelopeValidationFailed(AxtEnvelopeValidationDetails),
     /// NPoS consensus effects are invalid: {0}
     NposEffectsInvalid(String),
+}
+
+impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
+    fn from(error: crate::state::DaIndexHydrationError) -> Self {
+        match error {
+            crate::state::DaIndexHydrationError::ShardCursor(error) => Self::DaShardCursor(error),
+            crate::state::DaIndexHydrationError::ReceiptCursor(error) => {
+                Self::DaReceiptCursor(error)
+            }
+        }
+    }
 }
 
 /// Error during signature verification
@@ -5459,7 +5475,7 @@ pub(crate) mod valid {
                     timings.execution_da_indexes_ms = to_ms(da_indexes_start.elapsed());
                 }
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
-                let error = BlockValidationError::DaShardCursor(error);
+                let error = BlockValidationError::from(error);
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
@@ -18538,6 +18554,7 @@ mod event {
             ) => Reason::DaProofPolicyMismatch,
             BlockValidationError::DaCommitmentBundle(_) => Reason::DaShardCursorViolation,
             BlockValidationError::DaPinIntentBundle(_) => Reason::DaShardCursorViolation,
+            BlockValidationError::DaReceiptCursor(_) => Reason::DaShardCursorViolation,
             BlockValidationError::DaShardCursor(_) => Reason::DaShardCursorViolation,
             BlockValidationError::AxtEnvelopeValidationFailed(_) => {
                 Reason::TransactionValidationFailed

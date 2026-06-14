@@ -553,7 +553,7 @@ pub(crate) mod taikai_ingest {
         map.insert("updated_unix".into(), Value::from(record.updated_unix));
         let rendered = json::to_json_pretty(&Value::Object(map))
             .map_err(|err| io::Error::new(ErrorKind::Other, err.to_string()))?;
-        let tmp_path = path.with_extension(format!("tmp-{}", artifact_temp_suffix()));
+        let tmp_path = path.with_extension(format!("tmp-{}", artifact_temp_suffix()?));
         match OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -990,9 +990,22 @@ pub(crate) mod taikai_ingest {
         remove_temp_artifact(tmp_path).err().unwrap_or(err)
     }
 
-    fn artifact_temp_suffix() -> String {
-        let counter = ARTIFACT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        format!("{}-{counter:016x}", std::process::id())
+    fn allocate_artifact_temp_counter(counter: &AtomicU64) -> io::Result<u64> {
+        counter
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| {
+                io::Error::new(
+                    ErrorKind::Other,
+                    "Taikai artifact temp suffix counter exhausted",
+                )
+            })
+    }
+
+    fn artifact_temp_suffix() -> io::Result<String> {
+        let counter = allocate_artifact_temp_counter(&ARTIFACT_TEMP_COUNTER)?;
+        Ok(format!("{}-{counter:016x}", std::process::id()))
     }
 
     fn sync_parent_dir(path: &Path) -> io::Result<()> {
@@ -1065,6 +1078,37 @@ pub(crate) mod taikai_ingest {
                 fs::read(&tmp_path).expect("read existing temp artifact after cleanup helper"),
                 b"existing"
             );
+        }
+
+        #[test]
+        fn taikai_temp_artifact_counter_rejects_exhaustion_without_wrapping() {
+            let counter = AtomicU64::new(u64::MAX);
+
+            let err = allocate_artifact_temp_counter(&counter)
+                .expect_err("exhausted temp counter must reject");
+
+            assert_eq!(err.kind(), ErrorKind::Other);
+            assert!(
+                err.to_string().contains("temp suffix counter exhausted"),
+                "unexpected error: {err}"
+            );
+            assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+        }
+
+        #[test]
+        fn taikai_temp_artifact_counter_allocates_pre_exhaustion_suffix_once() {
+            let counter = AtomicU64::new(u64::MAX - 1);
+
+            let suffix = allocate_artifact_temp_counter(&counter)
+                .expect("last non-exhausted temp counter should allocate");
+
+            assert_eq!(suffix, u64::MAX - 1);
+            assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+            assert!(
+                allocate_artifact_temp_counter(&counter).is_err(),
+                "counter must fail closed once exhausted"
+            );
+            assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
         }
 
         #[test]
@@ -1150,7 +1194,7 @@ pub(crate) mod taikai_ingest {
 
         let tmp_name = format!(
             ".{prefix}-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-            artifact_temp_suffix()
+            artifact_temp_suffix()?
         );
         let tmp_path = base_dir.join(tmp_name);
 
@@ -1447,7 +1491,7 @@ pub(crate) mod taikai_ingest {
             ));
         };
         let tmp_path =
-            request_path.with_file_name(format!(".{name}.tmp-{}", artifact_temp_suffix()));
+            request_path.with_file_name(format!(".{name}.tmp-{}", artifact_temp_suffix()?));
 
         match write_temp_artifact(&tmp_path, body.as_bytes()) {
             Ok(()) => {}
@@ -1518,7 +1562,7 @@ pub(crate) mod taikai_ingest {
                 ),
             ));
         };
-        let tmp_path = path.with_file_name(format!(".{name}.tmp-{}", artifact_temp_suffix()));
+        let tmp_path = path.with_file_name(format!(".{name}.tmp-{}", artifact_temp_suffix()?));
 
         match write_temp_artifact(&tmp_path, marker.as_bytes()) {
             Ok(()) => {}
@@ -1568,6 +1612,8 @@ pub(crate) mod taikai_ingest {
             return Ok(());
         }
 
+        let mut processing_errors = Vec::new();
+
         for upload in uploads {
             match sender
                 .send(
@@ -1583,12 +1629,19 @@ pub(crate) mod taikai_ingest {
                         .unwrap_or_default()
                         .as_secs()
                         .to_string();
-                    persist_anchor_sentinel(&upload.sentinel_path, &marker).map_err(|err| {
-                        format!(
+                    if let Err(err) = persist_anchor_sentinel(&upload.sentinel_path, &marker) {
+                        let message = format!(
                             "failed to persist Taikai anchor sentinel `{}`: {err}",
                             upload.sentinel_path.display()
-                        )
-                    })?;
+                        );
+                        iroha_logger::warn!(
+                            ?err,
+                            sentinel = %upload.sentinel_path.display(),
+                            base = upload.base_id.as_str(),
+                            "failed to persist Taikai anchor sentinel"
+                        );
+                        processing_errors.push(message);
+                    }
                 }
                 Err(err) => {
                     let base_id = upload.base_id.as_str();
@@ -1601,12 +1654,19 @@ pub(crate) mod taikai_ingest {
                         base = base_id,
                         "failed to deliver Taikai envelope to anchor service"
                     );
-                    return Err(message);
+                    processing_errors.push(message);
                 }
             }
         }
 
-        Ok(())
+        match processing_errors.len() {
+            0 => Ok(()),
+            1 => Err(processing_errors.pop().expect("length checked")),
+            count => Err(format!(
+                "failed to process {count} Taikai anchor uploads: {}",
+                processing_errors.join("; ")
+            )),
+        }
     }
 
     pub(crate) async fn collect_pending_uploads(

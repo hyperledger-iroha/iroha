@@ -6,7 +6,9 @@ use std::fs;
 #[cfg(feature = "bench")]
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
-use criterion::{BatchSize, Criterion};
+#[cfg(feature = "bench")]
+use criterion::BatchSize;
+use criterion::Criterion;
 use iroha_config::{
     base::WithOrigin,
     parameters::{

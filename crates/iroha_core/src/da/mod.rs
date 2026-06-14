@@ -99,6 +99,14 @@ pub enum DaCommitmentValidationError {
     /// Confidential-compute policy validation failed.
     #[error(transparent)]
     ConfidentialCompute(#[from] ConfidentialComputeError),
+    /// Commitment bundle length cannot be represented in DA location/proof metadata.
+    #[error("DA commitment bundle length {len} exceeds representable maximum {max}")]
+    BundleTooLarge {
+        /// Number of commitments in the bundle.
+        len: usize,
+        /// Maximum supported commitment count for one bundle.
+        max: usize,
+    },
     /// Duplicate `(lane, epoch, sequence)` commitment found.
     #[error(
         "duplicate DA commitment detected for lane {key_lane}, epoch {epoch}, sequence {sequence}"
@@ -508,9 +516,10 @@ pub fn validate_pin_intent_bundle(
 
 /// Validate commitment bundle invariants before embedding into a block.
 ///
-/// Enforces unique `(lane, epoch, sequence)` tuples, unique manifest hashes and
-/// storage tickets within the bundle, non-zero manifest hashes and storage
-/// tickets, and lane proof policy compatibility.
+/// Enforces a representable bundle length, unique `(lane, epoch, sequence)`
+/// tuples, unique manifest hashes and storage tickets within the bundle,
+/// non-zero manifest hashes and storage tickets, and lane proof policy
+/// compatibility.
 ///
 /// # Errors
 ///
@@ -519,6 +528,8 @@ pub fn validate_commitment_bundle(
     bundle: &DaCommitmentBundle,
     lane_config: &LaneConfig,
 ) -> Result<(), DaCommitmentValidationError> {
+    validate_commitment_bundle_len(bundle.commitments.len())?;
+
     let mut seen_keys = BTreeSet::new();
     let mut seen_manifests = BTreeSet::new();
     let mut seen_tickets = BTreeSet::new();
@@ -572,6 +583,25 @@ pub fn validate_commitment_bundle(
         validate_confidential_compute_record(lane_config, record)?;
     }
 
+    Ok(())
+}
+
+pub(crate) const MAX_DA_BUNDLE_LOCATIONS: usize = u32::MAX as usize;
+
+pub(crate) fn da_bundle_location_index(index: usize) -> Option<u32> {
+    if index >= MAX_DA_BUNDLE_LOCATIONS {
+        return None;
+    }
+    u32::try_from(index).ok()
+}
+
+fn validate_commitment_bundle_len(len: usize) -> Result<(), DaCommitmentValidationError> {
+    if len > MAX_DA_BUNDLE_LOCATIONS {
+        return Err(DaCommitmentValidationError::BundleTooLarge {
+            len,
+            max: MAX_DA_BUNDLE_LOCATIONS,
+        });
+    }
     Ok(())
 }
 
@@ -1140,6 +1170,24 @@ mod tests {
                 ConfidentialComputeError::MissingPolicy
             )
         ));
+    }
+
+    #[test]
+    fn validate_commitment_bundle_len_rejects_unrepresentable_location_space() {
+        assert!(validate_commitment_bundle_len(0).is_ok());
+        assert!(validate_commitment_bundle_len(MAX_DA_BUNDLE_LOCATIONS).is_ok());
+
+        if let Some(len) = MAX_DA_BUNDLE_LOCATIONS.checked_add(1) {
+            let err = validate_commitment_bundle_len(len)
+                .expect_err("unrepresentable DA bundle length must fail");
+            assert_eq!(
+                err,
+                DaCommitmentValidationError::BundleTooLarge {
+                    len,
+                    max: MAX_DA_BUNDLE_LOCATIONS
+                }
+            );
+        }
     }
 
     #[test]

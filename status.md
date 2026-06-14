@@ -2,6 +2,331 @@
 
 Last updated: 2026-06-14
 
+## 2026-06-14 RBC Allocation Counter Overflow Hardening
+
+- Hardened RBC lane/dataspace allocation metadata construction to use checked
+  counters instead of saturating `tx_count`, RBC-byte, and TEU totals before
+  persisting or reporting allocation ownership.
+- Added adversarial coverage for an allocation byte counter that reaches
+  `u64::MAX` and must reject the next byte instead of clamping into plausible
+  metadata, plus a helper-level overflow regression.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib add_allocation_counter -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests derive_rbc_allocations_rejects_allocation_byte_overflow -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests derive_rbc_allocations_splits_chunks_across_lanes -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 DA/RBC Changed-Crate Clippy Pass
+
+- Fixed benchmark-target cfg/import gating surfaced by strict changed-crate
+  linting so `iroha_core`/`iroha_torii` all-target clippy can run without
+  enabling the optional `bench` feature.
+- Validation passed:
+  - `cargo clippy -p iroha_core -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 DA Shard Cursor Bundle Rollback Hardening
+
+- Hardened the public DA shard-cursor `advance_bundle` helper to apply bundle
+  cursor advances transactionally, matching the stricter mapped-record path so a
+  later regression cannot leave earlier cursor mutations behind.
+- Added focused rollback coverage for a rejected bundle that first advances a
+  different shard and then regresses an existing shard cursor.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib advance_bundle -- --nocapture`
+  - `cargo test -p iroha_core --lib da::shard_cursor:: -- --nocapture`
+
+## 2026-06-14 DA/RBC Broad Staged Validation Pass
+
+- Re-ran the changed-area DA/RBC suites after the staged hardening batch to
+  cover Torii DA ingest/persistence/routes, Core DA receipt/proof/replay/cursor
+  state, RBC store recovery, pending-RBC stash accounting, and RS16 layout
+  fanout arithmetic.
+- Validation passed:
+  - `cargo test -p iroha_torii da:: -- --nocapture` (`218` passed, `1` ignored)
+  - `cargo test -p iroha_core --lib da:: -- --nocapture` (`162` passed)
+  - `cargo test -p iroha_core --lib sumeragi::rbc_store:: -- --nocapture` (`68` passed)
+  - `cargo test -p iroha_core --lib pending_rbc -- --nocapture` (`10` passed)
+  - `cargo test -p iroha_core --lib rbc_payload -- --nocapture` (`8` passed)
+  - `cargo test -p iroha_core --lib rbc_layout -- --nocapture` (`3` passed)
+  - `cargo test -p iroha_core --lib rs16_initial_chunk_indices -- --nocapture` (`3` passed)
+
+## 2026-06-14 RBC Persisted Chunk Length Fail-Closed Check
+
+- Hardened persisted RBC chunk validation so known-layout sessions reject any
+  chunk whose expected length cannot be derived, while preserving legacy
+  snapshots that intentionally lack payload-size metadata.
+- Added focused adversarial coverage for the missing expected-length branch and
+  a legacy compatibility regression.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib validate_persisted_chunk_lengths -- --nocapture`
+  - `cargo test -p iroha_core --lib from_persisted_rejects_known_layout_chunk_length_mismatch -- --nocapture`
+
+## 2026-06-14 DA RS16 Commitment Count Preflight
+
+- Hardened DA RS16 manifest commitment construction with an exact checked
+  preflight count before allocating the commitment vector or iterating parity
+  generation.
+- Fixed row-parity capacity accounting so row parity is counted once per parity
+  row and column, not once per data stripe, avoiding excessive allocation
+  pressure for large striped payloads.
+- Focused validation passed:
+  - `cargo test -p iroha_torii chunk_commitment_capacity_hint -- --nocapture`
+  - `cargo test -p iroha_torii build_chunk_commitments -- --nocapture`
+
+## 2026-06-14 DA Compressed Payload Overrun Hardening
+
+- Hardened DA compressed payload normalization so gzip, deflate, and zstd
+  decoding reads at most one byte beyond the advertised `total_size` before
+  rejecting a size mismatch.
+- Added focused adversarial coverage proving overlong decompressed streams stop
+  at `total_size + 1` and that unbounded sentinel sizes reject before any read.
+- Focused validation passed:
+  - `cargo test -p iroha_torii decompress_reader -- --nocapture`
+  - `cargo test -p iroha_torii normalize_payload -- --nocapture`
+
+## 2026-06-14 DA IPA Parameter Length Overflow Hardening
+
+- Hardened DA ingest IPA commitment parameter sizing so chunk counts that
+  cannot round up to a supported power-of-two return a client-visible
+  `BAD_REQUEST` instead of panicking.
+- Added boundary coverage for zero, exact power-of-two, rounded-up, and
+  overflowing commitment counts without allocating huge vectors.
+- Focused validation passed:
+  - `cargo test -p iroha_torii ipa_params_len_for_commitment_count -- --nocapture`
+
+## 2026-06-14 RBC Payload Layout Index Arithmetic Hardening
+
+- Hardened RS16 payload/encoded-index translation helpers to use checked
+  multiplication and addition, returning `None` instead of wrapping impossible
+  layout arithmetic.
+- Updated reconstructable-stripe accounting and RS16 reconstruction bounds to
+  stop or invalidate on impossible checked stripe ranges rather than saturating
+  them into plausible local chunk windows.
+- Added adversarial coverage for encoded-index overflow in an over-cap RS16
+  layout while preserving normal payload-index and chunk-length helper behavior.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_payload_layout_index_helpers -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_layout_total_chunks -- --nocapture`
+
+## 2026-06-14 RS16 Initial Fanout Failure Boundary
+
+- Hardened reduced RS16 initial fanout so helper failures are no longer
+  conflated with intentional full fanout.
+- Outbound chunk dispatch now skips a bounded RS16 target when layout-derived
+  fanout indices cannot be computed, instead of broadening that target to a full
+  chunk broadcast.
+- Added focused adversarial coverage for deliberate full fanout and an over-cap
+  RS16 layout that must fail closed before target selection.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rs16_initial_chunk_indices -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_layout_total_chunks -- --nocapture`
+
+## 2026-06-14 RBC Payload Encode Preflight Hardening
+
+- Hardened RBC payload encoding so layout-derived chunk counts are checked
+  against representability and `RBC_MAX_TOTAL_CHUNKS` before materializing chunk
+  vectors and RS16 parity chunks.
+- Classified RS16 layout arithmetic overflow as chunk-count overflow instead of
+  the same unavailable-layout error used for legacy payload metadata.
+- Added focused adversarial coverage for plain and RS16 payloads that cross the
+  1024-chunk hard cap by only one payload edge, plus the RS16 `usize` overflow
+  layout boundary.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib over_cap_before_chunking -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_layout_total_chunks -- --nocapture`
+  - `cargo test -p iroha_core --lib layout_chunk_count_overflow -- --nocapture`
+
+## 2026-06-14 RBC Layout Chunk-Count Overflow Hardening
+
+- Hardened RBC session admission so layout-derived chunk counts must be
+  representable, within `RBC_MAX_TOTAL_CHUNKS`, and equal to the advertised
+  session chunk count instead of silently skipping the check when layout math
+  overflowed `u32`.
+- Switched known-layout total chunk derivation to checked multiplication for
+  RS16 layouts and added an explicit `LayoutChunkCountOverflow` session error.
+- Hardened persisted RBC layout validation so forged over-cap layout metadata
+  is classified and rejected before mismatch fallback or session rebuild.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib layout_chunk_count_overflow -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_session_new_rejects_rs16_layout_chunk_count_usize_overflow -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_layout_total_chunks -- --nocapture`
+
+## 2026-06-14 DA Ingest Replay Cursor Ownership Hardening
+
+- Removed the redundant Torii DA ingest spool action that advanced replay
+  cursors before the durable receipt log accepted the receipt.
+- Kept replay cursor persistence owned by `DaReceiptLog::append`, after receipt
+  validation and durable receipt-file append, so rejected gap/conflict/stale
+  receipts cannot poison replay admission state.
+- Added focused regression coverage that a rejected sequence-gap append leaves
+  the replay cursor unchanged and the next contiguous receipt can still advance
+  it.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_rejected_append_does_not_advance_replay_cursor -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_enforces_ordering_and_dedupe -- --nocapture`
+  - `cargo test -p iroha_torii sequence_gap -- --nocapture`
+
+## 2026-06-14 DA Ingest Receipt Sequence Gap Hardening
+
+- Hardened DA ingest replay admission so once a lane/epoch has sequence history
+  or a recovered cursor floor, fresh higher sequences must advance contiguously
+  instead of skipping over the next required receipt number.
+- Hardened the durable Torii DA receipt log with the same forward-gap check at
+  append time, and made receipt-log recovery reject on-disk gaps before seeding
+  replay cursors.
+- Threaded sequence-gap outcomes through Torii DA ingest conflict responses and
+  receipt metrics so operators can distinguish gaps from stale or conflicting
+  receipt evidence.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib sequence_gap -- --nocapture`
+  - `cargo test -p iroha_core --lib replay_cache -- --nocapture`
+  - `cargo test -p iroha_torii sequence_gap -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_enforces_ordering_and_dedupe -- --nocapture`
+  - `cargo test -p iroha_torii record_da_receipt_metrics_tracks_outcomes_and_cursor -- --nocapture`
+
+## 2026-06-14 DA Query Pagination Over-Offset Hardening
+
+- Added queryable-entry `len()` accessors to the DA commitment and pin-intent
+  stores so Torii list handlers can classify over-offset pages without draining
+  the full in-memory index.
+- Hardened DA commitment and pin-intent listing so unrepresentable offsets,
+  zero limits, and offsets past the current store length return an empty page
+  before constructing the listing iterator.
+- Added focused over-offset pagination coverage for both DA query surfaces and
+  count coverage for store pruning.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib builds_from -- --nocapture`
+  - `cargo test -p iroha_core --lib prunes_retired_lanes -- --nocapture`
+  - `cargo test -p iroha_torii list_over_offset_returns_empty_page -- --nocapture`
+
+## 2026-06-14 RBC Store Byte Accounting Hardening
+
+- Hardened persisted RBC store byte accounting so retention pressure totals
+  saturate instead of using unchecked `usize` sums across stored sessions.
+- Hardened complete-payload reconstruction from persisted chunks so capacity
+  overflow fails validation explicitly instead of panicking in debug builds or
+  wrapping in release builds.
+- Added focused adversarial coverage for the exact byte-total overflow boundary.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib payload_byte_accounting_handles_overflow_boundary_without_wrapping -- --nocapture`
+
+## 2026-06-14 DA Index Hydration Receipt Fail-Closed
+
+- Hardened DA index hydration from Kura so receipt cursor replay failures now
+  fail hydration instead of being logged and ignored, matching shard cursor
+  replay behavior.
+- Added a typed internal DA hydration error that maps shard failures to
+  `DaShardCursor` block validation errors and receipt failures to
+  `DaReceiptCursor` validation errors.
+- Added focused Kura replay coverage for committed receipt sequence gaps during
+  hydration.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib hydrate_da_indexes_rejects -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_da_shard_cursors_rejects_da_receipt_sequence_gap -- --nocapture`
+
+## 2026-06-14 RBC Chunk Allocation Overflow Hardening
+
+- Hardened RBC chunk allocation helpers so adversarial stake/weight vectors use
+  deterministic saturated `u128` weight accumulation and explicit bounded
+  allocation trimming instead of debug panics or release wrapping during `u32`
+  allocation sums.
+- Added focused adversarial coverage for saturated weight totals and
+  `u32::MAX + u32::MAX` allocation-sum shapes.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib allocation -- --nocapture`
+
+## 2026-06-14 DA Receipt Cursor Gap Validation
+
+- Hardened committed DA receipt cursor tracking so once a `(lane, epoch)` has a
+  recorded sequence, later bundles must advance contiguously instead of jumping
+  over missing receipt numbers.
+- Threaded receipt cursor gap failures into block validation as DA shard cursor
+  violations, so candidate blocks with committed receipt sequence gaps are
+  rejected before apply/hydration can merely log the receipt cursor failure.
+- Added focused rollback and block-validation coverage for mid-bundle sequence
+  gaps and committed sequence jumps.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib receipt_cursor_record_bundle_rejects_sequence_gap_and_rolls_back -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_da_shard_cursors_rejects_da_receipt_sequence_gap -- --nocapture`
+  - `cargo test -p iroha_core --lib receipt_cursor -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_da_shard_cursors_rejects -- --nocapture`
+
+## 2026-06-14 RS16 Manifest Metadata Index Hardening
+
+- Hardened RS16 chunk commitment metadata so stripe IDs and stripe-parity column
+  IDs use checked `u32` conversion instead of saturating oversized internal
+  indexes to `u32::MAX`.
+- Added focused boundary coverage for chunk-index counter exhaustion and
+  oversized manifest metadata indexes in the lower-level RS16 builder helpers.
+- Focused validation passed:
+  - `cargo test -p iroha_torii rs16::tests -- --nocapture`
+
+## 2026-06-14 DA Temp Artifact Suffix Counter Hardening
+
+- Hardened DA persistence and Taikai temp artifact suffix allocation so the
+  per-process `AtomicU64` counters use checked increments instead of wrapping at
+  `u64::MAX` and reusing old PID-prefixed temp names.
+- Existing artifact writers now fail closed before creating temp paths when the
+  suffix counter is exhausted, preserving the no-overwrite temp artifact
+  contract.
+- Added focused adversarial coverage for counter exhaustion and the final
+  pre-exhaustion suffix in both DA persistence and Taikai artifact helpers.
+- Focused validation passed:
+  - `cargo test -p iroha_torii temp_artifact_counter -- --nocapture`
+
+## 2026-06-14 DA Spool Queue-Depth Counter Hardening
+
+- Hardened the async DA spooler queue-depth counter so enqueue accounting uses
+  checked atomic increments instead of wrapping at `usize::MAX`; exhausted
+  counters now fail closed to synchronous batch execution.
+- Hardened worker/send-failure depth restoration so underflow clamps to zero
+  instead of wrapping to a huge telemetry depth when the counter is corrupted or
+  stale relative to the drained job count.
+- Added focused adversarial coverage for queue-depth increment overflow,
+  decrement underflow, and synchronous execution when the counter is exhausted.
+- Focused validation passed:
+  - `cargo test -p iroha_torii queue_depth -- --nocapture`
+
+## 2026-06-14 Taikai Anchor Batch Failure Isolation
+
+- Hardened Taikai anchor batch processing so one failed anchor delivery no
+  longer suppresses later pending uploads in the same batch; successful later
+  uploads still persist anchor sentinels while failed uploads remain pending.
+- Extended the same best-effort batch isolation to sentinel persistence
+  failures so a local marker obstruction for one upload does not block later
+  valid uploads from being delivered and marked anchored.
+- Added focused adversarial coverage for partial delivery failure, aggregate
+  multi-delivery failure reporting, and partial sentinel persistence failure.
+- Focused validation passed:
+  - `cargo test -p iroha_torii taikai_anchor_processing -- --nocapture`
+
+## 2026-06-14 DA Commitment Bundle Location Bounds
+
+- Hardened DA commitment bundle validation so bundles whose length cannot be
+  represented by the existing `u32` location/proof metadata are rejected
+  explicitly instead of allowing saturated `index_in_bundle` values to be
+  fabricated later.
+- Hardened DA commitment, pin-intent, and confidential-compute replay
+  projections so unrepresentable bundle indexes are skipped rather than
+  published under `u32::MAX`.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib unrepresentable -- --nocapture`
+
+## 2026-06-14 Pending RBC Stash Byte Accounting Hardening
+
+- Hardened pending RBC DELIVER stash accounting so bundled READY signature byte
+  totals saturate instead of wrapping in release builds or panicking in debug
+  builds when adversarial message shapes exceed `usize` arithmetic bounds.
+- Hardened pending RBC READY, DELIVER, and CHUNK admission so overflow while
+  computing `pending_bytes + message_size` is treated as cap exhaustion instead
+  of allowing the message through after saturating arithmetic.
+- Added focused boundary coverage for READY signature stash-size accumulation at
+  `usize::MAX` and for pending byte-counter overflow during READY, DELIVER, and
+  CHUNK admission.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_deliver_ready_signature_stash_bytes_saturates_without_wrapping -- --nocapture`
+  - `cargo test -p iroha_core --lib rejects_pending_byte_counter_overflow -- --nocapture`
+
 ## 2026-06-14 RBC DELIVER Ready-Bundle Prevalidation
 
 - Hardened RBC DELIVER handling so oversized, duplicate-sender, or out-of-range
@@ -2579,8 +2904,8 @@ Last updated: 2026-06-14
   directory sync; non-file sentinel artifacts now fail collection instead of
   suppressing pending uploads.
 - Hardened Taikai anchor batch processing so anchor-service delivery failures
-  return an error and leave the upload pending for retry instead of reporting a
-  logged-only successful batch.
+  return an error, leave failed uploads pending for retry, and continue sending
+  later pending uploads instead of reporting a logged-only successful batch.
 - Hardened core DA receipt spool cleanup observability: stale-receipt pruning
   now returns a structured report for scanned, removed, invalid, read-failed,
   entry-failed, remove-failed, and unreadable-spool cases, and the proposal path

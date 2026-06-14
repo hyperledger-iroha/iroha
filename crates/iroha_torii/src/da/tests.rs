@@ -3,8 +3,9 @@
 use core::convert::TryInto;
 use std::{
     cell::Cell,
+    collections::{BTreeMap, BTreeSet},
     fs,
-    io::{ErrorKind, Write},
+    io::{self, ErrorKind, Read, Write},
     num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
@@ -1627,6 +1628,65 @@ impl AnchorSender for FailingAnchorSender {
     }
 }
 
+#[derive(Default)]
+struct FirstFailingAnchorSender {
+    calls: AsyncMutex<Vec<(Url, String, Option<String>)>>,
+}
+
+#[async_trait]
+impl AnchorSender for FirstFailingAnchorSender {
+    async fn send(
+        &self,
+        endpoint: &Url,
+        body: String,
+        api_token: Option<&str>,
+    ) -> Result<(), AnchorSendError> {
+        let call_count = {
+            let mut calls = self.calls.lock().await;
+            calls.push((endpoint.clone(), body.clone(), api_token.map(str::to_owned)));
+            calls.len()
+        };
+        if call_count == 1 {
+            return Err(Box::new(std::io::Error::new(
+                ErrorKind::ConnectionRefused,
+                "anchor service unavailable for first upload",
+            )));
+        }
+        Ok(())
+    }
+}
+
+struct FirstBlockingSentinelAnchorSender {
+    calls: AsyncMutex<Vec<(Url, String, Option<String>)>>,
+    sentinel_paths_by_body: BTreeMap<String, PathBuf>,
+}
+
+#[async_trait]
+impl AnchorSender for FirstBlockingSentinelAnchorSender {
+    async fn send(
+        &self,
+        endpoint: &Url,
+        body: String,
+        api_token: Option<&str>,
+    ) -> Result<(), AnchorSendError> {
+        let call_count = {
+            let mut calls = self.calls.lock().await;
+            calls.push((endpoint.clone(), body.clone(), api_token.map(str::to_owned)));
+            calls.len()
+        };
+        if call_count == 1 {
+            let sentinel_path = self
+                .sentinel_paths_by_body
+                .get(&body)
+                .expect("first upload body should have a sentinel path");
+            async_fs::create_dir(sentinel_path)
+                .await
+                .expect("block first sentinel path");
+        }
+        Ok(())
+    }
+}
+
 async fn write_minimal_taikai_anchor_artifacts(spool_dir: &Path, base_id: &str) {
     async_fs::create_dir_all(spool_dir)
         .await
@@ -1833,6 +1893,277 @@ async fn taikai_anchor_processing_reports_anchor_delivery_failure() {
         .expect("collect after failed delivery");
     assert_eq!(pending_after.len(), 1);
     assert_eq!(pending_after[0].base_id(), base_id);
+}
+
+#[tokio::test]
+async fn taikai_anchor_processing_continues_after_anchor_delivery_failure() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let base_ids = [
+        "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "00000001-0000000000000002-0000000000000004-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    ];
+    for (base_id, label) in base_ids.iter().zip(["first", "second"]) {
+        write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+        async_fs::write(
+            spool_dir.join(format!("taikai-indexes-{base_id}.json")),
+            format!(r#"{{"case":"{label}"}}"#),
+        )
+        .await
+        .expect("write distinct indexes");
+    }
+
+    let pending_before = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("collect pending before upload");
+    assert_eq!(pending_before.len(), 2);
+    assert_ne!(
+        pending_before[0].body(),
+        pending_before[1].body(),
+        "test fixture bodies must identify which upload failed"
+    );
+
+    let anchor_cfg = DaTaikaiAnchor {
+        endpoint: Url::parse("http://localhost/anchor").unwrap(),
+        api_token: None,
+        poll_interval: Duration::from_secs(5),
+    };
+    let sender = FirstFailingAnchorSender::default();
+
+    let err = process_batch(&spool_dir, &anchor_cfg, &sender)
+        .await
+        .expect_err("first delivery failure should still be reported");
+
+    assert!(
+        err.contains("failed to deliver Taikai envelope"),
+        "unexpected process error: {err}"
+    );
+    assert!(
+        err.contains("anchor service unavailable for first upload"),
+        "delivery error should retain sender error context: {err}"
+    );
+    let calls = sender.calls.lock().await.clone();
+    assert_eq!(
+        calls.len(),
+        2,
+        "batch processing must attempt later uploads after a delivery failure"
+    );
+
+    let failed_base_id = pending_before
+        .iter()
+        .find(|pending| pending.body() == calls[0].1.as_str())
+        .map(|pending| pending.base_id().to_string())
+        .expect("failed upload body should come from pending set");
+    let succeeded_base_id = pending_before
+        .iter()
+        .find(|pending| pending.body() == calls[1].1.as_str())
+        .map(|pending| pending.base_id().to_string())
+        .expect("successful upload body should come from pending set");
+    assert_ne!(failed_base_id, succeeded_base_id);
+    assert!(
+        err.contains(&failed_base_id),
+        "delivery error should identify failed artifact: {err}"
+    );
+
+    let sentinel_path = |base_id: &str| {
+        spool_dir.join(format!(
+            "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+        ))
+    };
+    assert!(
+        async_fs::metadata(sentinel_path(&failed_base_id))
+            .await
+            .is_err(),
+        "failed delivery must not mark the upload as anchored"
+    );
+    assert!(
+        async_fs::metadata(sentinel_path(&succeeded_base_id))
+            .await
+            .is_ok(),
+        "later successful delivery should be marked as anchored"
+    );
+
+    let pending_after = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("collect after partial delivery failure");
+    assert_eq!(pending_after.len(), 1);
+    assert_eq!(pending_after[0].base_id(), failed_base_id);
+}
+
+#[tokio::test]
+async fn taikai_anchor_processing_reports_all_anchor_delivery_failures() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let base_ids = [
+        "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "00000001-0000000000000002-0000000000000004-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    ];
+    for base_id in base_ids {
+        write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+    }
+
+    let anchor_cfg = DaTaikaiAnchor {
+        endpoint: Url::parse("http://localhost/anchor").unwrap(),
+        api_token: None,
+        poll_interval: Duration::from_secs(5),
+    };
+    let sender = FailingAnchorSender::default();
+
+    let err = process_batch(&spool_dir, &anchor_cfg, &sender)
+        .await
+        .expect_err("delivery failures should fail batch processing");
+
+    assert!(
+        err.contains("failed to process 2 Taikai anchor uploads"),
+        "unexpected process error: {err}"
+    );
+    for base_id in base_ids {
+        assert!(
+            err.contains(base_id),
+            "aggregate error should identify every failed artifact: {err}"
+        );
+    }
+    assert_eq!(
+        sender.calls.lock().await.len(),
+        2,
+        "batch processing must attempt every pending upload"
+    );
+
+    let sentinel_path = |base_id: &str| {
+        spool_dir.join(format!(
+            "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+        ))
+    };
+    for base_id in base_ids {
+        assert!(
+            async_fs::metadata(sentinel_path(base_id)).await.is_err(),
+            "failed delivery must not mark upload as anchored"
+        );
+    }
+    let pending_after = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("collect after failed deliveries");
+    let pending_base_ids: BTreeSet<_> = pending_after
+        .iter()
+        .map(|pending| pending.base_id().to_string())
+        .collect();
+    assert_eq!(
+        pending_base_ids,
+        base_ids.into_iter().map(str::to_string).collect()
+    );
+}
+
+#[tokio::test]
+async fn taikai_anchor_processing_continues_after_sentinel_persistence_failure() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path().join(TAIKAI_SPOOL_SUBDIR);
+    let base_ids = [
+        "00000001-0000000000000002-0000000000000003-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "00000001-0000000000000002-0000000000000004-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    ];
+    for (base_id, label) in base_ids.iter().zip(["first", "second"]) {
+        write_minimal_taikai_anchor_artifacts(&spool_dir, base_id).await;
+        async_fs::write(
+            spool_dir.join(format!("taikai-indexes-{base_id}.json")),
+            format!(r#"{{"case":"{label}"}}"#),
+        )
+        .await
+        .expect("write distinct indexes");
+    }
+
+    let pending_before = collect_pending_uploads(&spool_dir)
+        .await
+        .expect("collect pending before upload");
+    assert_eq!(pending_before.len(), 2);
+    let sentinel_paths_by_body = pending_before
+        .iter()
+        .map(|pending| {
+            (
+                pending.body().to_string(),
+                spool_dir.join(format!(
+                    "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}",
+                    pending.base_id()
+                )),
+            )
+        })
+        .collect();
+
+    let anchor_cfg = DaTaikaiAnchor {
+        endpoint: Url::parse("http://localhost/anchor").unwrap(),
+        api_token: None,
+        poll_interval: Duration::from_secs(5),
+    };
+    let sender = FirstBlockingSentinelAnchorSender {
+        calls: AsyncMutex::new(Vec::new()),
+        sentinel_paths_by_body,
+    };
+
+    let err = process_batch(&spool_dir, &anchor_cfg, &sender)
+        .await
+        .expect_err("blocked first sentinel should still be reported");
+
+    assert!(
+        err.contains("failed to persist Taikai anchor sentinel"),
+        "unexpected process error: {err}"
+    );
+    let calls = sender.calls.lock().await.clone();
+    assert_eq!(
+        calls.len(),
+        2,
+        "batch processing must attempt later uploads after a sentinel failure"
+    );
+
+    let failed_base_id = pending_before
+        .iter()
+        .find(|pending| pending.body() == calls[0].1.as_str())
+        .map(|pending| pending.base_id().to_string())
+        .expect("failed upload body should come from pending set");
+    let succeeded_base_id = pending_before
+        .iter()
+        .find(|pending| pending.body() == calls[1].1.as_str())
+        .map(|pending| pending.base_id().to_string())
+        .expect("successful upload body should come from pending set");
+    assert_ne!(failed_base_id, succeeded_base_id);
+    assert!(
+        err.contains(&failed_base_id),
+        "sentinel error should identify failed artifact path: {err}"
+    );
+
+    let sentinel_path = |base_id: &str| {
+        spool_dir.join(format!(
+            "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
+        ))
+    };
+    assert!(
+        async_fs::metadata(sentinel_path(&failed_base_id))
+            .await
+            .expect("failed sentinel path metadata")
+            .is_dir(),
+        "failed sentinel path should remain blocked for operator inspection"
+    );
+    assert!(
+        async_fs::metadata(sentinel_path(&succeeded_base_id))
+            .await
+            .is_ok(),
+        "later successful delivery should still be marked as anchored"
+    );
+    assert!(
+        temp_artifact_names(&spool_dir).is_empty(),
+        "failed sentinel persistence should clean up temporary artifacts"
+    );
+
+    let err = match collect_pending_uploads(&spool_dir).await {
+        Ok(_) => panic!("blocked sentinel must reject later anchor collection"),
+        Err(err) => err,
+    };
+    assert!(
+        err.contains("is not a regular file"),
+        "unexpected anchor collection error: {err}"
+    );
+    assert!(
+        err.contains(&sentinel_path(&failed_base_id).display().to_string()),
+        "error should identify non-file sentinel path: {err}"
+    );
 }
 
 #[tokio::test]
@@ -2773,6 +3104,69 @@ fn normalize_payload_rejects_size_mismatch() {
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
 }
 
+struct CountingReader {
+    remaining: usize,
+    emitted: usize,
+}
+
+impl CountingReader {
+    fn new(remaining: usize) -> Self {
+        Self {
+            remaining,
+            emitted: 0,
+        }
+    }
+}
+
+impl Read for CountingReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.remaining == 0 {
+            return Ok(0);
+        }
+        let n = self.remaining.min(buf.len());
+        buf[..n].fill(0xA5);
+        self.remaining -= n;
+        self.emitted += n;
+        Ok(n)
+    }
+}
+
+#[test]
+fn decompress_reader_stops_after_advertised_len_plus_one() {
+    let mut reader = CountingReader::new(64);
+
+    let err = decompress_reader(&mut reader, 8, "test")
+        .expect_err("overlong decompressed stream should reject");
+
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        reader.emitted, 9,
+        "decompressor should read only one byte beyond advertised length"
+    );
+    assert!(
+        err.1
+            .contains("test payload decompressed to 9 bytes but total_size advertises 8 bytes"),
+        "unexpected error message: {}",
+        err.1
+    );
+}
+
+#[test]
+fn decompress_reader_rejects_unbounded_expected_len_without_reading() {
+    let mut reader = CountingReader::new(1);
+
+    let err = decompress_reader(&mut reader, usize::MAX, "test")
+        .expect_err("unbounded expected length should reject");
+
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert_eq!(reader.emitted, 0);
+    assert!(
+        err.1.contains("supported decompression boundary"),
+        "unexpected error message: {}",
+        err.1
+    );
+}
+
 #[test]
 fn build_receipt_includes_pdp_commitment() {
     let request = sample_request();
@@ -3037,6 +3431,29 @@ fn manifest_stripe_layout_fields_rejects_total_stripe_overflow() {
     assert!(
         err.1
             .contains("total stripes exceeds supported manifest stripe space"),
+        "unexpected error message: {}",
+        err.1
+    );
+}
+
+#[test]
+fn ipa_params_len_for_commitment_count_rounds_up_without_overflow() {
+    assert_eq!(ipa_params_len_for_commitment_count(0).unwrap(), 1);
+    assert_eq!(ipa_params_len_for_commitment_count(1).unwrap(), 1);
+    assert_eq!(ipa_params_len_for_commitment_count(8).unwrap(), 8);
+    assert_eq!(ipa_params_len_for_commitment_count(9).unwrap(), 16);
+}
+
+#[test]
+fn ipa_params_len_for_commitment_count_rejects_power_of_two_overflow() {
+    let overflow_count = (usize::MAX / 2).saturating_add(2);
+
+    let err = ipa_params_len_for_commitment_count(overflow_count)
+        .expect_err("overflowing IPA parameter length must reject");
+
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("IPA commitment parameter size"),
         "unexpected error message: {}",
         err.1
     );
@@ -4171,6 +4588,73 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
         1,
         "stale receipt must not be written before validation"
     );
+
+    let gap = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 3, 4);
+    assert!(matches!(
+        log.append(lane_epoch, 3, gap, test_fingerprint(4)).unwrap(),
+        ReceiptInsertOutcome::SequenceGap {
+            expected_next: 2,
+            observed: 3
+        }
+    ));
+    assert_eq!(
+        receipt_file_count(temp_dir.path()),
+        1,
+        "gap receipt must not be written before validation"
+    );
+
+    let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 2, 5);
+    assert!(matches!(
+        log.append(lane_epoch, 2, second, test_fingerprint(5))
+            .unwrap(),
+        ReceiptInsertOutcome::Stored { .. }
+    ));
+    assert_eq!(
+        receipt_file_count(temp_dir.path()),
+        2,
+        "contiguous receipt should still be accepted after a rejected gap"
+    );
+}
+
+#[test]
+fn da_receipt_log_rejected_append_does_not_advance_replay_cursor() {
+    let temp_dir = tempdir().expect("temp dir");
+    let lane_epoch = LaneEpoch::new(LaneId::new(4), 19);
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let signer = KeyPair::random();
+    let log = DaReceiptLog::open(
+        temp_dir.path().to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    )
+    .unwrap();
+
+    let first = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xE1);
+    assert!(matches!(
+        log.append(lane_epoch, 1, first, test_fingerprint(0xE1))
+            .unwrap(),
+        ReceiptInsertOutcome::Stored { .. }
+    ));
+    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 1)]);
+
+    let gap = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 3, 0xE3);
+    assert!(matches!(
+        log.append(lane_epoch, 3, gap, test_fingerprint(0xE3))
+            .unwrap(),
+        ReceiptInsertOutcome::SequenceGap {
+            expected_next: 2,
+            observed: 3
+        }
+    ));
+    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 1)]);
+
+    let second = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 2, 0xE2);
+    assert!(matches!(
+        log.append(lane_epoch, 2, second, test_fingerprint(0xE2))
+            .unwrap(),
+        ReceiptInsertOutcome::Stored { .. }
+    ));
+    assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 2)]);
 }
 
 #[test]
@@ -4413,6 +4897,52 @@ fn da_receipt_log_reloads_from_disk() {
             .iter()
             .any(|(key, seq)| *key == lane_epoch && *seq == 2),
         "cursor store should be seeded from disk"
+    );
+}
+
+#[test]
+fn da_receipt_log_rejects_sequence_gap_on_open() {
+    let temp_dir = tempdir().expect("temp dir");
+    let lane_epoch = LaneEpoch::new(LaneId::new(6), 18);
+    let signer = KeyPair::random();
+
+    for (sequence, seed, fingerprint) in [(1, 0x94, [0xB1; 32]), (3, 0x95, [0xB2; 32])] {
+        let receipt = test_receipt(
+            &signer,
+            lane_epoch.lane_id,
+            lane_epoch.epoch,
+            sequence,
+            seed,
+        );
+        let stored = persistence::StoredDaReceipt {
+            version: persistence::STORED_RECEIPT_VERSION,
+            sequence,
+            receipt: receipt.clone(),
+        };
+        let bytes = to_bytes(&stored).expect("encode receipt");
+        let path = temp_dir
+            .path()
+            .join(receipt_spool_file_name(&receipt, sequence, fingerprint));
+        fs::write(path, bytes).expect("write receipt");
+    }
+
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let err = match DaReceiptLog::open(
+        temp_dir.path().to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    ) {
+        Ok(_) => panic!("receipt-log recovery must reject missing receipt sequences"),
+        Err(err) => err,
+    };
+
+    assert!(
+        format!("{err:?}").contains("missing DA receipt sequence"),
+        "unexpected receipt-log recovery error: {err:?}"
+    );
+    assert!(
+        cursor_store.highest_sequences().is_empty(),
+        "gap receipt logs must not seed replay cursors"
     );
 }
 
@@ -5980,6 +6510,15 @@ fn record_da_receipt_metrics_tracks_outcomes_and_cursor() {
             path: std::path::PathBuf::new(),
         },
     );
+    record_da_receipt_metrics(
+        &telemetry,
+        lane_epoch,
+        6,
+        &ReceiptInsertOutcome::SequenceGap {
+            expected_next: 6,
+            observed: 7,
+        },
+    );
 
     let stored = metrics
         .torii_da_receipts_total
@@ -6001,6 +6540,12 @@ fn record_da_receipt_metrics_tracks_outcomes_and_cursor() {
         receipt_conflict, 1,
         "receipt conflict counter should increment"
     );
+
+    let sequence_gap = metrics
+        .torii_da_receipts_total
+        .with_label_values(&["sequence_gap", "7", "3"])
+        .get();
+    assert_eq!(sequence_gap, 1, "sequence gap counter should increment");
 
     let cursor = metrics
         .torii_da_receipt_highest_sequence
@@ -6043,6 +6588,24 @@ fn da_spool_rejection_response_rejects_stale_receipt_outcome() {
     let report = batch.execute_sync();
     let response = da_spool_rejection_response(&report, ResponseFormat::Json)
         .expect("stale receipt must produce a conflict response");
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[test]
+fn da_spool_rejection_response_rejects_sequence_gap_outcome() {
+    let mut batch = DaSpoolBatch::new();
+    batch.push(DaSpoolAction::new("receipt_log", || {
+        Ok(DaSpoolActionOutput::ReceiptOutcome(
+            ReceiptInsertOutcome::SequenceGap {
+                expected_next: 10,
+                observed: 12,
+            },
+        ))
+    }));
+    let report = batch.execute_sync();
+    let response = da_spool_rejection_response(&report, ResponseFormat::Json)
+        .expect("sequence gap receipt must produce a conflict response");
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }

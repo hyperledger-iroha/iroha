@@ -147,18 +147,40 @@ pub(super) struct RbcSeedWorkerHandle {
 
 #[derive(Debug)]
 pub(super) enum RbcError {
-    TransactionPayloadTooLarge { len: usize },
+    TransactionPayloadTooLarge {
+        len: usize,
+    },
     EmptyPayload,
     SeedBlockMismatch,
-    SeedPayloadLengthMismatch { expected: usize, observed: usize },
-    SeedPayloadHashMismatch { expected: Hash, observed: Hash },
-    ChunkSizeOverflow { chunk_size: usize },
-    ChunkCountOverflow { count: usize },
+    SeedPayloadLengthMismatch {
+        expected: usize,
+        observed: usize,
+    },
+    SeedPayloadHashMismatch {
+        expected: Hash,
+        observed: Hash,
+    },
+    ChunkSizeOverflow {
+        chunk_size: usize,
+    },
+    ChunkCountOverflow {
+        count: usize,
+    },
     ChunkCountUnavailable,
-    ChunkCountExceedsCap { count: u32, cap: u32 },
+    ChunkCountExceedsCap {
+        count: u32,
+        cap: u32,
+    },
     ChunkRootUnavailable,
     MissingLeaderSignature,
-    ChunkIndexOverflow { idx: usize },
+    ChunkIndexOverflow {
+        idx: usize,
+    },
+    AllocationCounterOverflow {
+        field: &'static str,
+        current: u64,
+        added: u64,
+    },
     SessionInit(RbcSessionError),
 }
 
@@ -204,6 +226,16 @@ impl std::fmt::Display for RbcError {
             Self::ChunkIndexOverflow { idx } => {
                 write!(f, "RBC chunk index {idx} exceeds u32 range")
             }
+            Self::AllocationCounterOverflow {
+                field,
+                current,
+                added,
+            } => {
+                write!(
+                    f,
+                    "RBC allocation counter `{field}` overflowed while adding {added} to {current}"
+                )
+            }
             Self::SessionInit(err) => write!(f, "RBC session init failed: {err}"),
         }
     }
@@ -229,9 +261,13 @@ fn rbc_chunk_index(idx: usize) -> std::result::Result<u32, RbcError> {
 }
 
 fn rbc_layout_total_chunks(layout: RbcPayloadLayout) -> std::result::Result<u32, RbcError> {
-    let total_chunks = layout
-        .total_chunks()
-        .ok_or(RbcError::ChunkCountUnavailable)?;
+    let total_chunks = layout.total_chunks().ok_or_else(|| {
+        if layout.payload_size_known() {
+            RbcError::ChunkCountOverflow { count: usize::MAX }
+        } else {
+            RbcError::ChunkCountUnavailable
+        }
+    })?;
     let total_chunks = u32::try_from(total_chunks).map_err(|_| RbcError::ChunkCountOverflow {
         count: total_chunks,
     })?;
@@ -443,6 +479,7 @@ fn encode_rbc_payload(
     chunking: RbcChunkingSpec,
 ) -> std::result::Result<EncodedRbcPayload, RbcError> {
     let layout = chunking.layout_for_payload(payload_bytes.len())?;
+    let expected_total_chunks = rbc_layout_total_chunks(layout)?;
     let chunk_bytes = match chunking.encoding {
         RbcEncoding::Plain => chunk_payload_bytes(payload_bytes, chunking.chunk_size_bytes),
         RbcEncoding::Rs16 => {
@@ -483,6 +520,14 @@ fn encode_rbc_payload(
         u32::try_from(chunk_bytes.len()).map_err(|_| RbcError::ChunkCountOverflow {
             count: chunk_bytes.len(),
         })?;
+    if total_chunks != expected_total_chunks {
+        return Err(RbcError::SessionInit(
+            RbcSessionError::LayoutChunkCountMismatch {
+                total_chunks,
+                expected_total_chunks,
+            },
+        ));
+    }
     if total_chunks > RBC_MAX_TOTAL_CHUNKS {
         return Err(RbcError::ChunkCountExceedsCap {
             count: total_chunks,
@@ -776,22 +821,32 @@ pub(super) fn rs16_initial_chunk_indices_for_target(
     target_idx: usize,
     seed: u64,
     fanout: config_actual::RbcRs16InitialFanout,
-) -> Option<Vec<u32>> {
+) -> std::result::Result<Option<Vec<u32>>, RbcError> {
     let required = match fanout {
-        config_actual::RbcRs16InitialFanout::Full => return None,
+        config_actual::RbcRs16InitialFanout::Full => return Ok(None),
         config_actual::RbcRs16InitialFanout::Data => usize::from(layout.data_shards),
         config_actual::RbcRs16InitialFanout::DataPlusOne => {
             usize::from(layout.data_shards).saturating_add(1)
         }
     };
     if !layout.is_rs16() || required == 0 {
-        return None;
+        return Ok(None);
     }
     let stripe_width = layout.stripe_width();
     let required = required.min(stripe_width);
-    let stripe_count = layout.stripe_count()?;
-    let total_chunks = layout.total_chunks()?;
-    let mut indices = Vec::with_capacity(stripe_count.saturating_mul(required));
+    let stripe_count = layout.stripe_count().ok_or_else(|| {
+        if layout.payload_size_known() {
+            RbcError::ChunkCountOverflow { count: usize::MAX }
+        } else {
+            RbcError::ChunkCountUnavailable
+        }
+    })?;
+    let total_chunks = usize::try_from(rbc_layout_total_chunks(layout)?)
+        .map_err(|_| RbcError::ChunkCountOverflow { count: usize::MAX })?;
+    let capacity = stripe_count
+        .checked_mul(required)
+        .ok_or(RbcError::ChunkCountOverflow { count: usize::MAX })?;
+    let mut indices = Vec::with_capacity(capacity);
 
     for stripe in 0..stripe_count {
         let mut offsets: Vec<usize> = (0..stripe_width).collect();
@@ -804,16 +859,19 @@ pub(super) fn rs16_initial_chunk_indices_for_target(
         offsets.shuffle(&mut rng);
         offsets.truncate(required);
         for offset in offsets {
-            let idx = stripe.saturating_mul(stripe_width).saturating_add(offset);
+            let idx = stripe
+                .checked_mul(stripe_width)
+                .and_then(|base| base.checked_add(offset))
+                .ok_or(RbcError::ChunkCountOverflow { count: usize::MAX })?;
             if idx < total_chunks {
-                indices.push(u32::try_from(idx).ok()?);
+                indices.push(rbc_chunk_index(idx)?);
             }
         }
     }
 
     indices.sort_unstable();
     indices.dedup();
-    Some(indices)
+    Ok(Some(indices))
 }
 
 #[allow(dead_code)]
@@ -891,7 +949,7 @@ pub(super) fn is_ready_rebroadcaster(roster: &[PeerId], local_peer_id: &PeerId, 
     rbc_ready_rebroadcast_indices(roster.len(), seed).contains(&local_idx)
 }
 
-pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32> {
+pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u64]) -> Vec<u32> {
     if weights.is_empty() {
         return Vec::new();
     }
@@ -899,7 +957,7 @@ pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32>
         return vec![0; weights.len()];
     }
 
-    let total_weight: u128 = weights.iter().copied().sum();
+    let total_weight: u128 = weights.iter().map(|weight| u128::from(*weight)).sum();
     // Fallback to even distribution when all weights are zero.
     if total_weight == 0 {
         let mut allocations = vec![0u32; weights.len()];
@@ -908,14 +966,16 @@ pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32>
             if remaining == 0 {
                 break;
             }
-            *allocation = allocation.saturating_add(1);
+            *allocation = allocation
+                .checked_add(1)
+                .expect("allocation cannot exceed total chunk count");
             remaining -= 1;
         }
         return allocations;
     }
 
     let mut allocations = vec![0u32; weights.len()];
-    let mut sum_assigned = 0u32;
+    let mut sum_assigned = 0u128;
     let mut fractional: Vec<(usize, u128)> = Vec::with_capacity(weights.len());
 
     for (idx, &weight) in weights.iter().enumerate() {
@@ -923,22 +983,27 @@ pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32>
             fractional.push((idx, 0));
             continue;
         }
-        let exact = weight.saturating_mul(u128::from(total_chunks));
-        let base = u32::try_from(exact / total_weight).unwrap_or(u32::MAX);
+        let exact = u128::from(weight) * u128::from(total_chunks);
+        let base = u32::try_from(exact / total_weight)
+            .expect("proportional allocation cannot exceed total chunk count");
         let remainder = exact % total_weight;
         allocations[idx] = base;
-        sum_assigned = sum_assigned.saturating_add(base);
+        sum_assigned = sum_assigned.saturating_add(u128::from(base));
         fractional.push((idx, remainder));
     }
 
-    let mut leftover = total_chunks.saturating_sub(sum_assigned);
+    trim_allocations_to_total(&mut allocations, total_chunks);
+    sum_assigned = allocation_total(&allocations);
+    let mut leftover = u128::from(total_chunks).saturating_sub(sum_assigned);
     if leftover > 0 {
         fractional.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         for (idx, _) in fractional {
             if leftover == 0 {
                 break;
             }
-            allocations[idx] = allocations[idx].saturating_add(1);
+            allocations[idx] = allocations[idx]
+                .checked_add(1)
+                .expect("allocation cannot exceed total chunk count");
             leftover -= 1;
         }
     }
@@ -946,7 +1011,33 @@ pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u128]) -> Vec<u32>
     allocations
 }
 
-fn distribute_allocation_weights(total_chunks: u32, weights: &[u128]) -> Vec<u32> {
+fn allocation_total(allocations: &[u32]) -> u128 {
+    allocations
+        .iter()
+        .map(|allocation| u128::from(*allocation))
+        .sum()
+}
+
+fn trim_allocations_to_total(allocations: &mut [u32], total_chunks: u32) {
+    let target = u128::from(total_chunks);
+    let assigned_total = allocation_total(allocations);
+    if assigned_total <= target {
+        return;
+    }
+
+    let mut excess = assigned_total - target;
+    for allocation in allocations.iter_mut().rev() {
+        if excess == 0 {
+            break;
+        }
+        let decrement = u128::from(*allocation).min(excess);
+        let decrement = u32::try_from(decrement).expect("allocation decrement fits u32");
+        *allocation -= decrement;
+        excess -= u128::from(decrement);
+    }
+}
+
+fn distribute_allocation_weights(total_chunks: u32, weights: &[u64]) -> Vec<u32> {
     let mut allocations = distribute_chunks(total_chunks, weights);
     if total_chunks == 0 {
         return allocations;
@@ -956,20 +1047,22 @@ fn distribute_allocation_weights(total_chunks: u32, weights: &[u128]) -> Vec<u32
             *allocation = 1;
         }
     }
-    let assigned_total: u32 = allocations.iter().copied().sum();
-    if assigned_total > total_chunks {
-        let mut excess = assigned_total - total_chunks;
-        for allocation in allocations.iter_mut().rev() {
-            if excess == 0 {
-                break;
-            }
-            if *allocation > 0 {
-                *allocation -= 1;
-                excess -= 1;
-            }
-        }
-    }
+    trim_allocations_to_total(&mut allocations, total_chunks);
     allocations
+}
+
+fn add_allocation_counter(
+    field: &'static str,
+    current: u64,
+    added: u64,
+) -> std::result::Result<u64, RbcError> {
+    current
+        .checked_add(added)
+        .ok_or(RbcError::AllocationCounterOverflow {
+            field,
+            current,
+            added,
+        })
 }
 
 #[cfg(test)]
@@ -1044,6 +1137,120 @@ mod tests {
     }
 
     #[test]
+    fn rbc_layout_total_chunks_rejects_rs16_usize_overflow() {
+        let layout = RbcPayloadLayout::new(RbcEncoding::Rs16, 2, u64::MAX, 1, 1)
+            .expect("layout syntax is valid but impossible to materialize");
+
+        assert!(matches!(
+            rbc_layout_total_chunks(layout),
+            Err(RbcError::ChunkCountOverflow { count }) if count == usize::MAX
+        ));
+    }
+
+    #[test]
+    fn rbc_payload_layout_index_helpers_reject_encoded_index_overflow() {
+        let payload_size = u64::try_from(usize::MAX).expect("usize fits u64");
+        let layout = RbcPayloadLayout::new(RbcEncoding::Rs16, 2, payload_size, 1, 2)
+            .expect("layout syntax is valid but over the runtime cap");
+        let last_payload_idx = layout
+            .payload_chunk_count()
+            .expect("payload chunk count")
+            .saturating_sub(1);
+
+        assert_eq!(layout.payload_chunk_index_for_encoded(0), Some(0));
+        assert_eq!(layout.expected_chunk_len_for_encoded(0), Some(2));
+        assert_eq!(
+            layout.encoded_index_for_payload_chunk(last_payload_idx),
+            None,
+            "encoded index arithmetic must fail closed instead of wrapping"
+        );
+    }
+
+    #[test]
+    fn encode_rbc_payload_rejects_plain_over_cap_before_chunking() {
+        let payload = vec![0xA5; usize::try_from(RBC_MAX_TOTAL_CHUNKS).unwrap() + 1];
+        let chunking = RbcChunkingSpec::plain(1);
+
+        let err = encode_rbc_payload(&payload, chunking)
+            .expect_err("over-cap layout must reject before chunk materialization");
+
+        assert!(matches!(
+            err,
+            RbcError::ChunkCountExceedsCap { count, cap }
+                if count == RBC_MAX_TOTAL_CHUNKS + 1 && cap == RBC_MAX_TOTAL_CHUNKS
+        ));
+    }
+
+    #[test]
+    fn encode_rbc_payload_rejects_rs16_over_cap_before_chunking() {
+        let payload = vec![0x5A; usize::try_from(RBC_MAX_TOTAL_CHUNKS).unwrap() + 1];
+        let chunking = RbcChunkingSpec {
+            encoding: RbcEncoding::Rs16,
+            chunk_size_bytes: 2,
+            data_shards: 1,
+            parity_shards: 1,
+        };
+
+        let err = encode_rbc_payload(&payload, chunking)
+            .expect_err("over-cap RS16 layout must reject before chunk materialization");
+
+        assert!(matches!(
+            err,
+            RbcError::ChunkCountExceedsCap { count, cap }
+                if count == RBC_MAX_TOTAL_CHUNKS + 2 && cap == RBC_MAX_TOTAL_CHUNKS
+        ));
+    }
+
+    #[test]
+    fn rbc_session_new_rejects_layout_chunk_count_overflow() {
+        let layout = RbcPayloadLayout::new(
+            RbcEncoding::Plain,
+            1,
+            u64::from(RBC_MAX_TOTAL_CHUNKS) + 1,
+            0,
+            0,
+        )
+        .expect("layout syntax is valid but over cap");
+
+        let err = RbcSession::new_with_layout(layout, 1, None, None, None, 0)
+            .expect_err("layout-derived chunk overflow must reject session creation");
+
+        match err {
+            RbcSessionError::LayoutChunkCountOverflow {
+                expected_total_chunks,
+                max_chunks,
+            } => {
+                assert_eq!(
+                    expected_total_chunks,
+                    usize::try_from(u64::from(RBC_MAX_TOTAL_CHUNKS) + 1).expect("cap fits usize")
+                );
+                assert_eq!(max_chunks, RBC_MAX_TOTAL_CHUNKS);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rbc_session_new_rejects_rs16_layout_chunk_count_usize_overflow() {
+        let layout = RbcPayloadLayout::new(RbcEncoding::Rs16, 2, u64::MAX, 1, 1)
+            .expect("layout syntax is valid but impossible to materialize");
+
+        let err = RbcSession::new_with_layout(layout, 1, None, None, None, 0)
+            .expect_err("RS16 layout chunk arithmetic overflow must reject session creation");
+
+        match err {
+            RbcSessionError::LayoutChunkCountOverflow {
+                expected_total_chunks,
+                max_chunks,
+            } => {
+                assert_eq!(expected_total_chunks, usize::MAX);
+                assert_eq!(max_chunks, RBC_MAX_TOTAL_CHUNKS);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
     fn select_rbc_chunk_targets_is_deterministic() {
         let roster = sample_roster(5);
         let local = roster[0].clone();
@@ -1064,14 +1271,16 @@ mod tests {
             99,
             config_actual::RbcRs16InitialFanout::DataPlusOne,
         )
-        .expect("reduced fanout indices");
+        .expect("reduced fanout should be computable")
+        .expect("reduced fanout should return bounded indices");
         let second = rs16_initial_chunk_indices_for_target(
             layout,
             2,
             99,
             config_actual::RbcRs16InitialFanout::DataPlusOne,
         )
-        .expect("reduced fanout indices");
+        .expect("reduced fanout should be computable")
+        .expect("reduced fanout should return bounded indices");
 
         assert_eq!(first, second);
         assert_eq!(first.len(), layout.stripe_count().unwrap() * 5);
@@ -1087,6 +1296,56 @@ mod tests {
                 .count();
             assert_eq!(observed, 5);
         }
+    }
+
+    #[test]
+    fn rs16_initial_chunk_indices_full_fanout_returns_unbounded_target() {
+        let layout =
+            RbcPayloadLayout::new(RbcEncoding::Rs16, 1024, 16 * 1024, 4, 2).expect("valid layout");
+
+        let indices = rs16_initial_chunk_indices_for_target(
+            layout,
+            2,
+            99,
+            config_actual::RbcRs16InitialFanout::Full,
+        )
+        .expect("full fanout should not fail");
+
+        assert!(
+            indices.is_none(),
+            "full fanout is the only successful unbounded RS16 target"
+        );
+    }
+
+    #[test]
+    fn rs16_initial_chunk_indices_rejects_over_cap_layout() {
+        let layout = RbcPayloadLayout::new(
+            RbcEncoding::Rs16,
+            2,
+            u64::from(RBC_MAX_TOTAL_CHUNKS) + 1,
+            1,
+            1,
+        )
+        .expect("layout syntax is valid but over the runtime cap");
+        let expected_count =
+            u32::try_from(layout.total_chunks().expect("layout count")).expect("count fits u32");
+        assert!(expected_count > RBC_MAX_TOTAL_CHUNKS);
+
+        let err = rs16_initial_chunk_indices_for_target(
+            layout,
+            0,
+            99,
+            config_actual::RbcRs16InitialFanout::Data,
+        )
+        .expect_err("over-cap RS16 fanout layout must fail closed");
+
+        assert!(matches!(
+            err,
+            RbcError::ChunkCountExceedsCap {
+                count,
+                cap: RBC_MAX_TOTAL_CHUNKS,
+            } if count == expected_count
+        ));
     }
 
     #[test]
@@ -1202,9 +1461,45 @@ mod tests {
     }
 
     #[test]
+    fn distribute_chunks_handles_max_u64_weights_without_saturation() {
+        let allocations = distribute_chunks(3, &[u64::MAX, u64::MAX]);
+        assert_eq!(allocations, vec![2, 1]);
+        assert_eq!(allocation_total(&allocations), 3);
+    }
+
+    #[test]
+    fn distribute_chunks_preserves_dominant_max_u64_weight() {
+        let allocations = distribute_chunks(4, &[u64::MAX, 1]);
+        assert_eq!(allocations, vec![4, 0]);
+        assert_eq!(allocation_total(&allocations), 4);
+    }
+
+    #[test]
+    fn trim_allocations_to_total_handles_u32_sum_overflow_shape() {
+        let mut allocations = vec![u32::MAX, u32::MAX, 1];
+        trim_allocations_to_total(&mut allocations, 2);
+        assert_eq!(allocation_total(&allocations), 2);
+        assert!(allocations.iter().all(|allocation| *allocation <= 2));
+    }
+
+    #[test]
     fn distribute_allocation_weights_returns_zero_for_empty_total() {
         let allocations = distribute_allocation_weights(0, &[1, 1, 1]);
         assert_eq!(allocations, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn add_allocation_counter_rejects_u64_overflow() {
+        let err = add_allocation_counter("lane.rbc_bytes_total", u64::MAX, 1)
+            .expect_err("overflowing allocation counter must fail");
+        assert!(matches!(
+            err,
+            RbcError::AllocationCounterOverflow {
+                field: "lane.rbc_bytes_total",
+                current: u64::MAX,
+                added: 1
+            }
+        ));
     }
 
     #[test]
@@ -1711,36 +2006,38 @@ impl Actor {
                 .map_err(|_| RbcError::TransactionPayloadTooLarge { len: *encoded_len })?;
             let teu = Queue::estimate_teu(tx);
 
-            lane_map
-                .entry(decision.lane_id)
-                .and_modify(|alloc| {
-                    alloc.tx_count = alloc.tx_count.saturating_add(1);
-                    alloc.rbc_bytes_total = alloc.rbc_bytes_total.saturating_add(len);
-                    alloc.teu_total = alloc.teu_total.saturating_add(teu);
-                })
-                .or_insert(LaneAllocation {
-                    lane_id: decision.lane_id,
-                    tx_count: 1,
-                    rbc_bytes_total: len,
-                    teu_total: teu,
-                    total_chunks: 0,
-                });
+            let lane_alloc = lane_map.entry(decision.lane_id).or_insert(LaneAllocation {
+                lane_id: decision.lane_id,
+                tx_count: 0,
+                rbc_bytes_total: 0,
+                teu_total: 0,
+                total_chunks: 0,
+            });
+            lane_alloc.tx_count = add_allocation_counter("lane.tx_count", lane_alloc.tx_count, 1)?;
+            lane_alloc.rbc_bytes_total =
+                add_allocation_counter("lane.rbc_bytes_total", lane_alloc.rbc_bytes_total, len)?;
+            lane_alloc.teu_total =
+                add_allocation_counter("lane.teu_total", lane_alloc.teu_total, teu)?;
 
-            dataspace_map
+            let dataspace_alloc = dataspace_map
                 .entry((decision.lane_id, decision.dataspace_id))
-                .and_modify(|alloc| {
-                    alloc.tx_count = alloc.tx_count.saturating_add(1);
-                    alloc.rbc_bytes_total = alloc.rbc_bytes_total.saturating_add(len);
-                    alloc.teu_total = alloc.teu_total.saturating_add(teu);
-                })
                 .or_insert(DataspaceAllocation {
                     lane_id: decision.lane_id,
                     dataspace_id: decision.dataspace_id,
-                    tx_count: 1,
-                    rbc_bytes_total: len,
-                    teu_total: teu,
+                    tx_count: 0,
+                    rbc_bytes_total: 0,
+                    teu_total: 0,
                     total_chunks: 0,
                 });
+            dataspace_alloc.tx_count =
+                add_allocation_counter("dataspace.tx_count", dataspace_alloc.tx_count, 1)?;
+            dataspace_alloc.rbc_bytes_total = add_allocation_counter(
+                "dataspace.rbc_bytes_total",
+                dataspace_alloc.rbc_bytes_total,
+                len,
+            )?;
+            dataspace_alloc.teu_total =
+                add_allocation_counter("dataspace.teu_total", dataspace_alloc.teu_total, teu)?;
         }
 
         let mut lane_allocations: Vec<LaneAllocation> = lane_map.into_values().collect();
@@ -1755,9 +2052,9 @@ impl Actor {
                 .then_with(|| a.dataspace_id.as_u64().cmp(&b.dataspace_id.as_u64()))
         });
 
-        let lane_weights: Vec<u128> = lane_allocations
+        let lane_weights: Vec<u64> = lane_allocations
             .iter()
-            .map(|alloc| u128::from(alloc.rbc_bytes_total))
+            .map(|alloc| alloc.rbc_bytes_total)
             .collect();
         let lane_chunks = distribute_allocation_weights(total_chunks, &lane_weights);
         for (alloc, chunk_count) in lane_allocations.iter_mut().zip(lane_chunks.into_iter()) {
@@ -1778,9 +2075,9 @@ impl Actor {
                 end += 1;
             }
             let lane_total_chunks = lane_chunk_map.get(&lane_id).copied().unwrap_or(0);
-            let weights: Vec<u128> = dataspace_allocations[idx..end]
+            let weights: Vec<u64> = dataspace_allocations[idx..end]
                 .iter()
-                .map(|alloc| u128::from(alloc.rbc_bytes_total))
+                .map(|alloc| alloc.rbc_bytes_total)
                 .collect();
             let allocated = distribute_allocation_weights(lane_total_chunks, &weights);
             for (alloc, chunk_count) in dataspace_allocations[idx..end]

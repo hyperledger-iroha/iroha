@@ -9,6 +9,8 @@ use iroha_data_model::da::{
 use iroha_primitives::erasure::rs16 as erasure_rs16;
 use sorafs_car::ChunkStore;
 
+const MAX_MANIFEST_CHUNK_COMMITMENTS: usize = u32::MAX as usize;
+
 pub(super) fn build_chunk_commitments(
     request: &DaIngestRequest,
     chunk_store: &ChunkStore,
@@ -61,13 +63,9 @@ where
 
     let stripes = chunks.len().div_ceil(data_shards);
     let row_parity = usize::from(request.erasure_profile.row_parity_stripes);
-    let mut commitments = Vec::with_capacity(
-        chunks.len()
-            + stripes.saturating_mul(parity_shards)
-            + stripes
-                .saturating_mul(row_parity)
-                .saturating_mul(data_shards + parity_shards),
-    );
+    let commitment_count =
+        chunk_commitment_capacity_hint(chunks.len(), data_shards, parity_shards, row_parity)?;
+    let mut commitments = Vec::with_capacity(commitment_count);
     let retain_row_parity_matrix = row_parity > 0;
     let mut stripe_symbols_matrix: Vec<Vec<Vec<u16>>> = if retain_row_parity_matrix {
         Vec::with_capacity(stripes)
@@ -118,7 +116,7 @@ where
                 stripe_symbols.push(symbols.clone());
 
                 let index = allocate_chunk_index(&mut next_index)?;
-                let stripe_id = u32::try_from(stripe).unwrap_or(u32::MAX);
+                let stripe_id = manifest_u32_index(stripe, "manifest stripe id")?;
                 commitments.push(ChunkCommitment::new_with_role(
                     index,
                     chunk.offset,
@@ -165,7 +163,7 @@ where
 
             let index = allocate_chunk_index(&mut next_index)?;
             parity_observer(index, symbols)?;
-            let stripe_id = u32::try_from(stripe).unwrap_or(u32::MAX);
+            let stripe_id = manifest_u32_index(stripe, "manifest stripe id")?;
             commitments.push(ChunkCommitment::new_with_role(
                 index,
                 offset,
@@ -252,7 +250,7 @@ where
                 })?;
                 let index = allocate_chunk_index(&mut next_index)?;
                 parity_observer(index, symbols)?;
-                let column_id = u32::try_from(column).unwrap_or(u32::MAX);
+                let column_id = manifest_u32_index(column, "manifest stripe parity column id")?;
                 commitments.push(ChunkCommitment::new_with_role(
                     index,
                     offset,
@@ -277,6 +275,68 @@ fn digest_symbols_le(symbols: &[u16], scratch: &mut Vec<u8>) -> [u8; 32] {
     *blake3::hash(scratch.as_slice()).as_bytes()
 }
 
+fn manifest_u32_index(value: usize, label: &str) -> Result<u32, (StatusCode, String)> {
+    u32::try_from(value).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("{label} exceeds supported u32 space"),
+        )
+    })
+}
+
+fn chunk_commitment_capacity_hint(
+    data_chunk_count: usize,
+    data_shards: usize,
+    parity_shards: usize,
+    row_parity: usize,
+) -> Result<usize, (StatusCode, String)> {
+    if data_chunk_count == 0 {
+        return Ok(0);
+    }
+    if data_shards == 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "erasure profile must include at least one data shard".into(),
+        ));
+    }
+
+    let stripes = data_chunk_count.div_ceil(data_shards);
+    let column_count = data_shards.checked_add(parity_shards).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "manifest commitment count exceeds supported size".into(),
+        )
+    })?;
+    let global_parity = stripes.checked_mul(parity_shards).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "manifest commitment count exceeds supported size".into(),
+        )
+    })?;
+    let row_parity_chunks = row_parity.checked_mul(column_count).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "manifest commitment count exceeds supported size".into(),
+        )
+    })?;
+    let total = data_chunk_count
+        .checked_add(global_parity)
+        .and_then(|count| count.checked_add(row_parity_chunks))
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "manifest commitment count exceeds supported size".into(),
+            )
+        })?;
+    if total > MAX_MANIFEST_CHUNK_COMMITMENTS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "manifest would exceed supported chunk index space".into(),
+        ));
+    }
+    Ok(total)
+}
+
 fn allocate_chunk_index(counter: &mut u32) -> Result<u32, (StatusCode, String)> {
     let idx = *counter;
     *counter = counter.checked_add(1).ok_or_else(|| {
@@ -286,4 +346,68 @@ fn allocate_chunk_index(counter: &mut u32) -> Result<u32, (StatusCode, String)> 
         )
     })?;
     Ok(idx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocate_chunk_index_rejects_overflow_without_wrapping() {
+        let mut counter = u32::MAX;
+
+        let err = allocate_chunk_index(&mut counter).expect_err("exhausted index must reject");
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(
+            err.1.contains("chunk index space"),
+            "unexpected error: {}",
+            err.1
+        );
+        assert_eq!(counter, u32::MAX);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn manifest_u32_index_rejects_overflow_without_saturating() {
+        let overflow = u32::MAX as usize + 1;
+
+        let err = manifest_u32_index(overflow, "manifest stripe id")
+            .expect_err("overflowed stripe id must reject");
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(
+            err.1
+                .contains("manifest stripe id exceeds supported u32 space"),
+            "unexpected error: {}",
+            err.1
+        );
+    }
+
+    #[test]
+    fn chunk_commitment_capacity_hint_counts_row_parity_once_per_column() {
+        let capacity =
+            chunk_commitment_capacity_hint(5, 2, 1, 2).expect("capacity math should fit");
+
+        assert_eq!(
+            capacity, 14,
+            "5 data chunks + 3 global parity chunks + 2 row parity stripes across 3 columns"
+        );
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn chunk_commitment_capacity_hint_rejects_index_space_overflow_before_allocation() {
+        let data_chunks = (u32::MAX as usize / 2) + 1;
+
+        let err = chunk_commitment_capacity_hint(data_chunks, 1, 1, 0)
+            .expect_err("commitment count over u32 index space must reject");
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(
+            err.1.contains("chunk index space"),
+            "unexpected error: {}",
+            err.1
+        );
+    }
 }

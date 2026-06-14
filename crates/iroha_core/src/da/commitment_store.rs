@@ -17,6 +17,7 @@ use iroha_data_model::{
     nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
+use tracing::warn;
 
 /// Simple index over DA commitments.
 #[derive(Debug, Default)]
@@ -49,9 +50,17 @@ impl DaCommitmentStore {
     /// Insert an entire bundle captured at `block_height`.
     pub fn insert_bundle(&mut self, block_height: u64, bundle: DaCommitmentBundle) {
         for (idx, record) in bundle.commitments.iter().enumerate() {
+            let Some(index_in_bundle) = crate::da::da_bundle_location_index(idx) else {
+                warn!(
+                    block_height,
+                    index = idx,
+                    "skipping DA commitment query index with unrepresentable bundle location"
+                );
+                continue;
+            };
             let location = DaCommitmentLocation {
                 block_height,
-                index_in_bundle: index_in_bundle(idx),
+                index_in_bundle,
             };
             let _ = self.insert(record, location);
         }
@@ -165,6 +174,12 @@ impl DaCommitmentStore {
         self.by_lane_epoch.values()
     }
 
+    /// Number of currently queryable commitment records.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_lane_epoch.len()
+    }
+
     /// Retrieve the stored bundle for a given block height.
     #[must_use]
     pub fn bundle_at(&self, block_height: u64) -> Option<&DaCommitmentBundle> {
@@ -195,10 +210,6 @@ impl DaCommitmentStore {
         self.by_lane_epoch
             .retain(|(lane, _, _), _| !retired.contains(&LaneId::new(*lane)));
     }
-}
-
-fn index_in_bundle(idx: usize) -> u32 {
-    u32::try_from(idx).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]
@@ -261,6 +272,7 @@ mod tests {
         assert!(!store.insert(&dup, loc));
 
         assert_eq!(store.all_sorted().count(), 1);
+        assert_eq!(store.len(), 1);
         let stored = store.get_by_manifest(&record.manifest_hash).unwrap();
         assert_eq!(stored.commitment, record);
         assert_eq!(stored.location.block_height, 7);
@@ -325,17 +337,22 @@ mod tests {
         let records = vec![sample_record(3, 4, 5), sample_record(2, 1, 0)];
         let store = DaCommitmentStore::from_bundle_at_height(&records, 11);
         assert_eq!(store.all_sorted().count(), 2);
+        assert_eq!(store.len(), 2);
         let fetched = store.get_by_lane_epoch_sequence(2, 1, 0).unwrap();
         assert_eq!(fetched.location.block_height, 11);
         assert_eq!(fetched.location.index_in_bundle, 1);
     }
 
     #[test]
-    fn index_in_bundle_saturates_on_overflow() {
-        assert_eq!(index_in_bundle(0), 0);
-        assert_eq!(index_in_bundle(u32::MAX as usize), u32::MAX);
-        if usize::BITS > u32::BITS {
-            assert_eq!(index_in_bundle((u32::MAX as usize) + 1), u32::MAX);
+    fn da_bundle_location_index_rejects_unrepresentable_indexes() {
+        assert_eq!(crate::da::da_bundle_location_index(0), Some(0));
+        assert_eq!(
+            crate::da::da_bundle_location_index((u32::MAX as usize) - 1),
+            Some(u32::MAX - 1)
+        );
+        assert_eq!(crate::da::da_bundle_location_index(u32::MAX as usize), None);
+        if let Some(index) = (u32::MAX as usize).checked_add(1) {
+            assert_eq!(crate::da::da_bundle_location_index(index), None);
         }
     }
 
@@ -357,6 +374,7 @@ mod tests {
         let retired = BTreeSet::from([LaneId::new(1)]);
         store.prune_lanes(&retired);
 
+        assert_eq!(store.len(), 1);
         let kept = store
             .get_by_lane_epoch_sequence(0, 1, 1)
             .expect("lane 0 entry kept");
