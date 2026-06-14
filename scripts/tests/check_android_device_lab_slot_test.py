@@ -6133,29 +6133,68 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_kagemusha_android_raw_puller_latest_writer_installs_private_permissions(
         self,
     ) -> None:
-        original_mkstemp = raw_puller.tempfile.mkstemp
-        temp_counter = 0
+        original_open = raw_puller.os.open
 
-        def permissive_mkstemp(*, prefix: str, suffix: str, dir: Path):
-            nonlocal temp_counter
-            temp_counter += 1
-            temp_path = Path(dir) / f"{prefix}permissive-{temp_counter}{suffix}"
-            fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
-            return fd, str(temp_path)
+        def permissive_temp_open(path, flags, mode=0o777, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if (
+                isinstance(path, str)
+                and path.startswith(".latest-slot.")
+                and path.endswith(".tmp")
+                and kwargs.get("dir_fd") is not None
+            ):
+                return original_open(path, flags, 0o666, *args, **kwargs)
+            return original_open(path, flags, mode, *args, **kwargs)
 
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             old_umask = os.umask(0)
-            raw_puller.tempfile.mkstemp = permissive_mkstemp
+            raw_puller.os.open = permissive_temp_open
             try:
                 errors = raw_puller._write_latest_slot(root, "pixel6")
             finally:
-                raw_puller.tempfile.mkstemp = original_mkstemp
+                raw_puller.os.open = original_open
                 os.umask(old_umask)
             output_mode = (root / "latest-slot.txt").lstat().st_mode & 0o777
 
         self.assertEqual(errors, [])
         self.assertEqual(output_mode, 0o600)
+
+    def test_kagemusha_android_raw_puller_latest_writer_does_not_follow_parent_swap_before_write(
+        self,
+    ) -> None:
+        original_open = raw_puller.os.open
+        swapped = False
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "raw-root"
+            root.mkdir()
+            original_root = wrapper / "raw-root-original"
+
+            def swapping_root_open(path, flags, mode=0o777, *args, **kwargs):  # type: ignore[no-untyped-def]
+                nonlocal swapped
+                if Path(path) == root and not swapped:
+                    root.rename(original_root)
+                    root.mkdir()
+                    swapped = True
+                return original_open(path, flags, mode, *args, **kwargs)
+
+            raw_puller.os.open = swapping_root_open
+            try:
+                errors = raw_puller._write_latest_slot(root, "pixel6")
+            finally:
+                raw_puller.os.open = original_open
+
+            new_root_latest = root / "latest-slot.txt"
+            original_root_latest = original_root / "latest-slot.txt"
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["raw latest-slot output parent directory changed before writing"],
+        )
+        self.assertFalse(new_root_latest.exists())
+        self.assertFalse(original_root_latest.exists())
 
     def test_kagemusha_android_raw_puller_latest_writer_rejects_symlink_after_replace(
         self,
@@ -6167,10 +6206,15 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             target = root / "external-latest-slot.txt"
             target.write_text("external\n", encoding="utf-8")
 
-            def replace_with_symlink(src, dst):  # type: ignore[no-untyped-def]
-                original_replace(src, dst)
-                Path(dst).unlink()
-                Path(dst).symlink_to(target)
+            def replace_with_symlink(src, dst, *args, **kwargs):  # type: ignore[no-untyped-def]
+                original_replace(src, dst, *args, **kwargs)
+                dst_dir_fd = kwargs.get("dst_dir_fd")
+                if dst_dir_fd is None:
+                    Path(dst).unlink()
+                    Path(dst).symlink_to(target)
+                else:
+                    os.unlink(dst, dir_fd=dst_dir_fd)
+                    os.symlink(target, dst, dir_fd=dst_dir_fd)
 
             raw_puller.os.replace = replace_with_symlink
             try:
@@ -6193,10 +6237,15 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             target = root / "external-latest-slot.txt"
             target.write_text("external\n", encoding="utf-8")
 
-            def replace_with_hardlink(src, dst):  # type: ignore[no-untyped-def]
-                original_replace(src, dst)
-                Path(dst).unlink()
-                os.link(target, dst)
+            def replace_with_hardlink(src, dst, *args, **kwargs):  # type: ignore[no-untyped-def]
+                original_replace(src, dst, *args, **kwargs)
+                dst_dir_fd = kwargs.get("dst_dir_fd")
+                if dst_dir_fd is None:
+                    Path(dst).unlink()
+                    os.link(target, dst)
+                else:
+                    os.unlink(dst, dir_fd=dst_dir_fd)
+                    os.link(target, dst, dst_dir_fd=dst_dir_fd)
 
             raw_puller.os.replace = replace_with_hardlink
             try:
@@ -6218,10 +6267,9 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             root = Path(temp)
             latest_path = root / "latest-slot.txt"
 
-            def chmod_after_replace(src, dst):  # type: ignore[no-untyped-def]
-                original_replace(src, dst)
-                if Path(dst) == latest_path:
-                    latest_path.chmod(0o644)
+            def chmod_after_replace(src, dst, *args, **kwargs):  # type: ignore[no-untyped-def]
+                original_replace(src, dst, *args, **kwargs)
+                latest_path.chmod(0o644)
 
             raw_puller.os.replace = chmod_after_replace
             try:
@@ -6239,7 +6287,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_kagemusha_android_raw_puller_latest_writer_rejects_readback_path_swap(
         self,
     ) -> None:
-        original_open = raw_puller.Path.open
+        original_open = raw_puller.os.open
         swapped = False
 
         with tempfile.TemporaryDirectory() as temp:
@@ -6247,26 +6295,69 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             latest_path = root / "latest-slot.txt"
             replacement = root / "replacement-latest-slot.txt"
 
-            def open_with_swap(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            def open_with_swap(path, flags, mode=0o777, *args, **kwargs):  # type: ignore[no-untyped-def]
                 nonlocal swapped
-                mode = args[0] if args else kwargs.get("mode", "r")
-                if self == latest_path and mode == "rb" and not swapped:
+                if (
+                    path == latest_path.name
+                    and kwargs.get("dir_fd") is not None
+                    and not swapped
+                ):
                     swapped = True
                     replacement.write_text("replacement\n", encoding="utf-8")
                     os.replace(replacement, latest_path)
-                return original_open(self, *args, **kwargs)
+                return original_open(path, flags, mode, *args, **kwargs)
 
-            raw_puller.Path.open = open_with_swap
+            raw_puller.os.open = open_with_swap
             try:
                 errors = raw_puller._write_latest_slot(root, "pixel6")
             finally:
-                raw_puller.Path.open = original_open
+                raw_puller.os.open = original_open
 
         self.assertTrue(swapped)
         self.assertEqual(
             errors,
             ["raw latest-slot output changed while being read back"],
         )
+
+    def test_kagemusha_android_raw_puller_latest_writer_sync_rejects_parent_identity_swap(
+        self,
+    ) -> None:
+        original_open = raw_puller.os.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "raw-root"
+            root.mkdir()
+            swapped_root = wrapper / "raw-root-swapped"
+            swapped = False
+            root_open_count = 0
+
+            def swapping_root_open(path, flags, mode=0o777, *args, **kwargs):  # type: ignore[no-untyped-def]
+                nonlocal root_open_count, swapped
+                if Path(path) == root:
+                    root_open_count += 1
+                    if root_open_count == 2 and not swapped:
+                        root.rename(swapped_root)
+                        root.mkdir()
+                        swapped = True
+                return original_open(path, flags, mode, *args, **kwargs)
+
+            raw_puller.os.open = swapping_root_open
+            try:
+                errors = raw_puller._write_latest_slot(root, "pixel6")
+            finally:
+                raw_puller.os.open = original_open
+
+            new_root_latest = root / "latest-slot.txt"
+            swapped_root_latest = swapped_root / "latest-slot.txt"
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["raw latest-slot output parent directory could not be synced"],
+        )
+        self.assertFalse(new_root_latest.exists())
+        self.assertFalse(swapped_root_latest.exists())
 
     def test_kagemusha_android_raw_puller_latest_writer_reports_temp_cleanup_failure(
         self,
@@ -6277,7 +6368,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
 
-            def failing_replace(_src, _dst):  # type: ignore[no-untyped-def]
+            def failing_replace(_src, _dst, *args, **kwargs):  # type: ignore[no-untyped-def]
                 raise OSError("simulated latest-slot replace failure")
 
             def failing_unlink(path: str, *args, **kwargs):
@@ -6330,93 +6421,248 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, "original\n")
 
+    def test_kagemusha_android_raw_puller_latest_writer_fd_temp_cleanup_rejects_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            temp_name = ".latest-slot.fd-swap.tmp"
+            temp_output = root / temp_name
+            temp_output.write_text("original\n", encoding="utf-8")
+            temp_identity = raw_puller._file_identity(temp_output.lstat())
+            original_temp = root / "original-latest-slot-fd-temp"
+            temp_output.rename(original_temp)
+            temp_output.write_text("do not remove\n", encoding="utf-8")
+            root_fd = os.open(root, raw_puller._directory_open_flags())
+            try:
+                errors = raw_puller._cleanup_temp_output_at(
+                    root_fd,
+                    temp_name,
+                    "raw latest-slot output",
+                    temp_identity,
+                )
+            finally:
+                os.close(root_fd)
+            replacement = temp_output.read_text(encoding="utf-8")
+            original = original_temp.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            errors,
+            ["raw latest-slot output temporary output changed before cleanup"],
+        )
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, "original\n")
+
+    def test_kagemusha_android_raw_puller_latest_writer_published_cleanup_preserves_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            latest_name = "latest-slot.txt"
+            latest_path = root / latest_name
+            latest_path.write_text("pixel6\n", encoding="utf-8")
+            latest_identity = raw_puller._file_identity(latest_path.lstat())
+            original_latest = root / "original-latest-slot.txt"
+            latest_path.rename(original_latest)
+            latest_path.write_text("do not remove\n", encoding="utf-8")
+            root_fd = os.open(root, raw_puller._directory_open_flags())
+            try:
+                errors = raw_puller._unlink_file_if_identity_at(
+                    root_fd,
+                    latest_name,
+                    latest_identity,
+                    "raw latest-slot output",
+                )
+            finally:
+                os.close(root_fd)
+            replacement = latest_path.read_text(encoding="utf-8")
+            original = original_latest.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, "pixel6\n")
+
+    def test_kagemusha_android_raw_puller_latest_writer_published_cleanup_reports_failure(
+        self,
+    ) -> None:
+        original_unlink = raw_puller.os.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            latest_name = "latest-slot.txt"
+            latest_path = root / latest_name
+            latest_path.write_text("pixel6\n", encoding="utf-8")
+            latest_identity = raw_puller._file_identity(latest_path.lstat())
+            root_fd = os.open(root, raw_puller._directory_open_flags())
+
+            def failing_unlink(path: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+                if path == latest_name and kwargs.get("dir_fd") == root_fd:
+                    raise OSError("simulated latest-slot cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            raw_puller.os.unlink = failing_unlink
+            try:
+                errors = raw_puller._unlink_file_if_identity_at(
+                    root_fd,
+                    latest_name,
+                    latest_identity,
+                    "raw latest-slot output",
+                )
+            finally:
+                raw_puller.os.unlink = original_unlink
+                os.close(root_fd)
+            latest_exists = latest_path.exists()
+
+        self.assertEqual(
+            errors,
+            ["raw latest-slot output could not be removed after parent sync failure"],
+        )
+        self.assertTrue(latest_exists)
+
     def test_kagemusha_android_raw_puller_summary_rejects_nonfinite_json_before_tempfile(
         self,
     ) -> None:
-        original_mkstemp = raw_puller.tempfile.mkstemp
-        mkstemp_called = False
-
-        def fail_mkstemp(*args, **kwargs):  # type: ignore[no-untyped-def]
-            nonlocal mkstemp_called
-            mkstemp_called = True
-            raise AssertionError("mkstemp must not be called")
+        original_open = raw_puller.os.open
+        temp_open_called = False
 
         with tempfile.TemporaryDirectory() as temp:
             summary_out = Path(temp) / "pull-summary.json"
-            raw_puller.tempfile.mkstemp = fail_mkstemp
+
+            def fail_temp_open(path, flags, mode=0o777, *args, **kwargs):  # type: ignore[no-untyped-def]
+                nonlocal temp_open_called
+                if (
+                    isinstance(path, str)
+                    and path.startswith(f".{summary_out.name}.")
+                    and path.endswith(".tmp")
+                ):
+                    temp_open_called = True
+                    raise AssertionError("summary temp file must not be opened")
+                return original_open(path, flags, mode, *args, **kwargs)
+
+            raw_puller.os.open = fail_temp_open
             try:
                 errors = raw_puller._write_summary(
                     summary_out,
                     {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA, "bad": float("nan")},
                 )
             finally:
-                raw_puller.tempfile.mkstemp = original_mkstemp
+                raw_puller.os.open = original_open
 
         self.assertEqual(errors, ["raw pull summary output is not strict JSON"])
-        self.assertFalse(mkstemp_called)
+        self.assertFalse(temp_open_called)
         self.assertFalse(summary_out.exists())
 
     def test_kagemusha_android_raw_puller_summary_rejects_oversized_json_before_tempfile(
         self,
     ) -> None:
-        original_mkstemp = raw_puller.tempfile.mkstemp
+        original_open = raw_puller.os.open
         original_limit = raw_puller.device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES
-        mkstemp_called = False
-
-        def fail_mkstemp(*args, **kwargs):  # type: ignore[no-untyped-def]
-            nonlocal mkstemp_called
-            mkstemp_called = True
-            raise AssertionError("mkstemp must not be called")
+        temp_open_called = False
 
         with tempfile.TemporaryDirectory() as temp:
             summary_out = Path(temp) / "pull-summary.json"
-            raw_puller.tempfile.mkstemp = fail_mkstemp
             raw_puller.device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES = 4
+
+            def fail_temp_open(path, flags, mode=0o777, *args, **kwargs):  # type: ignore[no-untyped-def]
+                nonlocal temp_open_called
+                if (
+                    isinstance(path, str)
+                    and path.startswith(f".{summary_out.name}.")
+                    and path.endswith(".tmp")
+                ):
+                    temp_open_called = True
+                    raise AssertionError("summary temp file must not be opened")
+                return original_open(path, flags, mode, *args, **kwargs)
+
+            raw_puller.os.open = fail_temp_open
             try:
                 errors = raw_puller._write_summary(
                     summary_out,
                     {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
                 )
             finally:
-                raw_puller.tempfile.mkstemp = original_mkstemp
+                raw_puller.os.open = original_open
                 raw_puller.device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES = original_limit
 
         self.assertEqual(
             errors,
             ["raw pull summary output must be no more than 4 bytes"],
         )
-        self.assertFalse(mkstemp_called)
+        self.assertFalse(temp_open_called)
         self.assertFalse(summary_out.exists())
 
     def test_kagemusha_android_raw_puller_summary_installs_private_permissions(
         self,
     ) -> None:
-        original_mkstemp = raw_puller.tempfile.mkstemp
-        temp_counter = 0
+        original_open = raw_puller.os.open
 
-        def permissive_mkstemp(*, prefix: str, suffix: str, dir: Path):
-            nonlocal temp_counter
-            temp_counter += 1
-            temp_path = Path(dir) / f"{prefix}permissive-{temp_counter}{suffix}"
-            fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
-            return fd, str(temp_path)
+        def permissive_temp_open(path, flags, mode=0o777, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if (
+                isinstance(path, str)
+                and path.startswith(".pull-summary.json.")
+                and path.endswith(".tmp")
+                and kwargs.get("dir_fd") is not None
+            ):
+                return original_open(path, flags, 0o666, *args, **kwargs)
+            return original_open(path, flags, mode, *args, **kwargs)
 
         with tempfile.TemporaryDirectory() as temp:
             summary_out = Path(temp) / "pull-summary.json"
             old_umask = os.umask(0)
-            raw_puller.tempfile.mkstemp = permissive_mkstemp
+            raw_puller.os.open = permissive_temp_open
             try:
                 errors = raw_puller._write_summary(
                     summary_out,
                     {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
                 )
             finally:
-                raw_puller.tempfile.mkstemp = original_mkstemp
+                raw_puller.os.open = original_open
                 os.umask(old_umask)
             output_mode = summary_out.lstat().st_mode & 0o777
 
         self.assertEqual(errors, [])
         self.assertEqual(output_mode, 0o600)
+
+    def test_kagemusha_android_raw_puller_summary_does_not_follow_parent_swap_before_write(
+        self,
+    ) -> None:
+        original_open = raw_puller.os.open
+        swapped = False
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "raw-summary-root"
+            root.mkdir()
+            summary_out = root / "pull-summary.json"
+            original_root = wrapper / "raw-summary-root-original"
+
+            def swapping_parent_open(path, flags, mode=0o777, *args, **kwargs):  # type: ignore[no-untyped-def]
+                nonlocal swapped
+                if Path(path) == summary_out.parent and not swapped:
+                    summary_out.parent.rename(original_root)
+                    summary_out.parent.mkdir()
+                    swapped = True
+                return original_open(path, flags, mode, *args, **kwargs)
+
+            raw_puller.os.open = swapping_parent_open
+            try:
+                errors = raw_puller._write_summary(
+                    summary_out,
+                    {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
+                )
+            finally:
+                raw_puller.os.open = original_open
+
+            new_root_summary = summary_out
+            original_root_summary = original_root / summary_out.name
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["raw pull summary output parent directory changed before writing"],
+        )
+        self.assertFalse(new_root_summary.exists())
+        self.assertFalse(original_root_summary.exists())
 
     def test_kagemusha_android_raw_puller_summary_rejects_symlink_after_replace(
         self,
@@ -6429,10 +6675,15 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             target = temp_path / "external-summary.json"
             target.write_text("external\n", encoding="utf-8")
 
-            def replace_with_symlink(src, dst):  # type: ignore[no-untyped-def]
-                original_replace(src, dst)
-                Path(dst).unlink()
-                Path(dst).symlink_to(target)
+            def replace_with_symlink(src, dst, *args, **kwargs):  # type: ignore[no-untyped-def]
+                original_replace(src, dst, *args, **kwargs)
+                dst_dir_fd = kwargs.get("dst_dir_fd")
+                if dst_dir_fd is None:
+                    Path(dst).unlink()
+                    Path(dst).symlink_to(target)
+                else:
+                    os.unlink(dst, dir_fd=dst_dir_fd)
+                    os.symlink(target, dst, dir_fd=dst_dir_fd)
 
             raw_puller.os.replace = replace_with_symlink
             try:
@@ -6459,10 +6710,15 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             target = temp_path / "external-summary.json"
             target.write_text("external\n", encoding="utf-8")
 
-            def replace_with_hardlink(src, dst):  # type: ignore[no-untyped-def]
-                original_replace(src, dst)
-                Path(dst).unlink()
-                os.link(target, dst)
+            def replace_with_hardlink(src, dst, *args, **kwargs):  # type: ignore[no-untyped-def]
+                original_replace(src, dst, *args, **kwargs)
+                dst_dir_fd = kwargs.get("dst_dir_fd")
+                if dst_dir_fd is None:
+                    Path(dst).unlink()
+                    os.link(target, dst)
+                else:
+                    os.unlink(dst, dir_fd=dst_dir_fd)
+                    os.link(target, dst, dst_dir_fd=dst_dir_fd)
 
             raw_puller.os.replace = replace_with_hardlink
             try:
@@ -6487,10 +6743,9 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             temp_path = Path(temp)
             summary_out = temp_path / "pull-summary.json"
 
-            def chmod_after_replace(src, dst):  # type: ignore[no-untyped-def]
-                original_replace(src, dst)
-                if Path(dst) == summary_out:
-                    summary_out.chmod(0o644)
+            def chmod_after_replace(src, dst, *args, **kwargs):  # type: ignore[no-untyped-def]
+                original_replace(src, dst, *args, **kwargs)
+                summary_out.chmod(0o644)
 
             raw_puller.os.replace = chmod_after_replace
             try:
@@ -6511,7 +6766,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_kagemusha_android_raw_puller_summary_rejects_readback_path_swap(
         self,
     ) -> None:
-        original_open = raw_puller.Path.open
+        original_open = raw_puller.os.open
         swapped = False
 
         with tempfile.TemporaryDirectory() as temp:
@@ -6519,23 +6774,26 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             summary_out = temp_path / "pull-summary.json"
             replacement = temp_path / "replacement-summary.json"
 
-            def open_with_swap(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            def open_with_swap(path, flags, mode=0o777, *args, **kwargs):  # type: ignore[no-untyped-def]
                 nonlocal swapped
-                mode = args[0] if args else kwargs.get("mode", "r")
-                if self == summary_out and mode == "rb" and not swapped:
+                if (
+                    path == summary_out.name
+                    and kwargs.get("dir_fd") is not None
+                    and not swapped
+                ):
                     swapped = True
                     replacement.write_text("replacement\n", encoding="utf-8")
                     os.replace(replacement, summary_out)
-                return original_open(self, *args, **kwargs)
+                return original_open(path, flags, mode, *args, **kwargs)
 
-            raw_puller.Path.open = open_with_swap
+            raw_puller.os.open = open_with_swap
             try:
                 errors = raw_puller._write_summary(
                     summary_out,
                     {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
                 )
             finally:
-                raw_puller.Path.open = original_open
+                raw_puller.os.open = original_open
 
         self.assertTrue(swapped)
         self.assertEqual(
@@ -6552,7 +6810,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             summary_out = Path(temp) / "pull-summary.json"
 
-            def failing_replace(_src, _dst):  # type: ignore[no-untyped-def]
+            def failing_replace(_src, _dst, *args, **kwargs):  # type: ignore[no-untyped-def]
                 raise OSError("simulated raw summary replace failure")
 
             def failing_unlink(path: str, *args, **kwargs):
@@ -6611,6 +6869,104 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, "original\n")
 
+    def test_kagemusha_android_raw_puller_summary_fd_temp_cleanup_rejects_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            temp_name = ".pull-summary.json.fd-swap.tmp"
+            temp_output = root / temp_name
+            temp_output.write_text("original\n", encoding="utf-8")
+            temp_identity = raw_puller._file_identity(temp_output.lstat())
+            original_temp = root / "original-raw-summary-fd-temp"
+            temp_output.rename(original_temp)
+            temp_output.write_text("do not remove\n", encoding="utf-8")
+            root_fd = os.open(root, raw_puller._directory_open_flags())
+            try:
+                errors = raw_puller._cleanup_temp_output_at(
+                    root_fd,
+                    temp_name,
+                    "raw pull summary output",
+                    temp_identity,
+                )
+            finally:
+                os.close(root_fd)
+            replacement = temp_output.read_text(encoding="utf-8")
+            original = original_temp.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            errors,
+            ["raw pull summary output temporary output changed before cleanup"],
+        )
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, "original\n")
+
+    def test_kagemusha_android_raw_puller_summary_published_cleanup_preserves_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            summary_name = "pull-summary.json"
+            summary_path = root / summary_name
+            summary_path.write_text('{"schema":"raw"}\n', encoding="utf-8")
+            summary_identity = raw_puller._file_identity(summary_path.lstat())
+            original_summary = root / "original-pull-summary.json"
+            summary_path.rename(original_summary)
+            summary_path.write_text("do not remove\n", encoding="utf-8")
+            root_fd = os.open(root, raw_puller._directory_open_flags())
+            try:
+                errors = raw_puller._unlink_file_if_identity_at(
+                    root_fd,
+                    summary_name,
+                    summary_identity,
+                    "raw pull summary output",
+                )
+            finally:
+                os.close(root_fd)
+            replacement = summary_path.read_text(encoding="utf-8")
+            original = original_summary.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, '{"schema":"raw"}\n')
+
+    def test_kagemusha_android_raw_puller_summary_published_cleanup_reports_failure(
+        self,
+    ) -> None:
+        original_unlink = raw_puller.os.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            summary_name = "pull-summary.json"
+            summary_path = root / summary_name
+            summary_path.write_text('{"schema":"raw"}\n', encoding="utf-8")
+            summary_identity = raw_puller._file_identity(summary_path.lstat())
+            root_fd = os.open(root, raw_puller._directory_open_flags())
+
+            def failing_unlink(path: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+                if path == summary_name and kwargs.get("dir_fd") == root_fd:
+                    raise OSError("simulated raw summary cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            raw_puller.os.unlink = failing_unlink
+            try:
+                errors = raw_puller._unlink_file_if_identity_at(
+                    root_fd,
+                    summary_name,
+                    summary_identity,
+                    "raw pull summary output",
+                )
+            finally:
+                raw_puller.os.unlink = original_unlink
+                os.close(root_fd)
+            summary_exists = summary_path.exists()
+
+        self.assertEqual(
+            errors,
+            ["raw pull summary output could not be removed after parent sync failure"],
+        )
+        self.assertTrue(summary_exists)
+
     def test_kagemusha_android_raw_puller_summary_sync_rejects_parent_identity_swap(
         self,
     ) -> None:
@@ -6623,14 +6979,17 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             summary_out = root / "pull-summary.json"
             swapped_root = wrapper / "raw-summary-root-swapped"
             swapped = False
+            parent_open_count = 0
 
-            def swapping_parent_open(path, flags, *args, **kwargs):  # type: ignore[no-untyped-def]
-                nonlocal swapped
-                if Path(path) == summary_out.parent and not swapped:
-                    summary_out.parent.rename(swapped_root)
-                    summary_out.parent.mkdir()
-                    swapped = True
-                return original_open(path, flags, *args, **kwargs)
+            def swapping_parent_open(path, flags, mode=0o777, *args, **kwargs):  # type: ignore[no-untyped-def]
+                nonlocal parent_open_count, swapped
+                if Path(path) == summary_out.parent:
+                    parent_open_count += 1
+                    if parent_open_count == 2 and not swapped:
+                        summary_out.parent.rename(swapped_root)
+                        summary_out.parent.mkdir()
+                        swapped = True
+                return original_open(path, flags, mode, *args, **kwargs)
 
             raw_puller.os.open = swapping_parent_open
             try:
@@ -6640,14 +6999,16 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 )
             finally:
                 raw_puller.os.open = original_open
-            written = (swapped_root / summary_out.name).read_text(encoding="utf-8")
+            new_root_summary = summary_out
+            swapped_root_summary = swapped_root / summary_out.name
 
         self.assertTrue(swapped)
         self.assertEqual(
             errors,
             ["raw pull summary output parent directory could not be synced"],
         )
-        self.assertIn(raw_puller.RAW_PULL_SUMMARY_SCHEMA, written)
+        self.assertFalse(new_root_summary.exists())
+        self.assertFalse(swapped_root_summary.exists())
 
     def test_kagemusha_android_raw_puller_summary_digest_rejects_symlinked_artifact(
         self,
@@ -25788,6 +26149,31 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
         self.assertEqual(errors, ["capture summary output must not be hardlinked"])
         self.assertEqual(target_text, "do not overwrite\n")
 
+    def test_android_capture_summary_rejects_missing_parent_under_symlinked_ancestor(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            alias_target = temp / "alias-target"
+            alias_target.mkdir()
+            linked_parent = temp / "linked-parent"
+            try:
+                linked_parent.symlink_to(alias_target, target_is_directory=True)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+            summary_path = linked_parent / "missing" / "capture.json"
+
+            errors = capture_runner.write_capture_summary(
+                summary_path,
+                {"schema": capture_runner.CAPTURE_SUMMARY_SCHEMA},
+            )
+
+        self.assertEqual(
+            errors,
+            ["capture summary output ancestor directory must not be a symlink"],
+        )
+        self.assertFalse((alias_target / "missing").exists())
+
     def test_android_capture_summary_writes_0600_and_exact_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_text:
             temp = Path(temp_text)
@@ -25802,6 +26188,63 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
         self.assertEqual(mode, 0o600)
         self.assertEqual(written, payload)
 
+    def test_android_capture_summary_does_not_follow_parent_swap_before_write(
+        self,
+    ) -> None:
+        original_open = capture_runner.os.open
+        try:
+            with tempfile.TemporaryDirectory() as temp_text:
+                temp = Path(temp_text)
+                parent = temp / "summary-parent"
+                parent.mkdir()
+                swapped_parent = temp / "summary-parent-original"
+                alias_target = temp / "alias-target"
+                alias_target.mkdir()
+                summary_path = parent / "capture.json"
+                swapped = False
+
+                def open_with_parent_swap(
+                    path_arg,
+                    flags,
+                    mode=0o777,
+                    *,
+                    dir_fd=None,
+                ):  # type: ignore[no-untyped-def]
+                    nonlocal swapped
+                    if (
+                        not swapped
+                        and dir_fd is not None
+                        and isinstance(path_arg, str)
+                        and path_arg.startswith(".capture.json.")
+                    ):
+                        parent.rename(swapped_parent)
+                        try:
+                            parent.symlink_to(alias_target, target_is_directory=True)
+                        except (NotImplementedError, OSError) as exc:
+                            self.skipTest(
+                                f"symlinks are not available in this test environment: {exc}"
+                            )
+                        swapped = True
+                    return original_open(path_arg, flags, mode, dir_fd=dir_fd)
+
+                capture_runner.os.open = open_with_parent_swap
+
+                errors = capture_runner.write_capture_summary(
+                    summary_path,
+                    {"schema": capture_runner.CAPTURE_SUMMARY_SCHEMA},
+                )
+                alias_entries = list(alias_target.iterdir())
+                original_entries = list(swapped_parent.iterdir())
+        finally:
+            capture_runner.os.open = original_open
+
+        self.assertEqual(
+            errors,
+            ["capture summary output parent directory could not be synced"],
+        )
+        self.assertEqual(alias_entries, [])
+        self.assertEqual(original_entries, [])
+
     def test_android_capture_summary_rejects_symlink_swap_after_replace(self) -> None:
         original_replace = capture_runner.os.replace
         try:
@@ -25811,10 +26254,14 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
                 target = temp / "target.json"
                 target.write_text("do not overwrite\n", encoding="utf-8")
 
-                def replace_with_link(src, dst):  # type: ignore[no-untyped-def]
-                    Path(src).unlink()
+                def replace_with_link(src, dst, **kwargs):  # type: ignore[no-untyped-def]
+                    src_dir_fd = kwargs.get("src_dir_fd")
+                    if src_dir_fd is None:
+                        Path(src).unlink()
+                    else:
+                        os.unlink(src, dir_fd=src_dir_fd)
                     try:
-                        Path(dst).symlink_to(target)
+                        (summary_path.parent / dst).symlink_to(target)
                     except (NotImplementedError, OSError) as exc:
                         self.skipTest(
                             f"symlinks are not available in this test environment: {exc}"
@@ -25845,10 +26292,14 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
                 target = temp / "target.json"
                 target.write_text("do not overwrite\n", encoding="utf-8")
 
-                def replace_with_link(src, dst):  # type: ignore[no-untyped-def]
-                    Path(src).unlink()
+                def replace_with_link(src, dst, **kwargs):  # type: ignore[no-untyped-def]
+                    src_dir_fd = kwargs.get("src_dir_fd")
+                    if src_dir_fd is None:
+                        Path(src).unlink()
+                    else:
+                        os.unlink(src, dir_fd=src_dir_fd)
                     try:
-                        os.link(target, dst)
+                        os.link(target, summary_path.parent / dst)
                     except (AttributeError, NotImplementedError, OSError) as exc:
                         self.skipTest(
                             f"hardlinks are not available in this test environment: {exc}"
@@ -25877,10 +26328,19 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
                 temp = Path(temp_text)
                 summary_path = temp / "capture.json"
 
-                def replace_with_tamper(src, dst):  # type: ignore[no-untyped-def]
-                    Path(src).unlink()
-                    Path(dst).write_text("tampered\n", encoding="utf-8")
-                    Path(dst).chmod(0o600)
+                def replace_with_tamper(src, dst, **kwargs):  # type: ignore[no-untyped-def]
+                    original_replace(src, dst, **kwargs)
+                    dst_dir_fd = kwargs.get("dst_dir_fd")
+                    if dst_dir_fd is None:
+                        Path(dst).write_text("tampered\n", encoding="utf-8")
+                        Path(dst).chmod(0o600)
+                        return
+                    tamper_fd = os.open(dst, os.O_WRONLY | os.O_TRUNC, dir_fd=dst_dir_fd)
+                    try:
+                        os.write(tamper_fd, b"tampered\n")
+                        os.fchmod(tamper_fd, 0o600)
+                    finally:
+                        os.close(tamper_fd)
 
                 capture_runner.os.replace = replace_with_tamper
 

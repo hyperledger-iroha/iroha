@@ -5043,6 +5043,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-mobile-privacy-production-gate-exactness",
     "--negative-control-mobile-privacy-localnet-lifecycle-audit",
     "--negative-control-public-privacy-localnet-lifecycle-catalog",
+    "--negative-control-public-privacy-sdk-export-review-scope-evidence",
     "--negative-control-public-privacy-zero-hash-evidence",
     "--negative-control-public-privacy-repeated-hash-evidence",
     "--negative-control-public-privacy-zero-signature-evidence",
@@ -6895,7 +6896,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const publicPrivacyLocalnetLifecycleBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-public-privacy-localnet-lifecycle-catalog":'),
-    guard.indexOf('if mode == "--negative-control-public-privacy-zero-hash-evidence":'),
+    guard.indexOf('if mode == "--negative-control-public-privacy-sdk-export-review-scope-evidence":'),
   );
   assert.match(
     publicPrivacyLocalnetLifecycleBranch,
@@ -6921,6 +6922,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     publicPrivacyLocalnetLifecycleBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "public privacy localnet lifecycle negative control must not unconditionally pass after run_checks",
+  );
+  const publicPrivacySdkExportScopeBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-public-privacy-sdk-export-review-scope-evidence":'),
+    guard.indexOf('if mode == "--negative-control-public-privacy-zero-hash-evidence":'),
+  );
+  assert.match(
+    publicPrivacySdkExportScopeBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "public privacy SDK export/review-scope negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    publicPrivacySdkExportScopeBranch,
+    /const sdkExports = evidenceSdkExports\(source\.sdk_exports, sdkEntrypoints\)[\s\S]*?Object\.fromEntries\(PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES\.map[\s\S]*?missing SDK exports[\s\S]*?missing ignored SDK exports[\s\S]*?export type PrivacyProductionGateEvidence = Readonly<[\s\S]*?export type PrivacyProductionGateArtifactEvidence = Readonly<[\s\S]*?const artifact = declarationInterface[\s\S]*?const artifactIgnored = declarationInterface[\s\S]*?function privacyPackageProductionEvidenceManifest\([\s\S]*?function privacyPackageProductionEvidenceManifestIgnored\(/u,
+    "public privacy SDK export/review-scope negative control must mutate parser, test, and declaration markers",
+  );
+  assert.match(
+    publicPrivacySdkExportScopeBranch,
+    /javascript\/iroha_js\/src\/privacyAlgorithms\.js privacy SDK export\/review-scope evidence[\s\S]*?javascript\/iroha_js\/dist\/privacyAlgorithms\.js privacy SDK export\/review-scope evidence[\s\S]*?JavaScript privacy SDK export\/review-scope evidence tests[\s\S]*?JavaScript privacy production evidence declarations[\s\S]*?JavaScript package privacy production evidence declaration tests[\s\S]*?JavaScript package privacy production evidence runtime tests/u,
+    "public privacy SDK export/review-scope negative control must require source, dist, declaration, runtime, and test labels",
+  );
+  assert.match(
+    publicPrivacySdkExportScopeBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: public privacy SDK export\/review-scope drift was not detected"\s*\)/u,
+    "public privacy SDK export/review-scope negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    publicPrivacySdkExportScopeBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "public privacy SDK export/review-scope negative control must not unconditionally pass after run_checks",
   );
   const publicPrivacyZeroHashBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-public-privacy-zero-hash-evidence":'),

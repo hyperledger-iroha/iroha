@@ -1720,6 +1720,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-localnet-lifecycle-catalog",
     ),
     (
+        "Public privacy SDK export and review-scope evidence negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-sdk-export-review-scope-evidence",
+    ),
+    (
         "Public privacy zero hash evidence negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-zero-hash-evidence",
     ),
@@ -7751,6 +7755,21 @@ def check_javascript(texts, errors):
             relative,
             PRIVACY_LOCALNET_ACCEPTANCE_LIFECYCLE_FIELDS
             + (
+                "PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+                "PRIVACY_PRODUCTION_REVIEW_SCOPE_KEYS",
+                '"sdk_exports"',
+                '"review_scope"',
+                "function evidenceSdkExports(value, sdkEntrypoints)",
+                "!isSdkEntrypointName(entrypoint)",
+                "function evidenceReviewScope(",
+                "value.version !== PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+                "fuzzArtifactHash !== fuzzResults.artifact.uri",
+                "performanceArtifactHash !== performanceResults.artifact.uri",
+                "const sdkExports = evidenceSdkExports(source.sdk_exports, sdkEntrypoints)",
+                "const reviewScope = evidenceReviewScope(source.review_scope, descriptor, {",
+                "sdkExports: evidence.sdkExports",
+                "reviewScope: evidence.reviewScope",
+                "sdkExports: Object.fromEntries(",
                 "lifecyclePassed: \"lifecycle_passed\"",
                 "const lifecycleShieldTxHash = evidenceHashUri(value.lifecycle_shield_tx_hash)",
                 "const lifecycleRedeemTxHash = evidenceHashUri(value.lifecycle_redeem_tx_hash)",
@@ -7769,11 +7788,48 @@ def check_javascript(texts, errors):
             f"{relative} privacy localnet lifecycle catalog",
             errors,
         )
+        require_contains(
+            texts,
+            relative,
+            (
+                "PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+                "PRIVACY_PRODUCTION_REVIEW_SCOPE_KEYS",
+                '"sdk_exports"',
+                '"review_scope"',
+                "function evidenceSdkExports(value, sdkEntrypoints)",
+                "!isSdkEntrypointName(entrypoint)",
+                "function evidenceReviewScope(",
+                "value.version !== PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+                "fuzzArtifactHash !== fuzzResults.artifact.uri",
+                "performanceArtifactHash !== performanceResults.artifact.uri",
+                "const sdkExports = evidenceSdkExports(source.sdk_exports, sdkEntrypoints)",
+                "const reviewScope = evidenceReviewScope(source.review_scope, descriptor, {",
+                "sdkExports: evidence.sdkExports",
+                "reviewScope: evidence.reviewScope",
+                "sdkExports: Object.fromEntries(",
+            ),
+            f"{relative} privacy SDK export/review-scope evidence",
+            errors,
+        )
     require_contains(
         texts,
         "javascript/iroha_js/test/privacyCatalogParity.test.js",
         PRIVACY_LOCALNET_ACCEPTANCE_LIFECYCLE_FIELDS
         + (
+            "PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+            "function productionEvidenceSdkExports(entrypoints)",
+            "sdkExports: productionEvidenceSdkExports(entrypoints)",
+            "reviewScope: {",
+            "assert.deepEqual(descriptor.sdkExports, productionEvidenceSdkExports(expectedEntrypoints))",
+            "descriptor.productionGate.reviewScope.algorithm_id",
+            "missing SDK exports",
+            "dev fixture SDK export",
+            "missing SDK export surface",
+            "stale SDK export surface",
+            "missing review scope",
+            "stale review scope version",
+            "stale review scope SDK entrypoints",
+            "stale review scope fuzz hash",
             "zero review artifact hash",
             "repeated review artifact hash",
             "repeated urn review artifact hash",
@@ -7805,6 +7861,83 @@ def check_javascript(texts, errors):
             "reject duplicate internal review evidence rows",
         ),
         "JavaScript privacy localnet lifecycle catalog tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/privacyCatalogParity.test.js",
+        (
+            "PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+            "function productionEvidenceSdkExports(entrypoints)",
+            "sdkExports: productionEvidenceSdkExports(entrypoints)",
+            "reviewScope: {",
+            "assert.deepEqual(descriptor.sdkExports, productionEvidenceSdkExports(expectedEntrypoints))",
+            "descriptor.productionGate.reviewScope.algorithm_id",
+            "missing SDK exports",
+            "dev fixture SDK export",
+            "missing SDK export surface",
+            "stale SDK export surface",
+            "missing review scope",
+            "stale review scope version",
+            "stale review scope SDK entrypoints",
+            "stale review scope fuzz hash",
+        ),
+        "JavaScript privacy SDK export/review-scope evidence tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/index.d.ts",
+        (
+            "export type PrivacyProductionSdkSurface",
+            "export type PrivacyProductionSdkExports = Readonly<",
+            "export type PrivacyProductionSdkParityArtifacts",
+            "export interface PrivacyProductionArtifact",
+            "export interface PrivacyProductionReviewScope",
+            "export interface PrivacyProductionLocalnetAcceptance",
+            "export type PrivacyProductionGateEvidence = Readonly<",
+            "readonly localnetAcceptance?: PrivacyProductionLocalnetAcceptance;",
+            "readonly fuzzResults?: PrivacyProductionResult;",
+            "readonly performanceResults?: PrivacyProductionResult;",
+            "readonly reviewScope?: PrivacyProductionReviewScope;",
+            "readonly sdkExports?: PrivacyProductionSdkExports;",
+            "readonly sdkParityArtifacts?: PrivacyProductionSdkParityArtifacts;",
+            "readonly gateEvidence?: PrivacyProductionGateEvidence;",
+        ),
+        "JavaScript privacy production evidence declarations",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "PrivacyProductionSdkSurface",
+            "PrivacyProductionSdkExports",
+            "PrivacyProductionSdkParityArtifacts",
+            "PrivacyProductionReviewScope",
+            "PrivacyProductionLocalnetAcceptance",
+            "PrivacyProductionGateEvidence",
+            "const artifact = declarationInterface(\"PrivacyProductionArtifact\");",
+            "/readonly gateEvidence\\?: PrivacyProductionGateEvidence;/",
+            "/readonly sdkExports\\?: PrivacyProductionSdkExports;/",
+        ),
+        "JavaScript package privacy production evidence declaration tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "function privacyPackageProductionEvidenceManifest(",
+            "function privacyPackageProductionEvidenceRow(",
+            "privacyPackageProductionSdkExports(expectedEntrypoints)",
+            "const productionCapabilities = getPrivacyCapabilities(productionEvidence,",
+            "zkAce.productionGate.reviewScope.algorithm_id",
+            "zkAce.productionGate.localnetAcceptance.lifecycle_redeem_tx_hash",
+            "Object.isFrozen(zkAce.productionGate.reviewScope)",
+            "zkAce.sdkExports.javascript.push(\"tamperedEntrypoint\")",
+        ),
+        "JavaScript package privacy production evidence runtime tests",
         errors,
     )
     require_contains(
@@ -15652,7 +15785,7 @@ if mode == "--negative-control-public-privacy-localnet-lifecycle-catalog":
     missing_targets = []
     expected_labels = []
     for target, label, needle, replacement in targets:
-        original = read(target)
+        original = mutated_texts.get(target, read(target))
         mutated = original.replace(needle, replacement, 1)
         if mutated == original:
             missing_targets.append(target)
@@ -15677,6 +15810,77 @@ if mode == "--negative-control-public-privacy-localnet-lifecycle-catalog":
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: public privacy localnet lifecycle catalog drift was not detected")
+
+if mode == "--negative-control-public-privacy-sdk-export-review-scope-evidence":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/src/privacyAlgorithms.js",
+            "javascript/iroha_js/src/privacyAlgorithms.js privacy SDK export/review-scope evidence",
+            "const sdkExports = evidenceSdkExports(source.sdk_exports, sdkEntrypoints)",
+            "const sdkExports = Object.fromEntries(PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES.map((surface) => [surface, [...sdkEntrypoints]]))",
+        ),
+        (
+            "javascript/iroha_js/dist/privacyAlgorithms.js",
+            "javascript/iroha_js/dist/privacyAlgorithms.js privacy SDK export/review-scope evidence",
+            "const sdkExports = evidenceSdkExports(source.sdk_exports, sdkEntrypoints)",
+            "const sdkExports = Object.fromEntries(PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES.map((surface) => [surface, [...sdkEntrypoints]]))",
+        ),
+        (
+            "javascript/iroha_js/test/privacyCatalogParity.test.js",
+            "JavaScript privacy SDK export/review-scope evidence tests",
+            "missing SDK exports",
+            "missing ignored SDK exports",
+        ),
+        (
+            "javascript/iroha_js/index.d.ts",
+            "JavaScript privacy production evidence declarations",
+            "export type PrivacyProductionGateEvidence = Readonly<",
+            "export type PrivacyProductionGateArtifactEvidence = Readonly<",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "JavaScript package privacy production evidence declaration tests",
+            "const artifact = declarationInterface(\"PrivacyProductionArtifact\");",
+            "const artifactIgnored = declarationInterface(\"PrivacyProductionArtifact\");",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "JavaScript package privacy production evidence runtime tests",
+            "function privacyPackageProductionEvidenceManifest(",
+            "function privacyPackageProductionEvidenceManifestIgnored(",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label, needle, replacement in targets:
+        original = mutated_texts.get(target, read(target))
+        mutated = original.replace(needle, replacement, 1)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate public privacy SDK export/review-scope evidence coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: public privacy SDK export/review-scope drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected public privacy SDK export/review-scope drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: public privacy SDK export/review-scope drift was not detected"
+    )
 
 if mode == "--negative-control-public-privacy-zero-hash-evidence":
     mutated_texts = dict(texts)

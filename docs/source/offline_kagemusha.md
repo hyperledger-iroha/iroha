@@ -487,8 +487,15 @@ report rendering unless the result matches the raw slot id, reports exact
 `status = ok`, preserves the selected run-as app package, asserts physical
 StrongBox/KeyMint attestation, and binds `attestation_challenge_sha256` to the
 pulled challenge bytes plus `attestation_certificate_chain_sha256` to the
-pulled certificate-chain bytes. The strict matrix scanner remains the authority
-for deciding when every standard device family has production evidence.
+pulled certificate-chain bytes. Its optional capture summary writer creates
+missing output parents one path component at a time through directory file
+descriptors with no-follow flags, then creates the temporary JSON file, atomic
+replacement, exact byte readback, rollback cleanup, and final parent-directory
+sync through the captured parent descriptor. If the public summary path is
+swapped before final sync, the writer fails closed and removes the file it
+installed through that descriptor instead of populating the swapped-in target.
+The strict matrix scanner remains the authority for deciding when every
+standard device family has production evidence.
 Required telemetry, status NDJSON, queue,
 attestation, and runtime-log artifact shape checks now also run on staged
 assembler output before publish, so failed status records, missing runtime
@@ -1122,9 +1129,14 @@ output file after atomic replacement, so oversized same-inode output growth
 cannot be accepted as a verified write, and they report identity-checked temporary-file cleanup
 failures after output write or post-stage output-validation errors.
 The Android raw puller's host `latest-slot.txt` and raw-pull summary writers
-also report identity-checked temporary-file cleanup failures after failed
-writes and refuse to unlink a temp output whose file identity changed before
-cleanup.
+now create their temporary files, promote replacements, and verify readback
+through the captured output-parent descriptor. They also report
+identity-checked temporary-file cleanup failures after failed writes, refuse to
+unlink a temp output whose file identity changed before cleanup, and remove the
+installed metadata file from the original parent if the public parent path is
+swapped before final directory sync. Published-output rollback is also
+identity-bound, so a swapped replacement is preserved and unlink failures are
+reported explicitly.
 The release-bundle writer applies the same pattern to its manifest output with
 a 16 MiB cap before temporary-file creation and during final opened-file
 readback, and reports temporary-file cleanup failures after write or post-stage
@@ -1354,8 +1366,11 @@ entry count so empty-directory flooding cannot exhaust host-side staging before
 slot validation. The local raw output root is tightened to `0700`, and extracted
 raw artifact directories are forced to `0700` and files to `0600` before
 installation. Raw `latest-slot.txt` and raw-pull summary outputs are likewise
-forced to `0600` and verified during final opened-file readback, so evidence
-confidentiality does not depend on the host process umask.
+forced to `0600`, written through descriptor-relative temporary files and
+replacement calls, and verified during final opened-file readback, so evidence
+confidentiality does not depend on the host process umask or a mutable public
+pathname. Their failed-write and failed-parent-sync cleanup paths recheck file
+identity through the captured parent descriptor before unlinking.
 All of these release-output writers also fail closed if the parent-directory
 sync after atomic replacement fails, so a release/readiness artifact is not
 accepted as durable when the directory entry cannot be fsynced. The readiness
@@ -1648,6 +1663,17 @@ loaded; malformed, duplicate, incomplete, or missing native evidence keeps the
 SDK capability surface fail-closed. Unshield v3 also rejects overflowing input
 amount sums before proving, so malformed witness archives return the proving
 failure status instead of wrapping the private total.
+Public JavaScript production-evidence rows now mirror the Python privacy catalog
+by requiring exact `sdk_exports` and `review_scope` sections before a row can
+promote readiness: every SDK surface repeats the admitted entrypoint list, and
+the review scope binds algorithm id, chain id, verifier metadata, required
+state, fuzz/performance artifact hashes, and the localnet run id.
+The JavaScript package declarations expose the same derived SDK export, review
+scope, SDK parity artifact, localnet acceptance, fuzz/performance result, and
+gate-evidence shapes as readonly TypeScript surfaces for descriptor consumers.
+Package-root `getPrivacyCapabilities(...)` tests also exercise complete
+production evidence so the distributable import path observes the same derived
+fields and immutable evidence objects.
 The Offline recursive prover and chain verifier require the literal
 `offline-note-recursive` circuit id; alias spellings such as
 `halo2/ipa:offline-note-recursive` are rejected before proof generation or

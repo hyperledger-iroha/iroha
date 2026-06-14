@@ -31,9 +31,18 @@ and completed history lives in [`status.md`](./status.md).
   rows, and the JS/Python review-evidence test helpers use real SHA-256
   artifact digests plus deterministic SHA-512-derived review signatures so
   localnet lifecycle hash distinctness is exercised without helper collisions.
-  The Kagemusha SDK parity guard pins those source/dist/test surfaces plus the
-  focused JS/Python runner coverage and zero/repeated hash/signature negative
-  controls.
+  JavaScript public evidence rows now also mirror Python's strict
+  `sdk_exports` and `review_scope` contract: every SDK surface must repeat the
+  exact admitted entrypoint list, and the review scope must bind algorithm id,
+  chain id, verifier metadata, required state, fuzz/performance artifact
+  hashes, and localnet run id before production readiness is promoted. The
+  JavaScript package TypeScript declarations now expose those derived
+  production-evidence fields as typed readonly shapes so SDK callers see the
+  same `sdkExports`, `reviewScope`, SDK parity artifact, localnet acceptance,
+  and gate-evidence contract that runtime descriptors return.
+  The Kagemusha SDK parity guard pins those source/dist/test/declaration and
+  package-root runtime surfaces plus the focused JS/Python runner coverage and
+  zero/repeated hash/signature negative controls.
 - ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
   endpoint for current confidential-v2 commitment inclusion paths, and the
   Kotlin/JVM plus Android Java Torii Merkle providers call it directly.
@@ -379,7 +388,8 @@ and completed history lives in [`status.md`](./status.md).
   journal/diagnostics, browser app-session, preview bootstrap, Norito journal
   record coverage, ISO alias validation/canonical-auth coverage,
   identifier-receipt adversarial and shared-vector exactness, package/browser,
-  privacy native bridge, and transaction-builder archive test names together.
+  privacy native bridge, public privacy `sdk_exports`/`review_scope` evidence
+  exactness, and transaction-builder archive test names together.
   The GitHub JS SDK job must build the local native host with
   `npm run build:native --prefix javascript/iroha_js` after dependency install
   and before the focused runner, so clean workers do not depend on stale or
@@ -563,7 +573,11 @@ and completed history lives in [`status.md`](./status.md).
   capture-summary output uses a `0600` fsynced temporary file, atomic
   replacement, opened-file identity readback,
   symlink/hardlink rejection, exact byte comparison, and parent-directory fsync
-  before reporting success. The signed-slot assembler binds every copied source
+  before reporting success. Missing capture-summary parents are now created one
+  path component at a time through no-follow directory file descriptors, and
+  the temporary write, replacement, readback, rollback cleanup, and final sync
+  stay anchored to the captured parent descriptor so public-path swaps cannot
+  populate a swapped-in target. The signed-slot assembler binds every copied source
   artifact to symlink-free ancestors and the opened file identity, uses a
   separate 64 MiB cap for the JNI-bearing offline wallet APK while retaining
   16 MiB caps for smaller evidence artifacts, and rejects source-directory
@@ -595,8 +609,9 @@ and completed history lives in [`status.md`](./status.md).
   through opened stage/final directory descriptors, and revalidates the
   captured temporary extraction directory identity before cleanup while
   reporting removal failures before latest-slot or summary publication. It
-  also forces raw `latest-slot.txt` and raw-pull summary outputs to `0600` and
-  verifies those modes during final opened-file readback. It
+  also forces raw `latest-slot.txt` and raw-pull summary outputs to `0600`,
+  writes them through descriptor-relative temporary files and replacement
+  calls, and verifies those modes during final opened-file readback. It
   accepts only the uncompressed `tar -cf -` stream emitted by the Android
   exporter, so compressed archive streams fail before extraction, and rejects
   noncanonical tar member spellings such as `./` or repeated separators before
@@ -651,12 +666,16 @@ and completed history lives in [`status.md`](./status.md).
   removes partial installs through the identity-bound output-root file
   descriptor only when the destination entry still names the directory created
   by the puller, reporting cleanup removal failures with the install error. The
-  host `latest-slot.txt` writer now follows the same
-  output-readback contract, with byte fsync, atomic replace, opened-file
-  identity readback that rejects symlinks, hardlinks, and path swaps, and an
-  identity-bound output-root fsync. The raw puller's host `latest-slot.txt` and
-  summary writers now also report identity-bound temp cleanup failures and
-  refuse to unlink a temp output whose file identity changed before cleanup.
+  host `latest-slot.txt` writer and raw-pull summary writer now follow the same
+  descriptor-anchored output-readback contract, with byte fsync, atomic
+  descriptor-relative replace, opened-file identity readback that rejects
+  symlinks, hardlinks, and path swaps, and identity-bound parent fsync. They
+  also report identity-bound temp cleanup failures, refuse to unlink a temp
+  output whose file identity changed before cleanup, and clean up the installed
+  metadata file from the original parent if the public parent path is swapped
+  before final sync. Published-output rollback is identity-bound too, so
+  cleanup preserves a swapped replacement and reports unlink failures instead
+  of silently deleting the wrong file.
   Explicit scanner `--slot` values now fail closed unless they are already
   exact safe single-directory names without whitespace, so whitespace-normalized
   slot selection cannot choose a production evidence bundle.

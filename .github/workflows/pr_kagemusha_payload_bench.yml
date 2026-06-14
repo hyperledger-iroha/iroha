@@ -959,6 +959,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-localnet-lifecycle-audit
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-localnet-lifecycle-catalog
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-sdk-export-review-scope-evidence
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-zero-hash-evidence
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-repeated-hash-evidence
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-zero-signature-evidence
@@ -1097,6 +1098,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-published-cleanup-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-open-path
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-inventory
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-harness-result
@@ -1414,6 +1416,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-published-cleanup-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-directory-collision
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-entry-cap
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-private-permissions

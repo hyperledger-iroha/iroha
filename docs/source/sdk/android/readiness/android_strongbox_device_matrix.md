@@ -287,11 +287,16 @@ Production release criteria:
   by the puller. Temporary extraction cleanup also revalidates the captured
   temp-directory identity through its parent descriptor before removing
   anything, so a swapped staging path is left untouched. The host-side
-  `latest-slot.txt` writer uses the same
-  fail-closed output discipline: it fsyncs the file bytes, atomically replaces
-  the output, verifies readback through an opened-file identity binding that
-  rejects symlinks, hardlinks, and path swaps, and fsyncs the identity-bound
-  output root.
+  `latest-slot.txt` writer and raw-pull summary writer use the same
+  fail-closed output discipline: they create temporary files through the
+  captured output-parent descriptor, fsync the file bytes, atomically replace
+  the output with descriptor-relative `rename` semantics, verify readback
+  through an opened-file identity binding that rejects symlinks, hardlinks, and
+  path swaps, and remove the installed metadata file from the original parent
+  if the public parent path is swapped before the final identity-bound parent
+  fsync. Their fd-relative temp cleanup refuses to remove a temporary output
+  whose file identity changed, and published-output rollback refuses to remove a
+  replacement whose identity no longer matches the file just written.
   A raw pull is not assembly-ready unless it contains
   `attestation/harness-result.json`; the puller verifies that
   the harness challenge and `chain_length` match the pulled challenge and PEM
@@ -344,7 +349,10 @@ Production release criteria:
   serialized as strict JSON, capped before temporary-file creation, atomically
   replaced after fsync, read back through an opened-file identity binding that
   rejects symlinks, hardlinks, and path swaps, and followed by an
-  identity-bound parent directory fsync. The summary's `artifact_sha256`
+  identity-bound parent directory fsync. Cleanup after failed writes and failed
+  parent fsync is descriptor-relative and identity-bound, so swapped temp or
+  published summary aliases are preserved instead of unlinked. The summary's
+  `artifact_sha256`
   inventory must cover every
   required raw artifact, and each digest is read through a separate opened-file
   identity binding that rejects symlinks, hardlinks, and file swaps.
@@ -501,7 +509,12 @@ Production release criteria:
   `attestation_challenge_sha256` equal to the pulled
   `attestation/challenge.hex` bytes plus an
   `attestation_certificate_chain_sha256` equal to the pulled
-  `attestation/keymint-certificate-chain.pem` bytes. It refuses to run without the
+  `attestation/keymint-certificate-chain.pem` bytes. Its optional
+  capture-summary output creates missing parent directories through
+  no-follow directory file descriptors, writes and promotes the temporary JSON
+  through the captured parent descriptor, verifies exact readback bytes, and
+  fails closed with identity-bound rollback if the public parent path is swapped
+  before final sync. It refuses to run without the
   explicit `--physical-device-attestation` operator assertion, rejects
   secret-looking or control-character ADB/package/path inputs before starting
   Gradle or ADB, and stops at the first failing child command. When

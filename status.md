@@ -2,6 +2,147 @@
 
 Last updated: 2026-06-14
 
+## 2026-06-14 Android Raw Puller Fd-Anchored Metadata Publish
+
+- Hardened `scripts/kagemusha_pull_android_device_lab_raw_slot.py` so the raw
+  puller's host `latest-slot.txt` and raw-pull summary outputs create temp
+  files, promote replacements, verify readback, and clean up failed writes
+  through captured output-parent directory descriptors. Parent path swaps before
+  writing now fail without populating the swapped target, and parent swaps before
+  final sync remove the installed metadata file from the original parent before
+  returning the durability error.
+- Added adversarial raw-puller regressions for latest-slot and summary
+  parent-swap-before-write cases, latest-slot parent-swap-before-sync cleanup,
+  descriptor-relative replacement tampering, fd-relative readback swaps,
+  fd-relative temp cleanup identity swaps, and published-output rollback
+  identity swaps/unlink failures.
+- Pinned the published-cleanup identity predicate and negative control in the
+  Kagemusha production-readiness command inventory so the CI guard rejects
+  cleanup regressions.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - focused raw-puller cleanup unittest selection (`6` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (`794` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper-rebind --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-verifying.pem --lineage-proof-evidence artifacts/kagemusha/lineage-proof-evidence.json --compact-key-evidence artifacts/kagemusha/recursive-compact-key-evidence.json --summary-out target/kagemusha-readiness-latest-codex-status.json` exited `1` with the expected blockers above; it still covers Google Pixel 6 / 6a and `nearby_offline`, `nfc_hce`, and `qr`.
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+  - conflict-marker scan over the same files returned no matches.
+
+## 2026-06-14 JavaScript Privacy Evidence Declaration Surface
+
+- Published typed JavaScript package declarations for the production privacy
+  evidence fields that the runtime now exposes: SDK export surfaces, SDK parity
+  artifacts, review scope, localnet acceptance, fuzz/performance results, and
+  gate evidence.
+- Updated the package declaration regression and SDK parity guard so
+  `index.d.ts`, package-dist tests, source/dist runtime checks, and the
+  public privacy SDK export/review-scope negative control fail together if the
+  declaration surface drifts from the runtime evidence contract. The package
+  root now also exercises `getPrivacyCapabilities(...)` with complete
+  production evidence so published consumers observe the derived `sdkExports`,
+  `reviewScope`, localnet lifecycle, SDK parity artifacts, and immutable
+  evidence objects through the distributable import path.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/package_dist.test.js --test-name-pattern "package dist entrypoint exports privacy native archive helpers|package declarations mark privacy capability metadata readonly"`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected"`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-sdk-export-review-scope-evidence`
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh`
+
+## 2026-06-14 Android Capture Summary Fd-Anchored Publish
+
+- Hardened `scripts/kagemusha_android_device_lab_capture.py` so optional
+  capture-summary output parents are created one component at a time through
+  no-follow directory file descriptors. The summary writer now creates the
+  temporary JSON file, promotes it, verifies exact readback bytes, performs
+  rollback cleanup, and checks final parent-directory sync against the captured
+  parent descriptor, so missing-parent symlink aliases and parent swaps cannot
+  populate a swapped-in target.
+- Added adversarial capture-summary regressions for a missing parent under a
+  symlinked ancestor and for a parent path swapped to a symlink before the temp
+  write. Updated the existing symlink, hardlink, and content-tamper swap tests
+  to exercise descriptor-relative `os.replace(...)`.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_symlink_output scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_hardlinked_output scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_missing_parent_under_symlinked_ancestor scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_writes_0600_and_exact_json scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_does_not_follow_parent_swap_before_write scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_symlink_swap_after_replace scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_hardlink_swap_after_replace scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_readback_mismatch_after_replace scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_sync_directory_rejects_identity_mismatch`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (785 tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check -- scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+    returned no matches.
+
+## 2026-06-14 JavaScript Privacy Evidence SDK Export Scope Exactness
+
+- Hardened the JavaScript public privacy production-evidence parser to mirror
+  Python's `sdk_exports` and `review_scope` contract. A row now promotes
+  production readiness only when every SDK surface repeats the exact admitted
+  entrypoint list and the review scope binds the algorithm id, chain id,
+  verifier metadata, required state, fuzz/performance artifact hashes, and
+  localnet run id.
+- Exposed the accepted `sdkExports`, `reviewScope`, and `sdkParityArtifacts`
+  through the derived JS production gate and added adversarial JS catalog tests
+  for missing/stale SDK exports, dev-fixture exports, missing export surfaces,
+  missing/stale review scopes, stale review-scope entrypoints, and mismatched
+  review-scope artifact hashes.
+- Updated the Kagemusha SDK parity guard, workflow negative-control inventory,
+  JavaScript parity meta-test, roadmap, and offline Kagemusha docs so the
+  source/dist/test contract cannot be removed silently.
+- Validation passed:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js && node --check javascript/iroha_js/dist/privacyAlgorithms.js && node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "privacy algorithm JS catalogs accept complete internal review evidence only for admitted backends|privacy algorithm JS catalogs reject malformed internal review evidence|privacy algorithm catalogs stay fail-closed and in parity across JS and Python|privacy algorithm JS validators reject supplied derived production fields"`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh && node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js && node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-sdk-export-review-scope-evidence`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected"`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `npm run build:native --prefix javascript/iroha_js`
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh`
+
+## 2026-06-14 Kagemusha staged-finalizer fd publish guard refresh
+
+- Updated `ci/check_kagemusha_production_readiness.sh` so its staged-finalizer
+  source markers and publish-readback negative controls require the current
+  artifact-directory file-descriptor anchored install path. The guard now pins
+  `_verify_published_file_at(...)`, fd-relative cleanup through
+  `_cleanup_published_files_at(...)`, fd-relative destination identity checks,
+  and the matching negative-control mutation instead of the retired path-based
+  publish snippets.
+- Refreshed the current Pixel 6/6a readiness summary. The signed slot still
+  verifies with all three declared D2D transports covered, but production
+  readiness remains blocked by missing Reserved-lineage proof evidence, missing
+  ABI-7 recursive compact key evidence, and missing signed evidence for Pixel
+  7, Pixel 8, Pixel Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_cleans_partial_publish_on_copy_error scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_reports_partial_publish_cleanup_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_verifies_published_stage_bytes scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_rejects_publish_directory_identity_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_publish_stage_does_not_follow_swapped_artifact_symlink scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_cleans_partial_publish_on_copy_error scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_reports_partial_publish_cleanup_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_verifies_published_stage_bytes scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_rejects_publish_directory_identity_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_publish_stage_does_not_follow_swapped_artifact_symlink`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (878 tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-readback`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-readback`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (783 tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper-rebind --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-verifying.pem --lineage-proof-evidence artifacts/kagemusha/lineage-proof-evidence.json --compact-key-evidence artifacts/kagemusha/recursive-compact-key-evidence.json --summary-out target/kagemusha-readiness-latest-codex-status.json`
+    exited `1` with `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and
+    `android_device_lab_standard_matrix_missing`.
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+    returned no matches.
+
 ## 2026-06-14 Python Multisig Resolved Account Exactness
 
 - Hardened the Python Torii multisig response parser so

@@ -9,10 +9,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import secrets
 import subprocess
 import stat
 import sys
-import tempfile
 from typing import Any, Callable, Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -119,6 +119,145 @@ def _directory_open_flags() -> int:
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     return flags
+
+
+def _write_all(file_fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        written = os.write(file_fd, view)
+        if written <= 0:
+            raise OSError("short write")
+        view = view[written:]
+
+
+def _open_capture_summary_parent(
+    parent: Path,
+) -> tuple[int | None, tuple[int, int] | None, list[str]]:
+    ancestor_errors = device_lab.validate_no_symlink_ancestors(
+        parent,
+        "capture summary output ancestor directory",
+    )
+    if ancestor_errors:
+        return None, None, ancestor_errors
+    flags = _directory_open_flags()
+    if parent.is_absolute():
+        start_path = Path(parent.anchor)
+        parts = list(parent.parts[1:])
+        if parts:
+            first_path = start_path / parts[0]
+            try:
+                if stat.S_ISLNK(first_path.lstat().st_mode):
+                    start_path = first_path.resolve(strict=True)
+                    parts = parts[1:]
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return None, None, ["capture summary output parent metadata could not be read"]
+    else:
+        start_path = Path.cwd()
+        parts = list(parent.parts)
+    try:
+        current_fd = os.open(start_path, flags)
+    except OSError:
+        return None, None, ["capture summary output parent metadata could not be read"]
+    filtered_parts = [part for part in parts if part not in ("", ".")]
+    for index, part in enumerate(filtered_parts):
+        is_final = index == len(filtered_parts) - 1
+        created = False
+        try:
+            next_fd = os.open(part, flags, dir_fd=current_fd)
+        except FileNotFoundError:
+            try:
+                os.mkdir(part, 0o700, dir_fd=current_fd)
+                created = True
+            except FileExistsError:
+                pass
+            except OSError:
+                os.close(current_fd)
+                return None, None, ["capture summary output parent could not be created"]
+            try:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            except OSError:
+                os.close(current_fd)
+                return None, None, [
+                    "capture summary output parent changed before permissions were tightened"
+                ]
+        except OSError:
+            try:
+                child_stat = os.stat(
+                    part,
+                    dir_fd=current_fd,
+                    follow_symlinks=False,
+                )
+            except OSError:
+                os.close(current_fd)
+                return None, None, [
+                    "capture summary output parent metadata could not be read"
+                ]
+            os.close(current_fd)
+            if stat.S_ISLNK(child_stat.st_mode):
+                if is_final:
+                    return None, None, [
+                        "capture summary output parent directory must not be a symlink"
+                    ]
+                return None, None, [
+                    "capture summary output ancestor directory must not be a symlink"
+                ]
+            if not stat.S_ISDIR(child_stat.st_mode):
+                return None, None, ["capture summary output parent must be a directory"]
+            return None, None, ["capture summary output parent metadata could not be read"]
+        try:
+            next_stat = os.fstat(next_fd)
+            if not stat.S_ISDIR(next_stat.st_mode):
+                os.close(next_fd)
+                os.close(current_fd)
+                return None, None, ["capture summary output parent must be a directory"]
+            if created:
+                os.fchmod(next_fd, 0o700)
+                next_stat = os.fstat(next_fd)
+                if stat.S_IMODE(next_stat.st_mode) != 0o700:
+                    os.close(next_fd)
+                    os.close(current_fd)
+                    return None, None, [
+                        "capture summary output parent permissions must be 0700"
+                    ]
+        except OSError:
+            os.close(next_fd)
+            os.close(current_fd)
+            return None, None, [
+                "capture summary output parent permissions could not be tightened"
+            ]
+        os.close(current_fd)
+        current_fd = next_fd
+    try:
+        parent_stat = os.fstat(current_fd)
+    except OSError:
+        os.close(current_fd)
+        return None, None, ["capture summary output parent metadata could not be read"]
+    if not stat.S_ISDIR(parent_stat.st_mode):
+        os.close(current_fd)
+        return None, None, ["capture summary output parent must be a directory"]
+    return current_fd, _file_identity(parent_stat), []
+
+
+def _unlink_file_if_identity_at(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> list[str]:
+    try:
+        path_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return ["capture summary output rollback cleanup metadata could not be read"]
+    if stat.S_ISREG(path_stat.st_mode) and _file_identity(path_stat) == expected_identity:
+        try:
+            os.unlink(name, dir_fd=parent_fd)
+            return []
+        except OSError:
+            return ["capture summary output rollback cleanup could not remove file"]
+    return []
 
 
 def _sync_directory(
@@ -697,65 +836,70 @@ def write_capture_summary(path: Path, payload: dict[str, Any]) -> list[str]:
             f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
         ]
     parent = path.parent
-    try:
-        parent_mode = parent.lstat().st_mode
-    except FileNotFoundError:
-        parent_mode = None
-    except OSError:
-        return ["capture summary output parent metadata could not be read"]
-    if parent_mode is not None:
-        if stat.S_ISLNK(parent_mode):
-            return ["capture summary output parent directory must not be a symlink"]
-        if not stat.S_ISDIR(parent_mode):
-            return ["capture summary output parent must be a directory"]
-    try:
-        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    except OSError:
-        return ["capture summary output parent could not be created"]
-    try:
-        parent_stat = parent.lstat()
-    except OSError:
-        return ["capture summary output parent metadata could not be read"]
-    if stat.S_ISLNK(parent_stat.st_mode):
-        return ["capture summary output parent directory must not be a symlink"]
-    if not stat.S_ISDIR(parent_stat.st_mode):
-        return ["capture summary output parent must be a directory"]
-    parent_identity = _file_identity(parent_stat)
-    ancestor_errors = device_lab.validate_no_symlink_ancestors(
-        path,
-        "capture summary output ancestor directory",
-    )
-    if ancestor_errors:
-        return ancestor_errors
-    try:
-        output_mode = path.lstat().st_mode
-    except FileNotFoundError:
-        pass
-    except OSError:
-        return ["capture summary output metadata could not be read"]
-    else:
-        if stat.S_ISLNK(output_mode):
-            return ["capture summary output must not be a symlink"]
-        if not stat.S_ISREG(output_mode):
-            return ["capture summary output must be a regular file"]
-        try:
-            if path.stat().st_nlink > 1:
-                return ["capture summary output must not be hardlinked"]
-        except OSError:
-            return ["capture summary output hardlink metadata could not be read"]
-    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=parent)
-    temp_path = Path(temp_name)
+    parent_fd, parent_identity, parent_errors = _open_capture_summary_parent(parent)
+    if parent_errors:
+        return parent_errors
+    assert parent_fd is not None
+    assert parent_identity is not None
+    temp_name: str | None = None
     temp_identity: tuple[int, int] | None = None
+    output_identity: tuple[int, int] | None = None
+    temp_fd: int | None = None
     try:
-        with os.fdopen(fd, "wb") as handle:
-            os.fchmod(handle.fileno(), 0o600)
-            temp_identity = _file_identity(os.fstat(handle.fileno()))
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_path, path)
         try:
-            expected_stat = path.lstat()
+            output_mode = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            ).st_mode
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return ["capture summary output metadata could not be read"]
+        else:
+            if stat.S_ISLNK(output_mode):
+                return ["capture summary output must not be a symlink"]
+            if not stat.S_ISREG(output_mode):
+                return ["capture summary output must be a regular file"]
+            try:
+                if os.stat(path.name, dir_fd=parent_fd).st_nlink > 1:
+                    return ["capture summary output must not be hardlinked"]
+            except OSError:
+                return ["capture summary output hardlink metadata could not be read"]
+        temp_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            temp_flags |= os.O_NOFOLLOW
+        for _attempt in range(100):
+            candidate = f".{path.name}.{secrets.token_hex(8)}.tmp"
+            try:
+                temp_fd = os.open(candidate, temp_flags, 0o600, dir_fd=parent_fd)
+            except FileExistsError:
+                continue
+            except OSError:
+                return ["capture summary output could not be written"]
+            temp_name = candidate
+            break
+        if temp_fd is None or temp_name is None:
+            return ["capture summary output could not be written"]
+        os.fchmod(temp_fd, 0o600)
+        temp_identity = _file_identity(os.fstat(temp_fd))
+        _write_all(temp_fd, encoded)
+        os.fsync(temp_fd)
+        os.close(temp_fd)
+        temp_fd = None
+        os.replace(
+            temp_name,
+            path.name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        temp_name = None
+        try:
+            expected_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
         except OSError:
             return ["capture summary output could not be read back after writing"]
         if stat.S_ISLNK(expected_stat.st_mode):
@@ -771,40 +915,57 @@ def write_capture_summary(path: Path, payload: dict[str, Any]) -> list[str]:
                 "capture summary output must be no more than "
                 f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
             ]
-        expected_identity = _file_identity(expected_stat)
+        output_identity = _file_identity(expected_stat)
+        read_flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            read_flags |= os.O_NOFOLLOW
         try:
-            with path.open("rb") as readback_handle:
-                open_stat = os.fstat(readback_handle.fileno())
-                if _file_identity(open_stat) != expected_identity:
-                    return ["capture summary output changed while being read back"]
-                if not stat.S_ISREG(open_stat.st_mode):
-                    return ["capture summary output must be a regular file after writing"]
-                if open_stat.st_nlink > 1:
-                    return ["capture summary output must not be hardlinked after writing"]
-                if stat.S_IMODE(open_stat.st_mode) != 0o600:
-                    return ["capture summary output permissions must be 0600"]
-                if open_stat.st_size > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+            readback_fd = os.open(path.name, read_flags, dir_fd=parent_fd)
+        except OSError:
+            return ["capture summary output could not be read back after writing"]
+        chunks: list[bytes] = []
+        readback_size = 0
+        try:
+            open_stat = os.fstat(readback_fd)
+            if _file_identity(open_stat) != output_identity:
+                return ["capture summary output changed while being read back"]
+            if not stat.S_ISREG(open_stat.st_mode):
+                return ["capture summary output must be a regular file after writing"]
+            if open_stat.st_nlink > 1:
+                return ["capture summary output must not be hardlinked after writing"]
+            if stat.S_IMODE(open_stat.st_mode) != 0o600:
+                return ["capture summary output permissions must be 0600"]
+            if open_stat.st_size > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+                return [
+                    "capture summary output must be no more than "
+                    f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+                ]
+            while True:
+                chunk = os.read(readback_fd, 1024 * 1024)
+                if not chunk:
+                    break
+                readback_size += len(chunk)
+                if readback_size > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
                     return [
                         "capture summary output must be no more than "
                         f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
                     ]
-                readback = readback_handle.read(
-                    device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES + 1
-                )
+                chunks.append(chunk)
         except OSError:
             return ["capture summary output could not be read back after writing"]
-        if len(readback) > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
-            return [
-                "capture summary output must be no more than "
-                f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
-            ]
+        finally:
+            os.close(readback_fd)
         try:
-            final_stat = path.lstat()
+            final_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
         except OSError:
             return ["capture summary output could not be read back after writing"]
-        if _file_identity(final_stat) != expected_identity:
+        if _file_identity(final_stat) != output_identity:
             return ["capture summary output changed while being read back"]
-        if readback != encoded:
+        if b"".join(chunks) != encoded:
             return ["capture summary output readback mismatch"]
         sync_errors = _sync_directory(
             parent,
@@ -812,16 +973,30 @@ def write_capture_summary(path: Path, payload: dict[str, Any]) -> list[str]:
             expected_identity=parent_identity,
         )
         if sync_errors:
-            return sync_errors
+            cleanup_errors: list[str] = []
+            if output_identity is not None:
+                cleanup_errors.extend(
+                    _unlink_file_if_identity_at(parent_fd, path.name, output_identity)
+                )
+            return [*sync_errors, *cleanup_errors]
     except OSError:
-        try:
-            if temp_path.exists():
-                temp_stat = temp_path.lstat()
-                if temp_identity is None or _file_identity(temp_stat) == temp_identity:
-                    temp_path.unlink()
-        except OSError:
-            pass
-        return ["capture summary output could not be written"]
+        cleanup_errors: list[str] = []
+        if temp_fd is not None:
+            try:
+                os.close(temp_fd)
+            except OSError:
+                pass
+        if temp_name is not None and temp_identity is not None:
+            cleanup_errors.extend(
+                _unlink_file_if_identity_at(parent_fd, temp_name, temp_identity)
+            )
+        if output_identity is not None:
+            cleanup_errors.extend(
+                _unlink_file_if_identity_at(parent_fd, path.name, output_identity)
+            )
+        return ["capture summary output could not be written", *cleanup_errors]
+    finally:
+        os.close(parent_fd)
     return []
 
 

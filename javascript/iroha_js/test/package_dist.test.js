@@ -758,6 +758,215 @@ const PACKAGE_JSON_TEXT = readFileSync(
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
 const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
+const PRIVACY_PACKAGE_PRODUCTION_GATE_VERSION = "privacy-production-gate-v1";
+const PRIVACY_PACKAGE_PRODUCTION_REVIEW_SCOPE_VERSION =
+  "privacy-production-review-scope-v1";
+const PRIVACY_PACKAGE_PRODUCTION_EVIDENCE_REGISTRY_VERSION =
+  "iroha-privacy-production-evidence-registry-v1";
+const PRIVACY_PACKAGE_PRODUCTION_SDK_SURFACES = Object.freeze([
+  "rust_core",
+  "ffi",
+  "python",
+  "javascript",
+  "java_android",
+  "kotlin",
+  "swift",
+  "csharp",
+]);
+const PRIVACY_PACKAGE_PRODUCTION_SDK_ARTIFACT_KINDS = Object.freeze([
+  "types",
+  "validation_rules",
+  "error_codes",
+  "golden_vectors",
+]);
+const PRIVACY_PACKAGE_REVIEW_SIGNATURE_PREFIX = "ed25519:";
+
+function privacyPackageProductionArtifact(label) {
+  return {
+    label,
+    uri: `sha256:${createHash("sha256").update(label).digest("hex")}`,
+  };
+}
+
+function privacyPackageProductionReviewSignature(label) {
+  return `${PRIVACY_PACKAGE_REVIEW_SIGNATURE_PREFIX}${createHash("sha512")
+    .update(label)
+    .digest("hex")}`;
+}
+
+function privacyPackageProductionEntrypoints(descriptor) {
+  const entrypoints = [];
+  for (const entrypoint of [
+    ...(descriptor.sdkEntrypoints ?? []),
+    ...(descriptor.plannedSdkEntrypoints ?? []),
+  ]) {
+    if (
+      typeof entrypoint !== "string" ||
+      entrypoint.includes("DevProofFixture") ||
+      entrypoint.endsWith("Locally")
+    ) {
+      continue;
+    }
+    if (!entrypoints.includes(entrypoint)) {
+      entrypoints.push(entrypoint);
+    }
+  }
+  return entrypoints;
+}
+
+function privacyPackageProductionSdkExports(entrypoints) {
+  return Object.fromEntries(
+    PRIVACY_PACKAGE_PRODUCTION_SDK_SURFACES.map((surface) => [
+      surface,
+      [...entrypoints],
+    ]),
+  );
+}
+
+function privacyPackageProductionSdkParityArtifacts(descriptor) {
+  return Object.fromEntries(
+    PRIVACY_PACKAGE_PRODUCTION_SDK_ARTIFACT_KINDS.map((kind) => [
+      kind,
+      Object.fromEntries(
+        PRIVACY_PACKAGE_PRODUCTION_SDK_SURFACES.map((surface) => [
+          surface,
+          privacyPackageProductionArtifact(
+            `${descriptor.id}-${surface}-${kind}-sdk-parity`,
+          ),
+        ]),
+      ),
+    ]),
+  );
+}
+
+function privacyPackageProductionEvidenceRow(
+  descriptor,
+  { chainId, localnetRunId },
+) {
+  const entrypoints = privacyPackageProductionEntrypoints(descriptor);
+  const fuzzArtifact = privacyPackageProductionArtifact(
+    `${descriptor.id}-package-fuzz`,
+  );
+  const performanceArtifact = privacyPackageProductionArtifact(
+    `${descriptor.id}-package-performance`,
+  );
+  return {
+    version: PRIVACY_PACKAGE_PRODUCTION_GATE_VERSION,
+    coveredAlgorithmId: descriptor.id,
+    chainId,
+    reviewerIdentity: "package-reviewer@internal.example",
+    reviewArtifact: {
+      ...privacyPackageProductionArtifact(`${descriptor.id}-package-review`),
+      signature: privacyPackageProductionReviewSignature(
+        `${descriptor.id}-package-review-signature`,
+      ),
+    },
+    verifierKeyId: descriptor.verifierKeyId,
+    proofFamily: descriptor.proofFamily,
+    publicInputsSchema: descriptor.publicInputsSchema,
+    sdkEntrypoints: privacyPackageProductionSdkExports(entrypoints),
+    sdkExports: privacyPackageProductionSdkExports(entrypoints),
+    sdkParityArtifacts: privacyPackageProductionSdkParityArtifacts(descriptor),
+    requiredState: [...(descriptor.requiredState ?? [])],
+    reviewScope: {
+      version: PRIVACY_PACKAGE_PRODUCTION_REVIEW_SCOPE_VERSION,
+      algorithmId: descriptor.id,
+      chainId,
+      verifierKeyId: descriptor.verifierKeyId,
+      proofFamily: descriptor.proofFamily,
+      publicInputsSchema: descriptor.publicInputsSchema,
+      sdkEntrypoints: [...entrypoints],
+      requiredState: [...(descriptor.requiredState ?? [])],
+      fuzzArtifactHash: fuzzArtifact.uri,
+      performanceArtifactHash: performanceArtifact.uri,
+      localnetRunId,
+    },
+    fuzzResults: {
+      passed: true,
+      artifact: fuzzArtifact,
+    },
+    performanceResults: {
+      passed: true,
+      artifact: performanceArtifact,
+    },
+    localnetRunId,
+    localnetAcceptance: {
+      runId: localnetRunId,
+      target: "localnet",
+      peerCount: 4,
+      peerIds: [
+        "package-privacy-peer-1@localnet",
+        "package-privacy-peer-2@localnet",
+        "package-privacy-peer-3@localnet",
+        "package-privacy-peer-4@localnet",
+      ],
+      chainId,
+      smokePassed: true,
+      smokeTxHash: privacyPackageProductionArtifact(
+        `${descriptor.id}-package-localnet-smoke`,
+      ).uri,
+      replayRejected: true,
+      replayRejectionHash: privacyPackageProductionArtifact(
+        `${descriptor.id}-package-localnet-replay`,
+      ).uri,
+      restartPersistenceChecked: true,
+      restartReplayRejected: true,
+      restartReplayRejectionHash: privacyPackageProductionArtifact(
+        `${descriptor.id}-package-localnet-restart-replay`,
+      ).uri,
+      stateRecoveryPassed: true,
+      stateRecoveryHash: privacyPackageProductionArtifact(
+        `${descriptor.id}-package-localnet-state-recovery`,
+      ).uri,
+      lifecyclePassed: true,
+      lifecycleShieldTxHash: privacyPackageProductionArtifact(
+        `${descriptor.id}-package-localnet-shield`,
+      ).uri,
+      lifecycleHopProofHash: privacyPackageProductionArtifact(
+        `${descriptor.id}-package-localnet-hop`,
+      ).uri,
+      lifecycleRecursiveInitHash: privacyPackageProductionArtifact(
+        `${descriptor.id}-package-localnet-recursive-init`,
+      ).uri,
+      lifecycleRecursiveInitVerifyHash: privacyPackageProductionArtifact(
+        `${descriptor.id}-package-localnet-recursive-init-verify`,
+      ).uri,
+      lifecycleRecursiveAppendHash: privacyPackageProductionArtifact(
+        `${descriptor.id}-package-localnet-recursive-append`,
+      ).uri,
+      lifecycleRecursiveAppendVerifyHash: privacyPackageProductionArtifact(
+        `${descriptor.id}-package-localnet-recursive-append-verify`,
+      ).uri,
+      lifecycleUnshieldProofHash: privacyPackageProductionArtifact(
+        `${descriptor.id}-package-localnet-unshield`,
+      ).uri,
+      lifecycleRedeemTxHash: privacyPackageProductionArtifact(
+        `${descriptor.id}-package-localnet-redeem`,
+      ).uri,
+    },
+    gateEvidence: Object.fromEntries(
+      descriptor.productionGate.requiredGates.map((gate) => [
+        gate,
+        [privacyPackageProductionArtifact(`${descriptor.id}-${gate}-package-gate`)],
+      ]),
+    ),
+  };
+}
+
+function privacyPackageProductionEvidenceManifest(
+  descriptors,
+  {
+    chainId = "boi-package-localnet-4p",
+    localnetRunId = "boi-package-localnet-4peer-run-2026-06-14",
+  } = {},
+) {
+  return {
+    version: PRIVACY_PACKAGE_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+    rows: descriptors.map((descriptor) =>
+      privacyPackageProductionEvidenceRow(descriptor, { chainId, localnetRunId }),
+    ),
+  };
+}
 
 function publicSccpSourceExports() {
   return [
@@ -2539,6 +2748,78 @@ test("package dist entrypoint exports privacy native archive helpers", () => {
     ),
   );
   assert.deepEqual(fresh.privacyCriteria, capabilities.privacyCriteria);
+
+  const chainId = "boi-package-localnet-4p";
+  const productionEvidence = privacyPackageProductionEvidenceManifest(
+    capabilities.privacyAlgorithms,
+    { chainId },
+  );
+  const productionCapabilities = getPrivacyCapabilities(productionEvidence, {
+    chainId,
+  });
+  const sourceZkAce = capabilities.privacyAlgorithms.find(
+    (descriptor) => descriptor.id === "zk-ace-pq-authorization-v0",
+  );
+  const zkAce = productionCapabilities.privacyAlgorithms.find(
+    (descriptor) => descriptor.id === "zk-ace-pq-authorization-v0",
+  );
+  assert.ok(sourceZkAce);
+  assert.ok(zkAce);
+  const expectedEntrypoints = privacyPackageProductionEntrypoints(sourceZkAce);
+  const expectedSdkExports =
+    privacyPackageProductionSdkExports(expectedEntrypoints);
+  assert.equal(zkAce.productionReady, true);
+  assert.equal(zkAce.implementationStage, "production-hardened");
+  assert.deepEqual(zkAce.plannedSdkEntrypoints, []);
+  assert.deepEqual(zkAce.sdkEntrypoints, expectedEntrypoints);
+  assert.deepEqual(zkAce.sdkExports, expectedSdkExports);
+  assert.deepEqual(zkAce.productionGate.sdkExports, expectedSdkExports);
+  assert.equal(zkAce.productionGate.ready, true);
+  assert.deepEqual(zkAce.productionGate.missing, []);
+  assert.equal(zkAce.productionGate.chainId, chainId);
+  assert.equal(
+    zkAce.productionGate.reviewerIdentity,
+    "package-reviewer@internal.example",
+  );
+  assert.equal(zkAce.productionGate.reviewScope.algorithm_id, zkAce.id);
+  assert.deepEqual(
+    zkAce.productionGate.reviewScope.sdk_entrypoints,
+    expectedEntrypoints,
+  );
+  assert.equal(
+    zkAce.productionGate.reviewScope.fuzz_artifact_hash,
+    zkAce.productionGate.fuzzResults.artifact.uri,
+  );
+  assert.equal(
+    zkAce.productionGate.reviewScope.performance_artifact_hash,
+    zkAce.productionGate.performanceResults.artifact.uri,
+  );
+  assert.equal(
+    zkAce.productionGate.localnetAcceptance.chain_id,
+    chainId,
+  );
+  assert.equal(zkAce.productionGate.localnetAcceptance.peer_count, 4);
+  assert.equal(zkAce.productionGate.localnetAcceptance.lifecycle_passed, true);
+  assert.match(
+    zkAce.productionGate.localnetAcceptance.lifecycle_redeem_tx_hash,
+    /^sha256:/u,
+  );
+  assert.deepEqual(
+    Object.keys(zkAce.productionGate.sdkParityArtifacts).sort(),
+    [...PRIVACY_PACKAGE_PRODUCTION_SDK_ARTIFACT_KINDS].sort(),
+  );
+  assert.equal(
+    Object.keys(zkAce.productionGate.gateEvidence).length,
+    zkAce.productionGate.requiredGates.length,
+  );
+  assert.equal(Object.isFrozen(zkAce.sdkExports), true);
+  assert.equal(Object.isFrozen(zkAce.productionGate.reviewScope), true);
+  assert.throws(() => {
+    zkAce.sdkExports.javascript.push("tamperedEntrypoint");
+  });
+  assert.throws(() => {
+    zkAce.productionGate.reviewScope.algorithm_id = "tampered";
+  });
 });
 
 test("package dist entrypoint exports production component privacy helpers", () => {
@@ -4594,6 +4875,47 @@ test("package declarations mark privacy capability metadata readonly", () => {
   assert.match(pqLayers, /readonly authorization: boolean;/);
   assert.match(pqLayers, /readonly noteEncryption: boolean;/);
 
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type PrivacyProductionSdkSurface =\s*\|\s*"rust_core"[\s\S]*?\|\s*"csharp";/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type PrivacyProductionSdkExports = Readonly<\s*Record<PrivacyProductionSdkSurface, readonly string\[\]>\s*>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type PrivacyProductionSdkParityArtifacts = Readonly<\s*Record<\s*PrivacyProductionSdkParityArtifactKind,\s*Readonly<Record<PrivacyProductionSdkSurface, PrivacyProductionArtifact>>\s*>\s*>;/,
+  );
+
+  const artifact = declarationInterface("PrivacyProductionArtifact");
+  assert.match(artifact, /readonly label: string;/);
+  assert.match(artifact, /readonly uri: string;/);
+
+  const result = declarationInterface("PrivacyProductionResult");
+  assert.match(result, /readonly passed: true;/);
+  assert.match(result, /readonly artifact: PrivacyProductionArtifact;/);
+
+  const reviewScope = declarationInterface("PrivacyProductionReviewScope");
+  assert.match(reviewScope, /readonly algorithm_id: string;/);
+  assert.match(reviewScope, /readonly chain_id: string;/);
+  assert.match(reviewScope, /readonly verifier_key_id: string \| null;/);
+  assert.match(reviewScope, /readonly public_inputs_schema: string \| null;/);
+  assert.match(reviewScope, /readonly sdk_entrypoints: readonly string\[\];/);
+  assert.match(reviewScope, /readonly required_state: readonly string\[\];/);
+  assert.match(reviewScope, /readonly fuzz_artifact_hash: string;/);
+  assert.match(reviewScope, /readonly performance_artifact_hash: string;/);
+  assert.match(reviewScope, /readonly localnet_run_id: string;/);
+
+  const localnetAcceptance = declarationInterface(
+    "PrivacyProductionLocalnetAcceptance",
+  );
+  assert.match(localnetAcceptance, /readonly target: "localnet";/);
+  assert.match(localnetAcceptance, /readonly peer_count: 4;/);
+  assert.match(localnetAcceptance, /readonly peer_ids: readonly string\[\];/);
+  assert.match(localnetAcceptance, /readonly lifecycle_redeem_tx_hash: string;/);
+  assert.match(localnetAcceptance, /readonly lifecycle_passed: true;/);
+
   const productionGate = declarationInterface("PrivacyProductionGate");
   assert.match(productionGate, /readonly ready: boolean;/);
   assert.match(
@@ -4605,6 +4927,31 @@ test("package declarations mark privacy capability metadata readonly", () => {
     productionGate,
     /readonly auditReferences: readonly Readonly<\{\s*label: string;\s*url: string;\s*uri\?: string;\s*signature\?: string;\s*\}>\[\];/,
   );
+  assert.match(
+    productionGate,
+    /readonly localnetAcceptance\?: PrivacyProductionLocalnetAcceptance;/,
+  );
+  assert.match(productionGate, /readonly fuzzResults\?: PrivacyProductionResult;/);
+  assert.match(
+    productionGate,
+    /readonly performanceResults\?: PrivacyProductionResult;/,
+  );
+  assert.match(
+    productionGate,
+    /readonly reviewScope\?: PrivacyProductionReviewScope;/,
+  );
+  assert.match(
+    productionGate,
+    /readonly sdkExports\?: PrivacyProductionSdkExports;/,
+  );
+  assert.match(
+    productionGate,
+    /readonly sdkParityArtifacts\?: PrivacyProductionSdkParityArtifacts;/,
+  );
+  assert.match(
+    productionGate,
+    /readonly gateEvidence\?: PrivacyProductionGateEvidence;/,
+  );
 
   const descriptor = declarationInterface("PrivacyAlgorithmDescriptor");
   assert.match(
@@ -4614,6 +4961,10 @@ test("package declarations mark privacy capability metadata readonly", () => {
   assert.match(descriptor, /readonly backendFamily: string;/);
   assert.match(descriptor, /readonly pqLayers: PrivacyPqLayers;/);
   assert.match(descriptor, /readonly sdkEntrypoints: readonly string\[\];/);
+  assert.match(
+    descriptor,
+    /readonly sdkExports\?: PrivacyProductionSdkExports;/,
+  );
   assert.match(descriptor, /readonly chainRequirements: readonly string\[\];/);
   assert.match(descriptor, /readonly productionReady: boolean;/);
   assert.match(descriptor, /readonly productionGate: PrivacyProductionGate;/);

@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
+import secrets
 import shutil
 import stat
 import subprocess
@@ -1172,6 +1173,185 @@ def _cleanup_temp_output(
     return []
 
 
+def _cleanup_temp_output_at(
+    parent_fd: int,
+    name: str,
+    label: str,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    if expected_identity is None:
+        return [f"{label} temporary output metadata could not be read"]
+    try:
+        temp_stat = os.stat(
+            name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} temporary output could not be removed"]
+    if (
+        not stat.S_ISREG(temp_stat.st_mode)
+        or _file_identity(temp_stat) != expected_identity
+    ):
+        return [f"{label} temporary output changed before cleanup"]
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} temporary output could not be removed"]
+    return []
+
+
+def _unlink_file_if_identity_at(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    label: str,
+) -> list[str]:
+    try:
+        file_stat = os.stat(
+            name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} cleanup metadata could not be read"]
+    if (
+        not stat.S_ISREG(file_stat.st_mode)
+        or _file_identity(file_stat) != expected_identity
+    ):
+        return []
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} could not be removed after parent sync failure"]
+    return []
+
+
+def _temp_output_open_flags() -> int:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _read_output_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _write_all(file_fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    offset = 0
+    while offset < len(view):
+        written = os.write(file_fd, view[offset:])
+        if written == 0:
+            raise OSError("short write")
+        offset += written
+
+
+def _open_temp_output_at(
+    parent_fd: int,
+    prefix: str,
+    suffix: str,
+    label: str,
+) -> tuple[int | None, str | None, tuple[int, int] | None, list[str]]:
+    for _attempt in range(128):
+        name = f"{prefix}{secrets.token_hex(16)}{suffix}"
+        try:
+            file_fd = os.open(name, _temp_output_open_flags(), 0o600, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+        except OSError:
+            return None, None, None, [f"{label} could not be written"]
+        try:
+            os.fchmod(file_fd, 0o600)
+            identity = _file_identity(os.fstat(file_fd))
+        except OSError:
+            try:
+                os.close(file_fd)
+            finally:
+                cleanup_errors = _cleanup_temp_output_at(parent_fd, name, label, None)
+            return None, name, None, [f"{label} could not be written", *cleanup_errors]
+        return file_fd, name, identity, []
+    return None, None, None, [f"{label} temporary output could not be created"]
+
+
+def _readback_published_output_at(
+    parent_fd: int,
+    name: str,
+    label: str,
+    *,
+    max_bytes: int,
+    size_error: str,
+) -> tuple[tuple[int, int] | None, bytes | None, list[str]]:
+    try:
+        expected_stat = os.stat(
+            name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except OSError:
+        return None, None, [f"{label} could not be read back after writing"]
+    if stat.S_ISLNK(expected_stat.st_mode):
+        return None, None, [f"{label} must not be a symlink after writing"]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return None, None, [f"{label} must be a regular file after writing"]
+    if expected_stat.st_nlink > 1:
+        return None, None, [f"{label} must not be hardlinked after writing"]
+    if stat.S_IMODE(expected_stat.st_mode) != 0o600:
+        return None, None, [f"{label} permissions must be 0600"]
+    if expected_stat.st_size > max_bytes:
+        return None, None, [size_error]
+    expected_identity = _file_identity(expected_stat)
+    read_fd: int | None = None
+    try:
+        read_fd = os.open(name, _read_output_open_flags(), dir_fd=parent_fd)
+        open_stat = os.fstat(read_fd)
+        if _file_identity(open_stat) != expected_identity:
+            return None, None, [f"{label} changed while being read back"]
+        if not stat.S_ISREG(open_stat.st_mode):
+            return None, None, [f"{label} must be a regular file after writing"]
+        if open_stat.st_nlink > 1:
+            return None, None, [f"{label} must not be hardlinked after writing"]
+        if stat.S_IMODE(open_stat.st_mode) != 0o600:
+            return None, None, [f"{label} permissions must be 0600"]
+        if open_stat.st_size > max_bytes:
+            return None, None, [size_error]
+        readback = os.read(read_fd, max_bytes + 1)
+    except OSError:
+        return None, None, [f"{label} could not be read back after writing"]
+    finally:
+        if read_fd is not None:
+            os.close(read_fd)
+    if len(readback) > max_bytes:
+        return None, None, [size_error]
+    try:
+        final_stat = os.stat(
+            name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except OSError:
+        return None, None, [f"{label} could not be read back after writing"]
+    if _file_identity(final_stat) != expected_identity:
+        return None, None, [f"{label} changed while being read back"]
+    return expected_identity, readback, []
+
+
 def _write_latest_slot(root: Path, slot_id: str) -> list[str]:
     latest_path = root / "latest-slot.txt"
     errors = device_lab.validate_summary_output_path(latest_path, "raw latest-slot output")
@@ -1184,71 +1364,82 @@ def _write_latest_slot(root: Path, slot_id: str) -> list[str]:
     if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
         return ["raw latest-slot output parent must be a directory"]
     root_identity = _file_identity(root_stat)
-    fd, temp_name = tempfile.mkstemp(prefix=".latest-slot.", suffix=".tmp", dir=root)
-    temp_path = Path(temp_name)
-    temp_identity: tuple[int, int] | None = None
-    encoded = (slot_id + "\n").encode("utf-8")
     try:
-        with os.fdopen(fd, "wb") as output:
-            os.fchmod(output.fileno(), 0o600)
-            temp_identity = _file_identity(os.fstat(output.fileno()))
-            output.write(encoded)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temp_path, latest_path)
-        try:
-            expected_stat = latest_path.lstat()
-        except OSError:
-            return ["raw latest-slot output could not be read back after writing"]
-        if stat.S_ISLNK(expected_stat.st_mode):
-            return ["raw latest-slot output must not be a symlink after writing"]
-        if not stat.S_ISREG(expected_stat.st_mode):
-            return ["raw latest-slot output must be a regular file after writing"]
-        if expected_stat.st_nlink > 1:
-            return ["raw latest-slot output must not be hardlinked after writing"]
-        if stat.S_IMODE(expected_stat.st_mode) != 0o600:
-            return ["raw latest-slot output permissions must be 0600"]
-        if expected_stat.st_size > len(encoded):
-            return ["raw latest-slot output readback mismatch"]
-        expected_identity = _file_identity(expected_stat)
-        try:
-            with latest_path.open("rb") as readback_handle:
-                open_stat = os.fstat(readback_handle.fileno())
-                if _file_identity(open_stat) != expected_identity:
-                    return ["raw latest-slot output changed while being read back"]
-                if not stat.S_ISREG(open_stat.st_mode):
-                    return ["raw latest-slot output must be a regular file after writing"]
-                if open_stat.st_nlink > 1:
-                    return ["raw latest-slot output must not be hardlinked after writing"]
-                if stat.S_IMODE(open_stat.st_mode) != 0o600:
-                    return ["raw latest-slot output permissions must be 0600"]
-                if open_stat.st_size > len(encoded):
-                    return ["raw latest-slot output readback mismatch"]
-                readback = readback_handle.read(len(encoded) + 1)
-        except OSError:
-            return ["raw latest-slot output could not be read back after writing"]
-        try:
-            final_stat = latest_path.lstat()
-        except OSError:
-            return ["raw latest-slot output could not be read back after writing"]
-        if _file_identity(final_stat) != expected_identity:
-            return ["raw latest-slot output changed while being read back"]
-        if readback != encoded:
-            return ["raw latest-slot output readback mismatch"]
-        sync_errors = _sync_directory(
-            root,
-            "raw latest-slot output parent directory could not be synced",
-            expected_identity=root_identity,
-        )
-        if sync_errors:
-            return sync_errors
+        root_fd = os.open(root, _directory_open_flags())
     except OSError:
-        cleanup_errors = _cleanup_temp_output(
-            temp_path,
+        return ["raw latest-slot output parent directory metadata could not be read"]
+    try:
+        try:
+            open_root_stat = os.fstat(root_fd)
+        except OSError:
+            return ["raw latest-slot output parent directory metadata could not be read"]
+        if not stat.S_ISDIR(open_root_stat.st_mode):
+            return ["raw latest-slot output parent must be a directory"]
+        if _file_identity(open_root_stat) != root_identity:
+            return ["raw latest-slot output parent directory changed before writing"]
+        fd, temp_name, temp_identity, temp_errors = _open_temp_output_at(
+            root_fd,
+            ".latest-slot.",
+            ".tmp",
             "raw latest-slot output",
-            temp_identity,
         )
-        return ["raw latest-slot output could not be written", *cleanup_errors]
+        if temp_errors:
+            return temp_errors
+        assert fd is not None
+        assert temp_name is not None
+        assert temp_identity is not None
+        encoded = (slot_id + "\n").encode("utf-8")
+        try:
+            try:
+                _write_all(fd, encoded)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(
+                temp_name,
+                latest_path.name,
+                src_dir_fd=root_fd,
+                dst_dir_fd=root_fd,
+            )
+            temp_name = None
+            expected_identity, readback, read_errors = _readback_published_output_at(
+                root_fd,
+                latest_path.name,
+                "raw latest-slot output",
+                max_bytes=len(encoded),
+                size_error="raw latest-slot output readback mismatch",
+            )
+            if read_errors:
+                return read_errors
+            assert expected_identity is not None
+            assert readback is not None
+            if readback != encoded:
+                return ["raw latest-slot output readback mismatch"]
+            sync_errors = _sync_directory(
+                root,
+                "raw latest-slot output parent directory could not be synced",
+                expected_identity=root_identity,
+            )
+            if sync_errors:
+                cleanup_errors = _unlink_file_if_identity_at(
+                    root_fd,
+                    latest_path.name,
+                    expected_identity,
+                    "raw latest-slot output",
+                )
+                return [*sync_errors, *cleanup_errors]
+        except OSError:
+            cleanup_errors = []
+            if temp_name is not None:
+                cleanup_errors = _cleanup_temp_output_at(
+                    root_fd,
+                    temp_name,
+                    "raw latest-slot output",
+                    temp_identity,
+                )
+            return ["raw latest-slot output could not be written", *cleanup_errors]
+    finally:
+        os.close(root_fd)
     return []
 
 
@@ -1256,13 +1447,6 @@ def _write_summary(path: Path, payload: dict[str, Any]) -> list[str]:
     errors = device_lab.validate_summary_output_path(path, "raw pull summary output")
     if errors:
         return errors
-    try:
-        parent_stat = path.parent.lstat()
-    except OSError:
-        return ["raw pull summary output parent directory metadata could not be read"]
-    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
-        return ["raw pull summary output parent directory could not be synced"]
-    parent_identity = _file_identity(parent_stat)
     try:
         encoded = _json_dumps(payload).encode("utf-8")
     except ValueError:
@@ -1272,81 +1456,91 @@ def _write_summary(path: Path, payload: dict[str, Any]) -> list[str]:
             "raw pull summary output must be no more than "
             f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
         ]
-    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    temp_path = Path(temp_name)
-    temp_identity: tuple[int, int] | None = None
     try:
-        with os.fdopen(fd, "wb") as output:
-            os.fchmod(output.fileno(), 0o600)
-            temp_identity = _file_identity(os.fstat(output.fileno()))
-            output.write(encoded)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temp_path, path)
-        try:
-            expected_stat = path.lstat()
-        except OSError:
-            return ["raw pull summary output could not be read back after writing"]
-        if stat.S_ISLNK(expected_stat.st_mode):
-            return ["raw pull summary output must not be a symlink after writing"]
-        if not stat.S_ISREG(expected_stat.st_mode):
-            return ["raw pull summary output must be a regular file after writing"]
-        if expected_stat.st_nlink > 1:
-            return ["raw pull summary output must not be hardlinked after writing"]
-        if stat.S_IMODE(expected_stat.st_mode) != 0o600:
-            return ["raw pull summary output permissions must be 0600"]
-        if expected_stat.st_size > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
-            return [
-                "raw pull summary output must be no more than "
-                f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
-            ]
-        expected_identity = _file_identity(expected_stat)
-        try:
-            with path.open("rb") as readback_handle:
-                open_stat = os.fstat(readback_handle.fileno())
-                if _file_identity(open_stat) != expected_identity:
-                    return ["raw pull summary output changed while being read back"]
-                if not stat.S_ISREG(open_stat.st_mode):
-                    return ["raw pull summary output must be a regular file after writing"]
-                if open_stat.st_nlink > 1:
-                    return ["raw pull summary output must not be hardlinked after writing"]
-                if stat.S_IMODE(open_stat.st_mode) != 0o600:
-                    return ["raw pull summary output permissions must be 0600"]
-                if open_stat.st_size > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
-                    return [
-                        "raw pull summary output must be no more than "
-                        f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
-                    ]
-                readback = readback_handle.read(device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES + 1)
-        except OSError:
-            return ["raw pull summary output could not be read back after writing"]
-        if len(readback) > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
-            return [
-                "raw pull summary output must be no more than "
-                f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
-            ]
-        try:
-            final_stat = path.lstat()
-        except OSError:
-            return ["raw pull summary output could not be read back after writing"]
-        if _file_identity(final_stat) != expected_identity:
-            return ["raw pull summary output changed while being read back"]
-        if readback != encoded:
-            return ["raw pull summary output readback mismatch"]
-        sync_errors = _sync_directory(
-            path.parent,
-            "raw pull summary output parent directory could not be synced",
-            expected_identity=parent_identity,
-        )
-        if sync_errors:
-            return sync_errors
+        parent_stat = path.parent.lstat()
     except OSError:
-        cleanup_errors = _cleanup_temp_output(
-            temp_path,
+        return ["raw pull summary output parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        return ["raw pull summary output parent directory could not be synced"]
+    parent_identity = _file_identity(parent_stat)
+    try:
+        parent_fd = os.open(path.parent, _directory_open_flags())
+    except OSError:
+        return ["raw pull summary output parent directory metadata could not be read"]
+    try:
+        try:
+            open_parent_stat = os.fstat(parent_fd)
+        except OSError:
+            return ["raw pull summary output parent directory metadata could not be read"]
+        if not stat.S_ISDIR(open_parent_stat.st_mode):
+            return ["raw pull summary output parent directory could not be synced"]
+        if _file_identity(open_parent_stat) != parent_identity:
+            return ["raw pull summary output parent directory changed before writing"]
+        fd, temp_name, temp_identity, temp_errors = _open_temp_output_at(
+            parent_fd,
+            f".{path.name}.",
+            ".tmp",
             "raw pull summary output",
-            temp_identity,
         )
-        return ["raw pull summary output could not be written", *cleanup_errors]
+        if temp_errors:
+            return temp_errors
+        assert fd is not None
+        assert temp_name is not None
+        assert temp_identity is not None
+        try:
+            try:
+                _write_all(fd, encoded)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(
+                temp_name,
+                path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+            temp_name = None
+            expected_identity, readback, read_errors = _readback_published_output_at(
+                parent_fd,
+                path.name,
+                "raw pull summary output",
+                max_bytes=device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES,
+                size_error=(
+                    "raw pull summary output must be no more than "
+                    f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+                ),
+            )
+            if read_errors:
+                return read_errors
+            assert expected_identity is not None
+            assert readback is not None
+            if readback != encoded:
+                return ["raw pull summary output readback mismatch"]
+            sync_errors = _sync_directory(
+                path.parent,
+                "raw pull summary output parent directory could not be synced",
+                expected_identity=parent_identity,
+            )
+            if sync_errors:
+                cleanup_errors = _unlink_file_if_identity_at(
+                    parent_fd,
+                    path.name,
+                    expected_identity,
+                    "raw pull summary output",
+                )
+                return [*sync_errors, *cleanup_errors]
+        except OSError:
+            cleanup_errors = []
+            if temp_name is not None:
+                cleanup_errors = _cleanup_temp_output_at(
+                    parent_fd,
+                    temp_name,
+                    "raw pull summary output",
+                    temp_identity,
+                )
+            return ["raw pull summary output could not be written", *cleanup_errors]
+    finally:
+        os.close(parent_fd)
     return []
 
 
