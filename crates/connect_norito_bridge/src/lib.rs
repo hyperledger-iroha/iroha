@@ -77,7 +77,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 7;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 8;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 const ERR_NULL_PTR: c_int = -1;
@@ -10844,7 +10844,7 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_kagemusha_compact_prover() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 7);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 8);
     }
 
     #[test]
@@ -21447,6 +21447,40 @@ fn java_optional_text_array(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_gas_metadata(
+    env: &mut jni::JNIEnv<'_>,
+    gas_asset_id: &jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
+) -> Result<Metadata, String> {
+    let gas_asset_id =
+        java_optional_text_array(env, gas_asset_id, gas_asset_id_present, "gasAssetId")?;
+    let mut metadata = Metadata::default();
+    if let Some(asset_id) = gas_asset_id {
+        if gas_limit_present == 0 {
+            return Err("gasLimit is required when gasAssetId is set".to_owned());
+        }
+        if gas_limit <= 0 {
+            return Err("gasLimit must be positive".to_owned());
+        }
+        let name =
+            Name::from_str("gas_asset_id").map_err(|_| "invalid gas_asset_id key".to_owned())?;
+        metadata.insert(name, Json::new(asset_id));
+        iroha_data_model::transaction::insert_transaction_gas_limit(
+            &mut metadata,
+            gas_limit as u64,
+        );
+    }
+    Ok(metadata)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_fixed_array<const N: usize>(
     env: &mut jni::JNIEnv<'_>,
     array: &jni::objects::JByteArray<'_>,
@@ -21600,6 +21634,10 @@ fn java_native_encode_shield_signed_transaction(
     payload_nonce: jni::objects::JByteArray<'_>,
     payload_ciphertext: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     let result = (|| -> Result<jni::sys::jobjectArray, String> {
         if creation_time_ms < 0 || ttl_ms < 0 {
@@ -21627,11 +21665,20 @@ fn java_native_encode_shield_signed_transaction(
         let private_key = java_private_key(algorithm_code, &private_key, env)?;
         let ttl =
             parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+        let metadata = java_gas_metadata(
+            env,
+            &gas_asset_id,
+            gas_asset_id_present,
+            gas_limit,
+            gas_limit_present,
+        )?;
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
             chain_id,
             authority,
             creation_time_ms as u64,
             ttl,
+            None,
+            metadata,
             private_key,
             || {
                 let instruction = zk::Shield::new(
@@ -21679,6 +21726,10 @@ fn java_native_encode_unshield_signed_transaction(
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     let result = (|| -> Result<jni::sys::jobjectArray, String> {
         if creation_time_ms < 0 || ttl_ms < 0 {
@@ -21712,11 +21763,20 @@ fn java_native_encode_unshield_signed_transaction(
         let private_key = java_private_key(algorithm_code, &private_key, env)?;
         let ttl =
             parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+        let metadata = java_gas_metadata(
+            env,
+            &gas_asset_id,
+            gas_asset_id_present,
+            gas_limit,
+            gas_limit_present,
+        )?;
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
             chain_id,
             authority,
             creation_time_ms as u64,
             ttl,
+            None,
+            metadata,
             private_key,
             || {
                 let instruction = zk::Unshield::new_with_outputs(
@@ -21769,6 +21829,10 @@ fn java_native_encode_register_zk_asset_signed_transaction(
     vk_shield: jni::objects::JByteArray<'_>,
     vk_shield_present: jni::sys::jboolean,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     let result = (|| -> Result<jni::sys::jobjectArray, String> {
         if creation_time_ms < 0 || ttl_ms < 0 {
@@ -21816,11 +21880,20 @@ fn java_native_encode_register_zk_asset_signed_transaction(
             vk_unshield,
             vk_shield,
         );
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+        let metadata = java_gas_metadata(
+            env,
+            &gas_asset_id,
+            gas_asset_id_present,
+            gas_limit,
+            gas_limit_present,
+        )?;
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
             chain_id,
             authority,
             creation_time_ms as u64,
             ttl,
+            None,
+            metadata,
             private_key,
             move || Executable::from([InstructionBox::from(register)]),
         )
@@ -22796,6 +22869,21 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeKeypairFromSeed(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -22867,6 +22955,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     payload_nonce: jni::objects::JByteArray<'_>,
     payload_ciphertext: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     java_native_encode_shield_signed_transaction(
         &mut env,
@@ -22884,6 +22976,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         payload_nonce,
         payload_ciphertext,
         private_key,
+        gas_asset_id,
+        gas_asset_id_present,
+        gas_limit,
+        gas_limit_present,
     )
 }
 
@@ -22912,6 +23008,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     java_native_encode_unshield_signed_transaction(
         &mut env,
@@ -22929,6 +23029,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         proof_json,
         root_hint,
         private_key,
+        gas_asset_id,
+        gas_asset_id_present,
+        gas_limit,
+        gas_limit_present,
     )
 }
 
@@ -22960,6 +23064,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     vk_shield: jni::objects::JByteArray<'_>,
     vk_shield_present: jni::sys::jboolean,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     java_native_encode_register_zk_asset_signed_transaction(
         &mut env,
@@ -22980,6 +23088,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         vk_shield,
         vk_shield_present,
         private_key,
+        gas_asset_id,
+        gas_asset_id_present,
+        gas_limit,
+        gas_limit_present,
     )
 }
 
@@ -22998,6 +23110,21 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     java_native_public_key_from_private(&mut env, algorithm_code, private_key)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
 
 #[cfg(any(
@@ -23079,6 +23206,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     payload_nonce: jni::objects::JByteArray<'_>,
     payload_ciphertext: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     java_native_encode_shield_signed_transaction(
         &mut env,
@@ -23096,6 +23227,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         payload_nonce,
         payload_ciphertext,
         private_key,
+        gas_asset_id,
+        gas_asset_id_present,
+        gas_limit,
+        gas_limit_present,
     )
 }
 
@@ -23124,6 +23259,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     java_native_encode_unshield_signed_transaction(
         &mut env,
@@ -23141,6 +23280,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         proof_json,
         root_hint,
         private_key,
+        gas_asset_id,
+        gas_asset_id_present,
+        gas_limit,
+        gas_limit_present,
     )
 }
 
@@ -23172,6 +23315,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     vk_shield: jni::objects::JByteArray<'_>,
     vk_shield_present: jni::sys::jboolean,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     java_native_encode_register_zk_asset_signed_transaction(
         &mut env,
@@ -23192,6 +23339,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         vk_shield,
         vk_shield_present,
         private_key,
+        gas_asset_id,
+        gas_asset_id_present,
+        gas_limit,
+        gas_limit_present,
     )
 }
 

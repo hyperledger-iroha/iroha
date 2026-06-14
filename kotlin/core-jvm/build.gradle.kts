@@ -37,6 +37,12 @@ kotlin {
 
 tasks.test {
     useJUnitPlatform()
+
+    // Host JNI bridge (libconnect_norito_bridge) for the opt-in localnet integration tests.
+    // Build it from the iroha repo root with: cargo build -p connect_norito_bridge --lib
+    // Pure-JVM tests ignore this; the localnet tests are gated on IROHA_LOCALNET_TEST=1.
+    val hostNativeDir = rootProject.projectDir.parentFile.resolve("target/debug")
+    systemProperty("java.library.path", hostNativeDir.absolutePath)
 }
 
 publishing {
