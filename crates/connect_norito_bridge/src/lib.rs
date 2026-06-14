@@ -10848,6 +10848,50 @@ mod offline_note_prover_tests {
     }
 
     #[test]
+    fn java_gas_metadata_requires_paired_asset_and_positive_limit() {
+        let canonical_asset = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+        let metadata = java_gas_metadata_from_parts(Some(canonical_asset.to_owned()), 7, 1)
+            .expect("valid gas metadata");
+        let gas_asset_key = Name::from_str("gas_asset_id").expect("metadata key");
+        let gas_limit_key = Name::from_str("gas_limit").expect("metadata key");
+        assert_eq!(
+            metadata.get(&gas_asset_key),
+            Some(&Json::new(canonical_asset))
+        );
+        assert_eq!(metadata.get(&gas_limit_key), Some(&Json::new(7u64)));
+
+        assert!(
+            java_gas_metadata_from_parts(None, 0, 0)
+                .expect("omitted gas metadata")
+                .is_empty()
+        );
+        assert_eq!(
+            java_gas_metadata_from_parts(None, 7, 1).expect_err("limit without asset must fail"),
+            "gasAssetId is required when gasLimit is set"
+        );
+        assert_eq!(
+            java_gas_metadata_from_parts(Some(canonical_asset.to_owned()), 7, 0)
+                .expect_err("asset without limit must fail"),
+            "gasLimit is required when gasAssetId is set"
+        );
+        assert_eq!(
+            java_gas_metadata_from_parts(Some(canonical_asset.to_owned()), 0, 1)
+                .expect_err("zero gas limit must fail"),
+            "gasLimit must be positive"
+        );
+        assert_eq!(
+            java_gas_metadata_from_parts(Some(canonical_asset.to_owned()), -1, 1)
+                .expect_err("negative gas limit must fail"),
+            "gasLimit must be positive"
+        );
+        assert_eq!(
+            java_gas_metadata_from_parts(Some("xor#universal".to_owned()), 7, 1)
+                .expect_err("textual gas asset alias must fail"),
+            "gasAssetId must be a canonical asset definition id"
+        );
+    }
+
+    #[test]
     fn kagemusha_compact_ffi_rejects_oversized_lengths_without_output() {
         let archive = [0xA5_u8];
 
@@ -21456,21 +21500,43 @@ fn java_gas_metadata(
 ) -> Result<Metadata, String> {
     let gas_asset_id =
         java_optional_text_array(env, gas_asset_id, gas_asset_id_present, "gasAssetId")?;
+    java_gas_metadata_from_parts(gas_asset_id, gas_limit, gas_limit_present)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_gas_metadata_from_parts(
+    gas_asset_id: Option<String>,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
+) -> Result<Metadata, String> {
     let mut metadata = Metadata::default();
-    if let Some(asset_id) = gas_asset_id {
-        if gas_limit_present == 0 {
+    match (gas_asset_id, gas_limit_present != 0) {
+        (None, false) => {}
+        (None, true) => {
+            return Err("gasAssetId is required when gasLimit is set".to_owned());
+        }
+        (Some(_), false) => {
             return Err("gasLimit is required when gasAssetId is set".to_owned());
         }
-        if gas_limit <= 0 {
-            return Err("gasLimit must be positive".to_owned());
+        (Some(asset_id), true) => {
+            if gas_limit <= 0 {
+                return Err("gasLimit must be positive".to_owned());
+            }
+            parse_asset_definition(asset_id.clone())
+                .map_err(|_| "gasAssetId must be a canonical asset definition id".to_owned())?;
+            let name = Name::from_str("gas_asset_id")
+                .map_err(|_| "invalid gas_asset_id key".to_owned())?;
+            metadata.insert(name, Json::new(asset_id));
+            iroha_data_model::transaction::insert_transaction_gas_limit(
+                &mut metadata,
+                gas_limit as u64,
+            );
         }
-        let name =
-            Name::from_str("gas_asset_id").map_err(|_| "invalid gas_asset_id key".to_owned())?;
-        metadata.insert(name, Json::new(asset_id));
-        iroha_data_model::transaction::insert_transaction_gas_limit(
-            &mut metadata,
-            gas_limit as u64,
-        );
     }
     Ok(metadata)
 }

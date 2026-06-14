@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.crypto
 
 import java.nio.charset.StandardCharsets
+import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.core.model.instructions.RegisterZkAssetInstruction
 import org.hyperledger.iroha.sdk.core.model.instructions.ShieldInstruction
 import org.hyperledger.iroha.sdk.core.model.instructions.UnshieldInstruction
@@ -90,7 +91,7 @@ class NativeSignerBridge private constructor() {
             requireGasPairing(gasAssetId, gasLimit)
             val selected = requireNotNull(instruction) { "instruction must be provided" }
             val key = requirePrivateKey(privateKey)
-            val gasAssetIdBytes = gasAssetId?.let { textBytes(it, "gasAssetId") } ?: ByteArray(0)
+            val gasAssetIdBytes = gasAssetIdBytes(gasAssetId)
             val chainBytes = textBytes(chainId, "chainId")
             val authorityBytes = textBytes(authority, "authority")
             val assetBytes = textBytes(selected.asset, "asset")
@@ -141,7 +142,7 @@ class NativeSignerBridge private constructor() {
             requireGasPairing(gasAssetId, gasLimit)
             val selected = requireNotNull(instruction) { "instruction must be provided" }
             val key = requirePrivateKey(privateKey)
-            val gasAssetIdBytes = gasAssetId?.let { textBytes(it, "gasAssetId") } ?: ByteArray(0)
+            val gasAssetIdBytes = gasAssetIdBytes(gasAssetId)
             val chainBytes = textBytes(chainId, "chainId")
             val authorityBytes = textBytes(authority, "authority")
             val assetBytes = textBytes(selected.asset, "asset")
@@ -196,7 +197,7 @@ class NativeSignerBridge private constructor() {
             requireGasPairing(gasAssetId, gasLimit)
             val selected = requireNotNull(instruction) { "instruction must be provided" }
             val key = requirePrivateKey(privateKey)
-            val gasAssetIdBytes = gasAssetId?.let { textBytes(it, "gasAssetId") } ?: ByteArray(0)
+            val gasAssetIdBytes = gasAssetIdBytes(gasAssetId)
             val chainBytes = textBytes(chainId, "chainId")
             val authorityBytes = textBytes(authority, "authority")
             val assetBytes = textBytes(selected.asset, "asset")
@@ -266,6 +267,15 @@ class NativeSignerBridge private constructor() {
 
         private fun optionalTextBytes(value: String?): ByteArray =
             value?.toByteArray(StandardCharsets.UTF_8) ?: ByteArray(0)
+
+        private fun gasAssetIdBytes(value: String?): ByteArray {
+            if (value == null) return ByteArray(0)
+            val bytes = textBytes(value, "gasAssetId")
+            require(AssetDefinitionIdEncoder.isCanonicalAddress(value)) {
+                "gasAssetId must be a canonical asset definition id"
+            }
+            return bytes
+        }
 
         private fun requireGasPairing(gasAssetId: String?, gasLimit: Long?) {
             require((gasAssetId == null) == (gasLimit == null)) {

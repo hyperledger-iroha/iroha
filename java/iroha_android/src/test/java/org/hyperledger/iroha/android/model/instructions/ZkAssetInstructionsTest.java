@@ -23,8 +23,9 @@ public final class ZkAssetInstructionsTest {
     unshieldInstructionValidatesInputsOutputsAndProof();
     registerZkAssetInstructionValidatesModeAndVerifierIds();
     nativeSignerZkMethodsRejectBadInputsBeforeNativeDispatch();
+    nativeSignerZkMethodsRejectGasMetadataPairingBeforeNativeDispatch();
     nativeSignedTransactionCopiesInputsAndOutputs();
-    nativeSignerZkRegisterIncludesGasMetadataWhenBridgeAvailable();
+    nativeSignerZkMethodsIncludeGasMetadataWhenBridgeAvailable();
     System.out.println("[IrohaAndroid] ZkAssetInstructionsTest passed.");
   }
 
@@ -245,6 +246,83 @@ public final class ZkAssetInstructionsTest {
             SigningAlgorithm.ED25519, "chain", "alice", 0, null, shield, new byte[0]));
   }
 
+  private static void nativeSignerZkMethodsRejectGasMetadataPairingBeforeNativeDispatch() {
+    final ShieldInstruction shield =
+        ShieldInstruction.builder()
+            .setAsset("rose#wonderland")
+            .setFrom("alice")
+            .setAmount("1")
+            .setNoteCommitment(fill(1, 32))
+            .setEncryptedPayload(samplePayload())
+            .build();
+    final UnshieldInstruction unshield =
+        UnshieldInstruction.builder()
+            .setAsset("rose#wonderland")
+            .setTo("bob")
+            .setPublicAmount("1")
+            .addInput(fill(2, 32))
+            .setProof(sampleProof())
+            .build();
+    final RegisterZkAssetInstruction register =
+        RegisterZkAssetInstruction.builder().setAsset("rose#wonderland").build();
+
+    final String[] gasAssetIds =
+        new String[] {
+          "xor#universal",
+          "xor#universal",
+          "not-base58",
+          null,
+          "",
+          "   ",
+          " xor#universal",
+          "xor#universal ",
+          "xor\0universal",
+          "xor#universal",
+          "xor#universal"
+        };
+    final Long[] gasLimits = new Long[] {null, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 0L, -1L};
+    for (int i = 0; i < gasAssetIds.length; i++) {
+      final String gasAssetId = gasAssetIds[i];
+      final Long gasLimit = gasLimits[i];
+      expectThrows(
+          () ->
+              NativeSignerBridge.encodeShieldSignedTransaction(
+                  SigningAlgorithm.ED25519,
+                  "chain",
+                  "alice",
+                  0,
+                  null,
+                  shield,
+                  new byte[] {1},
+                  gasAssetId,
+                  gasLimit));
+      expectThrows(
+          () ->
+              NativeSignerBridge.encodeUnshieldSignedTransaction(
+                  SigningAlgorithm.ED25519,
+                  "chain",
+                  "alice",
+                  0,
+                  null,
+                  unshield,
+                  new byte[] {1},
+                  gasAssetId,
+                  gasLimit));
+      expectThrows(
+          () ->
+              NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
+                  SigningAlgorithm.ED25519,
+                  "chain",
+                  "alice",
+                  0,
+                  null,
+                  register,
+                  new byte[] {1},
+                  gasAssetId,
+                  gasLimit));
+    }
+  }
+
   private static void nativeSignedTransactionCopiesInputsAndOutputs() {
     final byte[] versioned = new byte[] {1, 2, 3};
     final byte[] hash = fill(0x30, 32);
@@ -261,7 +339,7 @@ public final class ZkAssetInstructionsTest {
     expectThrows(() -> new NativeSignedTransaction(new byte[] {1}, fill(1, 31)));
   }
 
-  private static void nativeSignerZkRegisterIncludesGasMetadataWhenBridgeAvailable()
+  private static void nativeSignerZkMethodsIncludeGasMetadataWhenBridgeAvailable()
       throws Exception {
     assert NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION == 8;
     if (!NativeSignerBridge.isNativeAvailable()) {
@@ -279,7 +357,7 @@ public final class ZkAssetInstructionsTest {
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final String gasAssetId = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
     final long gasLimit = 1_000L;
-    final RegisterZkAssetInstruction instruction =
+    final RegisterZkAssetInstruction register =
         RegisterZkAssetInstruction.builder()
             .setAsset(gasAssetId)
             .setMode(ZkAssetMode.HYBRID)
@@ -287,17 +365,68 @@ public final class ZkAssetInstructionsTest {
             .setAllowUnshield(true)
             .build();
 
-    final NativeSignedTransaction nativeTx =
+    assertNativeGasMetadata(
         NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
             SigningAlgorithm.ED25519,
             "00000042",
             authority,
             1_736_000_000_000L,
             null,
-            instruction,
+            register,
             keypair.privateKey(),
             gasAssetId,
-            gasLimit);
+            gasLimit),
+        gasAssetId,
+        gasLimit);
+
+    final ShieldInstruction shield =
+        ShieldInstruction.builder()
+            .setAsset(gasAssetId)
+            .setFrom(authority)
+            .setAmount("1")
+            .setNoteCommitment(fill(3, 32))
+            .setEncryptedPayload(samplePayload())
+            .build();
+    assertNativeGasMetadata(
+        NativeSignerBridge.encodeShieldSignedTransaction(
+            SigningAlgorithm.ED25519,
+            "00000042",
+            authority,
+            1_736_000_000_001L,
+            null,
+            shield,
+            keypair.privateKey(),
+            gasAssetId,
+            gasLimit),
+        gasAssetId,
+        gasLimit);
+
+    final UnshieldInstruction unshield =
+        UnshieldInstruction.builder()
+            .setAsset(gasAssetId)
+            .setTo(authority)
+            .setPublicAmount("1")
+            .addInput(fill(4, 32))
+            .setProof(sampleProof())
+            .build();
+    assertNativeGasMetadata(
+        NativeSignerBridge.encodeUnshieldSignedTransaction(
+            SigningAlgorithm.ED25519,
+            "00000042",
+            authority,
+            1_736_000_000_002L,
+            null,
+            unshield,
+            keypair.privateKey(),
+            gasAssetId,
+            gasLimit),
+        gasAssetId,
+        gasLimit);
+  }
+
+  private static void assertNativeGasMetadata(
+      final NativeSignedTransaction nativeTx, final String gasAssetId, final long gasLimit)
+      throws Exception {
     final SignedTransaction signed =
         SignedTransactionEncoder.decodeVersioned(nativeTx.versionedSignedTransaction());
     final TransactionPayload payload =

@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.crypto;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstruction;
 import org.hyperledger.iroha.android.model.instructions.ShieldInstruction;
 import org.hyperledger.iroha.android.model.instructions.UnshieldInstruction;
@@ -123,7 +124,7 @@ public final class NativeSignerBridge {
     final byte[] assetBytes = textBytes(instruction.asset(), "asset");
     final byte[] fromBytes = textBytes(instruction.from(), "from");
     final byte[] amountBytes = textBytes(instruction.amount(), "amount");
-    final byte[] gasAssetIdBytes = gasAssetId == null ? new byte[0] : textBytes(gasAssetId, "gasAssetId");
+    final byte[] gasAssetIdBytes = gasAssetIdBytes(gasAssetId);
     final long ttl = ttlValue(ttlMs);
     final boolean hasTtl = ttlMs != null;
     requireNative();
@@ -198,7 +199,7 @@ public final class NativeSignerBridge {
     final byte[] outputsBytes = flattenFixed32(instruction.outputs());
     final byte[] proofJsonBytes = instruction.proof().toNativeJson().getBytes(StandardCharsets.UTF_8);
     final byte[] rootHintBytes = optionalBytes(instruction.rootHint());
-    final byte[] gasAssetIdBytes = gasAssetId == null ? new byte[0] : textBytes(gasAssetId, "gasAssetId");
+    final byte[] gasAssetIdBytes = gasAssetIdBytes(gasAssetId);
     final long ttl = ttlValue(ttlMs);
     final boolean hasTtl = ttlMs != null;
     requireNative();
@@ -270,7 +271,7 @@ public final class NativeSignerBridge {
     final byte[] transferBytes = optionalTextBytes(instruction.transferVerifyingKey());
     final byte[] unshieldBytes = optionalTextBytes(instruction.unshieldVerifyingKey());
     final byte[] shieldBytes = optionalTextBytes(instruction.shieldVerifyingKey());
-    final byte[] gasAssetIdBytes = gasAssetId == null ? new byte[0] : textBytes(gasAssetId, "gasAssetId");
+    final byte[] gasAssetIdBytes = gasAssetIdBytes(gasAssetId);
     final long ttl = ttlValue(ttlMs);
     final boolean hasTtl = ttlMs != null;
     requireNative();
@@ -347,6 +348,17 @@ public final class NativeSignerBridge {
 
   private static byte[] optionalTextBytes(final String value) {
     return value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static byte[] gasAssetIdBytes(final String value) {
+    if (value == null) {
+      return new byte[0];
+    }
+    final byte[] bytes = textBytes(value, "gasAssetId");
+    if (!AssetDefinitionIdEncoder.isCanonicalAddress(value)) {
+      throw new IllegalArgumentException("gasAssetId must be a canonical asset definition id");
+    }
+    return bytes;
   }
 
   private static void requireCreationTime(final long creationTimeMs) {
