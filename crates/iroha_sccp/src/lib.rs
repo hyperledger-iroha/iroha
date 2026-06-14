@@ -700,6 +700,14 @@ fn encode_0x_lower_hex(bytes: &[u8]) -> String {
     format!("0x{}", encode_lower_hex(bytes))
 }
 
+fn decode_ascii_lower_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
+}
+
 fn decode_fixed_hex_bytes<const N: usize>(value: &str) -> Option<[u8; N]> {
     let raw = value
         .strip_prefix("0x")
@@ -720,19 +728,15 @@ fn decode_fixed_hex_bytes<const N: usize>(value: &str) -> Option<[u8; N]> {
 }
 
 fn decode_hex_bytes(value: &str) -> Option<Vec<u8>> {
-    let raw = value
-        .strip_prefix("0x")
-        .or_else(|| value.strip_prefix("0X"))
-        .unwrap_or(value)
-        .as_bytes();
-    if raw.is_empty() || !raw.len().is_multiple_of(2) {
+    let raw = value.strip_prefix("0x")?.as_bytes();
+    if !raw.len().is_multiple_of(2) {
         return None;
     }
 
     let mut out = Vec::with_capacity(raw.len() / 2);
     for chunk in raw.chunks_exact(2) {
-        let hi = decode_ascii_hex_nibble(chunk[0])?;
-        let lo = decode_ascii_hex_nibble(chunk[1])?;
+        let hi = decode_ascii_lower_hex_nibble(chunk[0])?;
+        let lo = decode_ascii_lower_hex_nibble(chunk[1])?;
         out.push((hi << 4) | lo);
     }
     Some(out)
@@ -759,13 +763,17 @@ mod json_utils {
     }
 
     fn decode_hex_vec(value: &str) -> Result<Vec<u8>, Error> {
-        super::decode_hex_bytes(value)
-            .ok_or_else(|| Error::Message("invalid hex byte string".into()))
+        super::decode_hex_bytes(value).ok_or_else(|| {
+            Error::Message("expected canonical lowercase 0x-prefixed hex byte string".into())
+        })
     }
 
     fn decode_hex_fixed<const N: usize>(value: &str) -> Result<[u8; N], Error> {
-        super::decode_fixed_hex_bytes::<N>(value)
-            .ok_or_else(|| Error::Message(format!("expected {N}-byte hex string")))
+        super::decode_canonical_0x_lower_hex_fixed::<N>(value).ok_or_else(|| {
+            Error::Message(format!(
+                "expected canonical lowercase 0x-prefixed {N}-byte hex string"
+            ))
+        })
     }
 
     fn parse_decimal_u64(parser: &mut Parser<'_>) -> Result<u64, Error> {
@@ -5584,13 +5592,8 @@ fn decode_canonical_0x_lower_hex_fixed<const N: usize>(value: &str) -> Option<[u
 
     let mut out = [0u8; N];
     for (idx, chunk) in raw.chunks_exact(2).enumerate() {
-        let decode = |byte| match byte {
-            b'0'..=b'9' => Some(byte - b'0'),
-            b'a'..=b'f' => Some(byte - b'a' + 10),
-            _ => None,
-        };
-        let hi = decode(chunk[0])?;
-        let lo = decode(chunk[1])?;
+        let hi = decode_ascii_lower_hex_nibble(chunk[0])?;
+        let lo = decode_ascii_lower_hex_nibble(chunk[1])?;
         out[idx] = (hi << 4) | lo;
     }
     Some(out)
@@ -36274,6 +36277,12 @@ mod tests {
         format!("0x{}", raw.to_ascii_uppercase())
     }
 
+    fn replace_first(haystack: &str, needle: &str, replacement: &str) -> String {
+        let replaced = haystack.replacen(needle, replacement, 1);
+        assert_ne!(replaced, haystack, "test JSON must contain `{needle}`");
+        replaced
+    }
+
     fn destination_binding_with_key_part(
         mut binding: SccpDestinationBindingV1,
         part_index: usize,
@@ -36509,6 +36518,127 @@ mod tests {
                 .expect("canonical zero byte payload is still syntactically valid"),
             SccpNormalizedCodecValueV1::SoraAssetId { bytes: [0; 32] }
         );
+    }
+
+    #[test]
+    fn sccp_public_json_hex_helpers_reject_hex_aliases() {
+        let burn_payload = BurnPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_ETH,
+            nonce: 7,
+            sora_asset_id: [0xab; 32],
+            amount: 1,
+            recipient: [0xcd; 32],
+        };
+        let burn_json = norito::json::to_string(&burn_payload).expect("serialize burn JSON");
+        let burn_asset = encode_0x_lower_hex(&[0xab; 32]);
+        assert_eq!(
+            norito::json::from_str::<BurnPayloadV1>(&burn_json)
+                .expect("decode canonical burn JSON"),
+            burn_payload
+        );
+        for (alias, reason) in [
+            (encode_lower_hex(&[0xab; 32]), "bare fixed hash"),
+            (uppercase_0x_prefix(&burn_asset), "0X fixed hash prefix"),
+            (
+                uppercase_0x_hex_digits(&burn_asset),
+                "uppercase fixed hash bytes",
+            ),
+            (format!(" {burn_asset} "), "padded fixed hash"),
+        ] {
+            let json = replace_first(&burn_json, &burn_asset, &alias);
+            assert!(
+                norito::json::from_str::<BurnPayloadV1>(&json).is_err(),
+                "{reason} must not decode through json_utils::hex32"
+            );
+        }
+
+        let asset_register = AssetRegisterPayloadV1 {
+            version: 1,
+            target_domain: SCCP_DOMAIN_ETH,
+            home_domain: SCCP_DOMAIN_SORA,
+            nonce: 8,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: vec![0xab, 0xcd],
+            decimals: 18,
+        };
+        let asset_json =
+            norito::json::to_string(&asset_register).expect("serialize asset-register JSON");
+        let asset_id = encode_0x_lower_hex(&[0xab, 0xcd]);
+        assert_eq!(
+            norito::json::from_str::<AssetRegisterPayloadV1>(&asset_json)
+                .expect("decode canonical asset-register JSON"),
+            asset_register
+        );
+        for (alias, reason) in [
+            (encode_lower_hex(&[0xab, 0xcd]), "bare byte vector"),
+            (uppercase_0x_prefix(&asset_id), "0X byte-vector prefix"),
+            (
+                uppercase_0x_hex_digits(&asset_id),
+                "uppercase byte-vector bytes",
+            ),
+            (format!(" {asset_id} "), "padded byte vector"),
+        ] {
+            let json = replace_first(&asset_json, &asset_id, &alias);
+            assert!(
+                norito::json::from_str::<AssetRegisterPayloadV1>(&json).is_err(),
+                "{reason} must not decode through json_utils::bytes_hex"
+            );
+        }
+
+        let empty_asset_register = AssetRegisterPayloadV1 {
+            asset_id: Vec::new(),
+            ..asset_register
+        };
+        let empty_asset_json = norito::json::to_string(&empty_asset_register)
+            .expect("serialize empty asset-register JSON");
+        assert_eq!(
+            norito::json::from_str::<AssetRegisterPayloadV1>(&empty_asset_json)
+                .expect("canonical empty byte vector decodes"),
+            empty_asset_register
+        );
+
+        let sync_committee_proof = SccpEthBeaconSyncCommitteeProofV1 {
+            version: 1,
+            total_weight: 2,
+            signed_weight: 1,
+            sync_committee_message_hash: [0x11; 32],
+            sync_committee_public_keys: vec![vec![0xde, 0xad]],
+            sync_committee_weights: vec![1],
+            sync_committee_pops: vec![vec![0xbe, 0xef]],
+            signers_bitmap: vec![0x01],
+            aggregate_signature: vec![0xab, 0xcd],
+        };
+        let sync_json =
+            norito::json::to_string(&sync_committee_proof).expect("serialize sync-committee JSON");
+        let public_key = encode_0x_lower_hex(&[0xde, 0xad]);
+        assert_eq!(
+            norito::json::from_str::<SccpEthBeaconSyncCommitteeProofV1>(&sync_json)
+                .expect("decode canonical sync-committee JSON"),
+            sync_committee_proof
+        );
+        for (alias, reason) in [
+            (
+                encode_lower_hex(&[0xde, 0xad]),
+                "bare byte-vector list item",
+            ),
+            (
+                uppercase_0x_prefix(&public_key),
+                "0X byte-vector list item prefix",
+            ),
+            (
+                uppercase_0x_hex_digits(&public_key),
+                "uppercase byte-vector list item bytes",
+            ),
+            (format!(" {public_key} "), "padded byte-vector list item"),
+        ] {
+            let json = replace_first(&sync_json, &public_key, &alias);
+            assert!(
+                norito::json::from_str::<SccpEthBeaconSyncCommitteeProofV1>(&json).is_err(),
+                "{reason} must not decode through json_utils::vec_bytes_hex"
+            );
+        }
     }
 
     fn sample_test_evm_word_public_inputs() -> SccpEvmWordPublicInputsV1 {

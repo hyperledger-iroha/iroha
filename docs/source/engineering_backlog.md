@@ -5267,6 +5267,9 @@ redistributable schemas, and official trust/revocation bundles.
     peer fixtures now use checked random key generation before key-update,
     feedback-loopback, manifest helper, and collector-routing regressions
     consume identities;
+    integration sorting account-order fixtures now use checked random Ed25519
+    key generation before metadata sorting regressions consume generated
+    identities;
     high-level `iroha` Nexus app facade wallet-signature, error-code,
     unsupported-key, and submit/status failure fixtures now use checked
     Ed25519/secp256k1 key generation before draft/finalize regressions consume

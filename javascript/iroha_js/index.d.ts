@@ -398,8 +398,7 @@ export interface MultisigExecuteTriggerOptions {
   strictSignerCheck?: boolean;
 }
 
-export interface ProposeMultisigExecuteTriggerOptions
-  extends MultisigExecuteTriggerOptions {
+export interface ProposeMultisigExecuteTriggerOptions extends MultisigExecuteTriggerOptions {
   accountId: string;
   spec: MultisigSpecLike;
   transactionTtlMs?: number | null;
@@ -454,8 +453,7 @@ export interface MultisigProposePayload {
   private_key?: string | BinaryLike;
 }
 
-export interface MultisigContractCallProposeRequest
-  extends MultisigAccountSelector {
+export interface MultisigContractCallProposeRequest extends MultisigAccountSelector {
   signerAccountId: string;
   contractAddress?: string;
   contractAlias?: string;
@@ -507,8 +505,7 @@ export interface MultisigContractCallProposePayload {
   private_key?: string | BinaryLike;
 }
 
-export interface MultisigContractCallApproveRequest
-  extends MultisigAccountSelector {
+export interface MultisigContractCallApproveRequest extends MultisigAccountSelector {
   signerAccountId: string;
   proposalId?: string | null;
   instructionsHash?: string | null;
@@ -793,8 +790,7 @@ export interface TairaXorTransferPayloadInput {
   nonce: string | number | bigint;
 }
 
-export interface TairaXorBscTransferPayloadInput
-  extends TairaXorTransferPayloadInput {
+export interface TairaXorBscTransferPayloadInput extends TairaXorTransferPayloadInput {
   bscRecipient?: string;
   bsc_recipient?: string;
   evmRecipient?: string;
@@ -975,8 +971,7 @@ export interface TairaXorBscToTairaBoundSourceProofPackage {
   readonly amount: string;
 }
 
-export interface TairaXorTronBurnStartedEventInput
-  extends TairaXorRouteHashInput {
+export interface TairaXorTronBurnStartedEventInput extends TairaXorRouteHashInput {
   event: Record<string, unknown>;
   sourceEventDigest?: string;
   source_event_digest?: string;
@@ -1019,8 +1014,7 @@ export interface TairaXorTronBoundBurnStartedEvent {
   readonly nonce: string;
 }
 
-export interface TairaXorSccpRecordDescriptorInput
-  extends TairaXorTransferPayloadInput {
+export interface TairaXorSccpRecordDescriptorInput extends TairaXorTransferPayloadInput {
   chainId?: string;
   chain_id?: string;
   tairaChainId?: string;
@@ -1041,8 +1035,7 @@ export interface TairaXorSccpRecordDescriptorInput
   expected_payload_bytes?: BinaryLike | number[];
 }
 
-export interface TairaXorBscSccpRecordDescriptorInput
-  extends TairaXorSccpRecordDescriptorInput {
+export interface TairaXorBscSccpRecordDescriptorInput extends TairaXorSccpRecordDescriptorInput {
   bscRecipient?: string;
   bsc_recipient?: string;
   evmRecipient?: string;
@@ -1081,13 +1074,14 @@ export interface TairaXorSccpRecordDescriptor {
   }>;
 }
 
-export interface TairaXorBscSccpRecordDescriptor
-  extends Omit<TairaXorSccpRecordDescriptor, "route_id"> {
+export interface TairaXorBscSccpRecordDescriptor extends Omit<
+  TairaXorSccpRecordDescriptor,
+  "route_id"
+> {
   readonly route_id: "taira_bsc_xor";
 }
 
-export interface TairaXorSccpBurnRecordInput
-  extends TairaXorSccpRecordDescriptorInput {
+export interface TairaXorSccpBurnRecordInput extends TairaXorSccpRecordDescriptorInput {
   descriptor?: TairaXorSccpRecordDescriptor;
   recordDescriptor?: TairaXorSccpRecordDescriptor;
   record_descriptor?: TairaXorSccpRecordDescriptor;
@@ -1098,8 +1092,7 @@ export interface TairaXorSccpBurnRecordInput
   authority?: string;
 }
 
-export interface TairaXorBscSccpBurnRecordInput
-  extends TairaXorBscSccpRecordDescriptorInput {
+export interface TairaXorBscSccpBurnRecordInput extends TairaXorBscSccpRecordDescriptorInput {
   descriptor?: TairaXorBscSccpRecordDescriptor;
   recordDescriptor?: TairaXorBscSccpRecordDescriptor;
   record_descriptor?: TairaXorBscSccpRecordDescriptor;
@@ -1123,13 +1116,14 @@ export interface TairaXorSccpBurnRecordContractPayload {
   readonly record_instruction_hex: string;
 }
 
-export interface TairaXorBscSccpBurnRecordContractPayload
-  extends Omit<TairaXorSccpBurnRecordContractPayload, "descriptor"> {
+export interface TairaXorBscSccpBurnRecordContractPayload extends Omit<
+  TairaXorSccpBurnRecordContractPayload,
+  "descriptor"
+> {
   readonly descriptor: Readonly<TairaXorBscSccpRecordDescriptor>;
 }
 
-export interface TairaXorSccpBurnRecordZkIvmRequestInput
-  extends TairaXorSccpBurnRecordInput {
+export interface TairaXorSccpBurnRecordZkIvmRequestInput extends TairaXorSccpBurnRecordInput {
   vkRef?: { backend?: string; name?: string };
   vk_ref?: { backend?: string; name?: string };
   bytecode?: string;
@@ -1151,8 +1145,7 @@ export interface TairaXorSccpBurnRecordZkIvmRequestInput
   metadata?: Record<string, JsonValue>;
 }
 
-export interface TairaXorBscSccpBurnRecordZkIvmRequestInput
-  extends TairaXorBscSccpBurnRecordInput {
+export interface TairaXorBscSccpBurnRecordZkIvmRequestInput extends TairaXorBscSccpBurnRecordInput {
   vkRef?: { backend?: string; name?: string };
   vk_ref?: { backend?: string; name?: string };
   bytecode?: string;
@@ -1188,11 +1181,10 @@ export interface TairaXorSccpBurnRecordZkIvmRequest {
   }>;
 }
 
-export interface TairaXorBscSccpBurnRecordZkIvmRequest
-  extends Omit<
-    TairaXorSccpBurnRecordZkIvmRequest,
-    "route_id" | "descriptor" | "contract"
-  > {
+export interface TairaXorBscSccpBurnRecordZkIvmRequest extends Omit<
+  TairaXorSccpBurnRecordZkIvmRequest,
+  "route_id" | "descriptor" | "contract"
+> {
   readonly route_id: "taira_bsc_xor";
   readonly descriptor: Readonly<TairaXorBscSccpRecordDescriptor>;
   readonly contract: Readonly<TairaXorBscSccpBurnRecordContractPayload>;
@@ -1291,8 +1283,7 @@ export interface SccpBundleSurfaceValidation {
   checks: Record<string, boolean>;
 }
 
-export interface SccpGovernanceBundleSurfaceValidation
-  extends SccpBundleSurfaceValidation {
+export interface SccpGovernanceBundleSurfaceValidation extends SccpBundleSurfaceValidation {
   expectedCertificateHash: string;
 }
 
@@ -1426,8 +1417,7 @@ export interface SolanaSccpEpochStakeRootInput {
   validator_stakes?: readonly (string | number | bigint)[];
 }
 
-export interface SolanaSccpStakeActivationInput
-  extends SolanaSccpEpochStakeRootInput {
+export interface SolanaSccpStakeActivationInput extends SolanaSccpEpochStakeRootInput {
   validatorActivationEpochs?: readonly (string | number | bigint)[];
   validator_activation_epochs?: readonly (string | number | bigint)[];
   activationEpochs?: readonly (string | number | bigint)[];
@@ -1541,8 +1531,7 @@ export function solanaSccpOpenedAccountInclusionWitness(
   input: SolanaSccpAccountsLtHashOpenedContributionsInput,
 ): SolanaSccpOpenedAccountInclusionWitness;
 
-export interface SolanaSccpAccountsLtHashProofRequestInput
-  extends SolanaSccpAccountsLtHashOpenedContributionsInput {
+export interface SolanaSccpAccountsLtHashProofRequestInput extends SolanaSccpAccountsLtHashOpenedContributionsInput {
   parentSlot?: string | number | bigint;
   parent_slot?: string | number | bigint;
   bankSignatureCount?: string | number | bigint;
@@ -1867,8 +1856,7 @@ export type SolanaSccpFullLightClientAuditRole =
   | "bankForkChoice"
   | "bank_fork_choice";
 
-export interface SolanaSccpFullLightClientAuditProofRequestBaseInput
-  extends SolanaSccpAccountsLtHashProofRequestInput {
+export interface SolanaSccpFullLightClientAuditProofRequestBaseInput extends SolanaSccpAccountsLtHashProofRequestInput {
   sourceVerifierMaterial?: unknown;
   source_verifier_material?: unknown;
   sourceAdapterDeployment?: unknown;
@@ -2108,8 +2096,7 @@ export interface SolanaSccpParsedStakeStateV2StakeAccountData {
   stakeFlags: bigint;
 }
 
-export interface SolanaSccpStakeAccountStateInput
-  extends SolanaSccpStakeActivationInput {
+export interface SolanaSccpStakeAccountStateInput extends SolanaSccpStakeActivationInput {
   validatorVoteAccountAddresses?: readonly BinaryLike[];
   validator_vote_account_addresses?: readonly BinaryLike[];
   voteAccountAddresses?: readonly BinaryLike[];
@@ -2135,8 +2122,7 @@ export interface SolanaSccpStakeHistoryEntryInput {
   deactivating: string | number | bigint;
 }
 
-export interface SolanaSccpStakeHistoryInput
-  extends SolanaSccpStakeAccountStateInput {
+export interface SolanaSccpStakeHistoryInput extends SolanaSccpStakeAccountStateInput {
   validatorDelegatedStakes?: readonly (string | number | bigint)[];
   validator_delegated_stakes?: readonly (string | number | bigint)[];
   delegatedStakes?: readonly (string | number | bigint)[];
@@ -2280,7 +2266,11 @@ export interface SccpSourceAdapterDeploymentBinding {
 
 export type SccpDestinationBindingDomainInput =
   | SccpDomainIdInput
-  | { targetDomain?: SccpDomainIdInput; target_domain?: SccpDomainIdInput; domain?: SccpDomainIdInput };
+  | {
+      targetDomain?: SccpDomainIdInput;
+      target_domain?: SccpDomainIdInput;
+      domain?: SccpDomainIdInput;
+    };
 
 export interface EvmSccpDestinationBindingInput {
   version?: SccpVersionInput;
@@ -2420,8 +2410,7 @@ export interface SccpSourceVerifierMaterialInput {
   config_hash?: string;
 }
 
-export interface SccpSourceAdapterEngineDeploymentInput
-  extends SccpSourceVerifierMaterialInput {
+export interface SccpSourceAdapterEngineDeploymentInput extends SccpSourceVerifierMaterialInput {
   adapterProofFamily?: string;
   adapter_proof_family?: string;
   adapterVerifierVkHash?: string;
@@ -2468,8 +2457,7 @@ export interface SccpSourceVerifierMaterial {
   placeholderMaterial: false;
 }
 
-export interface SccpSourceAdapterEngineDeployment
-  extends SccpSourceVerifierMaterial {
+export interface SccpSourceAdapterEngineDeployment extends SccpSourceVerifierMaterial {
   targetDomain: number;
   adapterProofFamily: string;
   adapterVerifierVkHash: string;
@@ -2580,8 +2568,7 @@ export interface TonSccpShardProofInput {
   shard_state_dictionary_proof_boc?: BinaryLike;
 }
 
-export interface TonShardStateTransitionProofInput
-  extends TonValidatorSetTransitionMessageInput {
+export interface TonShardStateTransitionProofInput extends TonValidatorSetTransitionMessageInput {
   version?: SccpVersionInput;
   transitionMessageHash?: string;
   transition_message_hash?: string;
@@ -2591,8 +2578,7 @@ export interface TonShardStateTransitionProofInput
   validator_signature_proof?: TonValidatorSignatureProofInput;
 }
 
-export interface TonShardStateProofRequestInput
-  extends TonMasterchainBlockMessageInput {
+export interface TonShardStateProofRequestInput extends TonMasterchainBlockMessageInput {
   transactionLt?: string | number | bigint;
   transaction_lt?: string | number | bigint;
   shardStateProofBoc?: BinaryLike;
@@ -2713,8 +2699,7 @@ export type TonSccpFullLightClientAuditRole =
   | "shardAccountsDictionary"
   | "shard_accounts_dictionary";
 
-export interface TonSccpFullLightClientAuditProofRequestBaseInput
-  extends TonShardStateProofRequestInput {
+export interface TonSccpFullLightClientAuditProofRequestBaseInput extends TonShardStateProofRequestInput {
   sourceVerifierMaterial?: unknown;
   source_verifier_material?: unknown;
   sourceAdapterDeployment?: unknown;
@@ -2809,8 +2794,7 @@ export interface TonMasterchainConfigLeafInput {
   validator_set_payload_hash?: string;
 }
 
-export interface TonMasterchainConfigProofInput
-  extends TonMasterchainConfigLeafInput {
+export interface TonMasterchainConfigProofInput extends TonMasterchainConfigLeafInput {
   configRoot?: string;
   config_root?: string;
   configLeafHash?: string;
@@ -2958,8 +2942,7 @@ export interface TonValidatorSignatureProofInput {
   )[];
 }
 
-export interface TonValidatorSetTransitionSignatureInput
-  extends TonValidatorSetTransitionMessageInput {
+export interface TonValidatorSetTransitionSignatureInput extends TonValidatorSetTransitionMessageInput {
   version?: SccpVersionInput;
   transitionMessageHash?: string;
   transition_message_hash?: string;
@@ -3146,8 +3129,7 @@ export interface EthBeaconSyncCommitteeProofInput extends EthSyncCommitteePayloa
     | number[];
 }
 
-export interface EthSyncCommitteeTransitionSignatureInput
-  extends EthSyncCommitteeTransitionMessageInput {
+export interface EthSyncCommitteeTransitionSignatureInput extends EthSyncCommitteeTransitionMessageInput {
   version?: SccpVersionInput;
   transitionMessageHash?: string;
   transition_message_hash?: string;
@@ -3336,8 +3318,7 @@ export interface TronSccpReceiptProofInput {
   )[];
 }
 
-export interface TronSccpReceiptStateProofInput
-  extends TronSccpReceiptProofInput {
+export interface TronSccpReceiptStateProofInput extends TronSccpReceiptProofInput {
   receiptRootIndex?: string | number | bigint;
   receipt_root_index?: string | number | bigint;
   receiptTrieProofNodes?: readonly (
@@ -3356,8 +3337,7 @@ export interface TronSccpReceiptStateProofInput
   )[];
 }
 
-export interface TronSccpTransactionSourceProofInput
-  extends TronSccpReceiptProofInput {
+export interface TronSccpTransactionSourceProofInput extends TronSccpReceiptProofInput {
   transactionIndex?: string | number | bigint;
   transaction_index?: string | number | bigint;
   transactionCount?: string | number | bigint;
@@ -3562,8 +3542,7 @@ export interface TronWitnessScheduleTransitionMessageInput {
   next_witness_schedule_payload_hash?: string;
 }
 
-export interface TronWitnessScheduleTransitionSealInput
-  extends TronWitnessScheduleTransitionMessageInput {
+export interface TronWitnessScheduleTransitionSealInput extends TronWitnessScheduleTransitionMessageInput {
   transitionMessageHash?: string;
   transition_message_hash?: string;
   sealProof?: TronWitnessSealInput;
@@ -3906,8 +3885,7 @@ export type SolanaSccpSubmissionInput = SolanaSccpSubmissionInputBase &
       }
   );
 
-export interface SolanaSccpSubmissionInputWithProofResult
-  extends SolanaSccpSubmissionInputBase {
+export interface SolanaSccpSubmissionInputWithProofResult extends SolanaSccpSubmissionInputBase {
   /**
    * Wrapped result returned by wrapSolanaSccpProofResult or SolanaSccpProver.prove.
    * Its source public inputs, proof bytes, and recomputed envelope hash must
@@ -4074,8 +4052,7 @@ export type TonSccpMessageBodyInput = TonSccpMessageBodyInputBase &
       }
   );
 
-export interface TonSccpMessageBodyInputWithProofResult
-  extends TonSccpMessageBodyInputBase {
+export interface TonSccpMessageBodyInputWithProofResult extends TonSccpMessageBodyInputBase {
   /**
    * Wrapped result returned by wrapTonSccpProofResult or TonSccpProver.prove.
    * TON native-recursive proof bytes are only accepted when they match this
@@ -4182,7 +4159,7 @@ export interface EthereumMainnetNativeEvmProverAuditHashes {
   readonly no_wasm_no_remote_scan: string;
 }
 
-export interface EthereumMainnetNativeEvmProverBundleInput {
+export interface EthereumMainnetNativeEvmProverBundleInputBase {
   schema?: typeof SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1;
   bundleId?: typeof SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
   bundle_id?: typeof SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
@@ -4209,8 +4186,6 @@ export interface EthereumMainnetNativeEvmProverBundleInput {
   proving_key?: string;
   verifierKeyHash?: string;
   verifier_key_hash?: string;
-  verifierKeyArtifactHash?: string;
-  verifier_key_artifact_hash?: string;
   verifierKey?: string;
   verifier_key?: string;
   destinationBindingHash?: string;
@@ -4234,6 +4209,23 @@ export interface EthereumMainnetNativeEvmProverBundleInput {
   auditHashes?: EthereumMainnetNativeEvmProverAuditHashesInput;
   audit_hashes?: EthereumMainnetNativeEvmProverAuditHashesInput;
 }
+
+export type EthereumMainnetNativeEvmProverBundleInput =
+  EthereumMainnetNativeEvmProverBundleInputBase &
+    (
+      | {
+          verifierKeyArtifactHash: string;
+          verifier_key_artifact_hash?: string;
+        }
+      | {
+          verifierKeyArtifactHash?: string;
+          verifier_key_artifact_hash: string;
+        }
+    );
+
+export type NativeEvmProverBundleProfileOverride<T> = T extends unknown
+  ? Omit<T, "bundleId" | "bundle_id" | "chain">
+  : never;
 
 export interface EthereumMainnetNativeEvmProverBundleSdkArtifact {
   readonly sdk: "dotnet" | "java-android" | "javascript" | "kotlin" | "swift";
@@ -4690,21 +4682,20 @@ export type BscTestnetNativeEvmProverAuditHashesInput =
 export type BscTestnetNativeEvmProverAuditHashes =
   EthereumMainnetNativeEvmProverAuditHashes;
 
-export interface BscTestnetNativeEvmProverBundleInput
-  extends Omit<
-    EthereumMainnetNativeEvmProverBundleInput,
-    "bundleId" | "bundle_id" | "chain"
-  > {
-  bundleId?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
-  bundle_id?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
-  chain?: "bsc-testnet";
-}
+export type BscTestnetNativeEvmProverBundleInput =
+  NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput> & {
+    bundleId?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+    bundle_id?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+    chain?: "bsc-testnet";
+  };
 
 export type BscTestnetNativeEvmProverBundleSdkArtifact =
   EthereumMainnetNativeEvmProverBundleSdkArtifact;
 
-export interface BscTestnetNativeEvmProverBundle
-  extends Omit<EthereumMainnetNativeEvmProverBundle, "bundleId" | "chain"> {
+export interface BscTestnetNativeEvmProverBundle extends Omit<
+  EthereumMainnetNativeEvmProverBundle,
+  "bundleId" | "chain"
+> {
   readonly bundleId: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
   readonly chain: "bsc-testnet";
 }
@@ -4738,20 +4729,18 @@ export type BscTestnetNativeEvmProverParitySdkResultInput =
 export type BscTestnetNativeEvmProverParitySdkResult =
   EthereumMainnetNativeEvmProverParitySdkResult;
 
-export interface BscTestnetNativeEvmProverParityFixtureInput
-  extends Omit<
-    EthereumMainnetNativeEvmProverParityFixtureInput,
-    "schema" | "chain"
-  > {
+export interface BscTestnetNativeEvmProverParityFixtureInput extends Omit<
+  EthereumMainnetNativeEvmProverParityFixtureInput,
+  "schema" | "chain"
+> {
   schema?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
   chain?: "bsc-testnet";
 }
 
-export interface BscTestnetNativeEvmProverParityFixture
-  extends Omit<
-    EthereumMainnetNativeEvmProverParityFixture,
-    "schema" | "chain"
-  > {
+export interface BscTestnetNativeEvmProverParityFixture extends Omit<
+  EthereumMainnetNativeEvmProverParityFixture,
+  "schema" | "chain"
+> {
   readonly schema: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
   readonly chain: "bsc-testnet";
 }
@@ -4771,20 +4760,18 @@ export type BscTestnetNativeEvmProverSelfTestSdkResultInput =
 export type BscTestnetNativeEvmProverSelfTestSdkResult =
   EthereumMainnetNativeEvmProverSelfTestSdkResult;
 
-export interface BscTestnetNativeEvmProverSelfTestFixtureInput
-  extends Omit<
-    EthereumMainnetNativeEvmProverSelfTestFixtureInput,
-    "schema" | "chain"
-  > {
+export interface BscTestnetNativeEvmProverSelfTestFixtureInput extends Omit<
+  EthereumMainnetNativeEvmProverSelfTestFixtureInput,
+  "schema" | "chain"
+> {
   schema?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
   chain?: "bsc-testnet";
 }
 
-export interface BscTestnetNativeEvmProverSelfTestFixture
-  extends Omit<
-    EthereumMainnetNativeEvmProverSelfTestFixture,
-    "schema" | "chain"
-  > {
+export interface BscTestnetNativeEvmProverSelfTestFixture extends Omit<
+  EthereumMainnetNativeEvmProverSelfTestFixture,
+  "schema" | "chain"
+> {
   readonly schema: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
   readonly chain: "bsc-testnet";
 }
@@ -4799,18 +4786,23 @@ export function parseBscTestnetNativeEvmProverSelfTestFixture(
   nativeProverBundle: BscTestnetNativeEvmProverBundleInput,
 ): BscTestnetNativeEvmProverSelfTestFixture;
 
-export interface BscTestnetNativeEvmProverArtifacts
-  extends Omit<
-    EthereumMainnetNativeEvmProverArtifacts,
-    "nativeProverBundle" | "crossSdkFixtureParity" | "nativeProverSelfTest"
-  > {
+export interface BscTestnetNativeEvmProverArtifacts extends Omit<
+  EthereumMainnetNativeEvmProverArtifacts,
+  "nativeProverBundle" | "crossSdkFixtureParity" | "nativeProverSelfTest"
+> {
   readonly nativeProverBundle: Readonly<BscTestnetNativeEvmProverBundle>;
   readonly crossSdkFixtureParity: Readonly<BscTestnetNativeEvmProverParityFixture>;
   readonly nativeProverSelfTest: Readonly<BscTestnetNativeEvmProverSelfTestFixture>;
 }
 
-export interface BscTestnetNativeEvmProverArtifactsInput
-  extends Omit<EthereumMainnetNativeEvmProverArtifactsInput, "nativeProverBundle" | "native_prover_bundle" | "proverBundle" | "prover_bundle" | "manifest"> {
+export interface BscTestnetNativeEvmProverArtifactsInput extends Omit<
+  EthereumMainnetNativeEvmProverArtifactsInput,
+  | "nativeProverBundle"
+  | "native_prover_bundle"
+  | "proverBundle"
+  | "prover_bundle"
+  | "manifest"
+> {
   nativeProverBundle?: BscTestnetNativeEvmProverBundleInput | string;
   native_prover_bundle?: BscTestnetNativeEvmProverBundleInput | string;
   proverBundle?: BscTestnetNativeEvmProverBundleInput | string;
@@ -4830,19 +4822,27 @@ export function verifyBscTestnetNativeEvmProverArtifacts(
   },
 ): BscTestnetNativeEvmProverArtifacts;
 
-export interface BscTestnetNativeEvmProverArtifactResolverMetadata
-  extends Omit<
-    EthereumMainnetNativeEvmProverArtifactResolverMetadata,
-    "nativeProverBundle"
-  > {
+export interface BscTestnetNativeEvmProverArtifactResolverMetadata extends Omit<
+  EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+  "nativeProverBundle"
+> {
   readonly nativeProverBundle: Readonly<BscTestnetNativeEvmProverBundle>;
 }
 
-export interface BscTestnetNativeEvmProverArtifactBundleInput
-  extends Omit<
-    EthereumMainnetNativeEvmProverArtifactBundleInput,
-    "nativeProverBundle" | "native_prover_bundle" | "proverBundle" | "prover_bundle" | "manifest" | "artifactResolver" | "artifact_resolver" | "resolveArtifact" | "resolve_artifact" | "resolveArtifactBytes" | "resolve_artifact_bytes"
-  > {
+export interface BscTestnetNativeEvmProverArtifactBundleInput extends Omit<
+  EthereumMainnetNativeEvmProverArtifactBundleInput,
+  | "nativeProverBundle"
+  | "native_prover_bundle"
+  | "proverBundle"
+  | "prover_bundle"
+  | "manifest"
+  | "artifactResolver"
+  | "artifact_resolver"
+  | "resolveArtifact"
+  | "resolve_artifact"
+  | "resolveArtifactBytes"
+  | "resolve_artifact_bytes"
+> {
   nativeProverBundle?: BscTestnetNativeEvmProverBundleInput | string;
   native_prover_bundle?: BscTestnetNativeEvmProverBundleInput | string;
   proverBundle?: BscTestnetNativeEvmProverBundleInput | string;
@@ -4886,11 +4886,10 @@ export function verifyBscTestnetNativeEvmProverArtifactsFromBundle(
   },
 ): Promise<BscTestnetNativeEvmProverArtifacts>;
 
-export interface BscTestnetNativeProverSelfTestContext
-  extends Omit<
-    EthereumMainnetNativeProverSelfTestContext,
-    "nativeProverArtifacts" | "nativeProverSelfTest" | "expectedResult"
-  > {
+export interface BscTestnetNativeProverSelfTestContext extends Omit<
+  EthereumMainnetNativeProverSelfTestContext,
+  "nativeProverArtifacts" | "nativeProverSelfTest" | "expectedResult"
+> {
   readonly nativeProverArtifacts: Readonly<BscTestnetNativeEvmProverArtifacts>;
   readonly nativeProverSelfTest: Readonly<BscTestnetNativeEvmProverSelfTestFixture>;
   readonly expectedResult: Readonly<BscTestnetNativeEvmProverSelfTestSdkResult>;
@@ -4903,11 +4902,17 @@ export type BscTestnetNativeProverSelfTestFn = (
   | BscTestnetNativeEvmProverSelfTestSdkResultInput
   | Promise<BscTestnetNativeEvmProverSelfTestSdkResultInput>;
 
-export interface BscTestnetNativeProverSelfTestRunInput
-  extends Omit<
-    EthereumMainnetNativeProverSelfTestRunInput,
-    "nativeProverArtifacts" | "native_prover_artifacts" | "verifiedNativeProverArtifacts" | "verified_native_prover_artifacts" | "nativeProverSelfTest" | "native_prover_self_test" | "selfTestNativeProver" | "self_test_native_prover"
-  > {
+export interface BscTestnetNativeProverSelfTestRunInput extends Omit<
+  EthereumMainnetNativeProverSelfTestRunInput,
+  | "nativeProverArtifacts"
+  | "native_prover_artifacts"
+  | "verifiedNativeProverArtifacts"
+  | "verified_native_prover_artifacts"
+  | "nativeProverSelfTest"
+  | "native_prover_self_test"
+  | "selfTestNativeProver"
+  | "self_test_native_prover"
+> {
   nativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
   native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
   verifiedNativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
@@ -4935,21 +4940,20 @@ export type BscMainnetNativeEvmProverAuditHashesInput =
 export type BscMainnetNativeEvmProverAuditHashes =
   EthereumMainnetNativeEvmProverAuditHashes;
 
-export interface BscMainnetNativeEvmProverBundleInput
-  extends Omit<
-    EthereumMainnetNativeEvmProverBundleInput,
-    "bundleId" | "bundle_id" | "chain"
-  > {
-  bundleId?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
-  bundle_id?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
-  chain?: "bsc-mainnet";
-}
+export type BscMainnetNativeEvmProverBundleInput =
+  NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput> & {
+    bundleId?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+    bundle_id?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+    chain?: "bsc-mainnet";
+  };
 
 export type BscMainnetNativeEvmProverBundleSdkArtifact =
   EthereumMainnetNativeEvmProverBundleSdkArtifact;
 
-export interface BscMainnetNativeEvmProverBundle
-  extends Omit<EthereumMainnetNativeEvmProverBundle, "bundleId" | "chain"> {
+export interface BscMainnetNativeEvmProverBundle extends Omit<
+  EthereumMainnetNativeEvmProverBundle,
+  "bundleId" | "chain"
+> {
   readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
   readonly chain: "bsc-mainnet";
 }
@@ -4959,20 +4963,18 @@ export type BscMainnetNativeEvmProverParitySdkResultInput =
 export type BscMainnetNativeEvmProverParitySdkResult =
   EthereumMainnetNativeEvmProverParitySdkResult;
 
-export interface BscMainnetNativeEvmProverParityFixtureInput
-  extends Omit<
-    EthereumMainnetNativeEvmProverParityFixtureInput,
-    "schema" | "chain"
-  > {
+export interface BscMainnetNativeEvmProverParityFixtureInput extends Omit<
+  EthereumMainnetNativeEvmProverParityFixtureInput,
+  "schema" | "chain"
+> {
   schema?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
   chain?: "bsc-mainnet";
 }
 
-export interface BscMainnetNativeEvmProverParityFixture
-  extends Omit<
-    EthereumMainnetNativeEvmProverParityFixture,
-    "schema" | "chain"
-  > {
+export interface BscMainnetNativeEvmProverParityFixture extends Omit<
+  EthereumMainnetNativeEvmProverParityFixture,
+  "schema" | "chain"
+> {
   readonly schema: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
   readonly chain: "bsc-mainnet";
 }
@@ -4982,35 +4984,38 @@ export type BscMainnetNativeEvmProverSelfTestSdkResultInput =
 export type BscMainnetNativeEvmProverSelfTestSdkResult =
   EthereumMainnetNativeEvmProverSelfTestSdkResult;
 
-export interface BscMainnetNativeEvmProverSelfTestFixtureInput
-  extends Omit<
-    EthereumMainnetNativeEvmProverSelfTestFixtureInput,
-    "schema" | "chain"
-  > {
+export interface BscMainnetNativeEvmProverSelfTestFixtureInput extends Omit<
+  EthereumMainnetNativeEvmProverSelfTestFixtureInput,
+  "schema" | "chain"
+> {
   schema?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
   chain?: "bsc-mainnet";
 }
 
-export interface BscMainnetNativeEvmProverSelfTestFixture
-  extends Omit<
-    EthereumMainnetNativeEvmProverSelfTestFixture,
-    "schema" | "chain"
-  > {
+export interface BscMainnetNativeEvmProverSelfTestFixture extends Omit<
+  EthereumMainnetNativeEvmProverSelfTestFixture,
+  "schema" | "chain"
+> {
   readonly schema: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
   readonly chain: "bsc-mainnet";
 }
-export interface BscMainnetNativeEvmProverArtifacts
-  extends Omit<
-    EthereumMainnetNativeEvmProverArtifacts,
-    "nativeProverBundle" | "crossSdkFixtureParity" | "nativeProverSelfTest"
-  > {
+export interface BscMainnetNativeEvmProverArtifacts extends Omit<
+  EthereumMainnetNativeEvmProverArtifacts,
+  "nativeProverBundle" | "crossSdkFixtureParity" | "nativeProverSelfTest"
+> {
   readonly nativeProverBundle: Readonly<BscMainnetNativeEvmProverBundle>;
   readonly crossSdkFixtureParity: Readonly<BscMainnetNativeEvmProverParityFixture>;
   readonly nativeProverSelfTest: Readonly<BscMainnetNativeEvmProverSelfTestFixture>;
 }
 
-export interface BscMainnetNativeEvmProverArtifactsInput
-  extends Omit<EthereumMainnetNativeEvmProverArtifactsInput, "nativeProverBundle" | "native_prover_bundle" | "proverBundle" | "prover_bundle" | "manifest"> {
+export interface BscMainnetNativeEvmProverArtifactsInput extends Omit<
+  EthereumMainnetNativeEvmProverArtifactsInput,
+  | "nativeProverBundle"
+  | "native_prover_bundle"
+  | "proverBundle"
+  | "prover_bundle"
+  | "manifest"
+> {
   nativeProverBundle?: BscMainnetNativeEvmProverBundleInput | string;
   native_prover_bundle?: BscMainnetNativeEvmProverBundleInput | string;
   proverBundle?: BscMainnetNativeEvmProverBundleInput | string;
@@ -5018,19 +5023,27 @@ export interface BscMainnetNativeEvmProverArtifactsInput
   manifest?: BscMainnetNativeEvmProverBundleInput | string;
 }
 
-export interface BscMainnetNativeEvmProverArtifactResolverMetadata
-  extends Omit<
-    EthereumMainnetNativeEvmProverArtifactResolverMetadata,
-    "nativeProverBundle"
-  > {
+export interface BscMainnetNativeEvmProverArtifactResolverMetadata extends Omit<
+  EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+  "nativeProverBundle"
+> {
   readonly nativeProverBundle: Readonly<BscMainnetNativeEvmProverBundle>;
 }
 
-export interface BscMainnetNativeEvmProverArtifactBundleInput
-  extends Omit<
-    EthereumMainnetNativeEvmProverArtifactBundleInput,
-    "nativeProverBundle" | "native_prover_bundle" | "proverBundle" | "prover_bundle" | "manifest" | "artifactResolver" | "artifact_resolver" | "resolveArtifact" | "resolve_artifact" | "resolveArtifactBytes" | "resolve_artifact_bytes"
-  > {
+export interface BscMainnetNativeEvmProverArtifactBundleInput extends Omit<
+  EthereumMainnetNativeEvmProverArtifactBundleInput,
+  | "nativeProverBundle"
+  | "native_prover_bundle"
+  | "proverBundle"
+  | "prover_bundle"
+  | "manifest"
+  | "artifactResolver"
+  | "artifact_resolver"
+  | "resolveArtifact"
+  | "resolve_artifact"
+  | "resolveArtifactBytes"
+  | "resolve_artifact_bytes"
+> {
   nativeProverBundle?: BscMainnetNativeEvmProverBundleInput | string;
   native_prover_bundle?: BscMainnetNativeEvmProverBundleInput | string;
   proverBundle?: BscMainnetNativeEvmProverBundleInput | string;
@@ -5062,11 +5075,10 @@ export interface BscMainnetNativeEvmProverArtifactBundleInput
   ) => BinaryLike | Promise<BinaryLike>;
 }
 
-export interface BscMainnetNativeProverSelfTestContext
-  extends Omit<
-    EthereumMainnetNativeProverSelfTestContext,
-    "nativeProverArtifacts" | "nativeProverSelfTest" | "expectedResult"
-  > {
+export interface BscMainnetNativeProverSelfTestContext extends Omit<
+  EthereumMainnetNativeProverSelfTestContext,
+  "nativeProverArtifacts" | "nativeProverSelfTest" | "expectedResult"
+> {
   readonly nativeProverArtifacts: Readonly<BscMainnetNativeEvmProverArtifacts>;
   readonly nativeProverSelfTest: Readonly<BscMainnetNativeEvmProverSelfTestFixture>;
   readonly expectedResult: Readonly<BscMainnetNativeEvmProverSelfTestSdkResult>;
@@ -5079,11 +5091,17 @@ export type BscMainnetNativeProverSelfTestFn = (
   | BscMainnetNativeEvmProverSelfTestSdkResultInput
   | Promise<BscMainnetNativeEvmProverSelfTestSdkResultInput>;
 
-export interface BscMainnetNativeProverSelfTestRunInput
-  extends Omit<
-    EthereumMainnetNativeProverSelfTestRunInput,
-    "nativeProverArtifacts" | "native_prover_artifacts" | "verifiedNativeProverArtifacts" | "verified_native_prover_artifacts" | "nativeProverSelfTest" | "native_prover_self_test" | "selfTestNativeProver" | "self_test_native_prover"
-  > {
+export interface BscMainnetNativeProverSelfTestRunInput extends Omit<
+  EthereumMainnetNativeProverSelfTestRunInput,
+  | "nativeProverArtifacts"
+  | "native_prover_artifacts"
+  | "verifiedNativeProverArtifacts"
+  | "verified_native_prover_artifacts"
+  | "nativeProverSelfTest"
+  | "native_prover_self_test"
+  | "selfTestNativeProver"
+  | "self_test_native_prover"
+> {
   nativeProverArtifacts?: BscMainnetNativeEvmProverArtifacts;
   native_prover_artifacts?: BscMainnetNativeEvmProverArtifacts;
   verifiedNativeProverArtifacts?: BscMainnetNativeEvmProverArtifacts;
@@ -5591,8 +5609,7 @@ export interface SccpBridgeProofSubmitPayloadBaseInput {
   creation_time_ms?: NumericLike;
 }
 
-export interface EvmSccpBridgeProofSubmitPayloadInput
-  extends SccpBridgeProofSubmitPayloadBaseInput {
+export interface EvmSccpBridgeProofSubmitPayloadInput extends SccpBridgeProofSubmitPayloadBaseInput {
   submission?: EvmSccpSubmission;
   evmSccpSubmission?: EvmSccpSubmission;
   evm_sccp_submission?: EvmSccpSubmission;
@@ -5602,8 +5619,7 @@ export interface EvmSccpBridgeProofSubmitPayloadInput
   destination_binding?: EvmSccpDestinationBindingInput;
 }
 
-export interface TronSccpBridgeProofSubmitPayloadInput
-  extends SccpBridgeProofSubmitPayloadBaseInput {
+export interface TronSccpBridgeProofSubmitPayloadInput extends SccpBridgeProofSubmitPayloadBaseInput {
   submission?: TronSccpSubmission;
   tronSccpSubmission?: TronSccpSubmission;
   tron_sccp_submission?: TronSccpSubmission;
@@ -5884,8 +5900,7 @@ export interface EthereumMainnetBeaconFinalityEvidenceInput {
   [key: string]: unknown;
 }
 
-export interface EthereumMainnetBeaconFinalityEvidence
-  extends EthereumMainnetBeaconFinalityEvidenceInput {
+export interface EthereumMainnetBeaconFinalityEvidence extends EthereumMainnetBeaconFinalityEvidenceInput {
   readonly executionBlockNumber: string;
   readonly executionBlockHash: string;
   readonly executionReceiptsRoot: string;
@@ -5927,9 +5942,7 @@ export type EthereumMainnetConsensusProvider = {
     | Promise<EthereumMainnetBeaconFinalityEvidenceInput>;
 };
 
-export class EthereumMainnetBeaconRestConsensusProvider
-  implements EthereumMainnetConsensusProvider
-{
+export class EthereumMainnetBeaconRestConsensusProvider implements EthereumMainnetConsensusProvider {
   constructor(
     options: EthereumMainnetBeaconRestConsensusProviderOptions | string | URL,
   );
@@ -5999,8 +6012,7 @@ export interface EthereumMainnetInboundEvidenceInput {
   [key: string]: unknown;
 }
 
-export interface EthereumMainnetInboundEvidence
-  extends EthereumMainnetInboundEvidenceInput {
+export interface EthereumMainnetInboundEvidence extends EthereumMainnetInboundEvidenceInput {
   readonly sourceDomain: number;
   readonly targetDomain: number;
   readonly beaconFinality?: EthereumMainnetBeaconFinalityEvidence;
@@ -6203,8 +6215,7 @@ export interface BscMainnetParliaFinalityEvidenceInput {
   [key: string]: unknown;
 }
 
-export interface BscMainnetParliaFinalityEvidence
-  extends BscMainnetParliaFinalityEvidenceInput {
+export interface BscMainnetParliaFinalityEvidence extends BscMainnetParliaFinalityEvidenceInput {
   readonly executionBlockNumber: string;
   readonly executionBlockHash: string;
   readonly executionReceiptsRoot: string;
@@ -6247,8 +6258,7 @@ export interface BscMainnetInboundEvidenceInput {
   [key: string]: unknown;
 }
 
-export interface BscMainnetInboundEvidence
-  extends BscMainnetInboundEvidenceInput {
+export interface BscMainnetInboundEvidence extends BscMainnetInboundEvidenceInput {
   readonly sourceDomain: number;
   readonly targetDomain: number;
   readonly parliaFinality?: BscMainnetParliaFinalityEvidence;
@@ -6470,16 +6480,18 @@ export class BscTestnetSccp {
   buildOutboundProofRequest(
     input: BscTestnetSccpProofRequestInput,
   ): BscTestnetSccpProofRequest;
-  runNativeProverSelfTest(options?: {
-    nativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
-    native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
-    verifiedNativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
-    verified_native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
-    nativeProverSelfTest?: BscTestnetNativeProverSelfTestFn;
-    native_prover_self_test?: BscTestnetNativeProverSelfTestFn;
-    selfTestNativeProver?: BscTestnetNativeProverSelfTestFn;
-    self_test_native_prover?: BscTestnetNativeProverSelfTestFn;
-  } & Record<string, unknown>): Promise<BscTestnetNativeEvmProverSelfTestSdkResult>;
+  runNativeProverSelfTest(
+    options?: {
+      nativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
+      native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
+      verifiedNativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
+      verified_native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
+      nativeProverSelfTest?: BscTestnetNativeProverSelfTestFn;
+      native_prover_self_test?: BscTestnetNativeProverSelfTestFn;
+      selfTestNativeProver?: BscTestnetNativeProverSelfTestFn;
+      self_test_native_prover?: BscTestnetNativeProverSelfTestFn;
+    } & Record<string, unknown>,
+  ): Promise<BscTestnetNativeEvmProverSelfTestSdkResult>;
   proveOutboundToBsc(
     input: BscTestnetSccpProofRequestInput,
     options?: {
@@ -6853,9 +6865,13 @@ export function canonicalBscValidatorSetTransitionMessageBytes(
 export function bscValidatorSetTransitionMessageHash(
   input: BscValidatorSetTransitionMessageInput,
 ): string;
-export function canonicalBscCommitMessageBytes(input: BscCommitMessageInput): Uint8Array;
+export function canonicalBscCommitMessageBytes(
+  input: BscCommitMessageInput,
+): Uint8Array;
 export function bscCommitMessageHash(input: BscCommitMessageInput): string;
-export function canonicalBscCommitSealBytes(input: BscCommitSealInput): Uint8Array;
+export function canonicalBscCommitSealBytes(
+  input: BscCommitSealInput,
+): Uint8Array;
 export function bscCommitSealHash(input: BscCommitSealInput): string;
 export function bscValidatorSetPayloadFromParliaExtra(
   extraData: BinaryLike,
@@ -7435,11 +7451,9 @@ export interface TairaXorRouteHashInput {
   asset_key_hash?: string;
 }
 
-export interface TairaXorTransferPayloadHashInput
-  extends TairaXorTransferPayloadInput {}
+export interface TairaXorTransferPayloadHashInput extends TairaXorTransferPayloadInput {}
 
-export interface TairaXorBurnSourceEventDigestInput
-  extends TairaXorRouteHashInput {
+export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInput {
   bridgeAddress?: string | BinaryLike | number[];
   bridge_address?: string | BinaryLike | number[];
   burnerAddress?: string | BinaryLike | number[];
@@ -7463,8 +7477,7 @@ export interface TairaXorBurnSourceEventDigestInput
   burn_nonce?: string | number | bigint;
 }
 
-export interface TairaXorFinalizeFromTairaCallDataInput
-  extends Partial<TairaXorTransferPayloadInput> {
+export interface TairaXorFinalizeFromTairaCallDataInput extends Partial<TairaXorTransferPayloadInput> {
   proofBytes?: BinaryLike | number[];
   proof_bytes?: BinaryLike | number[];
   publicInputs?: SccpMessageTransparentPublicInputsInput;
@@ -7485,8 +7498,7 @@ export interface TairaXorFinalizeFromTairaCallDataInput
   payload_bytes?: BinaryLike | number[];
 }
 
-export interface TairaXorBurnToTairaCallDataInput
-  extends TairaXorRouteHashInput {
+export interface TairaXorBurnToTairaCallDataInput extends TairaXorRouteHashInput {
   tairaRecipientBytes?: BinaryLike | number[];
   taira_recipient_bytes?: BinaryLike | number[];
   /** Canonical TAIRA I105 account id when provided as text; use tairaRecipientBytes for raw bytes. */
@@ -7500,8 +7512,7 @@ export interface TairaXorBurnToTairaCallDataInput
   amount: string | number | bigint;
 }
 
-export interface TairaXorBurnToTairaAccountCallDataInput
-  extends TairaXorRouteHashInput {
+export interface TairaXorBurnToTairaAccountCallDataInput extends TairaXorRouteHashInput {
   /** Canonical TAIRA I105 account id; raw bytes, hex strings, and aliases are rejected. */
   tairaRecipient?: string;
   /** Canonical TAIRA I105 account id; raw bytes, hex strings, and aliases are rejected. */
@@ -7513,11 +7524,9 @@ export interface TairaXorBurnToTairaAccountCallDataInput
   amount: string | number | bigint;
 }
 
-export interface TairaXorBscBurnToTairaCallDataInput
-  extends TairaXorBurnToTairaCallDataInput {}
+export interface TairaXorBscBurnToTairaCallDataInput extends TairaXorBurnToTairaCallDataInput {}
 
-export interface TairaXorBscBurnToTairaAccountCallDataInput
-  extends TairaXorBurnToTairaAccountCallDataInput {}
+export interface TairaXorBscBurnToTairaAccountCallDataInput extends TairaXorBurnToTairaAccountCallDataInput {}
 
 export function tairaXorRouteIdHash(routeId?: string): string;
 export function tairaXorBscRouteIdHash(routeId?: string): string;
@@ -7647,12 +7656,14 @@ export function sccpTonFullLightClientGateHash(
   input: SccpSourceAdapterEngineDeploymentInput,
 ): string;
 export function sccpSourceAdapterVerifierVkHash(
-  input: SccpDomainIdInput | {
-    sourceDomain?: SccpDomainIdInput;
-    source_domain?: SccpDomainIdInput;
-    targetDomain?: SccpDomainIdInput;
-    target_domain?: SccpDomainIdInput;
-  },
+  input:
+    | SccpDomainIdInput
+    | {
+        sourceDomain?: SccpDomainIdInput;
+        source_domain?: SccpDomainIdInput;
+        targetDomain?: SccpDomainIdInput;
+        target_domain?: SccpDomainIdInput;
+      },
 ): string;
 export function sccpGroth16Bn254PublicSignalWords(
   input: SccpGroth16Bn254PublicSignalsInput,
@@ -8065,8 +8076,7 @@ export interface ZkAtPolicyCommitment {
   policy_digest: number[] | null;
 }
 
-export interface ZkAtAuthenticatorEnvelopeInput
-  extends ZkAtPolicyCommitmentInput {
+export interface ZkAtAuthenticatorEnvelopeInput extends ZkAtPolicyCommitmentInput {
   backend?: PrivacyBackendTag;
   backendTag?: PrivacyBackendTag;
   backend_tag?: PrivacyBackendTag;
@@ -8121,8 +8131,7 @@ export interface ZkAtDevProofFixture {
   envelope: Buffer;
 }
 
-export interface ZkAtAuthenticatorLocalVerificationInput
-  extends ZkAtAuthenticatorEnvelopeInput {
+export interface ZkAtAuthenticatorLocalVerificationInput extends ZkAtAuthenticatorEnvelopeInput {
   envelope?: BinaryLike;
   proofEnvelope?: BinaryLike;
   proof_envelope?: BinaryLike;
@@ -8202,8 +8211,7 @@ export interface ZkAmsAdmissionBatch {
   root_kind: "dev-sha256-admission-batch-root";
 }
 
-export interface ZkAmsAdmissionProofEnvelopeInput
-  extends ZkAmsAdmissionBatchInput {
+export interface ZkAmsAdmissionProofEnvelopeInput extends ZkAmsAdmissionBatchInput {
   backend?: PrivacyBackendTag;
   backendTag?: PrivacyBackendTag;
   backend_tag?: PrivacyBackendTag;
@@ -8244,8 +8252,7 @@ export interface ZkAmsAdmissionDevProofFixture {
   envelope: Buffer;
 }
 
-export interface ZkAmsAdmissionLocalVerificationInput
-  extends ZkAmsAdmissionBatchInput {
+export interface ZkAmsAdmissionLocalVerificationInput extends ZkAmsAdmissionBatchInput {
   envelope?: BinaryLike;
   proofEnvelope?: BinaryLike;
   proof_envelope?: BinaryLike;
@@ -8309,8 +8316,7 @@ export interface VegaCredentialPredicateCommitment {
   predicate_digest: number[] | null;
 }
 
-export interface VegaCredentialProofEnvelopeInput
-  extends VegaCredentialPredicateCommitmentInput {
+export interface VegaCredentialProofEnvelopeInput extends VegaCredentialPredicateCommitmentInput {
   backend?: PrivacyBackendTag;
   backendTag?: PrivacyBackendTag;
   backend_tag?: PrivacyBackendTag;
@@ -8371,8 +8377,7 @@ export interface VegaCredentialDevProofFixture {
   envelope: Buffer;
 }
 
-export interface VegaCredentialLocalVerificationInput
-  extends VegaCredentialProofEnvelopeInput {
+export interface VegaCredentialLocalVerificationInput extends VegaCredentialProofEnvelopeInput {
   envelope?: BinaryLike;
   proofEnvelope?: BinaryLike;
   proof_envelope?: BinaryLike;
@@ -8477,8 +8482,7 @@ export interface SilentThresholdCredentialCommitments {
   source_digests: Record<string, number[] | null>;
 }
 
-export interface SilentThresholdCredentialEnvelopeInput
-  extends SilentThresholdCredentialCommitmentsInput {
+export interface SilentThresholdCredentialEnvelopeInput extends SilentThresholdCredentialCommitmentsInput {
   backend?: PrivacyBackendTag;
   backendTag?: PrivacyBackendTag;
   backend_tag?: PrivacyBackendTag;
@@ -8522,8 +8526,7 @@ export interface SilentThresholdCredentialDevProofFixture {
   envelope: Buffer;
 }
 
-export interface SilentThresholdCredentialLocalVerificationInput
-  extends SilentThresholdCredentialCommitmentsInput {
+export interface SilentThresholdCredentialLocalVerificationInput extends SilentThresholdCredentialCommitmentsInput {
   envelope?: BinaryLike;
   proofEnvelope?: BinaryLike;
   proof_envelope?: BinaryLike;
@@ -8641,8 +8644,7 @@ export interface ZkX509IdentityCommitments {
   source_digests: Record<string, number[] | null>;
 }
 
-export interface ZkX509IdentityEnvelopeInput
-  extends ZkX509IdentityCommitmentsInput {
+export interface ZkX509IdentityEnvelopeInput extends ZkX509IdentityCommitmentsInput {
   backend?: PrivacyBackendTag;
   backendTag?: PrivacyBackendTag;
   backend_tag?: PrivacyBackendTag;
@@ -8686,8 +8688,7 @@ export interface ZkX509IdentityDevProofFixture {
   envelope: Buffer;
 }
 
-export interface ZkX509IdentityLocalVerificationInput
-  extends ZkX509IdentityCommitmentsInput {
+export interface ZkX509IdentityLocalVerificationInput extends ZkX509IdentityCommitmentsInput {
   envelope?: BinaryLike;
   proofEnvelope?: BinaryLike;
   proof_envelope?: BinaryLike;
@@ -8811,8 +8812,7 @@ export interface JindoLatticePublicInputsDescriptor {
   source_digests: Record<string, number[] | null>;
 }
 
-export interface JindoLatticeProofEnvelopeInput
-  extends JindoLatticePublicInputsInput {
+export interface JindoLatticeProofEnvelopeInput extends JindoLatticePublicInputsInput {
   backend?: PrivacyBackendTag;
   backendTag?: PrivacyBackendTag;
   backend_tag?: PrivacyBackendTag;
@@ -8851,8 +8851,7 @@ export interface JindoLatticeDevProofFixture {
   envelope: Buffer;
 }
 
-export interface JindoLatticeLocalVerificationInput
-  extends JindoLatticePublicInputsInput {
+export interface JindoLatticeLocalVerificationInput extends JindoLatticePublicInputsInput {
   envelope?: BinaryLike;
   proofEnvelope?: BinaryLike;
   proof_envelope?: BinaryLike;
@@ -8982,8 +8981,7 @@ export interface SisHintsCredentialCommitments {
   source_digests: Record<string, number[] | null>;
 }
 
-export interface SisHintsCredentialEnvelopeInput
-  extends SisHintsCredentialCommitmentsInput {
+export interface SisHintsCredentialEnvelopeInput extends SisHintsCredentialCommitmentsInput {
   backend?: PrivacyBackendTag;
   backendTag?: PrivacyBackendTag;
   backend_tag?: PrivacyBackendTag;
@@ -9026,8 +9024,7 @@ export interface SisHintsCredentialDevProofFixture {
   envelope: Buffer;
 }
 
-export interface SisHintsCredentialLocalVerificationInput
-  extends SisHintsCredentialCommitmentsInput {
+export interface SisHintsCredentialLocalVerificationInput extends SisHintsCredentialCommitmentsInput {
   envelope?: BinaryLike;
   proofEnvelope?: BinaryLike;
   proof_envelope?: BinaryLike;
@@ -9196,8 +9193,7 @@ export interface AnonymousPgcDevProofFixture {
   envelope: Buffer;
 }
 
-export interface AnonymousPgcDevProofLocalVerificationInput
-  extends AnonymousPgcDevProofFixtureInput {
+export interface AnonymousPgcDevProofLocalVerificationInput extends AnonymousPgcDevProofFixtureInput {
   envelope?: BinaryLike;
   proofEnvelope?: BinaryLike;
   proof_envelope?: BinaryLike;
@@ -9219,8 +9215,7 @@ export interface AnonymousPgcDevProofLocalVerificationResult {
   receiver_threshold: number;
 }
 
-export interface AnonymousPgcProofV1VerificationInput
-  extends AnonymousPgcDevProofFixtureInput {
+export interface AnonymousPgcProofV1VerificationInput extends AnonymousPgcDevProofFixtureInput {
   envelope?: BinaryLike;
   proofEnvelope?: BinaryLike;
   proof_envelope?: BinaryLike;
@@ -9242,8 +9237,7 @@ export interface AnonymousPgcProofV1VerificationResult {
   receiver_threshold: number;
 }
 
-export interface AnonymousPgcTransferInstructionInput
-  extends AnonymousPgcProofV1VerificationInput {}
+export interface AnonymousPgcTransferInstructionInput extends AnonymousPgcProofV1VerificationInput {}
 
 export interface AnonymousPgcTransferInstruction {
   kind: "zk::SubmitAnonymousPgcTransfer";
@@ -9390,8 +9384,7 @@ export interface VeRangeLocalVerificationResult {
   aux_bytes: number;
 }
 
-export interface VeRangeProofV1VerificationInput
-  extends VeRangeLocalVerificationInput {}
+export interface VeRangeProofV1VerificationInput extends VeRangeLocalVerificationInput {}
 
 export interface VeRangeProofV1VerificationResult {
   ok: true;
@@ -9463,8 +9456,7 @@ export interface PrivacyVerifierKeyRecordInput {
   status?: "Proposed" | "Active" | "Withdrawn" | string;
 }
 
-export interface RegisterPrivacyVerifierKeyInstructionInput
-  extends PrivacyVerifierKeyRecordInput {
+export interface RegisterPrivacyVerifierKeyInstructionInput extends PrivacyVerifierKeyRecordInput {
   id?: VerifyingKeyIdLike;
   verifierKey?: VerifyingKeyIdLike;
   verifierKeyId?: VerifyingKeyIdLike;
@@ -9477,8 +9469,7 @@ export interface RegisterPrivacyVerifierKeyInstructionInput
   verifyingKeyRecord?: PrivacyVerifierKeyRecordInput;
 }
 
-export interface RetirePrivacyVerifierKeyInstructionInput
-  extends RegisterPrivacyVerifierKeyInstructionInput {}
+export interface RetirePrivacyVerifierKeyInstructionInput extends RegisterPrivacyVerifierKeyInstructionInput {}
 
 /**
  * Canonicalise an account identifier to i105.
@@ -9489,20 +9480,38 @@ export interface RetirePrivacyVerifierKeyInstructionInput
 export function normalizeAccountId(value: string, name?: string): string;
 export function ensureCanonicalAccountId(value: string, name?: string): string;
 export function normalizeI105AccountId(value: string, name?: string): string;
-export function tryNormalizeI105AccountId(value: unknown, name?: string): string | null;
-export function normalizeToriiAccountReference(value: unknown, name?: string): string;
+export function tryNormalizeI105AccountId(
+  value: unknown,
+  name?: string,
+): string | null;
+export function normalizeToriiAccountReference(
+  value: unknown,
+  name?: string,
+): string;
 export function normalizeAccountAliasFqn(value: string, name?: string): string;
-export function tryNormalizeAccountAliasFqn(value: unknown, name?: string): string | null;
+export function tryNormalizeAccountAliasFqn(
+  value: unknown,
+  name?: string,
+): string | null;
 
 /**
  * Canonicalise a public asset identifier to bare Base58 form.
  * Asset aliases (`name#dataspace` / `name#domain.dataspace`) must be resolved first.
  */
 export function normalizeAssetId(value: string, name?: string): string;
-export function normalizeAssetDefinitionId(value: string, name?: string): string;
-export function tryNormalizeAssetDefinitionId(value: unknown, name?: string): string | null;
+export function normalizeAssetDefinitionId(
+  value: string,
+  name?: string,
+): string;
+export function tryNormalizeAssetDefinitionId(
+  value: unknown,
+  name?: string,
+): string | null;
 export function normalizeAssetAliasFqn(value: string, name?: string): string;
-export function tryNormalizeAssetAliasFqn(value: unknown, name?: string): string | null;
+export function tryNormalizeAssetAliasFqn(
+  value: unknown,
+  name?: string,
+): string | null;
 
 /**
  * Canonicalise an internal asset-holding identifier in
@@ -9516,7 +9525,10 @@ export function composeAssetHoldingId(
   name?: string,
 ): string;
 export function extractAssetDefinitionId(value: string, name?: string): string;
-export function tryExtractAssetDefinitionId(value: unknown, name?: string): string | null;
+export function tryExtractAssetDefinitionId(
+  value: unknown,
+  name?: string,
+): string | null;
 export function assetReferencesMatch(left: unknown, right: unknown): boolean;
 
 /**
@@ -9658,8 +9670,7 @@ export interface AccountAssetIteratorOptions extends PaginationIteratorOptions {
   assetId?: string;
 }
 
-export interface AccountTransactionIteratorOptions
-  extends PaginationIteratorOptions {
+export interface AccountTransactionIteratorOptions extends PaginationIteratorOptions {
   assetId?: string;
 }
 
@@ -9778,8 +9789,7 @@ export interface SubscriptionPlanListOptions {
   signal?: AbortSignal;
 }
 
-export interface SubscriptionPlanIteratorOptions
-  extends SubscriptionPlanListOptions {
+export interface SubscriptionPlanIteratorOptions extends SubscriptionPlanListOptions {
   pageSize?: NumericLike;
   maxItems?: NumericLike;
 }
@@ -9949,8 +9959,7 @@ export interface CaptureSumeragiTelemetryOptions {
   timestamp?: number;
 }
 
-export interface AppendSumeragiTelemetryOptions
-  extends CaptureSumeragiTelemetryOptions {
+export interface AppendSumeragiTelemetryOptions extends CaptureSumeragiTelemetryOptions {
   fs?: {
     mkdir?: typeof import("node:fs/promises").mkdir;
     appendFile?: typeof import("node:fs/promises").appendFile;
@@ -11785,8 +11794,7 @@ export function exportConnectQueueEvidence(
   options?: ConnectQueueRootOptions,
 ): Promise<ConnectQueueEvidenceExportResult>;
 
-export interface BootstrapConnectPreviewOptions
-  extends ConnectSessionPreviewOptions {
+export interface BootstrapConnectPreviewOptions extends ConnectSessionPreviewOptions {
   register?: boolean;
   sessionOptions?: {
     node?: string | null;
@@ -11917,8 +11925,9 @@ export interface ConnectWebSocketParams {
   allowInsecure?: boolean;
 }
 
-export interface ConnectWebSocketDialOptions<T = unknown>
-  extends ConnectWebSocketParams {
+export interface ConnectWebSocketDialOptions<
+  T = unknown,
+> extends ConnectWebSocketParams {
   baseUrl: string;
   protocols?: ConnectWebSocketProtocols;
   websocketOptions?: unknown;
@@ -11928,8 +11937,9 @@ export interface ConnectWebSocketDialOptions<T = unknown>
   ) => void;
 }
 
-export interface ClientConnectWebSocketOptions<T = unknown>
-  extends ConnectWebSocketParams {
+export interface ClientConnectWebSocketOptions<
+  T = unknown,
+> extends ConnectWebSocketParams {
   protocols?: ConnectWebSocketProtocols;
   websocketOptions?: unknown;
   WebSocketImpl?: ConnectWebSocketConstructor<T>;
@@ -12224,8 +12234,7 @@ export interface ToriiGovernanceCouncilDeriveResponse {
   derived_by: string;
 }
 
-export interface ToriiGovernanceCouncilPersistRequest
-  extends ToriiGovernanceCouncilDeriveRequest {
+export interface ToriiGovernanceCouncilPersistRequest extends ToriiGovernanceCouncilDeriveRequest {
   authority?: string | null;
   privateKey?: string | null;
 }
@@ -12382,8 +12391,7 @@ export interface ToriiGovernanceZkBallotProofRequest {
   ballot: JsonValue;
 }
 
-export interface ToriiGovernanceBallotResponse
-  extends ToriiGovernanceDraftResponse {
+export interface ToriiGovernanceBallotResponse extends ToriiGovernanceDraftResponse {
   accepted: boolean;
   reason: string | null;
 }
@@ -13011,11 +13019,7 @@ export interface ToriiSccpCounterpartySubmissionTemplate {
   requiredArguments: ReadonlyArray<ToriiSccpSubmissionArgument>;
 }
 
-export type ToriiSccpChainFamily =
-  | "Evm"
-  | "Solana"
-  | "Ton"
-  | "Tron";
+export type ToriiSccpChainFamily = "Evm" | "Solana" | "Ton" | "Tron";
 
 export type ToriiSccpNormalizedCodecValue =
   | { kind: "TextUtf8"; value: string }
@@ -13536,8 +13540,7 @@ export interface SumeragiEvidenceRecordBase {
   recorded_ms: number;
 }
 
-export interface SumeragiDoubleVoteEvidenceRecord
-  extends SumeragiEvidenceRecordBase {
+export interface SumeragiDoubleVoteEvidenceRecord extends SumeragiEvidenceRecordBase {
   kind: "DoublePrepare" | "DoubleCommit";
   phase: "Prepare" | "Commit" | "NewView";
   height: number;
@@ -13548,8 +13551,7 @@ export interface SumeragiDoubleVoteEvidenceRecord
   block_hash_2: string;
 }
 
-export interface SumeragiInvalidQcEvidenceRecord
-  extends SumeragiEvidenceRecordBase {
+export interface SumeragiInvalidQcEvidenceRecord extends SumeragiEvidenceRecordBase {
   kind: "InvalidQc";
   height: number;
   view: number;
@@ -13559,8 +13561,7 @@ export interface SumeragiInvalidQcEvidenceRecord
   reason: string;
 }
 
-export interface SumeragiInvalidProposalEvidenceRecord
-  extends SumeragiEvidenceRecordBase {
+export interface SumeragiInvalidProposalEvidenceRecord extends SumeragiEvidenceRecordBase {
   kind: "InvalidProposal";
   height: number;
   view: number;
@@ -13570,8 +13571,7 @@ export interface SumeragiInvalidProposalEvidenceRecord
   reason: string;
 }
 
-export interface SumeragiCensorshipEvidenceRecord
-  extends SumeragiEvidenceRecordBase {
+export interface SumeragiCensorshipEvidenceRecord extends SumeragiEvidenceRecordBase {
   kind: "Censorship";
   tx_hash: string;
   receipt_count: number;
@@ -13580,8 +13580,7 @@ export interface SumeragiCensorshipEvidenceRecord
   signers: ReadonlyArray<string>;
 }
 
-export interface SumeragiUnknownEvidenceRecord
-  extends SumeragiEvidenceRecordBase {
+export interface SumeragiUnknownEvidenceRecord extends SumeragiEvidenceRecordBase {
   detail?: string;
 }
 
@@ -13927,8 +13926,7 @@ export interface RegisterSnsNameTransactionInput {
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
-export interface RegisterSnsNameViaConsensusInput
-  extends RegisterSnsNameTransactionInput {
+export interface RegisterSnsNameViaConsensusInput extends RegisterSnsNameTransactionInput {
   client?: ToriiClient;
   toriiUrl?: string;
   waitForCommit?: boolean;
@@ -13948,12 +13946,9 @@ export type KagemushaInstructionArchiveType =
   | "KagemushaTransfer"
   | "RedeemKagemushaRecursive";
 
-export const KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME:
-  "iroha_data_model::isi::offline::KagemushaTransfer";
-export const KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME:
-  "iroha_data_model::isi::offline::RedeemKagemushaRecursive";
-export const KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME:
-  "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
+export const KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME: "iroha_data_model::isi::offline::KagemushaTransfer";
+export const KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME: "iroha_data_model::isi::offline::RedeemKagemushaRecursive";
+export const KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
 
 export const OFFLINE_CASH_TRANSPORT_QR: "qr";
 export const OFFLINE_CASH_TRANSPORT_NFC: "nfc";
@@ -14007,7 +14002,9 @@ export function offlineCashAvailableTransportKinds(
 ): OfflineCashTransportKind[];
 
 export interface OfflineCashAuditReceiptSynchronizer {
-  readonly hasPendingAuditReceipts?: boolean | (() => boolean | Promise<boolean>);
+  readonly hasPendingAuditReceipts?:
+    | boolean
+    | (() => boolean | Promise<boolean>);
   syncPendingAuditReceipts(): void | Promise<void>;
 }
 
@@ -14036,8 +14033,7 @@ export interface KagemushaInstructionArchiveInput {
   bytes_base64?: string;
 }
 
-export interface KagemushaInstructionTransactionInput
-  extends KagemushaInstructionArchiveInput {
+export interface KagemushaInstructionTransactionInput extends KagemushaInstructionArchiveInput {
   chainId: string;
   authority: string;
   metadata?: MetadataLike;
@@ -14075,7 +14071,8 @@ export type KagemushaRecursiveRedeemArchiveInput =
     };
 
 export type KagemushaRecursiveRedeemTransactionInput =
-  KagemushaRecursiveRedeemTransactionBaseInput & KagemushaRecursiveRedeemArchiveInput;
+  KagemushaRecursiveRedeemTransactionBaseInput &
+    KagemushaRecursiveRedeemArchiveInput;
 
 export interface IvmProvedTransactionAssemblyInput {
   chainId: string;
@@ -14868,14 +14865,11 @@ export interface IsoMessageSubmissionResponseBase {
   asset_id: string | null;
 }
 
-export interface IsoPacs008SubmissionResponse
-  extends IsoMessageSubmissionResponseBase {}
+export interface IsoPacs008SubmissionResponse extends IsoMessageSubmissionResponseBase {}
 
-export interface IsoPacs009SubmissionResponse
-  extends IsoMessageSubmissionResponseBase {}
+export interface IsoPacs009SubmissionResponse extends IsoMessageSubmissionResponseBase {}
 
-export interface IsoMessageStatusResponse
-  extends IsoMessageSubmissionResponseBase {
+export interface IsoMessageStatusResponse extends IsoMessageSubmissionResponseBase {
   detail: string | null;
   updated_at_ms: number;
 }
@@ -16297,13 +16291,11 @@ export interface RemoveSmartContractBytesTransactionInput {
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
-export interface SubmitTransactionAndWaitOptions
-  extends TransactionStatusPollOptions {
+export interface SubmitTransactionAndWaitOptions extends TransactionStatusPollOptions {
   hashHex: string;
 }
 
-export interface SubmitOfflineSettlementAndWaitOptions
-  extends TransactionStatusPollOptions {
+export interface SubmitOfflineSettlementAndWaitOptions extends TransactionStatusPollOptions {
   signal?: AbortSignal;
 }
 
@@ -16554,7 +16546,9 @@ export declare class ToriiBrowserClient {
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listPendingMultisigApprovals(options?: Record<string, unknown>): Promise<unknown>;
+  listPendingMultisigApprovals(
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   getPendingMultisigApproval(
     operationId: string,
     options?: Record<string, unknown>,
@@ -17971,26 +17965,16 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME:
-  "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME:
-  "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME:
-  "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyRequestV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME:
-  "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME:
-  "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME:
-  "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME:
-  "iroha_data_model::offline::model::KagemushaVerifiedFoldRecordBundle";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME:
-  "iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1";
-export const KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME:
-  "iroha_data_model::proof::ProofAttachment";
-export const KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME:
-  "iroha_data_model::proof::VerifyingKeyRecord";
+export const KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyRequestV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1";
+export const KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME: "iroha_data_model::offline::model::KagemushaVerifiedFoldRecordBundle";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1";
+export const KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME: "iroha_data_model::proof::ProofAttachment";
+export const KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME: "iroha_data_model::proof::VerifyingKeyRecord";
 export class KagemushaRecursiveSpendRequestCodecError extends Error {
   readonly kind: "field" | "archive" | string;
   readonly field: string;
@@ -19732,15 +19716,25 @@ export function buildOrchardActionBundleProofV1(
 ): Buffer;
 
 export function buildOrchardActionBundleInstruction(
-  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+  input: PrivacyProofEnvelopeInput & {
+    proofEnvelope?: BinaryLike;
+    proof_envelope?: BinaryLike;
+  },
 ): ResearchProtocolInstruction;
 
-export function buildPenumbraSpendProofV1(input: PrivacyProofEnvelopeInput): Buffer;
+export function buildPenumbraSpendProofV1(
+  input: PrivacyProofEnvelopeInput,
+): Buffer;
 
-export function buildPenumbraOutputProofV1(input: PrivacyProofEnvelopeInput): Buffer;
+export function buildPenumbraOutputProofV1(
+  input: PrivacyProofEnvelopeInput,
+): Buffer;
 
 export function buildPenumbraShieldedPoolTransaction(
-  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+  input: PrivacyProofEnvelopeInput & {
+    proofEnvelope?: BinaryLike;
+    proof_envelope?: BinaryLike;
+  },
 ): ResearchProtocolInstruction;
 
 export function buildFcmpPlusPlusMembershipProofV1(
@@ -19748,7 +19742,10 @@ export function buildFcmpPlusPlusMembershipProofV1(
 ): Buffer;
 
 export function buildFcmpPlusPlusTransferInstruction(
-  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+  input: PrivacyProofEnvelopeInput & {
+    proofEnvelope?: BinaryLike;
+    proof_envelope?: BinaryLike;
+  },
 ): ResearchProtocolInstruction;
 
 export function buildMidenStarkTransactionProofV1(
@@ -19756,7 +19753,10 @@ export function buildMidenStarkTransactionProofV1(
 ): Buffer;
 
 export function buildMidenNoteTransactionInstruction(
-  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+  input: PrivacyProofEnvelopeInput & {
+    proofEnvelope?: BinaryLike;
+    proof_envelope?: BinaryLike;
+  },
 ): ResearchProtocolInstruction;
 
 export function buildAztecPrivateKernelProofV1(
@@ -19764,7 +19764,10 @@ export function buildAztecPrivateKernelProofV1(
 ): Buffer;
 
 export function buildAztecPrivateRollupTransactionInstruction(
-  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+  input: PrivacyProofEnvelopeInput & {
+    proofEnvelope?: BinaryLike;
+    proof_envelope?: BinaryLike;
+  },
 ): ResearchProtocolInstruction;
 
 export function buildPqMaspStarkTransferProofV0(
@@ -19772,11 +19775,17 @@ export function buildPqMaspStarkTransferProofV0(
 ): Buffer;
 
 export function buildPqMaspStarkRegisterPoolInstruction(
-  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+  input: PrivacyProofEnvelopeInput & {
+    proofEnvelope?: BinaryLike;
+    proof_envelope?: BinaryLike;
+  },
 ): ResearchProtocolInstruction;
 
 export function buildPqMaspStarkTransferInstruction(
-  input: PrivacyProofEnvelopeInput & { proofEnvelope?: BinaryLike; proof_envelope?: BinaryLike },
+  input: PrivacyProofEnvelopeInput & {
+    proofEnvelope?: BinaryLike;
+    proof_envelope?: BinaryLike;
+  },
 ): ResearchProtocolInstruction;
 
 export function generateMlDsaKeyPair(): never;
@@ -19795,9 +19804,7 @@ export function buildVeRangeProofEnvelope(
   input: VeRangeProofEnvelopeInput,
 ): Buffer;
 
-export function buildVeRangeProofV1(
-  input: VeRangeProofV1Input,
-): Buffer;
+export function buildVeRangeProofV1(input: VeRangeProofV1Input): Buffer;
 
 export function verifyVeRangeProofLocally(
   input: VeRangeLocalVerificationInput | BinaryLike,

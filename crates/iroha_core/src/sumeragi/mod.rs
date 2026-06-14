@@ -3246,6 +3246,84 @@ mod tests {
     }
 
     #[test]
+    fn incoming_block_message_allows_distinct_rbc_deliver_signatures() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let base_deliver = crate::sumeragi::consensus::RbcDeliver {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([4u8; 32])),
+            height: 5,
+            view: 2,
+            epoch: 0,
+            roster_hash: Hash::prehashed([0x22; 32]),
+            chunk_root: Hash::prehashed([5u8; 32]),
+            sender: 2,
+            signature: vec![0xAA],
+            ready_signatures: Vec::new(),
+        };
+        let mut alt_deliver = base_deliver.clone();
+        alt_deliver.signature = vec![0xBB];
+        alt_deliver
+            .ready_signatures
+            .push(crate::sumeragi::consensus::RbcReadySignature {
+                sender: 1,
+                signature: vec![0xCC],
+            });
+
+        handle.incoming_block_message(BlockMessage::RbcDeliver(base_deliver));
+        handle.incoming_block_message(BlockMessage::RbcDeliver(alt_deliver));
+
+        let received: Vec<_> = rbc_chunk_rx.try_iter().collect();
+        assert_eq!(received.len(), 2);
+        assert!(received.iter().all(|msg| {
+            matches!(
+                msg,
+                InboundBlockMessage {
+                    message: BlockMessage::RbcDeliver(_),
+                    ..
+                }
+            )
+        }));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
     fn incoming_block_message_routes_block_created_via_payload_ingress_queue() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -12508,7 +12586,10 @@ impl SumeragiHandle {
                     ..
                 } = dedup_key
                 else {
-                    unreachable!("block sync dedup helper must return block sync update key");
+                    iroha_logger::warn!(
+                        "block sync dedup helper returned a non-BlockSyncUpdate key; dropping message"
+                    );
+                    return false;
                 };
                 let duplicate = !self.dedup_block_payload(dedup_key);
                 if duplicate {
@@ -15988,8 +16069,10 @@ impl SumeragiWorker {
                 iroha_logger::warn!(?err, "sumeragi validation worker thread exited with error");
             }
         }
-        if let Err(err) = commit_worker_join.join() {
-            iroha_logger::warn!(?err, "sumeragi commit worker thread exited with error");
+        if let Some(join) = commit_worker_join {
+            if let Err(err) = join.join() {
+                iroha_logger::warn!(?err, "sumeragi commit worker thread exited with error");
+            }
         }
         for join in qc_verify_worker_joins {
             if let Err(err) = join.join() {

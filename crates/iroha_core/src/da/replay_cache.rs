@@ -38,20 +38,11 @@ impl LaneEpoch {
 pub struct ReplayFingerprint([u8; blake3::OUT_LEN]);
 
 impl ReplayFingerprint {
-    /// Construct a fingerprint from a raw Blake3 hash output.
-    ///
-    /// # Panics
-    /// Panics if the provided slice does not have the expected length.
+    /// Try to construct a fingerprint from raw Blake3 hash output bytes.
     #[must_use]
-    pub fn from_hash_bytes(bytes: &[u8]) -> Self {
-        assert_eq!(
-            bytes.len(),
-            blake3::OUT_LEN,
-            "fingerprint must match blake3 output length"
-        );
-        let mut buf = [0u8; blake3::OUT_LEN];
-        buf.copy_from_slice(bytes);
-        Self(buf)
+    pub fn try_from_hash_bytes(bytes: &[u8]) -> Option<Self> {
+        let bytes = <[u8; blake3::OUT_LEN]>::try_from(bytes).ok()?;
+        Some(Self(bytes))
     }
 
     /// Construct a fingerprint from a [`blake3::Hash`].
@@ -126,10 +117,16 @@ impl ReplayCacheConfig {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            max_entries_per_lane: NonZeroUsize::new(Self::DEFAULT_CAPACITY)
-                .expect("DEFAULT_CAPACITY must be non-zero"),
+            max_entries_per_lane: Self::default_capacity(),
             ttl: Self::DEFAULT_TTL,
             max_sequence_lag: Self::DEFAULT_SEQUENCE_LAG,
+        }
+    }
+
+    fn default_capacity() -> NonZeroUsize {
+        match NonZeroUsize::new(Self::DEFAULT_CAPACITY) {
+            Some(capacity) => capacity,
+            None => NonZeroUsize::MIN,
         }
     }
 
@@ -267,15 +264,13 @@ impl ReplayCache {
             let updated = lane_state.highest_sequence.max(key.sequence);
             lane_state.highest_sequence = updated;
             lane_state.entries.insert(key.sequence, entry);
-            lane_state.enforce_capacity(&self.config);
+            lane_state.enforce_capacity(&self.config, Some(key.sequence));
 
-            ReplayInsertOutcome::Fresh {
-                snapshot: lane_state
-                    .entries
-                    .get(&key.sequence)
-                    .expect("entry must exist after insertion")
-                    .snapshot(key.sequence),
-            }
+            let snapshot = lane_state.entries.get(&key.sequence).map_or_else(
+                || entry.snapshot(key.sequence),
+                |entry| entry.snapshot(key.sequence),
+            );
+            ReplayInsertOutcome::Fresh { snapshot }
         }
     }
 
@@ -359,11 +354,14 @@ impl LaneState {
         self.entries.is_empty() && self.stale_floor.is_none()
     }
 
-    fn enforce_capacity(&mut self, config: &ReplayCacheConfig) {
+    fn enforce_capacity(&mut self, config: &ReplayCacheConfig, protected_sequence: Option<u64>) {
         let max_entries = config.max_entries_per_lane.get();
         while self.entries.len() > max_entries {
-            if let Some((&sequence, _)) =
-                self.entries.iter().min_by_key(|(_, entry)| entry.last_seen)
+            if let Some((&sequence, _)) = self
+                .entries
+                .iter()
+                .filter(|(sequence, _)| Some(**sequence) != protected_sequence)
+                .min_by_key(|(_, entry)| entry.last_seen)
             {
                 self.entries.remove(&sequence);
             } else {
@@ -409,6 +407,33 @@ mod tests {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&[seed]);
         ReplayFingerprint::from_hash(hasher.finalize())
+    }
+
+    #[test]
+    fn try_from_hash_bytes_rejects_malformed_lengths() {
+        let bytes = [7u8; blake3::OUT_LEN];
+        assert_eq!(
+            ReplayFingerprint::try_from_hash_bytes(&bytes),
+            Some(ReplayFingerprint::from(bytes)),
+        );
+        assert_eq!(
+            ReplayFingerprint::try_from_hash_bytes(&bytes[..blake3::OUT_LEN - 1]),
+            None,
+        );
+
+        let mut oversized = Vec::from(bytes);
+        oversized.push(8);
+        assert_eq!(ReplayFingerprint::try_from_hash_bytes(&oversized), None);
+    }
+
+    #[test]
+    fn default_config_uses_declared_nonzero_capacity() {
+        let config = ReplayCacheConfig::new();
+        assert_eq!(
+            config.max_entries_per_lane.get(),
+            ReplayCacheConfig::DEFAULT_CAPACITY
+        );
+        assert!(ReplayCacheConfig::DEFAULT_CAPACITY > 0);
     }
 
     #[test]
@@ -555,6 +580,51 @@ mod tests {
         }
 
         assert_eq!(cache.len_for_lane_epoch(lane_epoch), capacity.get());
+    }
+
+    #[test]
+    fn capacity_eviction_preserves_new_insert_when_timestamp_is_oldest() {
+        let capacity = NonZeroUsize::new(2).unwrap();
+        let cache = ReplayCache::new(
+            ReplayCacheConfig::new()
+                .with_max_entries_per_lane(capacity)
+                .with_max_sequence_lag(u64::MAX),
+        );
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 1);
+        let base = Instant::now();
+
+        assert!(matches!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 10, fingerprint(10)),
+                base + Duration::from_millis(10),
+            ),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
+        assert!(matches!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 11, fingerprint(11)),
+                base + Duration::from_millis(11),
+            ),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
+
+        let key = ReplayKey::new(lane_epoch, 12, fingerprint(12));
+        match cache.insert(key, base) {
+            ReplayInsertOutcome::Fresh { snapshot } => {
+                assert_eq!(snapshot.sequence, 12);
+                assert_eq!(snapshot.last_seen, base);
+            }
+            other => panic!("expected protected fresh insert, got {other:?}"),
+        }
+        assert_eq!(cache.len_for_lane_epoch(lane_epoch), capacity.get());
+
+        match cache.insert(key, base + Duration::from_millis(12)) {
+            ReplayInsertOutcome::Duplicate { snapshot } => {
+                assert_eq!(snapshot.sequence, 12);
+                assert_eq!(snapshot.hit_count, 2);
+            }
+            other => panic!("protected insert should remain cached, got {other:?}"),
+        }
     }
 
     #[test]

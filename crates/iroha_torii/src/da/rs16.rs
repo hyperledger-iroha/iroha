@@ -184,11 +184,25 @@ where
 
     if row_parity > 0 {
         let column_count = data_shards + parity_shards;
-        let base_offset = request.total_size.saturating_add(
-            stripes
-                .saturating_mul(parity_shards)
-                .saturating_mul(chunk_size) as u64,
-        );
+        let global_parity_bytes = stripes
+            .checked_mul(parity_shards)
+            .and_then(|count| count.checked_mul(chunk_size))
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "stripe parity base offset exceeded supported size".into(),
+                )
+            })?;
+        let base_offset = request
+            .total_size
+            .checked_add(global_parity_bytes)
+            .ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "stripe parity base offset exceeded supported size".into(),
+                )
+            })?;
         for column in 0..column_count {
             // Collect the column symbols across stripes.
             let mut column_symbols = Vec::with_capacity(stripes);
@@ -212,10 +226,30 @@ where
             for (row_parity_idx, symbols) in parity_cols.iter().enumerate() {
                 let digest = digest_symbols_le(symbols, &mut hash_scratch);
 
-                let offset = base_offset.saturating_add(
-                    ((row_parity_idx * column_count + column) as u64)
-                        .saturating_mul(request.chunk_size as u64),
-                );
+                let row_parity_chunk_index = row_parity_idx
+                    .checked_mul(column_count)
+                    .and_then(|base| base.checked_add(column))
+                    .and_then(|index| u64::try_from(index).ok())
+                    .ok_or_else(|| {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            "stripe parity chunk offset exceeded supported size".into(),
+                        )
+                    })?;
+                let row_parity_bytes = row_parity_chunk_index
+                    .checked_mul(u64::from(request.chunk_size))
+                    .ok_or_else(|| {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            "stripe parity chunk offset exceeded supported size".into(),
+                        )
+                    })?;
+                let offset = base_offset.checked_add(row_parity_bytes).ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        "stripe parity chunk offset exceeded supported size".into(),
+                    )
+                })?;
                 let index = allocate_chunk_index(&mut next_index)?;
                 parity_observer(index, symbols)?;
                 let column_id = u32::try_from(column).unwrap_or(u32::MAX);

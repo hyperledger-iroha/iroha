@@ -486,17 +486,21 @@ fn npos_shuffled_indices(seed: [u8; 32], height: u64, len: usize) -> Vec<usize> 
     let mut shuffled = Vec::with_capacity(len);
     let mut ctr: u64 = 0;
     while !slots.is_empty() {
-        let pos = npos_shuffle_prf_slot(seed, height, ctr, slots.len());
+        let Some(pos) = npos_shuffle_prf_slot(seed, height, ctr, slots.len()) else {
+            break;
+        };
         shuffled.push(slots.swap_remove(pos));
         ctr = ctr.saturating_add(1);
     }
     shuffled
 }
 
-fn npos_shuffle_prf_slot(seed: [u8; 32], height: u64, ctr: u64, modulus: usize) -> usize {
+fn npos_shuffle_prf_slot(seed: [u8; 32], height: u64, ctr: u64, modulus: usize) -> Option<usize> {
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
 
-    debug_assert!(modulus > 0);
+    if modulus == 0 {
+        return None;
+    }
 
     let mut hasher = Blake2b512::new();
     iroha_crypto::blake2::digest::Update::update(&mut hasher, &seed);
@@ -505,8 +509,10 @@ fn npos_shuffle_prf_slot(seed: [u8; 32], height: u64, ctr: u64, modulus: usize) 
     let digest = iroha_crypto::blake2::Digest::finalize(hasher);
     let mut w = [0u8; 8];
     w.copy_from_slice(&digest[..8]);
-    let modulus = u128::try_from(modulus).expect("candidate length fits u128");
-    (u128::from(u64::from_be_bytes(w)) % modulus) as usize
+    let Ok(modulus) = u128::try_from(modulus) else {
+        return None;
+    };
+    usize::try_from(u128::from(u64::from_be_bytes(w)) % modulus).ok()
 }
 
 fn canonicalize_index_for_view(
@@ -1085,6 +1091,22 @@ mod tests {
             ),
             vec![0, 1, 2],
             "canonicalized offender indices are deduplicated and sorted"
+        );
+    }
+
+    #[test]
+    fn npos_shuffle_prf_slot_rejects_zero_modulus_and_stays_bounded() {
+        let seed = [0x13_u8; 32];
+
+        assert_eq!(
+            npos_shuffle_prf_slot(seed, 7, 0, 0),
+            None,
+            "empty candidate sets cannot select a shuffle slot"
+        );
+        let slot = npos_shuffle_prf_slot(seed, 7, 0, 5).expect("non-empty candidate set");
+        assert!(
+            slot < 5,
+            "shuffle slot must stay inside the current candidate set"
         );
     }
 

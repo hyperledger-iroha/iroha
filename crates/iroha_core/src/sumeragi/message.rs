@@ -6,6 +6,7 @@ use iroha_data_model::{
     block::{BlockHeader, BlockSignature, SignedBlock, consensus::SumeragiMembershipStatus},
     peer::PeerId,
 };
+use iroha_logger::prelude::*;
 use iroha_macro::*;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
@@ -69,6 +70,12 @@ pub enum BlockMessage {
 }
 
 impl BlockMessage {
+    /// Local no-op sentinel used only when an infallible legacy decode/encode path must return a
+    /// valid message after a wire-codec failure.
+    pub(super) fn invalid_wire_sentinel() -> Self {
+        Self::ConsensusParams(ConsensusParamsAdvert::invalid_wire_sentinel())
+    }
+
     /// Normalize compact message variants into their full forms.
     pub fn normalize(self) -> Self {
         match self {
@@ -192,7 +199,14 @@ impl BlockMessageWire {
 
     /// Consume the wrapper and return the consensus message.
     pub fn into_message(self) -> BlockMessage {
-        Arc::try_unwrap(self.message).unwrap_or_else(|arc| (*arc).clone())
+        let message = self.message;
+        if Arc::strong_count(&message) == 1 {
+            return match Arc::into_inner(message) {
+                Some(message) => message,
+                None => BlockMessage::invalid_wire_sentinel(),
+            };
+        }
+        (*message).clone()
     }
 
     /// Cached encoded length if available.
@@ -253,8 +267,34 @@ impl BlockMessageWire {
             .ok_or(ncore::Error::LengthMismatch)
     }
 
+    pub(crate) fn try_encode_message(message: &BlockMessage) -> Result<Vec<u8>, ncore::Error> {
+        ncore::to_bytes(message)
+    }
+
     pub(crate) fn encode_message(message: &BlockMessage) -> Vec<u8> {
-        ncore::to_bytes(message).expect("encode block message")
+        match Self::try_encode_message(message) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                error!(
+                    %error,
+                    "failed to pre-encode Sumeragi block message; substituting invalid-wire sentinel"
+                );
+                Self::encode_invalid_wire_sentinel()
+            }
+        }
+    }
+
+    fn encode_invalid_wire_sentinel() -> Vec<u8> {
+        match ncore::to_bytes(&BlockMessage::invalid_wire_sentinel()) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                error!(
+                    %error,
+                    "failed to encode Sumeragi invalid-wire sentinel"
+                );
+                Vec::new()
+            }
+        }
     }
 }
 
@@ -284,7 +324,7 @@ impl NoritoSerialize for BlockMessageWire {
             writer.write_all(encoded)?;
             return Ok(());
         }
-        let encoded = Self::encode_message(self.message.as_ref());
+        let encoded = Self::try_encode_message(self.message.as_ref())?;
         writer.write_all(&encoded)?;
         Ok(())
     }
@@ -292,7 +332,16 @@ impl NoritoSerialize for BlockMessageWire {
 
 impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
-        Self::try_deserialize(archived).expect("decode block message wire")
+        match Self::try_deserialize(archived) {
+            Ok(wire) => wire,
+            Err(error) => {
+                error!(
+                    %error,
+                    "failed to decode Sumeragi block message through infallible Norito path"
+                );
+                Self::new(BlockMessage::invalid_wire_sentinel())
+            }
+        }
     }
 
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
@@ -416,6 +465,22 @@ pub struct ConsensusParamsAdvert {
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub membership: Option<SumeragiMembershipStatus>,
+}
+
+impl ConsensusParamsAdvert {
+    /// Local no-op sentinel for invalid infallible wire fallback paths.
+    pub(super) const fn invalid_wire_sentinel() -> Self {
+        Self {
+            collectors_k: 0,
+            redundant_send_r: 0,
+            membership: None,
+        }
+    }
+
+    /// Whether this advert is the local invalid-wire sentinel.
+    pub(super) fn is_invalid_wire_sentinel(&self) -> bool {
+        self.collectors_k == 0 && self.redundant_send_r == 0 && self.membership.is_none()
+    }
 }
 
 /// `BlockCreated` message structure.
@@ -1024,6 +1089,13 @@ mod tests {
         assert_eq!(u64::from(compact.epoch), chunk.epoch);
         assert_eq!(compact.idx, chunk.idx);
         assert_eq!(compact.bytes, chunk.bytes);
+    }
+
+    fn assert_invalid_wire_sentinel(message: &BlockMessage) {
+        match message {
+            BlockMessage::ConsensusParams(advert) => assert!(advert.is_invalid_wire_sentinel()),
+            other => panic!("expected invalid-wire sentinel, got {other:?}"),
+        }
     }
 
     fn roundtrip_cached_block_message_over_network_message(
@@ -1915,6 +1987,33 @@ mod tests {
             BlockMessage::QcVote(decoded_vote) => assert_eq!(decoded_vote, vote),
             other => panic!("expected qc vote, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn invalid_wire_sentinel_is_identified_and_self_describing() {
+        let advert = ConsensusParamsAdvert::invalid_wire_sentinel();
+        assert!(advert.is_invalid_wire_sentinel());
+        let msg = BlockMessage::invalid_wire_sentinel();
+        assert_invalid_wire_sentinel(&msg);
+
+        let encoded =
+            BlockMessageWire::try_encode_message(&msg).expect("encode invalid-wire sentinel");
+        assert_eq!(BlockMessageWire::encode_message(&msg), encoded);
+
+        let decoded = decode_from_bytes::<BlockMessage>(&encoded).expect("decode sentinel frame");
+        assert_invalid_wire_sentinel(&decoded);
+    }
+
+    #[test]
+    fn block_message_wire_into_message_clones_shared_arc() {
+        let msg = Arc::new(BlockMessage::invalid_wire_sentinel());
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
+        let wire = BlockMessageWire::with_encoded(Arc::clone(&msg), encoded);
+
+        let message = wire.into_message();
+
+        assert_invalid_wire_sentinel(&message);
+        assert_eq!(Arc::strong_count(&msg), 1);
     }
 
     #[test]

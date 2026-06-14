@@ -21,7 +21,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::panic_hook;
 
-use super::main_loop::RBC_MAX_TOTAL_CHUNKS;
+use super::main_loop::{RBC_MAX_TOTAL_CHUNKS, RbcPayloadLayout, RbcSessionError};
 
 /// Persisted metadata describing the node software that produced the snapshot.
 #[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
@@ -363,9 +363,8 @@ impl ChunkStore {
         let encoded = to_bytes(persisted).map_err(io::Error::other)?;
         {
             let mut file = fs::OpenOptions::new()
-                .create(true)
+                .create_new(true)
                 .write(true)
-                .truncate(true)
                 .open(&tmp)?;
             file.write_all(&encoded)?;
             file.sync_all()?;
@@ -1386,6 +1385,8 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
     if session.total_chunks > RBC_MAX_TOTAL_CHUNKS {
         return Err("total chunks exceeds cap");
     }
+    let layout = validate_layout(session)?;
+    validate_persisted_reconstruction_counters(layout, session.reconstructed_stripes)?;
     if !session.ready_signatures.is_empty() && session.session_roster.is_empty() {
         return Err("READY metadata without session roster");
     }
@@ -1436,6 +1437,7 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
             return Err("chunk index exceeds expected count");
         }
     }
+    validate_persisted_chunk_lengths(layout, &session.chunks)?;
 
     let mut ready_seen = BTreeSet::new();
     for ready in &session.ready_signatures {
@@ -1508,6 +1510,99 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
     }
 
     Ok(())
+}
+
+pub(super) fn validate_persisted_chunk_lengths(
+    layout: RbcPayloadLayout,
+    chunks: &[PersistedChunk],
+) -> Result<(), &'static str> {
+    for chunk in chunks {
+        if let Some(expected_len) = layout.expected_chunk_len_for_encoded(chunk.idx as usize)
+            && chunk.bytes.len() != expected_len
+        {
+            return Err("chunk length mismatch");
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_persisted_legacy_layout_metadata(
+    encoding: RbcEncoding,
+    payload_size_bytes: u64,
+    data_shards: u16,
+    parity_shards: u16,
+) -> Result<(), &'static str> {
+    if !matches!(encoding, RbcEncoding::Plain) {
+        return Err("legacy layout has non-plain encoding");
+    }
+    if payload_size_bytes != 0 {
+        return Err("legacy layout has payload size");
+    }
+    if data_shards != 0 || parity_shards != 0 {
+        return Err("legacy layout has erasure profile");
+    }
+    Ok(())
+}
+
+pub(super) fn validate_persisted_reconstruction_counters(
+    layout: RbcPayloadLayout,
+    reconstructed_stripes: u32,
+) -> Result<(), &'static str> {
+    if reconstructed_stripes == 0 {
+        return Ok(());
+    }
+    if !layout.is_rs16() {
+        return Err("plain session has reconstructed stripes");
+    }
+    let Some(stripe_count) = layout
+        .stripe_count()
+        .and_then(|count| u32::try_from(count).ok())
+    else {
+        return Err("stripe count exceeds supported range");
+    };
+    if reconstructed_stripes > stripe_count {
+        return Err("reconstructed stripe count exceeds stripe count");
+    }
+    Ok(())
+}
+
+fn validate_layout(session: &PersistedSession) -> Result<RbcPayloadLayout, &'static str> {
+    if session.chunk_size_bytes == 0 {
+        validate_persisted_legacy_layout_metadata(
+            session.encoding,
+            session.payload_size_bytes,
+            session.data_shards,
+            session.parity_shards,
+        )?;
+        return Ok(RbcPayloadLayout::legacy_plain());
+    }
+
+    let layout = RbcPayloadLayout::new(
+        session.encoding,
+        session.chunk_size_bytes,
+        session.payload_size_bytes,
+        session.data_shards,
+        session.parity_shards,
+    )
+    .map_err(|err| match err {
+        RbcSessionError::InvalidChunkSize { .. } => "invalid chunk size",
+        RbcSessionError::InvalidErasureProfile { .. } => "invalid erasure profile",
+        RbcSessionError::LayoutChunkCountMismatch { .. } => "layout chunk count mismatch",
+        RbcSessionError::TooManyChunks { .. } => "total chunks exceeds cap",
+        RbcSessionError::DigestCountMismatch { .. } => "chunk digest count mismatch",
+    })?;
+
+    let Some(expected_total_chunks) = layout
+        .total_chunks()
+        .and_then(|count| u32::try_from(count).ok())
+    else {
+        return Err("layout chunk count exceeds supported range");
+    };
+    if expected_total_chunks != session.total_chunks {
+        return Err("layout chunk count mismatch");
+    }
+
+    Ok(layout)
 }
 
 #[cfg(test)]
@@ -1708,6 +1803,33 @@ mod tests {
         let path = Path::new("/var/lib/iroha/rbc/session_a.norito");
         let tmp = temp_session_path(path);
         assert_eq!(tmp, Path::new("/var/lib/iroha/rbc/session_a.norito.tmp"));
+    }
+
+    #[test]
+    fn write_session_rejects_existing_temp_snapshot_without_truncating() {
+        let dir = tempdir().expect("tempdir");
+        let store = store_for_tests(dir.path());
+        let key = session_key(0x91);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest);
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp = temp_session_path(&path);
+        fs::write(&tmp, b"existing-rbc-session-temp").expect("seed temp snapshot");
+
+        let err = store
+            .write_session(&persisted)
+            .expect_err("existing temp snapshot should reject session persistence");
+
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read(&tmp).expect("read temp snapshot after failed persist"),
+            b"existing-rbc-session-temp"
+        );
+        assert!(
+            !path.exists(),
+            "failed persistence must not promote the temp snapshot"
+        );
     }
 
     #[test]
@@ -2824,6 +2946,144 @@ mod tests {
             manifest.clone(),
         );
 
+        let mut legacy_non_plain = sample_persisted_session(base_key, chain_hash, manifest.clone());
+        legacy_non_plain.encoding = RbcEncoding::Rs16;
+        legacy_non_plain.data_shards = 1;
+        legacy_non_plain.parity_shards = 1;
+        assert_persisted_session_rejected_and_deleted(
+            "legacy layout with non-plain encoding",
+            base_key,
+            legacy_non_plain,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut invalid_plain_profile =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        invalid_plain_profile.chunk_size_bytes = 8;
+        invalid_plain_profile.payload_size_bytes = 8;
+        invalid_plain_profile.data_shards = 1;
+        assert_persisted_session_rejected_and_deleted(
+            "plain layout with erasure metadata",
+            base_key,
+            invalid_plain_profile,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut plain_reconstructed_stripes =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        plain_reconstructed_stripes.reconstructed_stripes = 1;
+        assert_persisted_session_rejected_and_deleted(
+            "plain session with reconstructed stripes",
+            base_key,
+            plain_reconstructed_stripes,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut invalid_rs16_chunk_size =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        invalid_rs16_chunk_size.encoding = RbcEncoding::Rs16;
+        invalid_rs16_chunk_size.chunk_size_bytes = 3;
+        invalid_rs16_chunk_size.payload_size_bytes = 3;
+        invalid_rs16_chunk_size.data_shards = 1;
+        invalid_rs16_chunk_size.parity_shards = 1;
+        invalid_rs16_chunk_size.total_chunks = 2;
+        assert_persisted_session_rejected_and_deleted(
+            "rs16 layout with odd chunk size",
+            base_key,
+            invalid_rs16_chunk_size,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut rs16_reconstructed_stripes_over_count =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        rs16_reconstructed_stripes_over_count.total_chunks = 4;
+        rs16_reconstructed_stripes_over_count.encoding = RbcEncoding::Rs16;
+        rs16_reconstructed_stripes_over_count.chunk_size_bytes = 4;
+        rs16_reconstructed_stripes_over_count.payload_size_bytes = 5;
+        rs16_reconstructed_stripes_over_count.data_shards = 3;
+        rs16_reconstructed_stripes_over_count.parity_shards = 1;
+        rs16_reconstructed_stripes_over_count.reconstructed_stripes = 2;
+        assert_persisted_session_rejected_and_deleted(
+            "rs16 reconstructed stripe count exceeds stripe count",
+            base_key,
+            rs16_reconstructed_stripes_over_count,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut layout_chunk_count_mismatch =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        layout_chunk_count_mismatch.chunk_size_bytes = 4;
+        layout_chunk_count_mismatch.payload_size_bytes = 9;
+        assert_persisted_session_rejected_and_deleted(
+            "layout chunk count mismatch",
+            base_key,
+            layout_chunk_count_mismatch,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut plain_chunk_len_mismatch =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        plain_chunk_len_mismatch.total_chunks = 2;
+        plain_chunk_len_mismatch.chunk_size_bytes = 4;
+        plain_chunk_len_mismatch.payload_size_bytes = 6;
+        plain_chunk_len_mismatch.chunks.push(PersistedChunk {
+            idx: 1,
+            bytes: b"cde".to_vec(),
+        });
+        assert_persisted_session_rejected_and_deleted(
+            "plain chunk length mismatch",
+            base_key,
+            plain_chunk_len_mismatch,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut rs16_padded_data_len_mismatch =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        rs16_padded_data_len_mismatch.total_chunks = 4;
+        rs16_padded_data_len_mismatch.encoding = RbcEncoding::Rs16;
+        rs16_padded_data_len_mismatch.chunk_size_bytes = 4;
+        rs16_padded_data_len_mismatch.payload_size_bytes = 5;
+        rs16_padded_data_len_mismatch.data_shards = 3;
+        rs16_padded_data_len_mismatch.parity_shards = 1;
+        rs16_padded_data_len_mismatch.chunks.push(PersistedChunk {
+            idx: 2,
+            bytes: vec![0xCC],
+        });
+        assert_persisted_session_rejected_and_deleted(
+            "rs16 padded data length mismatch",
+            base_key,
+            rs16_padded_data_len_mismatch,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut rs16_parity_len_mismatch =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        rs16_parity_len_mismatch.total_chunks = 4;
+        rs16_parity_len_mismatch.encoding = RbcEncoding::Rs16;
+        rs16_parity_len_mismatch.chunk_size_bytes = 4;
+        rs16_parity_len_mismatch.payload_size_bytes = 5;
+        rs16_parity_len_mismatch.data_shards = 3;
+        rs16_parity_len_mismatch.parity_shards = 1;
+        rs16_parity_len_mismatch.chunks.push(PersistedChunk {
+            idx: 3,
+            bytes: vec![0xDD; 3],
+        });
+        assert_persisted_session_rejected_and_deleted(
+            "rs16 parity length mismatch",
+            base_key,
+            rs16_parity_len_mismatch,
+            chain_hash,
+            manifest.clone(),
+        );
+
         let mut too_many_chunks =
             persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xA0, 8);
         too_many_chunks.chunks.push(PersistedChunk {
@@ -3344,6 +3604,94 @@ mod tests {
         assert!(matches!(
             err,
             Err(crate::sumeragi::main_loop::PersistedLoadError::InvalidLayout("zero total chunks"))
+        ));
+    }
+
+    #[test]
+    fn from_persisted_rejects_known_layout_chunk_length_mismatch() {
+        let key = session_key(0x91);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut persisted = sample_persisted_session(key, chain_hash, manifest);
+        persisted.total_chunks = 2;
+        persisted.chunk_size_bytes = 4;
+        persisted.payload_size_bytes = 6;
+        persisted.chunks.push(PersistedChunk {
+            idx: 1,
+            bytes: b"cde".to_vec(),
+        });
+
+        let err = RbcSession::from_persisted_unchecked(&persisted);
+
+        assert!(matches!(
+            err,
+            Err(
+                crate::sumeragi::main_loop::PersistedLoadError::InvalidLayout(
+                    "chunk length mismatch"
+                )
+            )
+        ));
+    }
+
+    #[test]
+    fn from_persisted_rejects_invalid_legacy_layout_metadata() {
+        let key = session_key(0x94);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut persisted = sample_persisted_session(key, chain_hash, manifest);
+        persisted.encoding = RbcEncoding::Rs16;
+        persisted.data_shards = 1;
+        persisted.parity_shards = 1;
+
+        let err = RbcSession::from_persisted_unchecked(&persisted);
+
+        assert!(matches!(
+            err,
+            Err(
+                crate::sumeragi::main_loop::PersistedLoadError::InvalidLayout(
+                    "legacy layout has non-plain encoding"
+                )
+            )
+        ));
+    }
+
+    #[test]
+    fn from_persisted_rejects_reconstructed_stripe_counter_drift() {
+        let key = session_key(0x92);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut plain = sample_persisted_session(key, chain_hash, manifest.clone());
+        plain.reconstructed_stripes = 1;
+
+        let err = RbcSession::from_persisted_unchecked(&plain);
+
+        assert!(matches!(
+            err,
+            Err(
+                crate::sumeragi::main_loop::PersistedLoadError::InvalidLayout(
+                    "plain session has reconstructed stripes"
+                )
+            )
+        ));
+
+        let mut rs16 = sample_persisted_session(key, chain_hash, manifest);
+        rs16.total_chunks = 4;
+        rs16.encoding = RbcEncoding::Rs16;
+        rs16.chunk_size_bytes = 4;
+        rs16.payload_size_bytes = 5;
+        rs16.data_shards = 3;
+        rs16.parity_shards = 1;
+        rs16.reconstructed_stripes = 2;
+
+        let err = RbcSession::from_persisted_unchecked(&rs16);
+
+        assert!(matches!(
+            err,
+            Err(
+                crate::sumeragi::main_loop::PersistedLoadError::InvalidLayout(
+                    "reconstructed stripe count exceeds stripe count"
+                )
+            )
         ));
     }
 

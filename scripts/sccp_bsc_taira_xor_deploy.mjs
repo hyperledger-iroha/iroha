@@ -95,8 +95,7 @@ export const BSC_NETWORK_PROFILES = Object.freeze({
       "artifacts/sccp-bsc/taira-bsc-mainnet-xor-deployment.evidence.json",
     routeManifestOut:
       "artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.manifest.json",
-    routeConfigOut:
-      "artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.torii.toml",
+    routeConfigOut: "artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.torii.toml",
     routeFullConfigOut:
       "artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.full-taira-config.toml",
     routeFullConfigEvidenceOut:
@@ -214,8 +213,10 @@ const NATIVE_EVM_PROVER_BUNDLE_KEYS = Object.freeze([
   "proverBundle",
   "prover_bundle",
 ]);
-const NATIVE_EVM_PROVER_BUNDLE_VERIFIER_KEY_ARTIFACT_HASH_KEYS =
-  Object.freeze(["verifierKeyArtifactHash", "verifier_key_artifact_hash"]);
+const NATIVE_EVM_PROVER_BUNDLE_VERIFIER_KEY_ARTIFACT_HASH_KEYS = Object.freeze([
+  "verifierKeyArtifactHash",
+  "verifier_key_artifact_hash",
+]);
 const NATIVE_EVM_PROVER_ROLE_SEPARATED_HASH_FIELDS = Object.freeze([
   ["verifierKeyHash", ["verifierKeyHash", "verifier_key_hash"]],
   [
@@ -746,8 +747,8 @@ const defaultRouteManifestOut = (profile) =>
 
 const defaultRouteConfigOut = (profile, { fullConfigMode = false } = {}) =>
   fullConfigMode
-    ? profile.routeFullConfigOut ?? DEFAULT_ROUTE_FULL_CONFIG_OUT
-    : profile.routeConfigOut ?? DEFAULT_ROUTE_CONFIG_OUT;
+    ? (profile.routeFullConfigOut ?? DEFAULT_ROUTE_FULL_CONFIG_OUT)
+    : (profile.routeConfigOut ?? DEFAULT_ROUTE_CONFIG_OUT);
 
 const defaultRouteFullConfigEvidenceOut = (profile) =>
   profile.routeFullConfigEvidenceOut ?? DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT;
@@ -2957,7 +2958,8 @@ function attachNativeProverBundleToManifest(manifest, bundle) {
 }
 
 function bscProfileFromNativeEvmProverBundle(bundle) {
-  return bundle?.bundle_id === SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 ||
+  return bundle?.bundle_id ===
+    SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 ||
     bundle?.chain === BSC_NETWORK_PROFILES.mainnet.chain
     ? BSC_NETWORK_PROFILES.mainnet
     : BSC_NETWORK_PROFILES.testnet;
@@ -3389,6 +3391,36 @@ export function buildDeploymentEvidence({
 }
 
 function normalizeBscRouteEvidenceProfile(record, options = {}) {
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record,
+        keys: ["bscNetwork", "bsc_network", "network"],
+        pathName: "BSC deployment evidence",
+      },
+    ],
+    "BSC deployment evidence bscNetwork",
+  );
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record,
+        keys: ["chainIdHex", "chain_id_hex"],
+        pathName: "BSC deployment evidence",
+      },
+    ],
+    "BSC deployment evidence chainIdHex",
+  );
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record,
+        keys: ["networkIdHex", "network_id_hex"],
+        pathName: "BSC deployment evidence",
+      },
+    ],
+    "BSC deployment evidence networkIdHex",
+  );
   const profile = bscNetworkProfileFromOptions({
     ...options,
     "bsc-network":
@@ -3422,7 +3454,11 @@ function normalizeBscRouteEvidenceProfile(record, options = {}) {
       `BSC deployment evidence chainIdHex must be ${profile.chainIdHex}.`,
     );
   }
-  const networkIdHex = readFirstString(record, "networkIdHex", "network_id_hex");
+  const networkIdHex = readFirstString(
+    record,
+    "networkIdHex",
+    "network_id_hex",
+  );
   if (networkIdHex && normalizeHex32(networkIdHex) !== profile.networkIdHex) {
     throw new Error(
       `BSC deployment evidence networkIdHex must be ${profile.networkIdHex}.`,
@@ -3446,19 +3482,37 @@ function normalizeBscDeploymentEvidenceForRouteManifest(record, options = {}) {
     );
   }
   const profile = normalizeBscRouteEvidenceProfile(record, options);
+  assertSingleRecordAlias(
+    record,
+    ["destinationRollout", "destination_rollout"],
+    "BSC deployment evidence",
+    "BSC deployment evidence destinationRollout",
+  );
+  assertSingleRecordAlias(
+    record,
+    ["destinationBinding", "destination_binding"],
+    "BSC deployment evidence",
+    "BSC deployment evidence destinationBinding",
+  );
   const rollout =
     readFirstRecord(record, "destinationRollout", "destination_rollout") ?? {};
   const binding =
     readFirstRecord(record, "destinationBinding", "destination_binding") ?? {};
-  const address = (label, keys, extraSources = []) =>
-    readRequiredConsistentNormalizedString(
-      [
-        { record, keys, pathName: "BSC deployment evidence" },
-        ...extraSources,
-      ],
+  const address = (label, keys, extraSources = []) => {
+    const sources = [
+      { record, keys, pathName: "BSC deployment evidence" },
+      ...extraSources,
+    ];
+    assertSingleStringAliasPerSource(
+      sources,
+      `BSC deployment evidence ${label}`,
+    );
+    return readRequiredConsistentNormalizedString(
+      sources,
       `BSC deployment evidence ${label}`,
       (value, fieldLabel) => normalizeCanonicalEvmAddress(value, fieldLabel),
     );
+  };
   const addresses = {
     token: address("token address", [
       "bscTokenAddress",
@@ -3518,35 +3572,45 @@ function normalizeBscDeploymentEvidenceForRouteManifest(record, options = {}) {
       "BSC deployment evidence token, bridge, source bridge, and verifier addresses must be distinct.",
     );
   }
+  const verifierCodeHashSources = [
+    {
+      record,
+      keys: ["verifierCodeHash", "verifier_code_hash"],
+      pathName: "BSC deployment evidence",
+    },
+    {
+      record: rollout,
+      keys: ["verifierCodeHash", "verifier_code_hash"],
+      pathName: "BSC deployment evidence destinationRollout",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    verifierCodeHashSources,
+    "BSC deployment evidence verifierCodeHash",
+  );
   const verifierCodeHash = readRequiredConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: ["verifierCodeHash", "verifier_code_hash"],
-        pathName: "BSC deployment evidence",
-      },
-      {
-        record: rollout,
-        keys: ["verifierCodeHash", "verifier_code_hash"],
-        pathName: "BSC deployment evidence destinationRollout",
-      },
-    ],
+    verifierCodeHashSources,
     "BSC deployment evidence verifierCodeHash",
     (value, label) => normalizeCanonicalHex32(value, label),
   );
+  const verifierKeyHashSources = [
+    {
+      record,
+      keys: ["verifierKeyHash", "verifier_key_hash"],
+      pathName: "BSC deployment evidence",
+    },
+    {
+      record: rollout,
+      keys: ["verifierKeyHash", "verifier_key_hash"],
+      pathName: "BSC deployment evidence destinationRollout",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    verifierKeyHashSources,
+    "BSC deployment evidence verifierKeyHash",
+  );
   const verifierKeyHash = readRequiredConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: ["verifierKeyHash", "verifier_key_hash"],
-        pathName: "BSC deployment evidence",
-      },
-      {
-        record: rollout,
-        keys: ["verifierKeyHash", "verifier_key_hash"],
-        pathName: "BSC deployment evidence destinationRollout",
-      },
-    ],
+    verifierKeyHashSources,
     "BSC deployment evidence verifierKeyHash",
     (value, label) => normalizeCanonicalHex32(value, label),
   );
@@ -3564,24 +3628,29 @@ function normalizeBscDeploymentEvidenceForRouteManifest(record, options = {}) {
     verifierCodeHash,
     verifierKeyHash,
   });
+  const destinationBindingHashSources = [
+    {
+      record,
+      keys: ["destinationBindingHash", "destination_binding_hash"],
+      pathName: "BSC deployment evidence",
+    },
+    {
+      record: rollout,
+      keys: ["destinationBindingHash", "destination_binding_hash"],
+      pathName: "BSC deployment evidence destinationRollout",
+    },
+    {
+      record: binding,
+      keys: ["bindingHash", "binding_hash"],
+      pathName: "BSC deployment evidence destinationBinding",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    destinationBindingHashSources,
+    "BSC deployment evidence destinationBindingHash",
+  );
   const declaredBindingHash = readConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: ["destinationBindingHash", "destination_binding_hash"],
-        pathName: "BSC deployment evidence",
-      },
-      {
-        record: rollout,
-        keys: ["destinationBindingHash", "destination_binding_hash"],
-        pathName: "BSC deployment evidence destinationRollout",
-      },
-      {
-        record: binding,
-        keys: ["bindingHash", "binding_hash"],
-        pathName: "BSC deployment evidence destinationBinding",
-      },
-    ],
+    destinationBindingHashSources,
     "BSC deployment evidence destinationBindingHash",
     (value, label) => normalizeCanonicalHex32(value, label),
   );
@@ -3590,26 +3659,35 @@ function normalizeBscDeploymentEvidenceForRouteManifest(record, options = {}) {
       "BSC deployment evidence destinationBindingHash does not match computed binding hash.",
     );
   }
-  const declaredBindingKey = readConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: ["destinationBindingKey", "destination_binding_key"],
-        pathName: "BSC deployment evidence",
-      },
-      {
-        record: rollout,
-        keys: ["destinationBindingKey", "destination_binding_key"],
-        pathName: "BSC deployment evidence destinationRollout",
-      },
-      {
-        record: binding,
-        keys: ["key", "destinationBindingKey", "destination_binding_key"],
-        pathName: "BSC deployment evidence destinationBinding",
-      },
-    ],
+  const destinationBindingKeySources = [
+    {
+      record,
+      keys: ["destinationBindingKey", "destination_binding_key"],
+      pathName: "BSC deployment evidence",
+    },
+    {
+      record: rollout,
+      keys: ["destinationBindingKey", "destination_binding_key"],
+      pathName: "BSC deployment evidence destinationRollout",
+    },
+    {
+      record: binding,
+      keys: ["key", "destinationBindingKey", "destination_binding_key"],
+      pathName: "BSC deployment evidence destinationBinding",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    destinationBindingKeySources,
     "BSC deployment evidence destinationBindingKey",
-    (value) => normalizeNonEmptyText(value, "BSC deployment evidence destinationBindingKey"),
+  );
+  const declaredBindingKey = readConsistentNormalizedString(
+    destinationBindingKeySources,
+    "BSC deployment evidence destinationBindingKey",
+    (value) =>
+      normalizeNonEmptyText(
+        value,
+        "BSC deployment evidence destinationBindingKey",
+      ),
   );
   if (declaredBindingKey && declaredBindingKey !== destinationBindingKey) {
     throw new Error(
@@ -3652,12 +3730,19 @@ function normalizeBscTairaBurnRecordContract(contract, options = {}) {
   }
   const assetKey = readFirstString(contract, "assetKey", "asset_key");
   if (assetKey && assetKey !== ASSET_KEY) {
-    throw new Error(`TAIRA burn-record contract assetKey must be ${ASSET_KEY}.`);
+    throw new Error(
+      `TAIRA burn-record contract assetKey must be ${ASSET_KEY}.`,
+    );
   }
   const artifact = normalizeStrictBase64(
     readRequiredString(
       contract,
-      ["contractArtifactB64", "contract_artifact_b64", "artifactB64", "artifact_b64"],
+      [
+        "contractArtifactB64",
+        "contract_artifact_b64",
+        "artifactB64",
+        "artifact_b64",
+      ],
       "TAIRA burn-record contract artifact",
     ),
     "TAIRA burn-record contract artifact",
@@ -3744,32 +3829,46 @@ function normalizeBscTairaBurnRecordContract(contract, options = {}) {
   };
 }
 
-function readOptionalBscRouteHash(options, record, rollout, optionKeys, recordKeys, label) {
+function readOptionalBscRouteHash(
+  options,
+  record,
+  rollout,
+  optionKeys,
+  recordKeys,
+  label,
+) {
+  const sources = [
+    {
+      record: options,
+      keys: optionKeys,
+      pathName: "route-manifest options",
+    },
+    { record, keys: recordKeys, pathName: "BSC deployment evidence" },
+    {
+      record: rollout,
+      keys: recordKeys,
+      pathName: "BSC deployment evidence destinationRollout",
+    },
+  ];
+  assertSingleStringAliasPerSource(sources, label);
   return (
-    readConsistentNormalizedString(
-      [
-        { record: options, keys: optionKeys, pathName: "route-manifest options" },
-        { record, keys: recordKeys, pathName: "BSC deployment evidence" },
-        {
-          record: rollout,
-          keys: recordKeys,
-          pathName: "BSC deployment evidence destinationRollout",
-        },
-      ],
-      label,
-      (value, fieldLabel) => normalizeCanonicalHex32(value, fieldLabel),
+    readConsistentNormalizedString(sources, label, (value, fieldLabel) =>
+      normalizeCanonicalHex32(value, fieldLabel),
     ) || null
   );
 }
 
-async function readBscRouteManifestNativeProverBundle(options, {
-  profile,
-  verifierKeyHash,
-  proofArtifactHash,
-  provingKeyHash,
-  destinationBindingHash,
-  productionReady,
-}) {
+async function readBscRouteManifestNativeProverBundle(
+  options,
+  {
+    profile,
+    verifierKeyHash,
+    proofArtifactHash,
+    provingKeyHash,
+    destinationBindingHash,
+    productionReady,
+  },
+) {
   const bundlePath = optionValue(options, [
     "native-prover-bundle",
     "native-evm-prover-bundle",
@@ -3789,9 +3888,13 @@ async function readBscRouteManifestNativeProverBundle(options, {
   if (reason) {
     throw new Error(reason);
   }
-  const normalized = validateBscNativeEvmProverBundleForProfile(bundle, profile, {
-    expectedDestinationBindingHash: destinationBindingHash,
-  });
+  const normalized = validateBscNativeEvmProverBundleForProfile(
+    bundle,
+    profile,
+    {
+      expectedDestinationBindingHash: destinationBindingHash,
+    },
+  );
   if (normalized.verifierKeyHash !== verifierKeyHash) {
     throw new Error(
       "BSC native EVM prover bundle verifierKeyHash must match route verifierKeyHash.",
@@ -3807,17 +3910,38 @@ async function readBscRouteManifestNativeProverBundle(options, {
       "BSC native EVM prover bundle provingKeyHash must match route provingKeyHash.",
     );
   }
-  return { bundle: normalized, hash: canonicalBscNativeEvmProverBundleHash(normalized) };
+  return {
+    bundle: normalized,
+    hash: canonicalBscNativeEvmProverBundleHash(normalized),
+  };
 }
 
 function bscPostDeployRecordSources(evidence, liveEvidence) {
   const sources = [];
+  assertSingleRecordAlias(
+    liveEvidence,
+    ["postDeployLiveEvidence", "post_deploy_live_evidence"],
+    "BSC live evidence",
+    "BSC live evidence postDeployLiveEvidence",
+  );
+  assertSingleRecordAlias(
+    evidence,
+    ["postDeployLiveEvidence", "post_deploy_live_evidence"],
+    "BSC deployment evidence",
+    "BSC deployment evidence postDeployLiveEvidence",
+  );
   const liveRecord =
-    readFirstRecord(liveEvidence, "postDeployLiveEvidence", "post_deploy_live_evidence") ??
-    (isRecord(liveEvidence) ? liveEvidence : null);
+    readFirstRecord(
+      liveEvidence,
+      "postDeployLiveEvidence",
+      "post_deploy_live_evidence",
+    ) ?? (isRecord(liveEvidence) ? liveEvidence : null);
   const evidenceRecord =
-    readFirstRecord(evidence, "postDeployLiveEvidence", "post_deploy_live_evidence") ??
-    null;
+    readFirstRecord(
+      evidence,
+      "postDeployLiveEvidence",
+      "post_deploy_live_evidence",
+    ) ?? null;
   if (liveRecord) {
     sources.push({
       record: liveRecord,
@@ -3850,7 +3974,14 @@ function hasBscPostDeployEvidence(evidence, liveEvidence, options = {}) {
   );
 }
 
-function readBscPostDeployString(options, sources, optionKeys, recordKeys, label, normalizeValue) {
+function readBscPostDeployString(
+  options,
+  sources,
+  optionKeys,
+  recordKeys,
+  label,
+  normalizeValue,
+) {
   const allSources = [
     { record: options, keys: optionKeys, pathName: "route-manifest options" },
     ...sources.map((source) => ({
@@ -3896,13 +4027,18 @@ function normalizeBscPostDeployEvidence(
         source.keys,
         `${source.pathName}.fullTomlReady`,
       );
-      if (selected === undefined && hasAnyOwnManifestKey(source.record, source.keys)) {
+      if (
+        selected === undefined &&
+        hasAnyOwnManifestKey(source.record, source.keys)
+      ) {
         selected = value;
       } else if (
         hasAnyOwnManifestKey(source.record, source.keys) &&
         selected !== value
       ) {
-        throw new Error("postDeployLiveEvidence.fullTomlReady sources disagree.");
+        throw new Error(
+          "postDeployLiveEvidence.fullTomlReady sources disagree.",
+        );
       }
     }
     fullTomlReady = selected === true;
@@ -3967,7 +4103,12 @@ function normalizeBscPostDeployEvidence(
     ],
     "postDeployLiveEvidence.sourceEventExplorerUrl",
     (value, label) =>
-      normalizeBscExplorerTxUrl(value, label, sourceEventTransactionId, profile),
+      normalizeBscExplorerTxUrl(
+        value,
+        label,
+        sourceEventTransactionId,
+        profile,
+      ),
   );
   const routeCanaryExplorerUrl = readBscPostDeployString(
     options,
@@ -3981,7 +4122,12 @@ function normalizeBscPostDeployEvidence(
     ],
     "postDeployLiveEvidence.routeCanaryExplorerUrl",
     (value, label) =>
-      normalizeBscExplorerTxUrl(value, label, routeCanaryTransactionId, profile),
+      normalizeBscExplorerTxUrl(
+        value,
+        label,
+        routeCanaryTransactionId,
+        profile,
+      ),
   );
   if (sourceBridgeConfigHash === routeCanaryEvidenceHash) {
     throw new Error(
@@ -4026,7 +4172,9 @@ function normalizeBscOfflineFullTomlEvidence(record, profile) {
     "BSC offline full TOML evidence routeId",
   );
   if (routeId !== ROUTE_ID) {
-    throw new Error(`BSC offline full TOML evidence routeId must be ${ROUTE_ID}.`);
+    throw new Error(
+      `BSC offline full TOML evidence routeId must be ${ROUTE_ID}.`,
+    );
   }
   const assetKey = readRequiredString(
     record,
@@ -4034,7 +4182,9 @@ function normalizeBscOfflineFullTomlEvidence(record, profile) {
     "BSC offline full TOML evidence assetKey",
   );
   if (assetKey !== ASSET_KEY) {
-    throw new Error(`BSC offline full TOML evidence assetKey must be ${ASSET_KEY}.`);
+    throw new Error(
+      `BSC offline full TOML evidence assetKey must be ${ASSET_KEY}.`,
+    );
   }
   const networkValues = ["bscNetwork", "bsc_network", "network", "chain"]
     .map((key) =>
@@ -4100,7 +4250,9 @@ function normalizeBscOfflineFullTomlEvidence(record, profile) {
     "BSC offline full TOML evidence postDeployLiveEvidence.fullTomlReady",
   );
   if (fullTomlReady !== true || nestedFullTomlReady !== true) {
-    throw new Error("BSC offline full TOML evidence fullTomlReady must be true.");
+    throw new Error(
+      "BSC offline full TOML evidence fullTomlReady must be true.",
+    );
   }
   const offlineFullTomlSha256Sources = [
     {
@@ -4192,7 +4344,10 @@ export async function buildBscTairaXorRouteManifestDraft({
       );
     }
   }
-  const burnRecord = normalizeBscTairaBurnRecordContract(tairaContract, options);
+  const burnRecord = normalizeBscTairaBurnRecordContract(
+    tairaContract,
+    options,
+  );
   const nativeBundle = await readBscRouteManifestNativeProverBundle(options, {
     profile,
     verifierKeyHash,
@@ -4216,7 +4371,9 @@ export async function buildBscTairaXorRouteManifestDraft({
         "circuit_artifact_hash",
       ],
       "BSC route proofArtifactHash",
-    ) ?? nativeBundle?.bundle.proofArtifactHash ?? null;
+    ) ??
+    nativeBundle?.bundle.proofArtifactHash ??
+    null;
   const provingKeyHash =
     readOptionalBscRouteHash(
       options,
@@ -4225,7 +4382,9 @@ export async function buildBscTairaXorRouteManifestDraft({
       ["proving-key-hash"],
       ["provingKeyHash", "proving_key_hash"],
       "BSC route provingKeyHash",
-    ) ?? nativeBundle?.bundle.provingKeyHash ?? null;
+    ) ??
+    nativeBundle?.bundle.provingKeyHash ??
+    null;
   if (Boolean(proofArtifactHash) !== Boolean(provingKeyHash)) {
     throw new Error(
       "BSC route proofArtifactHash and provingKeyHash must be supplied together.",
@@ -4353,12 +4512,18 @@ export async function buildBscTairaXorRouteManifestDraft({
           [
             {
               record: options,
-              keys: ["settlement-asset-definition-id", "settlementAssetDefinitionId"],
+              keys: [
+                "settlement-asset-definition-id",
+                "settlementAssetDefinitionId",
+              ],
               pathName: "route-manifest options",
             },
             {
               record: evidence,
-              keys: ["settlementAssetDefinitionId", "settlement_asset_definition_id"],
+              keys: [
+                "settlementAssetDefinitionId",
+                "settlement_asset_definition_id",
+              ],
               pathName: "BSC deployment evidence",
             },
           ],
@@ -4410,6 +4575,14 @@ function normalizeBscTestnetKey(value, label) {
 }
 
 function readRequiredString(record, keys, label) {
+  const entries = collectStringEntries(record, keys, label);
+  if (entries.length > 1) {
+    throw new Error(
+      `${label} must not use multiple aliases: ${entries
+        .map((entry) => entry.key)
+        .join(", ")}.`,
+    );
+  }
   const value = readFirstString(record, ...keys);
   if (!value) {
     throw new Error(`${label} is required.`);
@@ -4534,6 +4707,17 @@ function assertSingleStringAliasPerSource(sources, label) {
   }
 }
 
+function assertSingleRecordAlias(record, keys, pathName, label) {
+  const entries = collectRecordEntries(record, keys, pathName);
+  if (entries.length > 1) {
+    throw new Error(
+      `${label} must not use multiple aliases in ${pathName}: ${entries
+        .map((entry) => entry.key)
+        .join(", ")}.`,
+    );
+  }
+}
+
 function assertNoForbiddenStringAliases(record, keys, pathName, label) {
   const entries = collectStringEntries(record, keys, pathName);
   if (entries.length > 0) {
@@ -4555,7 +4739,9 @@ function assertSingleValueAlias(record, keys, pathName, label) {
     }
     const value = ownValue(record, key);
     return (
-      (typeof value === "string" && value.trim()) || typeof value === "boolean"
+      (typeof value === "string" && value.trim()) ||
+      typeof value === "boolean" ||
+      typeof value === "number"
     );
   });
   if (presentKeys.length > 1) {
@@ -4737,6 +4923,24 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error(reason);
   }
 
+  assertSingleRecordAlias(
+    record,
+    ["destinationRollout", "destination_rollout"],
+    "route manifest",
+    "route manifest destinationRollout",
+  );
+  assertSingleRecordAlias(
+    record,
+    ["destinationBinding", "destination_binding"],
+    "route manifest",
+    "route manifest destinationBinding",
+  );
+  assertSingleRecordAlias(
+    record,
+    ["tairaXorBurnRecord", "taira_xor_burn_record"],
+    "route manifest",
+    "route manifest tairaXorBurnRecord",
+  );
   const destinationRollout = routeConfigRequiredRecord(
     readFirstRecord(record, "destinationRollout", "destination_rollout"),
     "route manifest destinationRollout",
@@ -4746,6 +4950,12 @@ function normalizeRouteManifestForConfig(manifest) {
   const burnRecord = routeConfigRequiredRecord(
     readFirstRecord(record, "tairaXorBurnRecord", "taira_xor_burn_record"),
     "route manifest tairaXorBurnRecord",
+  );
+  assertSingleRecordAlias(
+    burnRecord,
+    ["vkRef", "vk_ref"],
+    "route manifest tairaXorBurnRecord",
+    "route manifest tairaXorBurnRecord.vkRef",
   );
   const vkRef = routeConfigRequiredRecord(
     readFirstRecord(burnRecord, "vkRef", "vk_ref"),
@@ -4773,6 +4983,16 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error(`route manifest assetKey must be ${ASSET_KEY}.`);
   }
 
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record,
+        keys: ["bscNetwork", "bsc_network", "network"],
+        pathName: "route manifest",
+      },
+    ],
+    "route manifest bscNetwork",
+  );
   const bscNetworkText =
     readFirstString(record, "bscNetwork", "bsc_network", "network") ||
     readFirstString(record, "chain") ||
@@ -4840,6 +5060,12 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error(`route manifest networkIdHex must be ${bscProfile.label}.`);
   }
 
+  assertSingleValueAlias(
+    record,
+    ["counterpartyDomain", "counterparty_domain"],
+    "route manifest",
+    "route manifest counterpartyDomain",
+  );
   const counterpartyDomain = normalizeUint32(
     readFirstValue(record, "counterpartyDomain", "counterparty_domain"),
     "route manifest counterpartyDomain",
@@ -4847,18 +5073,82 @@ function normalizeRouteManifestForConfig(manifest) {
   if (counterpartyDomain !== SCCP_DOMAIN_BSC) {
     throw new Error("route manifest counterpartyDomain must be BSC domain 2.");
   }
-  const sourceDomain = normalizeUint32(
-    readFirstValue(destinationRollout, "sourceDomain", "source_domain") ??
-      readFirstValue(destinationBinding, "sourceDomain", "source_domain") ??
-      SCCP_DOMAIN_SORA,
+  assertSingleValueAlias(
+    destinationRollout,
+    ["sourceDomain", "source_domain"],
+    "route manifest destinationRollout",
     "route manifest sourceDomain",
   );
-  const targetDomain = normalizeUint32(
-    readFirstValue(destinationRollout, "targetDomain", "target_domain") ??
-      readFirstValue(destinationBinding, "targetDomain", "target_domain") ??
-      SCCP_DOMAIN_BSC,
+  assertSingleValueAlias(
+    destinationBinding,
+    ["sourceDomain", "source_domain"],
+    "route manifest destinationBinding",
+    "route manifest sourceDomain",
+  );
+  assertSingleValueAlias(
+    destinationRollout,
+    ["targetDomain", "target_domain"],
+    "route manifest destinationRollout",
     "route manifest targetDomain",
   );
+  assertSingleValueAlias(
+    destinationBinding,
+    ["targetDomain", "target_domain"],
+    "route manifest destinationBinding",
+    "route manifest targetDomain",
+  );
+  const rolloutSourceDomain = readFirstValue(
+    destinationRollout,
+    "sourceDomain",
+    "source_domain",
+  );
+  const bindingSourceDomain = readFirstValue(
+    destinationBinding,
+    "sourceDomain",
+    "source_domain",
+  );
+  const sourceDomain = normalizeUint32(
+    rolloutSourceDomain ?? bindingSourceDomain ?? SCCP_DOMAIN_SORA,
+    "route manifest sourceDomain",
+  );
+  if (
+    rolloutSourceDomain !== undefined &&
+    bindingSourceDomain !== undefined &&
+    normalizeUint32(
+      bindingSourceDomain,
+      "route manifest destinationBinding.sourceDomain",
+    ) !== sourceDomain
+  ) {
+    throw new Error(
+      "route manifest sourceDomain aliases disagree between destinationRollout and destinationBinding.",
+    );
+  }
+  const rolloutTargetDomain = readFirstValue(
+    destinationRollout,
+    "targetDomain",
+    "target_domain",
+  );
+  const bindingTargetDomain = readFirstValue(
+    destinationBinding,
+    "targetDomain",
+    "target_domain",
+  );
+  const targetDomain = normalizeUint32(
+    rolloutTargetDomain ?? bindingTargetDomain ?? SCCP_DOMAIN_BSC,
+    "route manifest targetDomain",
+  );
+  if (
+    rolloutTargetDomain !== undefined &&
+    bindingTargetDomain !== undefined &&
+    normalizeUint32(
+      bindingTargetDomain,
+      "route manifest destinationBinding.targetDomain",
+    ) !== targetDomain
+  ) {
+    throw new Error(
+      "route manifest targetDomain aliases disagree between destinationRollout and destinationBinding.",
+    );
+  }
   if (sourceDomain !== SCCP_DOMAIN_SORA || targetDomain !== SCCP_DOMAIN_BSC) {
     throw new Error(
       "route manifest destination rollout domains must be SORA -> BSC.",
@@ -4873,6 +5163,16 @@ function normalizeRouteManifestForConfig(manifest) {
   if (verifierTarget !== "EvmContract") {
     throw new Error("route manifest verifierTarget must be EvmContract.");
   }
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: destinationRollout,
+        keys: ["verifierBackend", "verifier_backend"],
+        pathName: "route manifest destinationRollout",
+      },
+    ],
+    "route manifest verifierBackend",
+  );
   const verifierBackend =
     readFirstString(
       destinationRollout,
@@ -4884,6 +5184,16 @@ function normalizeRouteManifestForConfig(manifest) {
       `route manifest verifier backend must be ${BSC_EVM_GROTH16_BACKEND}.`,
     );
   }
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: destinationRollout,
+        keys: ["proofFamily", "proof_family"],
+        pathName: "route manifest destinationRollout",
+      },
+    ],
+    "route manifest proofFamily",
+  );
   const proofFamily =
     readFirstString(destinationRollout, "proofFamily", "proof_family") ||
     SCCP_PROOF_FAMILY_STARK_FRI;
@@ -4893,6 +5203,12 @@ function normalizeRouteManifestForConfig(manifest) {
     );
   }
 
+  assertSingleValueAlias(
+    record,
+    ["productionReady", "production_ready"],
+    "route manifest",
+    "route manifest productionReady",
+  );
   const productionReadyValue = readFirstValue(
     record,
     "productionReady",
@@ -5308,6 +5624,21 @@ function normalizeRouteManifestForConfig(manifest) {
     seenRouteHashes.set(value, label);
   }
 
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: burnRecord,
+        keys: [
+          "contractArtifactB64",
+          "contract_artifact_b64",
+          "artifactB64",
+          "artifact_b64",
+        ],
+        pathName: "route manifest tairaXorBurnRecord",
+      },
+    ],
+    "route manifest tairaXorBurnRecord.contractArtifactB64",
+  );
   const artifact = normalizeStrictBase64(
     readFirstString(
       burnRecord,
@@ -5319,6 +5650,16 @@ function normalizeRouteManifestForConfig(manifest) {
     "route manifest tairaXorBurnRecord.contractArtifactB64",
   );
   const artifactSha256 = bytesToHex(sha256(new Uint8Array(artifact.bytes)));
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: burnRecord,
+        keys: ["artifactSha256", "artifact_sha256"],
+        pathName: "route manifest tairaXorBurnRecord",
+      },
+    ],
+    "route manifest tairaXorBurnRecord.artifactSha256",
+  );
   const declaredArtifactSha256 = normalizeCanonicalHex32(
     readFirstString(burnRecord, "artifactSha256", "artifact_sha256"),
     "route manifest tairaXorBurnRecord.artifactSha256",
@@ -5334,6 +5675,16 @@ function normalizeRouteManifestForConfig(manifest) {
       "route manifest TAIRA burn-record artifact",
     );
   }
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: burnRecord,
+        keys: ["settlementAssetDefinitionId", "settlement_asset_definition_id"],
+        pathName: "route manifest tairaXorBurnRecord",
+      },
+    ],
+    "route manifest tairaXorBurnRecord.settlementAssetDefinitionId",
+  );
   const settlementAssetDefinitionId = normalizeCanonicalAssetDefinitionId(
     readFirstString(
       burnRecord,
@@ -5342,11 +5693,37 @@ function normalizeRouteManifestForConfig(manifest) {
     ),
     "route manifest tairaXorBurnRecord.settlementAssetDefinitionId",
   );
+  assertSingleValueAlias(
+    burnRecord,
+    ["gasLimit", "gas_limit"],
+    "route manifest tairaXorBurnRecord",
+    "route manifest burn-record gasLimit",
+  );
   const gasLimit = normalizePositiveSafeInteger(
     readFirstValue(burnRecord, "gasLimit", "gas_limit"),
     "route manifest burn-record gasLimit",
   );
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: settlement,
+        keys: ["routeId", "route_id"],
+        pathName: "route manifest settlement",
+      },
+    ],
+    "route manifest settlement.routeId",
+  );
   const settlementRouteId = readFirstString(settlement, "routeId", "route_id");
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: settlement,
+        keys: ["assetKey", "asset_key"],
+        pathName: "route manifest settlement",
+      },
+    ],
+    "route manifest settlement.assetKey",
+  );
   const settlementAssetKey = readFirstString(
     settlement,
     "assetKey",
@@ -5359,6 +5736,12 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error(`route manifest settlement.assetKey must be ${ASSET_KEY}.`);
   }
 
+  assertSingleRecordAlias(
+    record,
+    ["postDeployLiveEvidence", "post_deploy_live_evidence"],
+    "route manifest",
+    "route manifest postDeployLiveEvidence",
+  );
   const postDeployLiveEvidence =
     readFirstRecord(
       record,
@@ -5571,6 +5954,23 @@ function normalizeRouteManifestForConfig(manifest) {
       "route manifest productionReady cannot be true when disabledReason is set.",
     );
   }
+
+  assertSingleValueAlias(
+    record,
+    ["version"],
+    "route manifest",
+    "route manifest version",
+  );
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: burnRecord,
+        keys: ["codeHash", "code_hash"],
+        pathName: "route manifest tairaXorBurnRecord",
+      },
+    ],
+    "route manifest tairaXorBurnRecord.codeHash",
+  );
 
   return {
     version: normalizeUint32(
@@ -5826,8 +6226,7 @@ function canonicalizeBscOfflineFullConfigTomlForHash(toml) {
   const filtered = normalized
     .split("\n")
     .filter(
-      (line) =>
-        !/^\s*post_deploy_offline_full_toml_sha256\s*=/u.test(line),
+      (line) => !/^\s*post_deploy_offline_full_toml_sha256\s*=/u.test(line),
     )
     .join("\n");
   return filtered.endsWith("\n") ? filtered : `${filtered}\n`;
@@ -5835,7 +6234,9 @@ function canonicalizeBscOfflineFullConfigTomlForHash(toml) {
 
 function bscOfflineFullTomlSha256(toml) {
   return bytesToHex(
-    sha256(textEncoder.encode(canonicalizeBscOfflineFullConfigTomlForHash(toml))),
+    sha256(
+      textEncoder.encode(canonicalizeBscOfflineFullConfigTomlForHash(toml)),
+    ),
   );
 }
 
@@ -6141,7 +6542,8 @@ async function commandRouteManifest(options) {
   const out = resolve(
     options.out ??
       defaultRouteManifestOut(
-        BSC_NETWORK_PROFILES[manifest.bscNetwork] ?? BSC_NETWORK_PROFILES.testnet,
+        BSC_NETWORK_PROFILES[manifest.bscNetwork] ??
+          BSC_NETWORK_PROFILES.testnet,
       ),
   );
   assertBscCanonicalProductionOutputSafe(out, manifest, "BSC route manifest");
@@ -6174,10 +6576,7 @@ async function commandRouteConfig(options) {
   const manifestPath = normalizeBscRouteManifestPath(
     options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT,
   );
-  const manifest = await readJson(
-    manifestPath,
-    "BSC route manifest",
-  );
+  const manifest = await readJson(manifestPath, "BSC route manifest");
   const profile =
     BSC_NETWORK_PROFILES[
       readFirstValue(manifest, "bscNetwork", "bsc_network", "network")
@@ -6236,7 +6635,10 @@ async function commandRouteConfig(options) {
       offlineFullTomlEvidence,
       "BSC offline full TOML evidence",
     );
-    await writeJsonNoSecrets(offlineFullTomlEvidenceOut, offlineFullTomlEvidence);
+    await writeJsonNoSecrets(
+      offlineFullTomlEvidenceOut,
+      offlineFullTomlEvidence,
+    );
   }
   return {
     ok: true,

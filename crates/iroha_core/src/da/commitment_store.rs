@@ -48,17 +48,15 @@ impl DaCommitmentStore {
 
     /// Insert an entire bundle captured at `block_height`.
     pub fn insert_bundle(&mut self, block_height: u64, bundle: DaCommitmentBundle) {
-        let mut pushed_any = false;
         for (idx, record) in bundle.commitments.iter().enumerate() {
             let location = DaCommitmentLocation {
                 block_height,
-                index_in_bundle: u32::try_from(idx)
-                    .expect("DA commitment bundle size must fit within u32::MAX"),
+                index_in_bundle: index_in_bundle(idx),
             };
-            pushed_any |= self.insert(record, location);
+            let _ = self.insert(record, location);
         }
 
-        if pushed_any {
+        if !bundle.commitments.is_empty() {
             self.by_block.insert(block_height, bundle);
         }
     }
@@ -199,6 +197,10 @@ impl DaCommitmentStore {
     }
 }
 
+fn index_in_bundle(idx: usize) -> u32 {
+    u32::try_from(idx).unwrap_or(u32::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, Signature};
@@ -326,6 +328,15 @@ mod tests {
         let fetched = store.get_by_lane_epoch_sequence(2, 1, 0).unwrap();
         assert_eq!(fetched.location.block_height, 11);
         assert_eq!(fetched.location.index_in_bundle, 1);
+    }
+
+    #[test]
+    fn index_in_bundle_saturates_on_overflow() {
+        assert_eq!(index_in_bundle(0), 0);
+        assert_eq!(index_in_bundle(u32::MAX as usize), u32::MAX);
+        if usize::BITS > u32::BITS {
+            assert_eq!(index_in_bundle((u32::MAX as usize) + 1), u32::MAX);
+        }
     }
 
     #[test]
@@ -481,6 +492,29 @@ mod tests {
             bundle.commitments[usize::try_from(fetched.location.index_in_bundle).unwrap()],
             fetched.commitment
         );
+    }
+
+    #[test]
+    fn insert_bundle_preserves_all_duplicate_bundle() {
+        let mut store = DaCommitmentStore::default();
+        let first = sample_record(1, 1, 1);
+        let mut duplicate_key = first.clone();
+        duplicate_key.manifest_hash = ManifestDigest::new([0x77; 32]);
+        duplicate_key.storage_ticket = StorageTicketId::new([0x78; 32]);
+
+        store.insert_bundle(7, DaCommitmentBundle::new(vec![first.clone()]));
+        store.insert_bundle(8, DaCommitmentBundle::new(vec![duplicate_key.clone()]));
+
+        assert!(
+            store
+                .get_by_manifest(&duplicate_key.manifest_hash)
+                .is_none(),
+            "duplicate-key record must not become queryable by manifest"
+        );
+        let bundle = store
+            .bundle_at(8)
+            .expect("duplicate-only committed block bundle retained");
+        assert_eq!(bundle.commitments.as_slice(), &[duplicate_key]);
     }
 
     #[test]

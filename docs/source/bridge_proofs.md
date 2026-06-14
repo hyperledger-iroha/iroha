@@ -72,6 +72,10 @@ The Rust readiness path requires those route allowlist and canary hashes to use
 the canonical lowercase `0x` spelling; bare hex, `0X` prefixes, uppercase byte
 aliases, and padded strings stay blockers. Deployment-bound EVM lane readiness
 replays that same canonical check for copied route-canary transaction hashes.
+Normalized codec JSON fixed-byte variants use the same canonical lowercase `0x`
+syntax; bare, `0X`, uppercase-byte, and padded aliases are rejected while
+syntactically valid zero byte payloads remain allowed unless a later semantic
+gate requires non-zero material.
 Release-readiness and strict release-bundle source inventories pin this optional
 canary-summary exactness so failed, partial, replayed, or drifted top-level
 summaries cannot be treated as production-shaped route profiles.

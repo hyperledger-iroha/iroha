@@ -5814,7 +5814,9 @@ pub fn record_validation_reject(
 
 /// Record an RBC abort occurrence for telemetry.
 pub fn record_rbc_abort(height: u64, view: u64) {
-    RBC_ABORT_TOTAL.fetch_add(1, Ordering::Relaxed);
+    let _ = RBC_ABORT_TOTAL.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        current.checked_add(1)
+    });
     RBC_ABORT_LAST_HEIGHT.store(height, Ordering::Relaxed);
     RBC_ABORT_LAST_VIEW.store(view, Ordering::Relaxed);
 }
@@ -8987,6 +8989,34 @@ mod tests {
     }
 
     #[test]
+    fn rbc_mismatch_status_labels_and_top_level_snapshot_are_stable() {
+        let _guard = super::rbc_status_test_guard();
+        super::reset_rbc_mismatch_for_tests();
+        assert_eq!(super::RbcMismatchKind::ChunkDigest.label(), "chunk_digest");
+        assert_eq!(super::RbcMismatchKind::PayloadHash.label(), "payload_hash");
+        assert_eq!(super::RbcMismatchKind::ChunkRoot.label(), "chunk_root");
+
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        super::record_rbc_mismatch(&peer, super::RbcMismatchKind::ChunkDigest);
+        super::record_rbc_mismatch(&peer, super::RbcMismatchKind::PayloadHash);
+        super::record_rbc_mismatch(&peer, super::RbcMismatchKind::ChunkRoot);
+
+        let snapshot = super::snapshot().rbc_mismatch;
+        assert_eq!(snapshot.entries.len(), 1);
+        let entry = &snapshot.entries[0];
+        assert_eq!(entry.peer_id, peer);
+        assert_eq!(entry.chunk_digest_mismatch_total, 1);
+        assert_eq!(entry.payload_hash_mismatch_total, 1);
+        assert_eq!(entry.chunk_root_mismatch_total, 1);
+        assert!(
+            entry.last_timestamp_ms > 0,
+            "top-level status snapshot should expose the latest mismatch timestamp"
+        );
+
+        super::reset_rbc_mismatch_for_tests();
+    }
+
+    #[test]
     fn vote_validation_drop_snapshot_tracks_entries() {
         let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
@@ -9946,6 +9976,48 @@ mod tests {
     }
 
     #[test]
+    fn phase_snapshot_saturates_pipeline_totals_without_counting_aggregator_fanout() {
+        let _guard = super::gossip_fallback_test_guard();
+        super::reset_gossip_fallback_for_tests();
+
+        super::set_phase_collect_aggregator_ms(u64::MAX);
+        super::set_phase_collect_aggregator_ema_ms(u64::MAX);
+        let snapshot = super::phase_latencies_snapshot();
+        assert_eq!(snapshot.collect_aggregator_ms, u64::MAX);
+        assert_eq!(snapshot.collect_aggregator_max_ms, u64::MAX);
+        assert_eq!(snapshot.collect_aggregator_ema_ms, u64::MAX);
+        assert_eq!(
+            snapshot.pipeline_total_ms, 0,
+            "collector fan-out latency is reported separately from the block pipeline total"
+        );
+        assert_eq!(snapshot.pipeline_total_max_ms, 0);
+
+        super::set_phase_propose_ms(u64::MAX);
+        super::set_phase_collect_da_ms(u64::MAX);
+        super::set_phase_collect_prevote_ms(1);
+        super::set_phase_collect_precommit_ms(2);
+        super::set_phase_commit_ms(3);
+        let saturated = super::phase_latencies_snapshot();
+        assert_eq!(saturated.pipeline_total_ms, u64::MAX);
+        assert_eq!(saturated.pipeline_total_max_ms, u64::MAX);
+
+        super::set_phase_propose_ms(1);
+        super::set_phase_collect_da_ms(1);
+        super::set_phase_collect_prevote_ms(1);
+        super::set_phase_collect_precommit_ms(1);
+        super::set_phase_commit_ms(1);
+        let cooled = super::phase_latencies_snapshot();
+        assert_eq!(cooled.pipeline_total_ms, 5);
+        assert_eq!(
+            cooled.pipeline_total_max_ms,
+            u64::MAX,
+            "max phase total should retain the adversarial saturated peak"
+        );
+
+        super::reset_gossip_fallback_for_tests();
+    }
+
+    #[test]
     fn availability_vote_tracking_records_counts() {
         super::reset_availability_stats_for_tests();
         let peer = iroha_data_model::peer::PeerId::new(KeyPair::random().public_key().clone());
@@ -10286,6 +10358,103 @@ mod tests {
             })
             .expect("post-poison consensus message handling entry");
         assert_eq!(entry.total, 1);
+
+        super::reset_message_handling_for_tests();
+    }
+
+    #[test]
+    fn consensus_message_handling_counters_keep_mixed_rbc_outcomes_partitioned() {
+        let _guard = super::message_handling_test_guard();
+        super::reset_message_handling_for_tests();
+
+        let cases = [
+            (
+                super::ConsensusMessageKind::RbcReady,
+                super::ConsensusMessageOutcome::Deferred,
+                super::ConsensusMessageReason::ReadyQuorumMissing,
+                2_u64,
+                "rbc_ready",
+                "deferred",
+                "ready_quorum_missing",
+            ),
+            (
+                super::ConsensusMessageKind::RbcReady,
+                super::ConsensusMessageOutcome::Dropped,
+                super::ConsensusMessageReason::InvalidSignature,
+                1_u64,
+                "rbc_ready",
+                "dropped",
+                "invalid_signature",
+            ),
+            (
+                super::ConsensusMessageKind::RbcDeliver,
+                super::ConsensusMessageOutcome::Deferred,
+                super::ConsensusMessageReason::ChunksMissing,
+                3_u64,
+                "rbc_deliver",
+                "deferred",
+                "chunks_missing",
+            ),
+            (
+                super::ConsensusMessageKind::RbcDeliver,
+                super::ConsensusMessageOutcome::Dropped,
+                super::ConsensusMessageReason::InvalidPayload,
+                1_u64,
+                "rbc_deliver",
+                "dropped",
+                "invalid_payload",
+            ),
+            (
+                super::ConsensusMessageKind::RbcChunk,
+                super::ConsensusMessageOutcome::Dropped,
+                super::ConsensusMessageReason::ChunkRootMismatch,
+                1_u64,
+                "rbc_chunk",
+                "dropped",
+                "chunk_root_mismatch",
+            ),
+            (
+                super::ConsensusMessageKind::RbcInit,
+                super::ConsensusMessageOutcome::Dropped,
+                super::ConsensusMessageReason::RosterHashMismatch,
+                1_u64,
+                "rbc_init",
+                "dropped",
+                "roster_hash_mismatch",
+            ),
+        ];
+
+        for (kind, outcome, reason, total, _, _, _) in cases {
+            for _ in 0..total {
+                super::record_consensus_message_handling(kind, outcome, reason);
+            }
+        }
+
+        let snapshot = super::snapshot();
+        let entries = snapshot.consensus_message_handling.entries;
+        let observed_total = entries.iter().map(|entry| entry.total).sum::<u64>();
+        let expected_total = cases
+            .iter()
+            .map(|(_, _, _, total, _, _, _)| *total)
+            .sum::<u64>();
+        assert_eq!(observed_total, expected_total);
+
+        for (kind, outcome, reason, total, kind_label, outcome_label, reason_label) in cases {
+            let mut matching_entries = entries.iter().filter(|entry| {
+                entry.kind == kind && entry.outcome == outcome && entry.reason == reason
+            });
+            let entry = matching_entries
+                .next()
+                .expect("mixed RBC counter entry should exist");
+            assert!(
+                matching_entries.next().is_none(),
+                "mixed RBC counter entry should be unique"
+            );
+            assert_eq!(entry.total, total);
+            assert_eq!(entry.kind.as_str(), kind_label);
+            assert_eq!(entry.outcome.as_str(), outcome_label);
+            assert_eq!(entry.reason.as_str(), reason_label);
+        }
 
         super::reset_message_handling_for_tests();
     }
@@ -10820,6 +10989,21 @@ mod tests {
         assert_eq!(snapshot.total, 2);
         assert_eq!(snapshot.last_height, 9);
         assert_eq!(snapshot.last_view, 4);
+
+        super::reset_rbc_abort_counters_for_tests();
+    }
+
+    #[test]
+    fn rbc_abort_counter_saturates_without_wrapping() {
+        super::reset_rbc_abort_counters_for_tests();
+        super::RBC_ABORT_TOTAL.store(u64::MAX, Ordering::Relaxed);
+
+        super::record_rbc_abort(11, 7);
+
+        let snapshot = super::snapshot().rbc_abort;
+        assert_eq!(snapshot.total, u64::MAX);
+        assert_eq!(snapshot.last_height, 11);
+        assert_eq!(snapshot.last_view, 7);
 
         super::reset_rbc_abort_counters_for_tests();
     }

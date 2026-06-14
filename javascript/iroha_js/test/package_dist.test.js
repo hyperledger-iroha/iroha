@@ -442,9 +442,7 @@ const TEST_CRC64_TABLE = (() => {
     let crc = BigInt(index);
     for (let bit = 0; bit < 8; bit += 1) {
       crc =
-        (crc & 1n) !== 0n
-          ? (crc >> 1n) ^ TEST_CRC64_REFLECTED_POLY
-          : crc >> 1n;
+        (crc & 1n) !== 0n ? (crc >> 1n) ^ TEST_CRC64_REFLECTED_POLY : crc >> 1n;
     }
     table[index] = crc;
   }
@@ -540,7 +538,10 @@ function kagemushaLineageVerifierKey(circuitId, seed) {
 }
 
 function kagemushaVerifierKeyCommitment(verifierKey) {
-  const backend = Buffer.from(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND, "utf8");
+  const backend = Buffer.from(
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+    "utf8",
+  );
   const backendLength = Buffer.alloc(8);
   backendLength.writeBigUInt64BE(BigInt(backend.length));
   const verifierKeyLength = Buffer.alloc(8);
@@ -588,7 +589,10 @@ function privacyNoritoFrameWithSchemaOverride(schemaByte, offset, value) {
   return frame;
 }
 
-function privacyNoritoFrameWithDeclaredPayloadLength(schemaByte, payloadLength) {
+function privacyNoritoFrameWithDeclaredPayloadLength(
+  schemaByte,
+  payloadLength,
+) {
   const frame = Buffer.from(privacyNoritoFrameWithPayload(schemaByte));
   frame.writeBigUInt64LE(BigInt(payloadLength), 23);
   return frame;
@@ -600,12 +604,12 @@ function privacyNoritoFrameWithFlags(schemaByte, flags) {
   return frame;
 }
 
-function slicedPrivacyView(archive, prefix = [0xff, 0x7f, 0x42], suffix = [0x24, 0x13]) {
-  const backing = Uint8Array.from([
-    ...prefix,
-    ...archive,
-    ...suffix,
-  ]);
+function slicedPrivacyView(
+  archive,
+  prefix = [0xff, 0x7f, 0x42],
+  suffix = [0x24, 0x13],
+) {
+  const backing = Uint8Array.from([...prefix, ...archive, ...suffix]);
   return backing.subarray(prefix.length, prefix.length + archive.length);
 }
 
@@ -618,12 +622,16 @@ function malformedPrivacyRequestArchives() {
   badMinorVersion[5] = 1;
   const badCompression = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
   badCompression[22] = 1;
-  const badDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(0x52, 6n);
-  const badOversizedDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(
+  const badDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(
     0x52,
-    0x8000000000000000n,
+    6n,
   );
-  const badPadding = Buffer.concat([PRIVACY_REQUEST_ARCHIVE, Buffer.from([0x7f])]);
+  const badOversizedDeclaredPayloadLength =
+    privacyNoritoFrameWithDeclaredPayloadLength(0x52, 0x8000000000000000n);
+  const badPadding = Buffer.concat([
+    PRIVACY_REQUEST_ARCHIVE,
+    Buffer.from([0x7f]),
+  ]);
   const badExcessivePadding = privacyNoritoFrameWithPadding(0x52, 65);
   const badFlags = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
   badFlags[39] = 0x08;
@@ -673,10 +681,11 @@ function malformedPrivacyNativeOutputArchives(schemaByte) {
     schemaByte,
     6n,
   );
-  const badOversizedDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(
-    schemaByte,
-    0x8000000000000000n,
-  );
+  const badOversizedDeclaredPayloadLength =
+    privacyNoritoFrameWithDeclaredPayloadLength(
+      schemaByte,
+      0x8000000000000000n,
+    );
   const badPadding = Buffer.concat([archive, Buffer.from([0x7f])]);
   const badExcessivePadding = privacyNoritoFrameWithPadding(schemaByte, 65);
   const badFlags = Buffer.from(archive);
@@ -704,26 +713,58 @@ function malformedPrivacyNativeOutputArchives(schemaByte) {
   ];
 }
 
-const LEGACY_FULLWIDTH_KANA = /[イロハニホヘトチリヌルヲワカヨタレソツネナラムウノオクヤマケフコエテアサキユメミシヒモセス]/u;
+const LEGACY_FULLWIDTH_KANA =
+  /[イロハニホヘトチリヌルヲワカヨタレソツネナラムウノオクヤマケフコエテアサキユメミシヒモセス]/u;
 const HALFWIDTH_KANA = /[ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼﾋﾓｾｽ]/u;
-const DECLARATIONS_TEXT = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+const DECLARATIONS_TEXT = readFileSync(
+  new URL("../index.d.ts", import.meta.url),
+  "utf8",
+);
 const PACKAGE_DECLARATION_TEXTS = new Map([
   ["index.d.ts", DECLARATIONS_TEXT],
-  ["connect.browser.d.ts", readFileSync(new URL("../connect.browser.d.ts", import.meta.url), "utf8")],
-  ["nexus-app.d.ts", readFileSync(new URL("../nexus-app.d.ts", import.meta.url), "utf8")],
-  ["kotodama-compiler.d.ts", readFileSync(new URL("../kotodama-compiler.d.ts", import.meta.url), "utf8")],
+  [
+    "connect.browser.d.ts",
+    readFileSync(new URL("../connect.browser.d.ts", import.meta.url), "utf8"),
+  ],
+  [
+    "nexus-app.d.ts",
+    readFileSync(new URL("../nexus-app.d.ts", import.meta.url), "utf8"),
+  ],
+  [
+    "kotodama-compiler.d.ts",
+    readFileSync(new URL("../kotodama-compiler.d.ts", import.meta.url), "utf8"),
+  ],
 ]);
-const SCCP_SOURCE_TEXT = readFileSync(new URL("../src/sccp.js", import.meta.url), "utf8");
-const INDEX_SOURCE_TEXT = readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
-const DIST_SCCP_TEXT = readFileSync(new URL("../dist/sccp.js", import.meta.url), "utf8");
-const DIST_INDEX_TEXT = readFileSync(new URL("../dist/index.js", import.meta.url), "utf8");
-const PACKAGE_JSON_TEXT = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+const SCCP_SOURCE_TEXT = readFileSync(
+  new URL("../src/sccp.js", import.meta.url),
+  "utf8",
+);
+const INDEX_SOURCE_TEXT = readFileSync(
+  new URL("../src/index.js", import.meta.url),
+  "utf8",
+);
+const DIST_SCCP_TEXT = readFileSync(
+  new URL("../dist/sccp.js", import.meta.url),
+  "utf8",
+);
+const DIST_INDEX_TEXT = readFileSync(
+  new URL("../dist/index.js", import.meta.url),
+  "utf8",
+);
+const PACKAGE_JSON_TEXT = readFileSync(
+  new URL("../package.json", import.meta.url),
+  "utf8",
+);
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
 const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
 
 function publicSccpSourceExports() {
-  return [...SCCP_SOURCE_TEXT.matchAll(/export\s+(?:const|function|class)\s+([A-Za-z0-9_]+)/gu)]
+  return [
+    ...SCCP_SOURCE_TEXT.matchAll(
+      /export\s+(?:const|function|class)\s+([A-Za-z0-9_]+)/gu,
+    ),
+  ]
     .map((match) => match[1])
     .filter((name) => name.startsWith("SCCP_") || /Sccp|sccp/u.test(name));
 }
@@ -731,19 +772,28 @@ function publicSccpSourceExports() {
 function sccpEntrypointExportNames(text) {
   const match = text.match(/export \{([\s\S]*?)\} from "\.\/sccp\.js";/u);
   assert.notEqual(match, null);
-  return new Set([...match[1].matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\b/gu)].map((item) => item[1]));
+  return new Set(
+    [...match[1].matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\b/gu)].map(
+      (item) => item[1],
+    ),
+  );
 }
 
 function declarationExportNames() {
   return new Set(
-    [...DECLARATIONS_TEXT.matchAll(/export\s+(?:const|function|class|interface|type)\s+([A-Za-z0-9_]+)/gu)]
-      .map((match) => match[1]),
+    [
+      ...DECLARATIONS_TEXT.matchAll(
+        /export\s+(?:const|function|class|interface|type)\s+([A-Za-z0-9_]+)/gu,
+      ),
+    ].map((match) => match[1]),
   );
 }
 
 function declarationInterface(name) {
   const match = DECLARATIONS_TEXT.match(
-    new RegExp(`export interface ${name}(?:\\s+extends\\s+[^{]+)?\\s*\\{[\\s\\S]*?\\n\\}`),
+    new RegExp(
+      `export interface ${name}(?:\\s+extends\\s+[^{]+)?\\s*\\{[\\s\\S]*?\\n\\}`,
+    ),
   );
   assert.ok(match, `missing declaration interface ${name}`);
   return match[0];
@@ -753,7 +803,9 @@ function declarationClass(name) {
   const start = DECLARATIONS_TEXT.indexOf(`export class ${name} {`);
   assert.notEqual(start, -1, `missing declaration class ${name}`);
   const end = DECLARATIONS_TEXT.indexOf("\nexport ", start + 1);
-  return end === -1 ? DECLARATIONS_TEXT.slice(start) : DECLARATIONS_TEXT.slice(start, end);
+  return end === -1
+    ? DECLARATIONS_TEXT.slice(start)
+    : DECLARATIONS_TEXT.slice(start, end);
 }
 
 function abiWord(value) {
@@ -782,7 +834,9 @@ function sampleGroth16ProofBytes(publicInputs = undefined) {
       : Uint8Array.from({ length: 32 }, () => 0x11),
     abiWord(SCCP_DOMAIN_SORA),
     publicInputs
-      ? Uint8Array.from(Buffer.from(publicInputs.commitment_root.slice(2), "hex"))
+      ? Uint8Array.from(
+          Buffer.from(publicInputs.commitment_root.slice(2), "hex"),
+        )
       : Uint8Array.from({ length: 32 }, () => 0x33),
     abiWord(1),
     abiWord(2),
@@ -994,7 +1048,9 @@ function rlpLengthPrefix(length, shortOffset, longOffset) {
 }
 
 function concatBytes(...parts) {
-  const out = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
+  const out = new Uint8Array(
+    parts.reduce((size, part) => size + part.length, 0),
+  );
   let offset = 0;
   for (const part of parts) {
     out.set(part, offset);
@@ -1013,7 +1069,9 @@ function rlpList(fields) {
   return concatBytes(rlpLengthPrefix(payload.length, 0xc0, 0xf7), payload);
 }
 
-function sampleEthExecutionHeaderRlp(receiptsRoot = Uint8Array.from(Array(32).fill(0x15))) {
+function sampleEthExecutionHeaderRlp(
+  receiptsRoot = Uint8Array.from(Array(32).fill(0x15)),
+) {
   return rlpList([
     rlpString(Uint8Array.from(Array(32).fill(0x10))),
     rlpString(Uint8Array.from(Array(32).fill(0x11))),
@@ -1062,11 +1120,16 @@ seiyaku BadAssetDefinitionChecksum {
 
   assert.equal(result.artifactBytes.length, 0);
   assert.equal(result.diagnostics.length, 1);
-  assert.match(result.diagnostics[0].message, /invalid AssetDefinitionId literal `62Fk4FPcMuLvW5QjDGNF2a4jAmjN`.*checksum/is);
+  assert.match(
+    result.diagnostics[0].message,
+    /invalid AssetDefinitionId literal `62Fk4FPcMuLvW5QjDGNF2a4jAmjN`.*checksum/is,
+  );
 });
 
 test("package dist Kotodama compiler matches src for direct account mint path", () => {
-  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(`ed0120${"11".repeat(32)}`);
+  const account = renderCanonicalAccountIdLiteralFromPublicKeyLiteral(
+    `ed0120${"11".repeat(32)}`,
+  );
   const asset = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
   const source = `
 seiyaku DirectAccountMint {
@@ -1081,7 +1144,10 @@ seiyaku DirectAccountMint {
 
   assert.deepEqual(srcResult.diagnostics, []);
   assert.deepEqual(distResult.diagnostics, []);
-  assert.deepEqual(Buffer.from(distResult.artifactBytes), Buffer.from(srcResult.artifactBytes));
+  assert.deepEqual(
+    Buffer.from(distResult.artifactBytes),
+    Buffer.from(srcResult.artifactBytes),
+  );
 });
 
 test("package SCCP entrypoint and declarations cover public source exports", () => {
@@ -1209,13 +1275,28 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
 
   for (const name of expected) {
     assert.match(DIST_INDEX_TEXT, new RegExp(`\\b${name}\\b`, "u"));
-    assert.ok(declarationExports.has(name), `missing declaration export ${name}`);
+    assert.ok(
+      declarationExports.has(name),
+      `missing declaration export ${name}`,
+    );
   }
-  assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1, "recursive_compact_v1");
+  assert.equal(
+    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
+    "recursive_compact_v1",
+  );
   assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1, "recursive_spend_v1");
-  assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1, "checked_prefold_v1");
-  assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 7);
-  assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1, "kagemusha-recursive-compact-v1");
+  assert.equal(
+    KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+    "checked_prefold_v1",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+    7,
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+    "kagemusha-recursive-compact-v1",
+  );
   assert.equal(
     KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
     "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch",
@@ -1231,7 +1312,9 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     true,
   );
   assert.equal(
-    isKagemushaRecursiveCompactUnavailable("recursive compact proof composition unavailable"),
+    isKagemushaRecursiveCompactUnavailable(
+      "recursive compact proof composition unavailable",
+    ),
     false,
   );
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 6);
@@ -1254,10 +1337,22 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS, 64);
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1, 64);
-  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1, true);
-  assert.equal(KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1, 1);
-  assert.equal(KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES, 8 * 1024 * 1024);
-  assert.equal(KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES, 128);
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1,
+    true,
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1,
+    1,
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES,
+    8 * 1024 * 1024,
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES,
+    128,
+  );
   assert.equal(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 64 * 1024 * 1024);
   assert.equal(
     KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN,
@@ -1376,7 +1471,10 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
   ]) {
-    assert.equal(isKagemushaRecursiveSpendLineageProofCircuitId(circuitId), true);
+    assert.equal(
+      isKagemushaRecursiveSpendLineageProofCircuitId(circuitId),
+      true,
+    );
   }
   assert.equal(
     isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
@@ -1390,16 +1488,23 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
     true,
   );
-  assert.equal(requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(), true);
+  assert.equal(
+    requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(),
+    true,
+  );
   for (const openingLen of [2, 4, 8, 16, 32, 64, 128]) {
     assert.equal(
-      isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(openingLen),
+      isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(
+        openingLen,
+      ),
       true,
     );
   }
   for (const openingLen of [0, 1, 3, 65, 129, -2, 2.5, Number.NaN, "2", true]) {
     assert.equal(
-      isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(openingLen),
+      isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(
+        openingLen,
+      ),
       false,
     );
   }
@@ -1500,7 +1605,10 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
   );
   const oldHashProvingKey = Buffer.from(expectedProvingKey);
-  OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH.copy(oldHashProvingKey, 6);
+  OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH.copy(
+    oldHashProvingKey,
+    6,
+  );
   assert.throws(
     () =>
       kagemushaRecursiveSpendLineageKeyArtifactsForInit(
@@ -1543,18 +1651,54 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   for (const malformed of [
     [null, /lineage_key_artifacts/],
-    [{ ...initArtifacts, proofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 }, /proof_circuit_id/],
-    [{ ...initArtifacts, proofCircuitId: "unknown-kagemusha-recursive-spend-circuit" }, /proof_circuit_id/],
+    [
+      {
+        ...initArtifacts,
+        proofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      },
+      /proof_circuit_id/,
+    ],
+    [
+      {
+        ...initArtifacts,
+        proofCircuitId: "unknown-kagemusha-recursive-spend-circuit",
+      },
+      /proof_circuit_id/,
+    ],
     [{ ...initArtifacts, verifierOpeningLen: 3 }, /verifier_opening_len/],
     [{ ...initArtifacts, verifierOpeningLen: true }, /verifier_opening_len/],
-    [{ ...initArtifacts, lineageVerifierKeyBackend: "halo2/kzg" }, /lineage_verifier_key/],
-    [{ ...initArtifacts, lineageVerifierKeyBackend: " halo2/ipa" }, /lineage_verifier_key/],
-    [{ ...initArtifacts, lineageVerifierKeyBackend: "halo2/ipa " }, /lineage_verifier_key/],
-    [{ ...initArtifacts, lineageVerifierKeyBackend: "HALO2/IPA" }, /lineage_verifier_key/],
-    [{ ...initArtifacts, lineageVerifierKey: Buffer.alloc(0) }, /lineage_verifier_key/],
-    [{ ...initArtifacts, lineageProvingKeyArchive: Buffer.alloc(0) }, /lineage_proving_key_archive/],
-    [{ ...initArtifacts, lineageVerifierKey: "not-bytes" }, /lineage_verifier_key/],
-    [{ ...initArtifacts, lineageProvingKeyArchive: "not-bytes" }, /lineage_proving_key_archive/],
+    [
+      { ...initArtifacts, lineageVerifierKeyBackend: "halo2/kzg" },
+      /lineage_verifier_key/,
+    ],
+    [
+      { ...initArtifacts, lineageVerifierKeyBackend: " halo2/ipa" },
+      /lineage_verifier_key/,
+    ],
+    [
+      { ...initArtifacts, lineageVerifierKeyBackend: "halo2/ipa " },
+      /lineage_verifier_key/,
+    ],
+    [
+      { ...initArtifacts, lineageVerifierKeyBackend: "HALO2/IPA" },
+      /lineage_verifier_key/,
+    ],
+    [
+      { ...initArtifacts, lineageVerifierKey: Buffer.alloc(0) },
+      /lineage_verifier_key/,
+    ],
+    [
+      { ...initArtifacts, lineageProvingKeyArchive: Buffer.alloc(0) },
+      /lineage_proving_key_archive/,
+    ],
+    [
+      { ...initArtifacts, lineageVerifierKey: "not-bytes" },
+      /lineage_verifier_key/,
+    ],
+    [
+      { ...initArtifacts, lineageProvingKeyArchive: "not-bytes" },
+      /lineage_proving_key_archive/,
+    ],
   ]) {
     assert.throws(
       () => validateKagemushaRecursiveSpendLineageKeyArtifacts(malformed[0]),
@@ -1582,7 +1726,9 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "unknown-kagemusha-recursive-spend-circuit",
   ]) {
     assert.equal(
-      requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(outputCircuitId),
+      requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
+        outputCircuitId,
+      ),
       false,
     );
   }
@@ -1690,9 +1836,15 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   for (const [circuitId, hopCount] of [
     [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, -1],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.MAX_SAFE_INTEGER],
+    [
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      Number.MAX_SAFE_INTEGER,
+    ],
     [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.NaN],
-    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.POSITIVE_INFINITY],
+    [
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      Number.POSITIVE_INFINITY,
+    ],
     [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 1n],
     [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, new Number(1)],
     [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, true],
@@ -1702,9 +1854,15 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ["", 1],
     ["unknown-kagemusha-recursive-spend-circuit", Number.MAX_SAFE_INTEGER],
   ]) {
-    assert.equal(canRedeemKagemushaRecursiveSpendWitnessless(circuitId, hopCount), false);
     assert.equal(
-      requiresKagemushaRecursiveSpendLineageWitnessForRedeem(circuitId, hopCount),
+      canRedeemKagemushaRecursiveSpendWitnessless(circuitId, hopCount),
+      false,
+    );
+    assert.equal(
+      requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
+        circuitId,
+        hopCount,
+      ),
       true,
     );
   }
@@ -1714,11 +1872,25 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(64), false);
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(1.5), false);
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(-1), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.MAX_SAFE_INTEGER), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.NaN), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.POSITIVE_INFINITY), false);
+  assert.equal(
+    canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.MAX_SAFE_INTEGER),
+    false,
+  );
+  assert.equal(
+    canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.NaN),
+    false,
+  );
+  assert.equal(
+    canAppendKagemushaRecursiveSpendWitnesslessLineage(
+      Number.POSITIVE_INFINITY,
+    ),
+    false,
+  );
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(1n), false);
-  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(new Number(1)), false);
+  assert.equal(
+    canAppendKagemushaRecursiveSpendWitnesslessLineage(new Number(1)),
+    false,
+  );
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(true), false);
   assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage("1"), false);
   assert.equal(
@@ -1745,7 +1917,10 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
     true,
   );
-  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), true);
+  assert.equal(
+    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1),
+    true,
+  );
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -1891,11 +2066,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
     false,
   );
-  for (const previousHopCount of [
-    Number.NaN,
-    1n,
-    new Number(1),
-  ]) {
+  for (const previousHopCount of [Number.NaN, 1n, new Number(1)]) {
     assert.equal(
       canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -1976,8 +2147,14 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     preferredKagemushaOfflineSpendMode(false),
     KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
   );
-  assert.equal(typeof isKagemushaRecursiveCompactPaymentTokenNativeAvailable(), "boolean");
-  assert.equal(typeof isKagemushaCompactPaymentTokenNativeAvailable(), "boolean");
+  assert.equal(
+    typeof isKagemushaRecursiveCompactPaymentTokenNativeAvailable(),
+    "boolean",
+  );
+  assert.equal(
+    typeof isKagemushaCompactPaymentTokenNativeAvailable(),
+    "boolean",
+  );
   assert.equal(
     typeof isKagemushaRecursiveAggregationProofBundleNativeAvailable(),
     "boolean",
@@ -2001,12 +2178,19 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(typeof kagemushaVerifyRecursiveCompactPaymentToken, "function");
   assert.equal(typeof kagemushaBuildPallasOpenEnvelopesArchive, "function");
-  assert.equal(typeof kagemushaBuildPreviousProofOpenEnvelopesArchive, "function");
-  assert.equal(typeof kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection, "function");
+  assert.equal(
+    typeof kagemushaBuildPreviousProofOpenEnvelopesArchive,
+    "function",
+  );
+  assert.equal(
+    typeof kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection,
+    "function",
+  );
   assert.throws(
-    () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(
-      privacyNoritoFrameWithPayload(0x4d),
-    ),
+    () =>
+      kagemushaProveVerifiedCompactPaymentTokenWithRecords(
+        privacyNoritoFrameWithPayload(0x4d),
+      ),
     /Kagemusha compact payment-token prover|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha record bundle archive/,
   );
   assert.throws(
@@ -2027,7 +2211,10 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     /recursive compact Kagemusha payment-token prover|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha record bundle archive/,
   );
   assert.throws(
-    () => kagemushaBuildPallasOpenEnvelopesArchive(privacyNoritoFrameWithPayload(0x4e)),
+    () =>
+      kagemushaBuildPallasOpenEnvelopesArchive(
+        privacyNoritoFrameWithPayload(0x4e),
+      ),
     /Kagemusha Pallas open-envelope builders|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha record bundle archive/,
   );
   assert.throws(
@@ -2046,7 +2233,10 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     /recursive compact Kagemusha payment-token verifier|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha recursive compact payment token archive/,
   );
   assert.throws(
-    () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(privacyNoritoFrameWithPayload(0x4c)),
+    () =>
+      kagemushaRecursiveSpendCompactPaymentTokenFromBundle(
+        privacyNoritoFrameWithPayload(0x4c),
+      ),
     /recursive spend compact Kagemusha payment-token projection|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha recursive spend compact-token bundle archive/,
   );
   assert.throws(
@@ -2132,7 +2322,11 @@ test("package dist Kagemusha recursive compact requires key packages before nati
       /recursiveCompactVerifierKeysArchive must be a Buffer, string, or ArrayBuffer view/,
     );
     assert.throws(
-      () => kagemushaVerifyRecursiveCompactPaymentToken(compactToken, Buffer.alloc(0)),
+      () =>
+        kagemushaVerifyRecursiveCompactPaymentToken(
+          compactToken,
+          Buffer.alloc(0),
+        ),
       /recursiveCompactVerifierKeysArchive must not be empty/,
     );
     assert.deepEqual(calls, []);
@@ -2145,7 +2339,10 @@ test("package dist Kagemusha recursive compact requires key packages before nati
       ),
       nativeOutput,
     );
-    assert.equal(kagemushaVerifyRecursiveCompactPaymentToken(compactToken, verifierKeys), true);
+    assert.equal(
+      kagemushaVerifyRecursiveCompactPaymentToken(compactToken, verifierKeys),
+      true,
+    );
   } finally {
     if (previous === undefined) {
       delete globalThis.__IROHA_NATIVE_BINDING__;
@@ -2214,7 +2411,10 @@ test("package dist Kagemusha recursive spend availability rejects coerced ABI ve
       };
 
       assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false);
-      assert.equal(isKagemushaRecursiveCompactPaymentTokenNativeAvailable(), false);
+      assert.equal(
+        isKagemushaRecursiveCompactPaymentTokenNativeAvailable(),
+        false,
+      );
       assert.equal(
         isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(),
         false,
@@ -2250,7 +2450,10 @@ test("package dist entrypoint exports privacy native archive helpers", () => {
 
   for (const name of expected) {
     assert.match(DIST_INDEX_TEXT, new RegExp(`\\b${name}\\b`, "u"));
-    assert.ok(declarationExports.has(name), `missing declaration export ${name}`);
+    assert.ok(
+      declarationExports.has(name),
+      `missing declaration export ${name}`,
+    );
   }
   assert.equal(PRIVACY_FFI_VERSION_V1, 1);
   assert.equal(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION, 7);
@@ -2279,19 +2482,32 @@ test("package dist entrypoint exports privacy native archive helpers", () => {
     "privacyCriteria",
   ]);
   assert.equal(
-    capabilities.privacyAlgorithms.every((descriptor) => descriptor.productionReady === false),
+    capabilities.privacyAlgorithms.every(
+      (descriptor) => descriptor.productionReady === false,
+    ),
     true,
   );
   assert.equal(
-    capabilities.privacyAlgorithms.every((descriptor) => descriptor.productionGate.ready === false),
+    capabilities.privacyAlgorithms.every(
+      (descriptor) => descriptor.productionGate.ready === false,
+    ),
     true,
   );
   assert.equal(Object.isFrozen(capabilities), true);
   assert.equal(Object.isFrozen(capabilities.privacyAlgorithms), true);
   assert.equal(Object.isFrozen(capabilities.privacyAlgorithms[0]), true);
-  assert.equal(Object.isFrozen(capabilities.privacyAlgorithms[0].productionGate), true);
-  assert.equal(Object.isFrozen(capabilities.privacyAlgorithms[0].productionGate.gates), true);
-  assert.equal(Object.isFrozen(capabilities.privacyAlgorithms[0].productionGate.missing), true);
+  assert.equal(
+    Object.isFrozen(capabilities.privacyAlgorithms[0].productionGate),
+    true,
+  );
+  assert.equal(
+    Object.isFrozen(capabilities.privacyAlgorithms[0].productionGate.gates),
+    true,
+  );
+  assert.equal(
+    Object.isFrozen(capabilities.privacyAlgorithms[0].productionGate.missing),
+    true,
+  );
   assert.equal(Object.isFrozen(capabilities.privacyCriteria), true);
   assert.throws(() => {
     capabilities.privacyAlgorithms[0].productionReady = true;
@@ -2311,7 +2527,10 @@ test("package dist entrypoint exports privacy native archive helpers", () => {
   const fresh = getPrivacyCapabilities();
   assert.equal(fresh.privacyAlgorithms[0].productionReady, false);
   assert.equal(fresh.privacyAlgorithms[0].productionGate.ready, false);
-  assert.equal(fresh.privacyAlgorithms[0].productionGate.gates.external_audit, false);
+  assert.equal(
+    fresh.privacyAlgorithms[0].productionGate.gates.external_audit,
+    false,
+  );
   assert.ok(
     fresh.privacyAlgorithms[0].productionGate.missing.includes(
       "internal cryptographic review signoff is missing",
@@ -2343,7 +2562,10 @@ test("package dist entrypoint exports production component privacy helpers", () 
     "buildAnonymousPgcTransferInstruction",
   ]) {
     assert.match(DIST_INDEX_TEXT, new RegExp(`\\b${name}\\b`, "u"));
-    assert.ok(declarationExports.has(name), `missing declaration export ${name}`);
+    assert.ok(
+      declarationExports.has(name),
+      `missing declaration export ${name}`,
+    );
   }
   assert.equal(typeof buildJindoLatticeProofV0, "function");
   assert.equal(typeof verifyJindoPolynomialCommitmentV0, "function");
@@ -2356,10 +2578,16 @@ test("package dist entrypoint exports production component privacy helpers", () 
   assert.equal(typeof buildVegaCredentialPredicateProofV0, "function");
   assert.equal(typeof verifyVegaCredentialPredicateProofV0, "function");
   assert.equal(typeof buildSilentThresholdCredentialShowingProofV0, "function");
-  assert.equal(typeof verifySilentThresholdCredentialShowingProofV0, "function");
+  assert.equal(
+    typeof verifySilentThresholdCredentialShowingProofV0,
+    "function",
+  );
   assert.equal(typeof buildZkX509IdentityProofV0, "function");
   assert.equal(typeof verifyZkX509IdentityProofV0, "function");
-  assert.equal(typeof buildAnonymousPgcAccountCommitmentInstruction, "function");
+  assert.equal(
+    typeof buildAnonymousPgcAccountCommitmentInstruction,
+    "function",
+  );
   assert.equal(typeof buildAnonymousPgcKOutOfNProofV1, "function");
   assert.equal(typeof verifyAnonymousPgcKOutOfNProofV1, "function");
   assert.equal(typeof buildAnonymousPgcTransferInstruction, "function");
@@ -2401,28 +2629,33 @@ test("package dist ZK-AMS production helpers reject dev fixture bytes", () => {
   const fixtureInput = {
     issuerRoot: Buffer.alloc(32, 0x91),
     admissionNullifiers: [Buffer.alloc(32, 0xa1), Buffer.alloc(32, 0xa2)],
-    anonymousAccountCommitments: [Buffer.alloc(32, 0xb1), Buffer.alloc(32, 0xb2)],
+    anonymousAccountCommitments: [
+      Buffer.alloc(32, 0xb1),
+      Buffer.alloc(32, 0xb2),
+    ],
     recursiveProof: Buffer.from("zk-ams:recursive-proof:batch-7"),
     domainSeparator: "boi:zk-ams:pilot:v0",
     vkHash: Buffer.alloc(32, 0x66),
   };
   const fixture = buildZkAmsAdmissionDevProofFixture(fixtureInput);
   assert.throws(
-    () => buildZkAmsAdmissionBatchProofV0({
-      ...fixtureInput,
-      proofBytes: fixture.proofBytes,
-    }),
+    () =>
+      buildZkAmsAdmissionBatchProofV0({
+        ...fixtureInput,
+        proofBytes: fixture.proofBytes,
+      }),
     /dev fixture proof/,
   );
   assert.throws(
-    () => verifyZkAmsAdmissionBatchProofV0({
-      envelope: fixture.envelope,
-      issuerRoot: fixtureInput.issuerRoot,
-      admissionNullifiers: fixtureInput.admissionNullifiers,
-      anonymousAccountCommitments: fixtureInput.anonymousAccountCommitments,
-      recursiveProof: fixtureInput.recursiveProof,
-      domainSeparator: fixtureInput.domainSeparator,
-    }),
+    () =>
+      verifyZkAmsAdmissionBatchProofV0({
+        envelope: fixture.envelope,
+        issuerRoot: fixtureInput.issuerRoot,
+        admissionNullifiers: fixtureInput.admissionNullifiers,
+        anonymousAccountCommitments: fixtureInput.anonymousAccountCommitments,
+        recursiveProof: fixtureInput.recursiveProof,
+        domainSeparator: fixtureInput.domainSeparator,
+      }),
     /dev fixture/,
   );
 });
@@ -2456,8 +2689,14 @@ test("package dist privacy proof envelopes preserve pending production backend t
     ["halo2/pasta/kagemusha-recursive-aggregation-v1", "Halo2IpaPasta"],
     ["halo2/pasta/kagemusha-recursive-compact-v1", "Halo2IpaPasta"],
     ["halo2/pasta/kagemusha-recursive-spend-lineage-v1", "Halo2IpaPasta"],
-    ["halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1", "Halo2IpaPasta"],
-    ["halo2/pasta/kagemusha-recursive-spend-lineage-append-v1", "Halo2IpaPasta"],
+    [
+      "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
+      "Halo2IpaPasta",
+    ],
+    [
+      "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
+      "Halo2IpaPasta",
+    ],
     ["stark/fri", "Stark"],
     ["stark/fri/sha256-goldilocks", "Stark"],
     ["stark/fri/poseidon2-goldilocks", "Stark"],
@@ -2542,10 +2781,16 @@ test("package dist research privacy adapters build envelopes and reject class op
 
   const instructionHelpers = [
     [buildOrchardActionBundleInstruction, "zk::SubmitOrchardActionBundle"],
-    [buildPenumbraShieldedPoolTransaction, "zk::SubmitPenumbraShieldedPoolTransaction"],
+    [
+      buildPenumbraShieldedPoolTransaction,
+      "zk::SubmitPenumbraShieldedPoolTransaction",
+    ],
     [buildFcmpPlusPlusTransferInstruction, "zk::SubmitFcmpPlusPlusTransfer"],
     [buildMidenNoteTransactionInstruction, "zk::SubmitMidenNoteTransaction"],
-    [buildAztecPrivateRollupTransactionInstruction, "zk::SubmitAztecPrivateRollupTransaction"],
+    [
+      buildAztecPrivateRollupTransactionInstruction,
+      "zk::SubmitAztecPrivateRollupTransaction",
+    ],
     [buildPqMaspStarkRegisterPoolInstruction, "zk::SubmitPqMaspStarkTransfer"],
     [buildPqMaspStarkTransferInstruction, "zk::SubmitPqMaspStarkTransfer"],
   ];
@@ -2602,7 +2847,11 @@ test("package dist Jindo production helpers reject dev fixture bytes", () => {
 
   const fixture = buildJindoLatticeDevProofFixture({ ...base, vkHash });
   assert.throws(
-    () => verifyJindoPolynomialCommitmentV0({ envelope: fixture.envelope, ...base }),
+    () =>
+      verifyJindoPolynomialCommitmentV0({
+        envelope: fixture.envelope,
+        ...base,
+      }),
     /(unsupported tag|must be LatticePcsSis)/,
   );
   assert.throws(
@@ -2623,7 +2872,11 @@ test("package dist Jindo production helpers reject dev fixture bytes", () => {
     proofBytes: fixture.proofBytes,
   });
   assert.throws(
-    () => verifyJindoPolynomialCommitmentV0({ envelope: devEncodedAsLattice, ...base }),
+    () =>
+      verifyJindoPolynomialCommitmentV0({
+        envelope: devEncodedAsLattice,
+        ...base,
+      }),
     /dev fixture/,
   );
 
@@ -2665,10 +2918,13 @@ test("package dist Jindo and SIS public helpers reject class-instance options", 
     [buildJindoLatticePublicInputs, jindoBase],
     [buildJindoLatticeProofEnvelope, jindoProofOptions],
     [buildJindoLatticeProofV0, jindoProofOptions],
-    [buildJindoLatticeDevProofFixture, {
-      ...jindoBase,
-      vkHash: Buffer.alloc(32, 0xaa),
-    }],
+    [
+      buildJindoLatticeDevProofFixture,
+      {
+        ...jindoBase,
+        vkHash: Buffer.alloc(32, 0xaa),
+      },
+    ],
   ]) {
     assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
   }
@@ -2713,10 +2969,13 @@ test("package dist Jindo and SIS public helpers reject class-instance options", 
     [buildSisHintsCredentialCommitments, sisBase],
     [buildSisHintsCredentialEnvelope, sisProofOptions],
     [buildSisHintsAnonymousCredentialProofV0, sisProofOptions],
-    [buildSisHintsCredentialDevProofFixture, {
-      ...sisBase,
-      vkHash: Buffer.alloc(32, 0xbb),
-    }],
+    [
+      buildSisHintsCredentialDevProofFixture,
+      {
+        ...sisBase,
+        vkHash: Buffer.alloc(32, 0xbb),
+      },
+    ],
   ]) {
     assert.throws(() => helper(new PrivacyOptions(options)), /plain object/);
   }
@@ -2735,7 +2994,10 @@ test("package dist Jindo and SIS public helpers reject class-instance options", 
     ...sisBase,
     vkHash: Buffer.alloc(32, 0xbb),
   });
-  assert.equal(verifySisHintsCredentialProofLocally(sisFixture.envelope).ok, true);
+  assert.equal(
+    verifySisHintsCredentialProofLocally(sisFixture.envelope).ok,
+    true,
+  );
   assert.throws(
     () =>
       verifySisHintsCredentialProofLocally(
@@ -2771,7 +3033,11 @@ test("package dist SIS-with-hints production helpers reject dev fixture bytes", 
 
   const fixture = buildSisHintsCredentialDevProofFixture({ ...base, vkHash });
   assert.throws(
-    () => verifySisHintsAnonymousCredentialProofV0({ envelope: fixture.envelope, ...base }),
+    () =>
+      verifySisHintsAnonymousCredentialProofV0({
+        envelope: fixture.envelope,
+        ...base,
+      }),
     /(unsupported tag|must be SisWithHints)/,
   );
   assert.throws(
@@ -2831,7 +3097,11 @@ test("package dist Vega production helpers reject dev fixture bytes", () => {
 
   const fixture = buildVegaCredentialDevProofFixture({ ...base, vkHash });
   assert.throws(
-    () => verifyVegaCredentialPredicateProofV0({ envelope: fixture.envelope, ...base }),
+    () =>
+      verifyVegaCredentialPredicateProofV0({
+        envelope: fixture.envelope,
+        ...base,
+      }),
     /dev fixture/,
   );
   assert.throws(
@@ -2869,7 +3139,10 @@ test("package dist silent-threshold production helpers reject dev fixture bytes"
   assert.equal(verified.production, true);
   assert.equal(verified.kind, "silent-threshold-anoncred-v0");
 
-  const fixture = buildSilentThresholdCredentialDevProofFixture({ ...base, vkHash });
+  const fixture = buildSilentThresholdCredentialDevProofFixture({
+    ...base,
+    vkHash,
+  });
   assert.throws(
     () =>
       verifySilentThresholdCredentialShowingProofV0({
@@ -3182,7 +3455,11 @@ test("package dist privacy dev proof fixtures reject production metadata claims"
 
   for (const [name, builder, input] of devFixtureCases) {
     const fixture = builder(input);
-    assert.equal(fixture.production, false, `${name} fixture must stay dev-only`);
+    assert.equal(
+      fixture.production,
+      false,
+      `${name} fixture must stay dev-only`,
+    );
     for (const [field, value] of [
       ["production", true],
       ["productionReady", true],
@@ -3198,7 +3475,9 @@ test("package dist privacy dev proof fixtures reject production metadata claims"
     }
   }
 
-  const veRangePayload = Buffer.from("transfer:alice@wonderland:bob@wonderland:42");
+  const veRangePayload = Buffer.from(
+    "transfer:alice@wonderland:bob@wonderland:42",
+  );
   const veRangeCommitments = [Buffer.alloc(32, 0x44), Buffer.alloc(32, 0x45)];
   const veRangeFixture = buildVeRangeDevProofFixture({
     commitments: veRangeCommitments,
@@ -3290,8 +3569,14 @@ test("package dist privacy native availability clears request copies after failu
     }
   }
 
-  assert.deepEqual(Buffer.from(throwingProbe), Buffer.alloc(privacyNoritoFrame(0x52).length));
-  assert.deepEqual(Buffer.from(badOutputProbe), Buffer.alloc(privacyNoritoFrame(0x52).length));
+  assert.deepEqual(
+    Buffer.from(throwingProbe),
+    Buffer.alloc(privacyNoritoFrame(0x52).length),
+  );
+  assert.deepEqual(
+    Buffer.from(badOutputProbe),
+    Buffer.alloc(privacyNoritoFrame(0x52).length),
+  );
   assert.deepEqual(badOutput, Buffer.alloc(1));
 });
 
@@ -3524,10 +3809,14 @@ test("package dist privacy native wrappers reject wrong-operation result schemas
 
     globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
       privacyBuildProofV1() {
-        assert.fail("wrong-schema build request must not reach native dispatch");
+        assert.fail(
+          "wrong-schema build request must not reach native dispatch",
+        );
       },
       privacyVerifyProofV1() {
-        assert.fail("wrong-schema verify request must not reach native dispatch");
+        assert.fail(
+          "wrong-schema verify request must not reach native dispatch",
+        );
       },
     });
     for (const wrongSchemaArchive of [
@@ -3603,12 +3892,16 @@ test("package dist privacy native wrappers reject invalid Norito-framed output a
   badVersion[4] = 1;
   const badMinorVersion = Buffer.from(PRIVACY_BUILD_ARCHIVE);
   badMinorVersion[5] = 1;
-  const badDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(0x42, 6n);
-  const badOversizedDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(
+  const badDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(
     0x42,
-    0x8000000000000000n,
+    6n,
   );
-  const badPadding = Buffer.concat([PRIVACY_VERIFY_ARCHIVE, Buffer.from([0x7f])]);
+  const badOversizedDeclaredPayloadLength =
+    privacyNoritoFrameWithDeclaredPayloadLength(0x42, 0x8000000000000000n);
+  const badPadding = Buffer.concat([
+    PRIVACY_VERIFY_ARCHIVE,
+    Buffer.from([0x7f]),
+  ]);
   const badFlags = Buffer.from(PRIVACY_BUILD_ARCHIVE);
   badFlags[39] = 0x08;
   const badFieldBitsetFlags = Buffer.from(PRIVACY_BUILD_ARCHIVE);
@@ -3894,10 +4187,16 @@ test("package dist privacy native wrappers sanitize native exceptions", () => {
         error = caught;
       }
       assert.ok(error, `${operation} should throw`);
-      assert.match(error.message, new RegExp(`native ${operation} failed`, "u"));
+      assert.match(
+        error.message,
+        new RegExp(`native ${operation} failed`, "u"),
+      );
       assert.equal(error.cause, undefined);
       assert.equal(String(error).includes(witness.toString("utf8")), false);
-      assert.equal(String(error.stack).includes(witness.toString("utf8")), false);
+      assert.equal(
+        String(error.stack).includes(witness.toString("utf8")),
+        false,
+      );
     }
   } finally {
     if (previous === undefined) {
@@ -3909,7 +4208,10 @@ test("package dist privacy native wrappers sanitize native exceptions", () => {
 
   assert.equal(capturedRequests.length, 2);
   for (const request of capturedRequests) {
-    assert.equal(request.every((value) => value === 0), true);
+    assert.equal(
+      request.every((value) => value === 0),
+      true,
+    );
   }
   assert.deepEqual(requestArchive, Buffer.from(PRIVACY_REQUEST_ARCHIVE));
 });
@@ -3942,8 +4244,14 @@ test("package dist privacy native wrappers clear temporary request copies", () =
     },
   };
   try {
-    assert.deepEqual(privacyBuildProofV1(requestArchive), PRIVACY_BUILD_ARCHIVE);
-    assert.deepEqual(privacyVerifyProofV1(requestArchive), PRIVACY_VERIFY_ARCHIVE);
+    assert.deepEqual(
+      privacyBuildProofV1(requestArchive),
+      PRIVACY_BUILD_ARCHIVE,
+    );
+    assert.deepEqual(
+      privacyVerifyProofV1(requestArchive),
+      PRIVACY_VERIFY_ARCHIVE,
+    );
   } finally {
     if (previous === undefined) {
       delete globalThis.__IROHA_NATIVE_BINDING__;
@@ -3954,8 +4262,14 @@ test("package dist privacy native wrappers clear temporary request copies", () =
 
   assert.ok(buildRequest, "build request should be captured");
   assert.ok(verifyRequest, "verify request should be captured");
-  assert.equal(buildRequest.every((value) => value === 0), true);
-  assert.equal(verifyRequest.every((value) => value === 0), true);
+  assert.equal(
+    buildRequest.every((value) => value === 0),
+    true,
+  );
+  assert.equal(
+    verifyRequest.every((value) => value === 0),
+    true,
+  );
   assert.deepEqual(requestArchive, originalArchive);
 });
 
@@ -3989,7 +4303,14 @@ test("package dist privacyProofRequestV1 clears component copies after native di
   try {
     globalThis.__IROHA_NATIVE_BINDING__ = {
       ...binding,
-      privacyProofRequestV1(_algorithmId, _entrypoint, _vkRef, publicCopy, witnessCopy, proofCopy) {
+      privacyProofRequestV1(
+        _algorithmId,
+        _entrypoint,
+        _vkRef,
+        publicCopy,
+        witnessCopy,
+        proofCopy,
+      ) {
         captured.push([publicCopy, witnessCopy, proofCopy]);
         assert.notEqual(publicCopy, publicInputs);
         assert.notEqual(witnessCopy, witness);
@@ -4014,9 +4335,18 @@ test("package dist privacyProofRequestV1 clears component copies after native di
 
     globalThis.__IROHA_NATIVE_BINDING__ = {
       ...binding,
-      privacyProofRequestV1(_algorithmId, _entrypoint, _vkRef, publicCopy, witnessCopy, proofCopy) {
+      privacyProofRequestV1(
+        _algorithmId,
+        _entrypoint,
+        _vkRef,
+        publicCopy,
+        witnessCopy,
+        proofCopy,
+      ) {
         captured.push([publicCopy, witnessCopy, proofCopy]);
-        throw new Error("native proof request failure with private component bytes");
+        throw new Error(
+          "native proof request failure with private component bytes",
+        );
       },
     };
     let error;
@@ -4046,7 +4376,10 @@ test("package dist privacyProofRequestV1 clears component copies after native di
   assert.equal(captured.length, 2);
   for (const copies of captured) {
     for (const copy of copies) {
-      assert.equal(copy.every((value) => value === 0), true);
+      assert.equal(
+        copy.every((value) => value === 0),
+        true,
+      );
     }
   }
   assert.deepEqual(publicInputs, Buffer.from("public-inputs"));
@@ -4112,8 +4445,14 @@ test("package dist privacy native wrappers respect sliced request archive views"
     Buffer.from(verifyBacking.subarray(2, 2 + PRIVACY_REQUEST_ARCHIVE.length)),
     PRIVACY_REQUEST_ARCHIVE,
   );
-  assert.equal(buildRequest.every((value) => value === 0), true);
-  assert.equal(verifyRequest.every((value) => value === 0), true);
+  assert.equal(
+    buildRequest.every((value) => value === 0),
+    true,
+  );
+  assert.equal(
+    verifyRequest.every((value) => value === 0),
+    true,
+  );
 });
 
 test("package dist privacy native wrappers respect sliced native output archive views", () => {
@@ -4196,9 +4535,16 @@ test("package dist privacy native wrappers defensively copy native output archiv
   const capabilitiesOutput = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
   const buildOutput = Buffer.from(PRIVACY_BUILD_ARCHIVE);
   const verifyBacking = Uint8Array.from(
-    Buffer.concat([Buffer.from([0x00]), PRIVACY_VERIFY_ARCHIVE, Buffer.from([0x00])]),
+    Buffer.concat([
+      Buffer.from([0x00]),
+      PRIVACY_VERIFY_ARCHIVE,
+      Buffer.from([0x00]),
+    ]),
   );
-  const verifyOutput = verifyBacking.subarray(1, 1 + PRIVACY_VERIFY_ARCHIVE.length);
+  const verifyOutput = verifyBacking.subarray(
+    1,
+    1 + PRIVACY_VERIFY_ARCHIVE.length,
+  );
   globalThis.__IROHA_NATIVE_BINDING__ = {
     connectNoritoBridgeAbiVersion() {
       return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
@@ -4248,7 +4594,10 @@ test("package declarations mark privacy capability metadata readonly", () => {
 
   const productionGate = declarationInterface("PrivacyProductionGate");
   assert.match(productionGate, /readonly ready: boolean;/);
-  assert.match(productionGate, /readonly gates: Readonly<Record<string, boolean>>;/);
+  assert.match(
+    productionGate,
+    /readonly gates: Readonly<Record<string, boolean>>;/,
+  );
   assert.match(productionGate, /readonly missing: readonly string\[\];/);
   assert.match(
     productionGate,
@@ -4256,7 +4605,10 @@ test("package declarations mark privacy capability metadata readonly", () => {
   );
 
   const descriptor = declarationInterface("PrivacyAlgorithmDescriptor");
-  assert.match(descriptor, /readonly coveredCriteria: readonly PrivacyCriterionKey\[\];/);
+  assert.match(
+    descriptor,
+    /readonly coveredCriteria: readonly PrivacyCriterionKey\[\];/,
+  );
   assert.match(descriptor, /readonly backendFamily: string;/);
   assert.match(descriptor, /readonly pqLayers: PrivacyPqLayers;/);
   assert.match(descriptor, /readonly sdkEntrypoints: readonly string\[\];/);
@@ -4271,7 +4623,10 @@ test("package declarations mark privacy capability metadata readonly", () => {
     capabilities,
     /readonly privacyAlgorithms: readonly PrivacyAlgorithmDescriptor\[\];/,
   );
-  assert.match(capabilities, /readonly privacyCriteria: readonly PrivacyCriterionKey\[\];/);
+  assert.match(
+    capabilities,
+    /readonly privacyCriteria: readonly PrivacyCriterionKey\[\];/,
+  );
 
   assert.match(
     DECLARATIONS_TEXT,
@@ -4369,7 +4724,11 @@ test("package declarations do not advertise privacy production metadata inputs",
     "VeRangeDevProofFixtureInput",
   ]) {
     const declaration = declarationInterface(name);
-    assert.doesNotMatch(declaration, /\bproduction\b/u, `${name} exposes production`);
+    assert.doesNotMatch(
+      declaration,
+      /\bproduction\b/u,
+      `${name} exposes production`,
+    );
     assert.doesNotMatch(
       declaration,
       /\bproductionReady\b/u,
@@ -4464,7 +4823,10 @@ test("package declarations expose SCCP proof-result request bytes", () => {
       `${resultType} must expose the retained request bytes`,
     );
   }
-  for (const inputType of ["EvmSccpSubmissionInput", "TronSccpSubmissionInput"]) {
+  for (const inputType of [
+    "EvmSccpSubmissionInput",
+    "TronSccpSubmissionInput",
+  ]) {
     assert.match(
       DECLARATIONS_TEXT,
       new RegExp(
@@ -4485,10 +4847,16 @@ test("package declarations keep EVM and TRON proof envelopes readonly", () => {
     const declaration = declarationInterface(typeName);
     assert.match(declaration, /readonly version: 1;/);
     assert.match(declaration, /readonly publicInputs: /);
-    assert.match(declaration, /readonly publicSignalWords: readonly string\[\];/);
+    assert.match(
+      declaration,
+      /readonly publicSignalWords: readonly string\[\];/,
+    );
     assert.match(declaration, /readonly bundleBytes: Uint8Array;/);
     assert.match(declaration, /readonly sourceProofBytes: Uint8Array;/);
-    assert.match(declaration, /readonly proofContext: Readonly<SolanaSccpProofContext>;/);
+    assert.match(
+      declaration,
+      /readonly proofContext: Readonly<SolanaSccpProofContext>;/,
+    );
   }
 });
 
@@ -4501,7 +4869,9 @@ test("package declarations expose SCCP local-prover result metadata", () => {
   ]) {
     assert.match(
       DECLARATIONS_TEXT,
-      new RegExp(`export interface ${resultType}[\\s\\S]*proofBytes\\?: BinaryLike;`),
+      new RegExp(
+        `export interface ${resultType}[\\s\\S]*proofBytes\\?: BinaryLike;`,
+      ),
       `${resultType} must expose callback proof bytes`,
     );
     assert.match(
@@ -4513,10 +4883,7 @@ test("package declarations expose SCCP local-prover result metadata", () => {
     );
   }
 
-  for (const resultType of [
-    "EvmSccpProveResult",
-    "TronSccpProveResult",
-  ]) {
+  for (const resultType of ["EvmSccpProveResult", "TronSccpProveResult"]) {
     assert.match(
       DECLARATIONS_TEXT,
       new RegExp(
@@ -4660,7 +5027,10 @@ test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
     declaration,
     /static fromNativeProverBundle\([\s\S]*options: EthereumMainnetSccpNativeProverBundleOptions,[\s\S]*\): Promise<EthereumMainnetSccp>;/u,
   );
-  assert.match(declaration, /validateExecutionProviderMainnet\([\s\S]*\): Promise<unknown>;/u);
+  assert.match(
+    declaration,
+    /validateExecutionProviderMainnet\([\s\S]*\): Promise<unknown>;/u,
+  );
   assert.match(
     declaration,
     /collectInboundEvidenceFromReceipt\([\s\S]*input\?: EthereumMainnetInboundEvidenceInput,[\s\S]*\): Promise<EthereumMainnetInboundEvidence>;/u,
@@ -4740,7 +5110,11 @@ function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned() {
   ];
   for (const [artifact, source] of Object.entries(artifacts)) {
     for (const pattern of forbidden) {
-      assert.doesNotMatch(source, pattern, `${artifact} must not depend on ${pattern}`);
+      assert.doesNotMatch(
+        source,
+        pattern,
+        `${artifact} must not depend on ${pattern}`,
+      );
     }
   }
 }
@@ -4791,6 +5165,23 @@ test("browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned", (
 });
 
 test("package declarations use BSC-specific mainnet native prover bundle types", () => {
+  const evmBundleInputBase = declarationInterface(
+    "EthereumMainnetNativeEvmProverBundleInputBase",
+  );
+  assert.doesNotMatch(evmBundleInputBase, /verifierKeyArtifactHash/u);
+  assert.doesNotMatch(evmBundleInputBase, /verifier_key_artifact_hash/u);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type EthereumMainnetNativeEvmProverBundleInput =\s+EthereumMainnetNativeEvmProverBundleInputBase &\s+\(\s+\|\s+\{\s+verifierKeyArtifactHash: string;\s+verifier_key_artifact_hash\?: string;\s+\}\s+\|\s+\{\s+verifierKeyArtifactHash\?: string;\s+verifier_key_artifact_hash: string;/u,
+  );
+  assert.doesNotMatch(
+    DECLARATIONS_TEXT,
+    /export interface EthereumMainnetNativeEvmProverBundleInput\s*\{[\s\S]*verifierKeyArtifactHash\?: string;[\s\S]*verifier_key_artifact_hash\?: string;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type NativeEvmProverBundleProfileOverride<T> = T extends unknown\s+\? Omit<T, "bundleId" \| "bundle_id" \| "chain">\s+: never;/u,
+  );
   assert.doesNotMatch(
     DECLARATIONS_TEXT,
     /export type BscMainnetNativeEvmProverBundleInput =\s+EthereumMainnetNativeEvmProverBundleInput &/u,
@@ -4801,11 +5192,15 @@ test("package declarations use BSC-specific mainnet native prover bundle types",
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface BscMainnetNativeEvmProverBundleInput[\s\S]*extends Omit<[\s\S]*EthereumMainnetNativeEvmProverBundleInput,[\s\S]*"bundleId" \| "bundle_id" \| "chain"[\s\S]*bundleId\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*bundle_id\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*chain\?: "bsc-mainnet";/u,
+    /export type BscTestnetNativeEvmProverBundleInput =\s+NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput> & \{[\s\S]*bundleId\?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*bundle_id\?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*chain\?: "bsc-testnet";/u,
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface BscMainnetNativeEvmProverBundle[\s\S]*extends Omit<EthereumMainnetNativeEvmProverBundle, "bundleId" \| "chain">[\s\S]*readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*readonly chain: "bsc-mainnet";/u,
+    /export type BscMainnetNativeEvmProverBundleInput =\s+NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput> & \{[\s\S]*bundleId\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*bundle_id\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*chain\?: "bsc-mainnet";/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface BscMainnetNativeEvmProverBundle[\s\S]*extends Omit<[\s\S]*EthereumMainnetNativeEvmProverBundle,[\s\S]*"bundleId" \| "chain"[\s\S]*>[\s\S]*readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*readonly chain: "bsc-mainnet";/u,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -4847,12 +5242,20 @@ test("package declarations expose BSC mainnet Parlia finality evidence hooks", (
 test("package declarations separate TON proof-request and submission inputs", () => {
   const manifestInput = declarationInterface("TonSccpManifestInput");
   const proofRequestInput = declarationInterface("TonSccpProofRequestInput");
-  const messageBodyInputBase = declarationInterface("TonSccpMessageBodyInputBase");
+  const messageBodyInputBase = declarationInterface(
+    "TonSccpMessageBodyInputBase",
+  );
 
   assert.match(manifestInput, /version: SccpVersionInput;/);
   assert.doesNotMatch(manifestInput, /version\?:/);
-  assert.match(manifestInput, /proofFamily\?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;/);
-  assert.match(manifestInput, /proof_family\?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;/);
+  assert.match(
+    manifestInput,
+    /proofFamily\?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;/,
+  );
+  assert.match(
+    manifestInput,
+    /proof_family\?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;/,
+  );
   assert.match(
     manifestInput,
     /verifierBackendKey\?: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;/,
@@ -4861,7 +5264,10 @@ test("package declarations separate TON proof-request and submission inputs", ()
     manifestInput,
     /verifier_backend_key\?: typeof SCCP_TON_CONTRACT_PROOF_BACKEND_V1;/,
   );
-  assert.match(proofRequestInput, /publicInputs\?: SccpMessageTransparentPublicInputsInput;/);
+  assert.match(
+    proofRequestInput,
+    /publicInputs\?: SccpMessageTransparentPublicInputsInput;/,
+  );
   assert.match(proofRequestInput, /bundleBytes\?: BinaryLike;/);
   assert.match(proofRequestInput, /sourceStateVerifierHash\?: string;/);
   assert.match(
@@ -4891,9 +5297,14 @@ test("package declarations separate TON proof-request and submission inputs", ()
 });
 
 test("package declarations require wrapped Solana submission proof results", () => {
-  const submissionInputBase = declarationInterface("SolanaSccpSubmissionInputBase");
+  const submissionInputBase = declarationInterface(
+    "SolanaSccpSubmissionInputBase",
+  );
 
-  assert.match(submissionInputBase, /publicInputs\?: SccpMessageTransparentPublicInputsInput;/);
+  assert.match(
+    submissionInputBase,
+    /publicInputs\?: SccpMessageTransparentPublicInputsInput;/,
+  );
   assert.match(submissionInputBase, /proofBytes\?: BinaryLike;/);
   assert.doesNotMatch(submissionInputBase, /proofResult\?:/);
   assert.match(
@@ -4938,7 +5349,9 @@ test("package dist Solana submission rejects inert bundle bytes", () => {
     () =>
       buildSolanaSccpSubmission({
         ...baseSubmission,
-        bundleBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        bundleBytes: new Uint8Array(
+          SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1,
+        ).fill(1),
       }),
     /bundleBytes must be at most/,
   );
@@ -4946,10 +5359,22 @@ test("package dist Solana submission rejects inert bundle bytes", () => {
 
 test("package dist entrypoint exports SCCP portal constants", () => {
   assert.equal(SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN, 141);
-  assert.equal(SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1, "submit_sccp_message_proof");
-  assert.match(SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1, /^sccp:ton:/u);
-  assert.match(SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1, /^sccp:ton:/u);
-  assert.match(SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1, /^sccp:ton:/u);
+  assert.equal(
+    SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
+    "submit_sccp_message_proof",
+  );
+  assert.match(
+    SCCP_TON_MAINNET_MASTERCHAIN_CONFIG_VERIFIER_ID_V1,
+    /^sccp:ton:/u,
+  );
+  assert.match(
+    SCCP_TON_MAINNET_VALIDATOR_SET_TRANSITION_VERIFIER_ID_V1,
+    /^sccp:ton:/u,
+  );
+  assert.match(
+    SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1,
+    /^sccp:ton:/u,
+  );
   assert.match(
     DECLARATIONS_TEXT,
     /export const SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN: 141;/,
@@ -5016,12 +5441,14 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
       sourceVerifierMaterialHash: `0x${"33".repeat(32)}`,
       sourceAdapterEngineDeploymentHash: `0x${"34".repeat(32)}`,
       verifierIdentity: "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3",
-      verifierCodeHash: "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
+      verifierCodeHash:
+        "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
       solanaRpcCommitment: "finalized",
       solanaProgramOwner: SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
       solanaProgramdataOwner: SCCP_SOLANA_UPGRADEABLE_LOADER_ID,
       solanaProgramImmutable: true,
-      solanaProgramAccountDataBase64: "AgAAABERERERERERERERERERERERERERERERERERERERERER",
+      solanaProgramAccountDataBase64:
+        "AgAAABERERERERERERERERERERERERERERERERERERERERER",
       solanaProgramdataAddress: "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
       solanaProgramdataSlot: "4321",
       solanaExpectedProgramdataSlot: "4321",
@@ -5055,7 +5482,8 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
   );
   assert.equal(
     canonicalTronSccpRouteCanaryEvidenceBytes({
-      routeAllowlistHash: "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
+      routeAllowlistHash:
+        "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
       destinationBindingHash:
         "0x17c953ad5b8c9a2b6f7102aca993fa7c427d018505cf4f58fac35ea454caba7f",
       sourceVerifierMaterialHash:
@@ -5089,7 +5517,8 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
   );
   assert.equal(
     tronSccpRouteCanaryEvidenceHash({
-      routeAllowlistHash: "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
+      routeAllowlistHash:
+        "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
       destinationBindingHash:
         "0x17c953ad5b8c9a2b6f7102aca993fa7c427d018505cf4f58fac35ea454caba7f",
       sourceVerifierMaterialHash:
@@ -5140,7 +5569,9 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
     /export function tronSccpRouteCanaryEvidenceHash\([\s\S]*TronSccpRouteCanaryEvidenceInput/,
   );
 
-  const rawDataHash = solanaSccpAccountRawDataHash(new Uint8Array([1, 2, 3, 4]));
+  const rawDataHash = solanaSccpAccountRawDataHash(
+    new Uint8Array([1, 2, 3, 4]),
+  );
   assert.match(rawDataHash, /^0x[0-9a-f]{64}$/u);
   const opening = {
     address: `0x${"41".repeat(32)}`,
@@ -5155,25 +5586,37 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
     opening,
     rawDataHash,
   };
-  assert.equal(canonicalSolanaSccpAccountInclusionLeafBytes(leafInput).length, 109);
+  assert.equal(
+    canonicalSolanaSccpAccountInclusionLeafBytes(leafInput).length,
+    109,
+  );
   const leafHash = solanaSccpAccountInclusionLeafHash(leafInput);
   assert.match(leafHash, /^0x[0-9a-f]{64}$/u);
   assert.equal(
-    canonicalSolanaSccpAccountInclusionNodeBytes(leafHash, `0x${"88".repeat(32)}`).length,
+    canonicalSolanaSccpAccountInclusionNodeBytes(
+      leafHash,
+      `0x${"88".repeat(32)}`,
+    ).length,
     65,
   );
   assert.match(
     solanaSccpAccountInclusionNodeHash(leafHash, `0x${"88".repeat(32)}`),
     /^0x[0-9a-f]{64}$/u,
   );
-  const tree = solanaSccpAccountInclusionRootAndBranches([leafHash, `0x${"88".repeat(32)}`]);
+  const tree = solanaSccpAccountInclusionRootAndBranches([
+    leafHash,
+    `0x${"88".repeat(32)}`,
+  ]);
   assert.match(tree.root, /^0x[0-9a-f]{64}$/u);
   assert.equal(tree.branches.length, 2);
   assert.equal(tree.branches[0].length, 1);
   assert.ok(Object.isFrozen(tree));
   assert.ok(Object.isFrozen(tree.branches));
   assert.ok(Object.isFrozen(tree.branches[0]));
-  assert.equal(solanaSccpAccountInclusionRootFromBranch(leafHash, tree.branches[0]), tree.root);
+  assert.equal(
+    solanaSccpAccountInclusionRootFromBranch(leafHash, tree.branches[0]),
+    tree.root,
+  );
 
   assert.match(
     DECLARATIONS_TEXT,
@@ -5227,13 +5670,12 @@ test("package dist entrypoint enforces SCCP route-canary role separation", () =>
   };
   const distSolanaRouteCanaryGovernedHashReuse = {
     ...distSolanaRouteCanaryEvidence,
-    routeAllowlistHash: distSolanaRouteCanaryEvidence.sourceVerifierMaterialHash,
+    routeAllowlistHash:
+      distSolanaRouteCanaryEvidence.sourceVerifierMaterialHash,
   };
   assert.throws(
     () =>
-      solanaSccpRouteCanaryEvidenceHash(
-        distSolanaRouteCanaryGovernedHashReuse,
-      ),
+      solanaSccpRouteCanaryEvidenceHash(distSolanaRouteCanaryGovernedHashReuse),
     /Solana route canary governed hashes/u,
   );
 
@@ -5344,7 +5786,10 @@ test("package dist entrypoint exports Solana account opening helpers", () => {
   assert.match(accountHash, /^0x[0-9a-f]{64}$/u);
   assert.notEqual(
     accountHash,
-    solanaSccpAccountOpeningHash({ ...input, owner: SCCP_SOLANA_STAKE_PROGRAM_ID }),
+    solanaSccpAccountOpeningHash({
+      ...input,
+      owner: SCCP_SOLANA_STAKE_PROGRAM_ID,
+    }),
   );
   assert.equal(typeof solanaSccpOpenedAccountInclusionWitness, "function");
   assert.equal(
@@ -5362,14 +5807,26 @@ test("package dist entrypoint exports Solana account opening helpers", () => {
       }),
     /request\.parameterSet/,
   );
-  assert.equal(typeof canonicalSolanaSccpAccountsLtHashCommitmentBytes, "function");
-  assert.equal(typeof canonicalSolanaSccpAccountsLtHashVerificationContextBytes, "function");
+  assert.equal(
+    typeof canonicalSolanaSccpAccountsLtHashCommitmentBytes,
+    "function",
+  );
+  assert.equal(
+    typeof canonicalSolanaSccpAccountsLtHashVerificationContextBytes,
+    "function",
+  );
   assert.equal(typeof solanaSccpAccountsLtHashPublicInputColumns, "function");
-  assert.equal(typeof solanaSccpAccountsLtHashOpenVerifySchemaDescriptor, "function");
+  assert.equal(
+    typeof solanaSccpAccountsLtHashOpenVerifySchemaDescriptor,
+    "function",
+  );
   assert.equal(typeof buildTonShardStateProofRequest, "function");
   assert.equal(typeof canonicalTonShardStateProofPublicInputsBytes, "function");
   assert.equal(typeof canonicalTonShardStateWitnessCommitmentBytes, "function");
-  assert.equal(typeof canonicalTonShardStateVerificationContextBytes, "function");
+  assert.equal(
+    typeof canonicalTonShardStateVerificationContextBytes,
+    "function",
+  );
   assert.equal(typeof tonShardStateProofPublicInputsHash, "function");
   assert.equal(typeof tonShardStatePublicInputColumns, "function");
   assert.equal(typeof tonShardStateOpenVerifySchemaDescriptor, "function");
@@ -5386,12 +5843,24 @@ test("package dist entrypoint exports Solana account opening helpers", () => {
     "sccp-ton-shard-accounts-dictionary-v1",
   );
   assert.equal(typeof tonSccpShardStateVerificationProofHash, "function");
-  assert.equal(typeof canonicalTonSccpFullLightClientAuditStatementBytes, "function");
+  assert.equal(
+    typeof canonicalTonSccpFullLightClientAuditStatementBytes,
+    "function",
+  );
   assert.equal(typeof tonSccpFullLightClientAuditStatementHash, "function");
-  assert.equal(typeof tonSccpFullLightClientAuditPublicInputColumns, "function");
-  assert.equal(typeof tonSccpFullLightClientAuditOpenVerifySchemaDescriptor, "function");
+  assert.equal(
+    typeof tonSccpFullLightClientAuditPublicInputColumns,
+    "function",
+  );
+  assert.equal(
+    typeof tonSccpFullLightClientAuditOpenVerifySchemaDescriptor,
+    "function",
+  );
   assert.equal(typeof buildTonSccpFullLightClientAuditProofRequest, "function");
-  assert.equal(typeof buildTonSccpFullLightClientAuditProofRequests, "function");
+  assert.equal(
+    typeof buildTonSccpFullLightClientAuditProofRequests,
+    "function",
+  );
 });
 
 const sampleDistTonShardStateSourceStateInput = () => ({
@@ -5483,8 +5952,9 @@ test("package dist entrypoint enforces TON source-state proof cap", async () => 
 });
 
 test("package dist entrypoint exports Solana account data helpers", () => {
-  const towerVoteSlots = Array.from({ length: Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) }, (_, index) =>
-    11n + BigInt(index),
+  const towerVoteSlots = Array.from(
+    { length: Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) },
+    (_, index) => 11n + BigInt(index),
   );
   const voteInput = {
     nodePubkey: `0x${"51".repeat(32)}`,
@@ -5504,10 +5974,17 @@ test("package dist entrypoint exports Solana account data helpers", () => {
   assert.match(voteHash, /^0x[0-9a-f]{64}$/u);
   assert.notEqual(
     voteHash,
-    solanaSccpVoteAccountDataHash({ ...voteInput, authorizedVoter: `0x${"62".repeat(32)}` }),
+    solanaSccpVoteAccountDataHash({
+      ...voteInput,
+      authorizedVoter: `0x${"62".repeat(32)}`,
+    }),
   );
   assert.throws(
-    () => solanaSccpVoteAccountDataHash({ ...voteInput, towerVoteSlots: [10n, ...towerVoteSlots.slice(1)] }),
+    () =>
+      solanaSccpVoteAccountDataHash({
+        ...voteInput,
+        towerVoteSlots: [10n, ...towerVoteSlots.slice(1)],
+      }),
     /towerVoteSlots\[0\]/u,
   );
 
@@ -5520,15 +5997,22 @@ test("package dist entrypoint exports Solana account data helpers", () => {
     deactivationEpoch: 9n,
     creditsObserved: 123n,
   };
-  assert.equal(canonicalSolanaSccpStakeAccountDataBytes(stakeInput).length, 154);
+  assert.equal(
+    canonicalSolanaSccpStakeAccountDataBytes(stakeInput).length,
+    154,
+  );
   const stakeHash = solanaSccpStakeAccountDataHash(stakeInput);
   assert.match(stakeHash, /^0x[0-9a-f]{64}$/u);
   assert.notEqual(
     stakeHash,
-    solanaSccpStakeAccountDataHash({ ...stakeInput, voterPubkey: `0x${"a2".repeat(32)}` }),
+    solanaSccpStakeAccountDataHash({
+      ...stakeInput,
+      voterPubkey: `0x${"a2".repeat(32)}`,
+    }),
   );
   assert.throws(
-    () => solanaSccpStakeAccountDataHash({ ...stakeInput, deactivationEpoch: 2n }),
+    () =>
+      solanaSccpStakeAccountDataHash({ ...stakeInput, deactivationEpoch: 2n }),
     /deactivationEpoch/u,
   );
 });
@@ -5536,9 +6020,16 @@ test("package dist entrypoint exports Solana account data helpers", () => {
 test("package dist entrypoint exports Solana raw vote account parser helpers", () => {
   const raw = sampleSolanaVoteStateAccount();
   const voteAccountAddress = `0x${"81".repeat(32)}`;
-  const parsed = solanaSccpVoteAccountDataFromRawVoteState(raw, 3n, voteAccountAddress);
+  const parsed = solanaSccpVoteAccountDataFromRawVoteState(
+    raw,
+    3n,
+    voteAccountAddress,
+  );
   assert.deepEqual(Array.from(parsed.authorizedVoter), Array(32).fill(0x61));
-  assert.deepEqual(Array.from(parsed.inflationRewardsCollector), Array(32).fill(0x81));
+  assert.deepEqual(
+    Array.from(parsed.inflationRewardsCollector),
+    Array(32).fill(0x81),
+  );
   assert.equal(parsed.inflationRewardsCommissionBps, 700n);
   assert.equal(parsed.rootSlot, 10n);
   assert.equal(
@@ -5546,7 +6037,11 @@ test("package dist entrypoint exports Solana raw vote account parser helpers", (
     solanaSccpVoteAccountDataHash(parsed),
   );
   assert.equal(
-    solanaSccpVoteAccountDataHashFromRawVoteStateV1OrV3(raw, 3n, voteAccountAddress),
+    solanaSccpVoteAccountDataHashFromRawVoteStateV1OrV3(
+      raw,
+      3n,
+      voteAccountAddress,
+    ),
     solanaSccpVoteAccountDataHash(parsed),
   );
   const parsedV4 = solanaSccpVoteAccountDataFromRawVoteState(
@@ -5554,11 +6049,17 @@ test("package dist entrypoint exports Solana raw vote account parser helpers", (
     3n,
     voteAccountAddress,
   );
-  assert.deepEqual(Array.from(parsedV4.blockRevenueCollector), Array(32).fill(0x91));
+  assert.deepEqual(
+    Array.from(parsedV4.blockRevenueCollector),
+    Array(32).fill(0x91),
+  );
   assert.equal(parsedV4.inflationRewardsCommissionBps, 1_234n);
   assert.equal(parsedV4.blockRevenueCommissionBps, 9_876n);
   assert.equal(parsedV4.pendingDelegatorRewards, 456n);
-  assert.deepEqual(Array.from(parsedV4.blsPubkeyCompressed), Array(48).fill(0xa5));
+  assert.deepEqual(
+    Array.from(parsedV4.blsPubkeyCompressed),
+    Array(48).fill(0xa5),
+  );
 });
 
 test("package dist entrypoint exports Solana raw stake account parser helpers", () => {
@@ -5585,10 +6086,22 @@ test("package dist entrypoint exports Solana stake account state helpers", () =>
     validatorStakes: [1n, 2n],
     validatorActivationEpochs: [0n, 2n],
     validatorDeactivationEpochs: [(1n << 64n) - 1n, 9n],
-    validatorVoteAccountAddresses: [`0x${"33".repeat(32)}`, `0x${"44".repeat(32)}`],
-    validatorStakeAccountAddresses: [`0x${"55".repeat(32)}`, `0x${"66".repeat(32)}`],
-    validatorVoteAccountHashes: [`0x${"77".repeat(32)}`, `0x${"88".repeat(32)}`],
-    validatorStakeAccountHashes: [`0x${"99".repeat(32)}`, `0x${"aa".repeat(32)}`],
+    validatorVoteAccountAddresses: [
+      `0x${"33".repeat(32)}`,
+      `0x${"44".repeat(32)}`,
+    ],
+    validatorStakeAccountAddresses: [
+      `0x${"55".repeat(32)}`,
+      `0x${"66".repeat(32)}`,
+    ],
+    validatorVoteAccountHashes: [
+      `0x${"77".repeat(32)}`,
+      `0x${"88".repeat(32)}`,
+    ],
+    validatorStakeAccountHashes: [
+      `0x${"99".repeat(32)}`,
+      `0x${"aa".repeat(32)}`,
+    ],
   };
   assert.equal(canonicalSolanaSccpStakeAccountStateBytes(input).length, 437);
   assert.equal(
@@ -5605,10 +6118,22 @@ test("package dist entrypoint exports Solana stake history helpers", () => {
     validatorDelegatedStakes: [1n, 3n],
     validatorActivationEpochs: [0n, 2n],
     validatorDeactivationEpochs: [(1n << 64n) - 1n, 9n],
-    validatorVoteAccountAddresses: [`0x${"33".repeat(32)}`, `0x${"44".repeat(32)}`],
-    validatorStakeAccountAddresses: [`0x${"55".repeat(32)}`, `0x${"66".repeat(32)}`],
-    validatorVoteAccountHashes: [`0x${"77".repeat(32)}`, `0x${"88".repeat(32)}`],
-    validatorStakeAccountHashes: [`0x${"99".repeat(32)}`, `0x${"aa".repeat(32)}`],
+    validatorVoteAccountAddresses: [
+      `0x${"33".repeat(32)}`,
+      `0x${"44".repeat(32)}`,
+    ],
+    validatorStakeAccountAddresses: [
+      `0x${"55".repeat(32)}`,
+      `0x${"66".repeat(32)}`,
+    ],
+    validatorVoteAccountHashes: [
+      `0x${"77".repeat(32)}`,
+      `0x${"88".repeat(32)}`,
+    ],
+    validatorStakeAccountHashes: [
+      `0x${"99".repeat(32)}`,
+      `0x${"aa".repeat(32)}`,
+    ],
     stakeHistoryEntries: [
       { epoch: 2n, effective: 23n, activating: 3n, deactivating: 0n },
       { epoch: 3n, effective: 3n, activating: 1n, deactivating: 0n },
@@ -5640,7 +6165,10 @@ test("package dist entrypoint exports Solana StakeHistory sysvar helpers", () =>
   const hash = solanaSccpStakeHistorySysvarDataHash(input);
   assert.equal(canonical.length, 72);
   assert.match(hash, /^0x[0-9a-f]{64}$/u);
-  assert.equal(solanaSccpStakeHistorySysvarDataHashFromRawData(canonical), hash);
+  assert.equal(
+    solanaSccpStakeHistorySysvarDataHashFromRawData(canonical),
+    hash,
+  );
 });
 
 test("package dist entrypoint exports Solana tower replay helpers", () => {
@@ -5649,8 +6177,9 @@ test("package dist entrypoint exports Solana tower replay helpers", () => {
     rootedSlot: 1_296_065n,
     parentSlot: 1_296_095n,
     bankForkHash: `0x${"aa".repeat(32)}`,
-    towerVoteSlots: Array.from({ length: Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) }, (_, index) =>
-      1_296_066n + BigInt(index),
+    towerVoteSlots: Array.from(
+      { length: Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) },
+      (_, index) => 1_296_066n + BigInt(index),
     ),
   };
   assert.equal(canonicalSolanaSccpTowerReplayBytes(input).length, 573);
@@ -5702,7 +6231,10 @@ test("package dist entrypoint exports TON BoC root helper", () => {
     "sccp:ton:source-state-verifier:shard-state-light-client-mainnet:v1",
   );
   const boc = Buffer.from("b5ee9c720101020100070001020101000202", "hex");
-  const checkedBoc = Buffer.from("b5ee9c724101020100070001020101000202be1c1df5", "hex");
+  const checkedBoc = Buffer.from(
+    "b5ee9c724101020100070001020101000202be1c1df5",
+    "hex",
+  );
   const prunedBoc = Buffer.from(
     "b5ee9c72010101010026002848010149725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe0001",
     "hex",
@@ -5755,7 +6287,11 @@ test("package dist entrypoint exports TON BoC root helper", () => {
     "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
   );
   assert.equal(
-    tonShardAccountsLastTransactionHash(shardAccountsBoc, Uint8Array.from([17, ...Array(31).fill(0)]), 256),
+    tonShardAccountsLastTransactionHash(
+      shardAccountsBoc,
+      Uint8Array.from([17, ...Array(31).fill(0)]),
+      256,
+    ),
     "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
   );
   const selectedShardAccount = tonShardAccountsLastTransaction(
@@ -5781,7 +6317,9 @@ test("package dist entrypoint exports TON BoC root helper", () => {
     tonShardStateAccountsRootHash(shardStateProofBoc),
     "0x049a63ecefc78dc0cd468ebf47e0385807d790a2ca8e0dca5cbbeb0714567fd3",
   );
-  const shardStateTagOffset = shardStateProofBoc.indexOf(Buffer.from("9023afe2", "hex"));
+  const shardStateTagOffset = shardStateProofBoc.indexOf(
+    Buffer.from("9023afe2", "hex"),
+  );
   assert.notEqual(shardStateTagOffset, -1);
   const basechainCustom = Buffer.from(shardStateProofBoc);
   basechainCustom[shardStateTagOffset + 45] |= 0x40;
@@ -5830,16 +6368,23 @@ test("package dist entrypoint exports SCCP TRON Groth16 helpers", () => {
       }),
     /sourceProofBytes requires proofResult for request-bound submission/,
   );
-  const publicInputWords = sccpMessageTransparentPublicInputAbiWords(publicInputs);
+  const publicInputWords =
+    sccpMessageTransparentPublicInputAbiWords(publicInputs);
   assert.equal(publicInputWords.length, 6);
-  assert.equal(Buffer.from(publicInputWords[2]).toString("hex"), `${"00".repeat(31)}05`);
+  assert.equal(
+    Buffer.from(publicInputWords[2]).toString("hex"),
+    `${"00".repeat(31)}05`,
+  );
   const callData = sccpSubmitMessageProofCallData(
     proofBytes,
     publicInputs,
     `0x${"55".repeat(32)}`,
   );
   assert.equal(callData.length, 676);
-  assert.equal(Buffer.from(callData.subarray(0, 4)).toString("hex"), "bd57826c");
+  assert.equal(
+    Buffer.from(callData.subarray(0, 4)).toString("hex"),
+    "bd57826c",
+  );
   const mismatchedProof = Uint8Array.from(proofBytes);
   mismatchedProof.fill(0x44, 3 * 32, 4 * 32);
   assert.throws(
@@ -5884,14 +6429,10 @@ test("package dist entrypoint exports SCCP TRON Groth16 helpers", () => {
   assert.notEqual(
     request.requestHash,
     buildTronSccpProofRequest({
-      public_inputs: sampleEvmFamilyProofBundleFixture(
-        SCCP_DOMAIN_TRON,
-        2n,
-      ).publicInputs,
-      bundle_bytes: sampleEvmFamilyProofBundleFixture(
-        SCCP_DOMAIN_TRON,
-        2n,
-      ).bundleBytes,
+      public_inputs: sampleEvmFamilyProofBundleFixture(SCCP_DOMAIN_TRON, 2n)
+        .publicInputs,
+      bundle_bytes: sampleEvmFamilyProofBundleFixture(SCCP_DOMAIN_TRON, 2n)
+        .bundleBytes,
       source_proof_bytes: new Uint8Array([10]),
       source_domain: SCCP_DOMAIN_SORA,
       statement_hash: `0x${"55".repeat(32)}`,
@@ -5901,14 +6442,14 @@ test("package dist entrypoint exports SCCP TRON Groth16 helpers", () => {
   assert.throws(
     () =>
       buildTronSccpProofRequest({
-        public_inputs: sampleEvmFamilyProofBundleFixture(SCCP_DOMAIN_BSC)
-          .publicInputs,
-        bundle_bytes: sampleEvmFamilyProofBundleFixture(SCCP_DOMAIN_BSC)
-          .bundleBytes,
+        public_inputs:
+          sampleEvmFamilyProofBundleFixture(SCCP_DOMAIN_BSC).publicInputs,
+        bundle_bytes:
+          sampleEvmFamilyProofBundleFixture(SCCP_DOMAIN_BSC).bundleBytes,
         source_domain: SCCP_DOMAIN_SORA,
         statement_hash: `0x${"55".repeat(32)}`,
         destination_binding: destinationBinding,
-    }),
+      }),
     /publicInputs\.targetDomain must be TRON/,
   );
   assert.throws(
@@ -5934,7 +6475,8 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     const seed = Buffer.from(`${label}\n`, "utf8");
     const out = Buffer.alloc(size);
     for (let index = 0; index < out.length; index += 1) {
-      out[index] = (seed[index % seed.length] + index * 31 + (index >> 7)) & 0xff;
+      out[index] =
+        (seed[index % seed.length] + index * 31 + (index >> 7)) & 0xff;
     }
     return out;
   };
@@ -5965,7 +6507,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       offset += 12 + sectionSize;
     }
     if (offset !== out.length) {
-      throw new Error("native EVM SnarkJS fixture sections do not fill the file");
+      throw new Error(
+        "native EVM SnarkJS fixture sections do not fill the file",
+      );
     }
     return out;
   };
@@ -5979,13 +6523,16 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     "zkey",
     10,
   );
-  const verifierKeyBytes = nativeArtifactPayloadBytes("sccp package verifier key v1");
+  const verifierKeyBytes = nativeArtifactPayloadBytes(
+    "sccp package verifier key v1",
+  );
   const implementationBytes = nativeArtifactPayloadBytes(
     "sccp package pure typescript prover artifact v1",
   );
   const proofArtifactHash = sha256Hex(proofArtifactBytes);
   const provingKeyHash = sha256Hex(provingKeyBytes);
-  const verifierKeyHash = sha256Hex(verifierKeyBytes);
+  const verifierKeyArtifactHash = sha256Hex(verifierKeyBytes);
+  const verifierKeyHash = fixtureHash("dist EVM verifier key semantic hash v1");
   const implementationHash = sha256Hex(implementationBytes);
   const ethereumMainnetBinding = ethereumMainnetSccpDestinationBinding({
     verifierAddress: `0x${"11".repeat(20)}`,
@@ -6006,12 +6553,15 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key_hash: provingKeyHash,
     verifier_key: "artifacts/eth-mainnet/verifier-key.bin",
     verifier_key_hash: verifierKeyHash,
+    verifier_key_artifact_hash: verifierKeyArtifactHash,
     destination_binding_hash: ethereumMainnetBinding.bindingHash,
     no_wasm: true,
     remote_prover_required: false,
     browser_implementation: "pure-typescript",
-    cross_sdk_fixture_parity_artifact: "artifacts/eth-mainnet/cross-sdk-parity.json",
-    native_prover_self_test_artifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+    cross_sdk_fixture_parity_artifact:
+      "artifacts/eth-mainnet/cross-sdk-parity.json",
+    native_prover_self_test_artifact:
+      "artifacts/eth-mainnet/native-prover-self-test.json",
     native_sdk_artifacts: Object.entries(
       SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
     ).map(([sdk, implementation], index) => ({
@@ -6020,9 +6570,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       prover_artifact_hash: proofArtifactHash,
       proving_key_hash: provingKeyHash,
       implementation_artifact: `artifacts/eth-mainnet/${sdk}-implementation.bin`,
-      implementation_hash: sdk === "javascript"
-        ? implementationHash
-        : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
+      implementation_hash:
+        sdk === "javascript"
+          ? implementationHash
+          : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
     })),
     audit_hashes: {
       circuit_security_audit: fixtureHash("dist eth circuit security audit"),
@@ -6039,7 +6590,8 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   };
   const publicSignalWords = Array.from(
     { length: 9 },
-    (_, index) => `0x${(index + 0x10).toString(16).padStart(2, "0").repeat(32)}`,
+    (_, index) =>
+      `0x${(index + 0x10).toString(16).padStart(2, "0").repeat(32)}`,
   );
   const paritySdkResult = {
     receipt_proof_hash: `0x${"d1".repeat(32)}`,
@@ -6063,10 +6615,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     ),
     ...paritySdkResult,
     sdk_results: Object.fromEntries(
-      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
-        sdk,
-        { ...paritySdkResult },
-      ]),
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
+        (sdk) => [sdk, { ...paritySdkResult }],
+      ),
     ),
   };
   const parityFixtureBytes = Buffer.from(JSON.stringify(parityFixture), "utf8");
@@ -6074,7 +6625,8 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   nativeProverBundle.audit_hashes.cross_sdk_fixture_parity = parityFixtureHash;
   const selfTestPublicSignalWords = Array.from(
     { length: 9 },
-    (_, index) => `0x${(index + 0x30).toString(16).padStart(2, "0").repeat(32)}`,
+    (_, index) =>
+      `0x${(index + 0x30).toString(16).padStart(2, "0").repeat(32)}`,
   );
   const selfTestSdkResult = {
     request_hash: `0x${"e1".repeat(32)}`,
@@ -6099,13 +6651,15 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     ),
     ...selfTestSdkResult,
     sdk_results: Object.fromEntries(
-      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
-        sdk,
-        { ...selfTestSdkResult },
-      ]),
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
+        (sdk) => [sdk, { ...selfTestSdkResult }],
+      ),
     ),
   };
-  const selfTestFixtureBytes = Buffer.from(JSON.stringify(selfTestFixture), "utf8");
+  const selfTestFixtureBytes = Buffer.from(
+    JSON.stringify(selfTestFixture),
+    "utf8",
+  );
   const selfTestFixtureHash = sha256Hex(selfTestFixtureBytes);
   nativeProverBundle.audit_hashes.native_prover_self_test = selfTestFixtureHash;
   const hashConsistentNativeProverBundle = ({
@@ -6118,24 +6672,30 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   } = {}) => {
     const selectedProofArtifactHash = sha256Hex(selectedProofArtifactBytes);
     const selectedProvingKeyHash = sha256Hex(selectedProvingKeyBytes);
-    const selectedVerifierKeyHash = sha256Hex(selectedVerifierKeyBytes);
+    const selectedVerifierKeyHash = verifierKeyHash;
+    const selectedVerifierKeyArtifactHash = sha256Hex(selectedVerifierKeyBytes);
     const selectedImplementationHash = sha256Hex(selectedImplementationBytes);
     const selectedBundle = {
       ...nativeProverBundle,
       proof_artifact_hash: selectedProofArtifactHash,
       proving_key_hash: selectedProvingKeyHash,
       verifier_key_hash: selectedVerifierKeyHash,
-      native_sdk_artifacts: nativeProverBundle.native_sdk_artifacts.map((artifact, index) => ({
-        ...artifact,
-        prover_artifact_hash: selectedProofArtifactHash,
-        proving_key_hash: selectedProvingKeyHash,
-        implementation_hash: artifact.sdk === "javascript"
-          ? selectedImplementationHash
-          : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
-      })),
+      verifier_key_artifact_hash: selectedVerifierKeyArtifactHash,
+      native_sdk_artifacts: nativeProverBundle.native_sdk_artifacts.map(
+        (artifact, index) => ({
+          ...artifact,
+          prover_artifact_hash: selectedProofArtifactHash,
+          proving_key_hash: selectedProvingKeyHash,
+          implementation_hash:
+            artifact.sdk === "javascript"
+              ? selectedImplementationHash
+              : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
+        }),
+      ),
     };
     const selectedParityFixtureBytes =
-      overrideParityFixtureBytes ?? Buffer.from(
+      overrideParityFixtureBytes ??
+      Buffer.from(
         JSON.stringify({
           ...parityFixture,
           proof_artifact_hash: selectedProofArtifactHash,
@@ -6145,7 +6705,8 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         "utf8",
       );
     const selectedSelfTestFixtureBytes =
-      overrideSelfTestFixtureBytes ?? Buffer.from(
+      overrideSelfTestFixtureBytes ??
+      Buffer.from(
         JSON.stringify({
           ...selfTestFixture,
           proof_artifact_hash: selectedProofArtifactHash,
@@ -6172,9 +6733,12 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     "pure-typescript",
   );
   assert.equal(
-    parseEthereumMainnetNativeEvmProverBundleManifest(JSON.stringify(nativeProverBundle), {
-      destinationBinding: ethereumMainnetBinding,
-    }).proofArtifactHash,
+    parseEthereumMainnetNativeEvmProverBundleManifest(
+      JSON.stringify(nativeProverBundle),
+      {
+        destinationBinding: ethereumMainnetBinding,
+      },
+    ).proofArtifactHash,
     proofArtifactHash,
   );
   assert.throws(
@@ -6207,7 +6771,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   assert.throws(
     () =>
       validateEthereumMainnetNativeEvmProverBundle(
-        { ...nativeProverBundle, proof_artifact: "artifacts/eth-mainnet/proof-artifact.bin" },
+        {
+          ...nativeProverBundle,
+          proof_artifact: "artifacts/eth-mainnet/proof-artifact.bin",
+        },
         { destinationBinding: ethereumMainnetBinding },
       ),
     /proofArtifact must reference a \.r1cs artifact/u,
@@ -6215,7 +6782,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   assert.throws(
     () =>
       validateEthereumMainnetNativeEvmProverBundle(
-        { ...nativeProverBundle, proving_key: "artifacts/eth-mainnet/proving-key.bin" },
+        {
+          ...nativeProverBundle,
+          proving_key: "artifacts/eth-mainnet/proving-key.bin",
+        },
         { destinationBinding: ethereumMainnetBinding },
       ),
     /provingKey must reference a \.zkey artifact/u,
@@ -6267,15 +6837,23 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   );
   assert.equal(verifiedNativeArtifacts.implementation, "pure-typescript");
   assert.equal(verifiedNativeArtifacts.implementationHash, implementationHash);
-  assert.equal(verifiedNativeArtifacts.crossSdkFixtureParityHash, parityFixtureHash);
-  assert.equal(verifiedNativeArtifacts.nativeProverSelfTestHash, selfTestFixtureHash);
   assert.equal(
-    (await runEthereumMainnetNativeProverSelfTest({
-      nativeProverArtifacts: verifiedNativeArtifacts,
-      nativeProverSelfTest(context) {
-        return context.expectedResult;
-      },
-    })).proofHash,
+    verifiedNativeArtifacts.crossSdkFixtureParityHash,
+    parityFixtureHash,
+  );
+  assert.equal(
+    verifiedNativeArtifacts.nativeProverSelfTestHash,
+    selfTestFixtureHash,
+  );
+  assert.equal(
+    (
+      await runEthereumMainnetNativeProverSelfTest({
+        nativeProverArtifacts: verifiedNativeArtifacts,
+        nativeProverSelfTest(context) {
+          return context.expectedResult;
+        },
+      })
+    ).proofHash,
     selfTestFixture.proof_hash,
   );
   const nativeArtifactBytes = new Map([
@@ -6285,22 +6863,25 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     [nativeProverBundle.cross_sdk_fixture_parity_artifact, parityFixtureBytes],
     [nativeProverBundle.native_prover_self_test_artifact, selfTestFixtureBytes],
     [
-      nativeProverBundle.native_sdk_artifacts.find((row) => row.sdk === "javascript")
-        .implementation_artifact,
+      nativeProverBundle.native_sdk_artifacts.find(
+        (row) => row.sdk === "javascript",
+      ).implementation_artifact,
       implementationBytes,
     ],
   ]);
   assert.equal(
-    (await verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
-      {
-        nativeProverBundle,
-        sdk: "javascript",
-        artifactResolver(path) {
-          return nativeArtifactBytes.get(path);
+    (
+      await verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
+        {
+          nativeProverBundle,
+          sdk: "javascript",
+          artifactResolver(path) {
+            return nativeArtifactBytes.get(path);
+          },
         },
-      },
-      { destinationBinding: ethereumMainnetBinding },
-    )).implementationHash,
+        { destinationBinding: ethereumMainnetBinding },
+      )
+    ).implementationHash,
     implementationHash,
   );
   await assert.rejects(
@@ -6335,7 +6916,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       },
     },
   });
-  assert.equal((await factorySdk.runNativeProverSelfTest()).calldataHash, selfTestFixture.calldata_hash);
+  assert.equal(
+    (await factorySdk.runNativeProverSelfTest()).calldataHash,
+    selfTestFixture.calldata_hash,
+  );
   const factoryResult = await factorySdk.proveOutboundToEthereum({
     public_inputs: publicInputs,
     bundle_bytes: fixture.bundleBytes,
@@ -6345,27 +6929,41 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   });
   assert.equal(factoryRequest.proofArtifactHash, proofArtifactHash);
   assert.equal(factoryRequest.provingKeyHash, provingKeyHash);
-  assert.equal(factoryResult.destinationBindingHash, ethereumMainnetBinding.bindingHash);
-  const tinyProofArtifactBytes = Buffer.from("tiny native proof artifact\n", "utf8");
+  assert.equal(
+    factoryResult.destinationBindingHash,
+    ethereumMainnetBinding.bindingHash,
+  );
+  const tinyProofArtifactBytes = Buffer.from(
+    "tiny native proof artifact\n",
+    "utf8",
+  );
   const tinyProofArtifactHash = sha256Hex(tinyProofArtifactBytes);
   const tinyNativeProverBundle = {
     ...nativeProverBundle,
     proof_artifact_hash: tinyProofArtifactHash,
-    native_sdk_artifacts: nativeProverBundle.native_sdk_artifacts.map((artifact) => ({
-      ...artifact,
-      prover_artifact_hash: tinyProofArtifactHash,
-    })),
+    native_sdk_artifacts: nativeProverBundle.native_sdk_artifacts.map(
+      (artifact) => ({
+        ...artifact,
+        prover_artifact_hash: tinyProofArtifactHash,
+      }),
+    ),
   };
   const tinyParityFixture = {
     ...parityFixture,
     proof_artifact_hash: tinyProofArtifactHash,
   };
-  const tinyParityFixtureBytes = Buffer.from(JSON.stringify(tinyParityFixture), "utf8");
+  const tinyParityFixtureBytes = Buffer.from(
+    JSON.stringify(tinyParityFixture),
+    "utf8",
+  );
   const tinySelfTestFixture = {
     ...selfTestFixture,
     proof_artifact_hash: tinyProofArtifactHash,
   };
-  const tinySelfTestFixtureBytes = Buffer.from(JSON.stringify(tinySelfTestFixture), "utf8");
+  const tinySelfTestFixtureBytes = Buffer.from(
+    JSON.stringify(tinySelfTestFixture),
+    "utf8",
+  );
   tinyNativeProverBundle.audit_hashes = {
     ...nativeProverBundle.audit_hashes,
     cross_sdk_fixture_parity: sha256Hex(tinyParityFixtureBytes),
@@ -6409,7 +7007,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       ),
     /provingKeyBytes must be at least 65536 bytes/u,
   );
-  const tinyVerifierKeyBytes = Buffer.from("tiny package verifier key\n", "utf8");
+  const tinyVerifierKeyBytes = Buffer.from(
+    "tiny package verifier key\n",
+    "utf8",
+  );
   const tinyVerifierKeyBundle = hashConsistentNativeProverBundle({
     verifierKeyBytes: tinyVerifierKeyBytes,
   });
@@ -6472,7 +7073,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       ),
     /nativeProverSelfTestBytes must be at least 128 bytes/u,
   );
-  const tinyImplementationBytes = Buffer.from("tiny package implementation\n", "utf8");
+  const tinyImplementationBytes = Buffer.from(
+    "tiny package implementation\n",
+    "utf8",
+  );
   const tinyImplementationBundle = hashConsistentNativeProverBundle({
     implementationBytes: tinyImplementationBytes,
   });
@@ -6484,8 +7088,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
           proofArtifactBytes,
           provingKeyBytes,
           verifierKeyBytes,
-          crossSdkFixtureParityBytes: tinyImplementationBundle.parityFixtureBytes,
-          nativeProverSelfTestBytes: tinyImplementationBundle.selfTestFixtureBytes,
+          crossSdkFixtureParityBytes:
+            tinyImplementationBundle.parityFixtureBytes,
+          nativeProverSelfTestBytes:
+            tinyImplementationBundle.selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: tinyImplementationBytes,
         },
@@ -6510,24 +7116,29 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       ),
     /implementationBytes sha256/u,
   );
-  assert.equal(new EthereumMainnetSccp().buildOutboundProofRequest({
-    public_inputs: publicInputs,
-    bundle_bytes: fixture.bundleBytes,
-    source_domain: SCCP_DOMAIN_SORA,
-    statement_hash: `0x${"55".repeat(32)}`,
-    destination_binding: ethereumMainnetBinding,
-    native_prover_bundle: nativeProverBundle,
-  }).proofArtifactHash, proofArtifactHash);
-  assert.equal(new EthereumMainnetSccp().buildOutboundProofRequest({
-    public_inputs: publicInputs,
-    bundle_bytes: fixture.bundleBytes,
-    source_domain: SCCP_DOMAIN_SORA,
-    statement_hash: `0x${"55".repeat(32)}`,
-    destination_binding: ethereumMainnetBinding,
-  }).targetDomain, SCCP_DOMAIN_ETH);
-  const ethWrongTargetFixture = sampleEvmFamilyProofBundleFixture(
-    SCCP_DOMAIN_BSC,
+  assert.equal(
+    new EthereumMainnetSccp().buildOutboundProofRequest({
+      public_inputs: publicInputs,
+      bundle_bytes: fixture.bundleBytes,
+      source_domain: SCCP_DOMAIN_SORA,
+      statement_hash: `0x${"55".repeat(32)}`,
+      destination_binding: ethereumMainnetBinding,
+      native_prover_bundle: nativeProverBundle,
+    }).proofArtifactHash,
+    proofArtifactHash,
   );
+  assert.equal(
+    new EthereumMainnetSccp().buildOutboundProofRequest({
+      public_inputs: publicInputs,
+      bundle_bytes: fixture.bundleBytes,
+      source_domain: SCCP_DOMAIN_SORA,
+      statement_hash: `0x${"55".repeat(32)}`,
+      destination_binding: ethereumMainnetBinding,
+    }).targetDomain,
+    SCCP_DOMAIN_ETH,
+  );
+  const ethWrongTargetFixture =
+    sampleEvmFamilyProofBundleFixture(SCCP_DOMAIN_BSC);
   assert.throws(
     () =>
       new EthereumMainnetSccp().buildOutboundProofRequest({
@@ -6572,9 +7183,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       prover_artifact_hash: proofArtifactHash,
       proving_key_hash: provingKeyHash,
       implementation_artifact: `artifacts/bsc-mainnet/${sdk}-implementation.bin`,
-      implementation_hash: sdk === "javascript"
-        ? implementationHash
-        : `0x${(index + 0x41).toString(16).padStart(2, "0").repeat(32)}`,
+      implementation_hash:
+        sdk === "javascript"
+          ? implementationHash
+          : `0x${(index + 0x41).toString(16).padStart(2, "0").repeat(32)}`,
     })),
   };
   const bscMainnetParitySdkResult = {
@@ -6595,10 +7207,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     ),
     ...bscMainnetParitySdkResult,
     sdk_results: Object.fromEntries(
-      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
-        sdk,
-        { ...bscMainnetParitySdkResult },
-      ]),
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
+        (sdk) => [sdk, { ...bscMainnetParitySdkResult }],
+      ),
     ),
   };
   const bscMainnetParityFixtureBytes = Buffer.from(
@@ -6619,10 +7230,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     ),
     ...selfTestSdkResult,
     sdk_results: Object.fromEntries(
-      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
-        sdk,
-        { ...selfTestSdkResult },
-      ]),
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
+        (sdk) => [sdk, { ...selfTestSdkResult }],
+      ),
     ),
   };
   const bscMainnetSelfTestFixtureBytes = Buffer.from(
@@ -6663,17 +7273,27 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     bscRequest,
   );
   assert.equal(
-    buildBscMainnetSccpDestinationSubmission({ proofResult: bscProofResult }).targetDomain,
+    buildBscMainnetSccpDestinationSubmission({ proofResult: bscProofResult })
+      .targetDomain,
     SCCP_DOMAIN_BSC,
   );
-  assert.equal(bscMainnetSdk.buildBscCalldata({ proofResult: bscProofResult }).targetDomain, SCCP_DOMAIN_BSC);
-  assert.equal((await new BscMainnetSccpProver().buildRequest({
-    public_inputs: bscPublicInputs,
-    bundle_bytes: bscFixture.bundleBytes,
-    source_domain: SCCP_DOMAIN_SORA,
-    statement_hash: `0x${"55".repeat(32)}`,
-    destination_binding: bscMainnetBinding,
-  })).targetDomain, SCCP_DOMAIN_BSC);
+  assert.equal(
+    bscMainnetSdk.buildBscCalldata({ proofResult: bscProofResult })
+      .targetDomain,
+    SCCP_DOMAIN_BSC,
+  );
+  assert.equal(
+    (
+      await new BscMainnetSccpProver().buildRequest({
+        public_inputs: bscPublicInputs,
+        bundle_bytes: bscFixture.bundleBytes,
+        source_domain: SCCP_DOMAIN_SORA,
+        statement_hash: `0x${"55".repeat(32)}`,
+        destination_binding: bscMainnetBinding,
+      })
+    ).targetDomain,
+    SCCP_DOMAIN_BSC,
+  );
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccp/u);
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccpProver/u);
   const bscTestnetBinding = bscTestnetSccpDestinationBinding({
@@ -6691,8 +7311,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     proving_key: "artifacts/bsc-testnet/proving-key.zkey",
     verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
     destination_binding_hash: bscTestnetBinding.bindingHash,
-    cross_sdk_fixture_parity_artifact: "artifacts/bsc-testnet/cross-sdk-parity.json",
-    native_prover_self_test_artifact: "artifacts/bsc-testnet/native-prover-self-test.json",
+    cross_sdk_fixture_parity_artifact:
+      "artifacts/bsc-testnet/cross-sdk-parity.json",
+    native_prover_self_test_artifact:
+      "artifacts/bsc-testnet/native-prover-self-test.json",
     native_sdk_artifacts: Object.entries(
       SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
     ).map(([sdk, implementation], index) => ({
@@ -6701,9 +7323,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       prover_artifact_hash: proofArtifactHash,
       proving_key_hash: provingKeyHash,
       implementation_artifact: `artifacts/bsc-testnet/${sdk}-implementation.bin`,
-      implementation_hash: sdk === "javascript"
-        ? implementationHash
-        : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
+      implementation_hash:
+        sdk === "javascript"
+          ? implementationHash
+          : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
     })),
   };
   const bscTestnetParitySdkResult = {
@@ -6724,10 +7347,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     ),
     ...bscTestnetParitySdkResult,
     sdk_results: Object.fromEntries(
-      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
-        sdk,
-        { ...bscTestnetParitySdkResult },
-      ]),
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
+        (sdk) => [sdk, { ...bscTestnetParitySdkResult }],
+      ),
     ),
   };
   const bscTestnetParityFixtureBytes = Buffer.from(
@@ -6748,10 +7370,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     ),
     ...selfTestSdkResult,
     sdk_results: Object.fromEntries(
-      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
-        sdk,
-        { ...selfTestSdkResult },
-      ]),
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
+        (sdk) => [sdk, { ...selfTestSdkResult }],
+      ),
     ),
   };
   const bscTestnetSelfTestFixtureBytes = Buffer.from(
@@ -6791,7 +7412,9 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     bscTestnetRequest,
   );
   assert.equal(
-    buildBscTestnetSccpDestinationSubmission({ proofResult: bscTestnetProofResult }).targetDomain,
+    buildBscTestnetSccpDestinationSubmission({
+      proofResult: bscTestnetProofResult,
+    }).targetDomain,
     SCCP_DOMAIN_BSC,
   );
   const bscTestnetSdk = new BscTestnetSccp({
@@ -6809,32 +7432,46 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     bscProofBytes,
     bscTestnetNativeRequest,
   );
-  assert.equal(bscTestnetSdk.buildBscCalldata({
-    proofResult: bscTestnetNativeProofResult,
-  }).destinationBindingHash, bscTestnetNativeRequest.destinationBindingHash);
-  assert.equal((await new BscTestnetSccpProver().buildRequest({
-    public_inputs: bscPublicInputs,
-    bundle_bytes: bscFixture.bundleBytes,
-    source_domain: SCCP_DOMAIN_SORA,
-    statement_hash: `0x${"55".repeat(32)}`,
-    destination_binding: bscTestnetBinding,
-  })).destinationBinding.networkId, SCCP_BSC_TESTNET_NETWORK_ID);
-  assert.equal(buildBscTestnetSccpLocalAdmissionSubmission({
-    source_domain: SCCP_DOMAIN_BSC,
-    target_domain: SCCP_DOMAIN_SORA,
-    proof_bytes: new Uint8Array([1, 2, 3]),
-    public_inputs_bytes: new Uint8Array([4, 5, 6]),
-    bundle_bytes: new Uint8Array([7, 8, 9]),
-    envelope_bytes: new Uint8Array([10, 11, 12]),
-    statement_hash: `0x${"66".repeat(32)}`,
-    source_verifier_material_hash: `0x${"77".repeat(32)}`,
-    source_adapter_engine_deployment_hash: `0x${"88".repeat(32)}`,
-  }).sourceDomain, SCCP_DOMAIN_BSC);
+  assert.equal(
+    bscTestnetSdk.buildBscCalldata({
+      proofResult: bscTestnetNativeProofResult,
+    }).destinationBindingHash,
+    bscTestnetNativeRequest.destinationBindingHash,
+  );
+  assert.equal(
+    (
+      await new BscTestnetSccpProver().buildRequest({
+        public_inputs: bscPublicInputs,
+        bundle_bytes: bscFixture.bundleBytes,
+        source_domain: SCCP_DOMAIN_SORA,
+        statement_hash: `0x${"55".repeat(32)}`,
+        destination_binding: bscTestnetBinding,
+      })
+    ).destinationBinding.networkId,
+    SCCP_BSC_TESTNET_NETWORK_ID,
+  );
+  assert.equal(
+    buildBscTestnetSccpLocalAdmissionSubmission({
+      source_domain: SCCP_DOMAIN_BSC,
+      target_domain: SCCP_DOMAIN_SORA,
+      proof_bytes: new Uint8Array([1, 2, 3]),
+      public_inputs_bytes: new Uint8Array([4, 5, 6]),
+      bundle_bytes: new Uint8Array([7, 8, 9]),
+      envelope_bytes: new Uint8Array([10, 11, 12]),
+      statement_hash: `0x${"66".repeat(32)}`,
+      source_verifier_material_hash: `0x${"77".repeat(32)}`,
+      source_adapter_engine_deployment_hash: `0x${"88".repeat(32)}`,
+    }).sourceDomain,
+    SCCP_DOMAIN_BSC,
+  );
   assert.match(DECLARATIONS_TEXT, /export type BscTestnetSccpProofRequest/u);
   assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccp/u);
   assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccpProver/u);
   assert.match(DECLARATIONS_TEXT, /buildBscTestnetSccpDestinationSubmission/u);
-  assert.match(DECLARATIONS_TEXT, /buildBscTestnetSccpLocalAdmissionSubmission/u);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /buildBscTestnetSccpLocalAdmissionSubmission/u,
+  );
   const request = buildEvmSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: fixture.bundleBytes,
@@ -6863,9 +7500,18 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   assert.notEqual(artifactRequest.requestHash, request.requestHash);
   const proofResult = wrapEvmSccpProofResult(proofBytes, request);
   assert.equal(proofResult.requestHash, request.requestHash);
-  const artifactProofResult = wrapEvmSccpProofResult(proofBytes, artifactRequest);
-  assert.equal(artifactProofResult.proofArtifactHash, artifactRequest.proofArtifactHash);
-  assert.equal(artifactProofResult.provingKeyHash, artifactRequest.provingKeyHash);
+  const artifactProofResult = wrapEvmSccpProofResult(
+    proofBytes,
+    artifactRequest,
+  );
+  assert.equal(
+    artifactProofResult.proofArtifactHash,
+    artifactRequest.proofArtifactHash,
+  );
+  assert.equal(
+    artifactProofResult.provingKeyHash,
+    artifactRequest.provingKeyHash,
+  );
   assert.throws(
     () =>
       buildEvmSccpSubmission({
@@ -6888,16 +7534,23 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       }),
     /bundleBytes requires proofResult for request-bound submission/,
   );
-  const publicInputWords = sccpMessageTransparentPublicInputAbiWords(publicInputs);
+  const publicInputWords =
+    sccpMessageTransparentPublicInputAbiWords(publicInputs);
   assert.equal(publicInputWords.length, 6);
-  assert.equal(Buffer.from(publicInputWords[2]).toString("hex"), `${"00".repeat(31)}01`);
+  assert.equal(
+    Buffer.from(publicInputWords[2]).toString("hex"),
+    `${"00".repeat(31)}01`,
+  );
   const callData = sccpSubmitMessageProofCallData(
     proofBytes,
     publicInputs,
     `0x${"55".repeat(32)}`,
   );
   assert.equal(callData.length, 676);
-  assert.equal(Buffer.from(callData.subarray(0, 4)).toString("hex"), "bd57826c");
+  assert.equal(
+    Buffer.from(callData.subarray(0, 4)).toString("hex"),
+    "bd57826c",
+  );
   const mismatchedProof = Uint8Array.from(proofBytes);
   mismatchedProof.fill(0x22, 32, 64);
   assert.throws(
@@ -6933,14 +7586,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   assert.notEqual(
     request.requestHash,
     buildEvmSccpProofRequest({
-      public_inputs: sampleEvmFamilyProofBundleFixture(
-        SCCP_DOMAIN_ETH,
-        2n,
-      ).publicInputs,
-      bundle_bytes: sampleEvmFamilyProofBundleFixture(
-        SCCP_DOMAIN_ETH,
-        2n,
-      ).bundleBytes,
+      public_inputs: sampleEvmFamilyProofBundleFixture(SCCP_DOMAIN_ETH, 2n)
+        .publicInputs,
+      bundle_bytes: sampleEvmFamilyProofBundleFixture(SCCP_DOMAIN_ETH, 2n)
+        .bundleBytes,
       source_proof_bytes: new Uint8Array([10]),
       source_domain: SCCP_DOMAIN_SORA,
       statement_hash: `0x${"55".repeat(32)}`,
@@ -7021,7 +7670,8 @@ const buildSampleTonMessageProofBundleFixture = () => {
 };
 
 test("package dist entrypoint exports SCCP TON proof wrapper", () => {
-  const { publicInputs, bundleBytes } = buildSampleTonMessageProofBundleFixture();
+  const { publicInputs, bundleBytes } =
+    buildSampleTonMessageProofBundleFixture();
   const request = buildTonSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: bundleBytes,
@@ -7053,7 +7703,9 @@ test("package dist entrypoint exports SCCP TON proof wrapper", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: result,
-        bundleBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        bundleBytes: new Uint8Array(
+          SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1,
+        ).fill(1),
       }),
     /bundleBytes must be at most/,
   );
@@ -7062,14 +7714,16 @@ test("package dist entrypoint exports SCCP TON proof wrapper", () => {
       wrapTonSccpProofResult(
         new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
         request,
-    ),
+      ),
     /at most/,
   );
   assert.throws(
     () =>
       buildTonSccpSubmission({
         publicInputs,
-        proofBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        proofBytes: new Uint8Array(
+          SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1,
+        ).fill(1),
         bundleBytes: new Uint8Array([5, 6, 7]),
         statementHash: `0x${"55".repeat(32)}`,
         destinationBindingHash: `0x${"66".repeat(32)}`,
@@ -7103,18 +7757,29 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
     bridgeAddress: `0x${"11".repeat(20)}`,
     sourceBridgeEmitterCodeHash: `0x${"77".repeat(32)}`,
     networkId: SCCP_ETH_MAINNET_NETWORK_ID,
-    configHash: "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b",
+    configHash:
+      "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b",
   };
   assert.ok(canonicalSccpSourceVerifierMaterialBytes(material).length > 0);
   assert.equal(
     sccpSourceVerifierMaterialHash(material),
     "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77",
   );
-  assert.equal(SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1, "sccp-source-adapter-v1");
-  assert.equal(SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1, "fastpq-lane-balanced");
-  const sourceAdapterVerifierVkHash = sccpSourceAdapterVerifierVkHash(SCCP_DOMAIN_ETH);
+  assert.equal(
+    SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
+    "sccp-source-adapter-v1",
+  );
+  assert.equal(
+    SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1,
+    "fastpq-lane-balanced",
+  );
+  const sourceAdapterVerifierVkHash =
+    sccpSourceAdapterVerifierVkHash(SCCP_DOMAIN_ETH);
   assert.match(sourceAdapterVerifierVkHash, /^0x[0-9a-f]{64}$/u);
-  assert.notEqual(sourceAdapterVerifierVkHash, sccpSourceAdapterVerifierVkHash(SCCP_DOMAIN_BSC));
+  assert.notEqual(
+    sourceAdapterVerifierVkHash,
+    sccpSourceAdapterVerifierVkHash(SCCP_DOMAIN_BSC),
+  );
   assert.throws(
     () =>
       sccpSourceAdapterVerifierVkHash({
@@ -7127,12 +7792,17 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
     ...material,
     deploymentReceiptHash: `0x${"aa".repeat(32)}`,
   };
-  assert.ok(canonicalSccpSourceAdapterEngineDeploymentBytes(deployment).length > 0);
+  assert.ok(
+    canonicalSccpSourceAdapterEngineDeploymentBytes(deployment).length > 0,
+  );
   assert.equal(
     sccpSourceAdapterEngineDeploymentHash(deployment),
     "0xfeb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4",
   );
-  assert.equal(sccpDestinationBindingKey(SCCP_DOMAIN_SOL), "sccp:0:3:sol:solana-program-v1:2");
+  assert.equal(
+    sccpDestinationBindingKey(SCCP_DOMAIN_SOL),
+    "sccp:0:3:sol:solana-program-v1:2",
+  );
   assert.equal(
     sccpDestinationBindingHash(SCCP_DOMAIN_SOL),
     "0x078578f0aa27daa2972d6c19d1d26dbb6bf6ba1e8df84e283d7ef101fc46abf6",
@@ -7207,7 +7877,9 @@ test("package dist entrypoint exports BSC validator-set payload helpers", () => 
         validatorIndex: 0,
         storageSlot: `0x${"33".repeat(32)}`,
         storageValue: `0x94${"11".repeat(20)}`,
-        storageValueHash: bscValidatorSetStorageValueHash(`0x94${"11".repeat(20)}`),
+        storageValueHash: bscValidatorSetStorageValueHash(
+          `0x94${"11".repeat(20)}`,
+        ),
         storageProofNodes: [`0xe4822080a0${"44".repeat(32)}`],
       },
       {
@@ -7215,7 +7887,9 @@ test("package dist entrypoint exports BSC validator-set payload helpers", () => 
         validatorIndex: 1,
         storageSlot: `0x${"55".repeat(32)}`,
         storageValue: `0x94${"22".repeat(20)}`,
-        storageValueHash: bscValidatorSetStorageValueHash(`0x94${"22".repeat(20)}`),
+        storageValueHash: bscValidatorSetStorageValueHash(
+          `0x94${"22".repeat(20)}`,
+        ),
         storageProofNodes: [`0xe4822080a0${"66".repeat(32)}`],
       },
     ],
@@ -7244,7 +7918,8 @@ test("package dist entrypoint exports BSC validator-set payload helpers", () => 
     blockNumber: 401n,
     blockHash: `0x${"22".repeat(32)}`,
     receiptsRoot: `0x${"33".repeat(32)}`,
-    validatorSetHash: "0xc5152802f6ca9ec72a4249646aca7476496f00b71ab5b1482c881a31fb42dd8c",
+    validatorSetHash:
+      "0xc5152802f6ca9ec72a4249646aca7476496f00b71ab5b1482c881a31fb42dd8c",
   };
   assert.equal(canonicalBscCommitMessageBytes(commitMessage).length, 117);
   assert.equal(
@@ -7272,8 +7947,14 @@ test("package dist entrypoint exports BSC validator-set payload helpers", () => 
   );
   assert.equal(typeof bscValidatorSetPayloadFromParliaExtra, "function");
   assert.equal(typeof bscValidatorSetPayloadFromHeaderRlp, "function");
-  assert.equal(canonicalBscValidatorSetMetadataProofBytes(metadataProof).length, 560);
-  assert.match(bscValidatorSetMetadataProofHash(metadataProof), /^0x[0-9a-f]{64}$/);
+  assert.equal(
+    canonicalBscValidatorSetMetadataProofBytes(metadataProof).length,
+    560,
+  );
+  assert.match(
+    bscValidatorSetMetadataProofHash(metadataProof),
+    /^0x[0-9a-f]{64}$/,
+  );
   assert.equal(
     canonicalBscValidatorSetTransitionMessageBytes({
       sourceDomain: SCCP_DOMAIN_BSC,
@@ -7284,7 +7965,8 @@ test("package dist entrypoint exports BSC validator-set payload helpers", () => 
       parentValidatorSetHash: `0x${"88".repeat(32)}`,
       nextValidatorSetHash: bscValidatorSetHashFromPayload(payload),
       nextValidatorSetPayloadHash: bscValidatorSetPayloadHash(payload),
-      validatorSetMetadataProofHash: bscValidatorSetMetadataProofHash(metadataProof),
+      validatorSetMetadataProofHash:
+        bscValidatorSetMetadataProofHash(metadataProof),
     }).length,
     189,
   );
@@ -7298,7 +7980,8 @@ test("package dist entrypoint exports BSC validator-set payload helpers", () => 
       parentValidatorSetHash: `0x${"88".repeat(32)}`,
       nextValidatorSetHash: bscValidatorSetHashFromPayload(payload),
       nextValidatorSetPayloadHash: bscValidatorSetPayloadHash(payload),
-      validatorSetMetadataProofHash: bscValidatorSetMetadataProofHash(metadataProof),
+      validatorSetMetadataProofHash:
+        bscValidatorSetMetadataProofHash(metadataProof),
     }),
     /^0x[0-9a-f]{64}$/,
   );
@@ -7334,12 +8017,15 @@ test("package dist entrypoint exports ETH sync-committee payload helpers", () =>
 test("package dist entrypoint exports ETH beacon execution-payload SSZ helpers", () => {
   const headerRlp = sampleEthExecutionHeaderRlp();
   const executionPayloadRoot = ethExecutionPayloadHeaderRootFromRlp(headerRlp);
-  const beaconBodyRoot = ethBeaconBodyRootFromExecutionPayloadBranch(executionPayloadRoot, [
-    `0x${"ee".repeat(32)}`,
-    `0x${"ff".repeat(32)}`,
-    `0x${"11".repeat(32)}`,
-    `0x${"22".repeat(32)}`,
-  ]);
+  const beaconBodyRoot = ethBeaconBodyRootFromExecutionPayloadBranch(
+    executionPayloadRoot,
+    [
+      `0x${"ee".repeat(32)}`,
+      `0x${"ff".repeat(32)}`,
+      `0x${"11".repeat(32)}`,
+      `0x${"22".repeat(32)}`,
+    ],
+  );
 
   assert.equal(
     executionPayloadRoot,
@@ -7381,9 +8067,13 @@ test("package dist entrypoint exports TON validator-set transition helpers", () 
     masterchainBlockHash: `0x${"aa".repeat(32)}`,
     masterchainFileHash: `0x${"a5".repeat(32)}`,
     parentValidatorSetHash,
-    nextValidatorSetHash: tonValidatorSetHashFromPayload(nextValidatorSetPayload),
+    nextValidatorSetHash: tonValidatorSetHashFromPayload(
+      nextValidatorSetPayload,
+    ),
     nextValidatorSetPayload,
-    nextValidatorSetPayloadHash: tonValidatorSetPayloadHash(nextValidatorSetPayload),
+    nextValidatorSetPayloadHash: tonValidatorSetPayloadHash(
+      nextValidatorSetPayload,
+    ),
     nextValidatorSetConfigHash: `0x${"cc".repeat(32)}`,
   };
 
@@ -7395,7 +8085,10 @@ test("package dist entrypoint exports TON validator-set transition helpers", () 
     Buffer.from(nextValidatorSetPayload).toString("hex"),
     `0102000000${"33".repeat(32)}0300000000000000${"44".repeat(32)}0400000000000000`,
   );
-  assert.equal(canonicalTonValidatorSetTransitionMessageBytes(message).length, 233);
+  assert.equal(
+    canonicalTonValidatorSetTransitionMessageBytes(message).length,
+    233,
+  );
   assert.equal(
     tonValidatorSetTransitionMessageHash(message),
     "0x91eda926884eb1ae700e7b398c46f6d47fbb973efa322564894936140ccd2a19",
@@ -7407,7 +8100,8 @@ test("package dist entrypoint exports TON masterchain config proof helpers", () 
     validatorPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
     validatorWeights: [1n, 2n],
   });
-  const validatorSetPayloadHash = tonValidatorSetPayloadHash(validatorSetPayload);
+  const validatorSetPayloadHash =
+    tonValidatorSetPayloadHash(validatorSetPayload);
   const configDictionaryProofBoc = Buffer.from(
     "b5ee9c72010106010091000101c00101117fffffff80000008a002012b120000000100000002000200020000000000000003c00302087fff00000405005b14e3a049e28444444444444444444444444444444444444444444444444444444444444444400000000000000060005b14e3a049e288888888888888888888888888888888888888888888888888888888888888888000000000000000a0",
     "hex",
@@ -7426,16 +8120,21 @@ test("package dist entrypoint exports TON masterchain config proof helpers", () 
   const configLeafHash = tonMasterchainConfigLeafHash(leaf);
   const proof = {
     ...leaf,
-    configRoot: "0x5bf87008e0e76085d6db977b53a89329de49a4eed8fd1ff90d8c78f096ef05af",
+    configRoot:
+      "0x5bf87008e0e76085d6db977b53a89329de49a4eed8fd1ff90d8c78f096ef05af",
     configLeafHash,
     configLeafIndex: SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM,
-    configValueHash: "0x1aa64eb5ca0b3cb254dfada709904ce81f8b327eed0d83f2522122a0a9dddd50",
+    configValueHash:
+      "0x1aa64eb5ca0b3cb254dfada709904ce81f8b327eed0d83f2522122a0a9dddd50",
     configDictionaryProofBoc,
     configInclusionBranch: [],
   };
 
   assert.equal(canonicalTonMasterchainConfigLeafBytes(leaf).length, 141);
-  assert.equal(tonHashmapEProofRootHash(configDictionaryProofBoc), proof.configRoot);
+  assert.equal(
+    tonHashmapEProofRootHash(configDictionaryProofBoc),
+    proof.configRoot,
+  );
   assert.deepEqual(
     tonConfigValidatorSetPayloadFromProofBoc(configDictionaryProofBoc),
     validatorSetPayload,
@@ -7468,8 +8167,10 @@ test("package dist entrypoint exports TON masterchain signature helpers", () => 
     masterchainBlockHash: `0x${"aa".repeat(32)}`,
     masterchainFileHash: `0x${"a5".repeat(32)}`,
     validatorSetHash: tonValidatorSetHash(validatorSet),
-    masterchainConfigRoot: "0x5bf87008e0e76085d6db977b53a89329de49a4eed8fd1ff90d8c78f096ef05af",
-    masterchainConfigProofHash: "0x9949285613a9e9dfb4ed3728bbede7ddea36fd82ac3d7eff3955dd75e9c4941c",
+    masterchainConfigRoot:
+      "0x5bf87008e0e76085d6db977b53a89329de49a4eed8fd1ff90d8c78f096ef05af",
+    masterchainConfigProofHash:
+      "0x9949285613a9e9dfb4ed3728bbede7ddea36fd82ac3d7eff3955dd75e9c4941c",
     shardWorkchainId: 0,
     shardShard: 0x8000000000000000n,
     shardSeqno: 7n,
@@ -7491,19 +8192,25 @@ test("package dist entrypoint exports TON masterchain signature helpers", () => 
     signatures: [new Uint8Array(64).fill(0xab), new Uint8Array(64).fill(0xcd)],
   };
 
-  assert.equal(canonicalTonMasterchainBlockMessageBytes(blockMessage).length, 365);
+  assert.equal(
+    canonicalTonMasterchainBlockMessageBytes(blockMessage).length,
+    365,
+  );
   assert.equal(
     blockMessageHash,
     "0x0ca07d5072adb7db3d6a0f831294c7e119c451884aaa1afcbb23e0df0911d8bd",
   );
-  assert.equal(canonicalTonMasterchainValidatorSignaturesBytes(signatures).length, 322);
+  assert.equal(
+    canonicalTonMasterchainValidatorSignaturesBytes(signatures).length,
+    322,
+  );
   assert.equal(
     tonMasterchainValidatorSignaturesHash(signatures),
     "0x7a927ad3e689e4f3679fe1d1b8ea1088b914523b0c2da0d6dc0938e5e5cf8d15",
   );
 });
 
-  test("package dist entrypoint exports TRON witness-schedule payload helpers", () => {
+test("package dist entrypoint exports TRON witness-schedule payload helpers", () => {
   const payload = canonicalTronWitnessSchedulePayloadBytes({
     witnessAddresses: [`0x41${"11".repeat(20)}`, `0x41${"22".repeat(20)}`],
     witnessWeights: [1n, 2n],
@@ -7524,8 +8231,10 @@ test("package dist entrypoint exports TON masterchain signature helpers", () => 
   const solidMessage = {
     sourceDomain: SCCP_DOMAIN_TRON,
     solidBlockNumber: 12345n,
-    blockHash: "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
-    witnessScheduleHash: "0x0c5eca6f96572fe939e640d8951abd126d2e966ffc4e3d0d087dbff6052577be",
+    blockHash:
+      "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+    witnessScheduleHash:
+      "0x0c5eca6f96572fe939e640d8951abd126d2e966ffc4e3d0d087dbff6052577be",
     receiptRoot: `0x${"bb".repeat(32)}`,
     transactionRoot: `0x${"dd".repeat(32)}`,
     receiptProofHash: `0x${"cc".repeat(32)}`,
@@ -7567,7 +8276,11 @@ test("package dist entrypoint exports TON masterchain signature helpers", () => 
     nextWitnessScheduleHash: solidMessage.witnessScheduleHash,
     nextWitnessSchedulePayload: payload,
   };
-  assert.equal(canonicalTronWitnessScheduleTransitionMessageBytes(transitionMessage).length, 157);
+  assert.equal(
+    canonicalTronWitnessScheduleTransitionMessageBytes(transitionMessage)
+      .length,
+    157,
+  );
   assert.equal(
     tronWitnessScheduleTransitionMessageHash(transitionMessage),
     "0x6e53d3f7d1253223a70a163a02544a8df27b74171cb0c76c8f42d71419fabd43",
@@ -7592,7 +8305,10 @@ test("package dist entrypoint exports TON masterchain signature helpers", () => 
       ],
     },
   };
-  assert.equal(canonicalTronWitnessScheduleTransitionSealBytes(transitionSeal).length, 456);
+  assert.equal(
+    canonicalTronWitnessScheduleTransitionSealBytes(transitionSeal).length,
+    456,
+  );
   assert.equal(
     tronWitnessScheduleTransitionSealHash(transitionSeal),
     "0xbb3b7ef87bd3efb77d9b7f0a4dba8e7398827621d59039c694c285a7e2deacce",
@@ -7603,19 +8319,27 @@ test("package dist entrypoint exports TRON receipt-state transcript helpers", ()
   const input = {
     sourceEventDigest: `0x${"34".repeat(32)}`,
     receiptRoot: `0x${"bb".repeat(32)}`,
-    transactionRoot: "0x21789ae4e9fb0f13a9d7ef876ccbc90ee2fe1d1eddeec5c35e33e0a09c768079",
+    transactionRoot:
+      "0x21789ae4e9fb0f13a9d7ef876ccbc90ee2fe1d1eddeec5c35e33e0a09c768079",
     receiptRootIndex: 0n,
     receiptTrieProofNodes: [`0xe4822080a0${"bb".repeat(32)}`],
     inclusionBranch: [`0x${"ee".repeat(32)}`],
   };
 
   assert.equal(
-    Buffer.from(canonicalEvmReceiptRootMptValue(input.receiptRoot)).toString("hex"),
+    Buffer.from(canonicalEvmReceiptRootMptValue(input.receiptRoot)).toString(
+      "hex",
+    ),
     `f8409e736363703a65766d3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`,
   );
-  assert.throws(() => canonicalEvmReceiptRootMptValue(`0x${"00".repeat(32)}`), /must not be zero/u);
+  assert.throws(
+    () => canonicalEvmReceiptRootMptValue(`0x${"00".repeat(32)}`),
+    /must not be zero/u,
+  );
   assert.equal(
-    Buffer.from(canonicalTronReceiptRootMptValue(input.receiptRoot)).toString("hex"),
+    Buffer.from(canonicalTronReceiptRootMptValue(input.receiptRoot)).toString(
+      "hex",
+    ),
     `f8419f736363703a74726f6e3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`,
   );
   assert.equal(canonicalTronSccpReceiptStateProofBytes(input).length, 186);
@@ -7655,7 +8379,10 @@ test("package dist entrypoint exports TRON solid-block header transcript helpers
 
   assert.equal(tronRawBlockHeaderHash(parentRawHeader), parentRawHeaderHash);
   assert.equal(tronRawBlockHeaderHash(rawHeader), rawHeaderHash);
-  assert.equal(tronBlockIdFromRawDataHash(12344n, parentRawHeaderHash), parentBlockId);
+  assert.equal(
+    tronBlockIdFromRawDataHash(12344n, parentRawHeaderHash),
+    parentBlockId,
+  );
   assert.equal(tronBlockIdFromRawDataHash(12345n, rawHeaderHash), blockId);
   const tronHeaderSignature = (recoveryId) => {
     const signature = new Uint8Array(65).fill(0xaa);
