@@ -16589,7 +16589,8 @@ mod torii_routed_read_tests {
         label: &str,
         seed: u8,
     ) -> iroha_data_model::escrow::AnonymousAssetEscrowRecord {
-        let seller_keypair = KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
+        let seller_keypair =
+            checked_routed_read_test_keypair(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
         let asset_definition: AssetDefinitionId =
             "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().expect("asset id");
         let proof = iroha_data_model::escrow::AnonymousAssetEscrowProofRecord {
@@ -16618,6 +16619,21 @@ mod torii_routed_read_tests {
             closed_at_ms: None,
             resolution: None,
         }
+    }
+
+    fn checked_routed_read_test_keypair(
+        seed: Vec<u8>,
+        algorithm: iroha_crypto::Algorithm,
+    ) -> KeyPair {
+        KeyPair::try_from_seed(seed, algorithm).expect("derive routed-read fixture key")
+    }
+
+    #[test]
+    fn routed_read_fixture_keypair_rejects_all_zero_seed() {
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], iroha_crypto::Algorithm::Ed25519).is_err(),
+            "checked routed-read fixtures must reject invalid Ed25519 seed material"
+        );
     }
 
     #[test]
@@ -42482,6 +42498,26 @@ pub(crate) mod tests_runtime_handlers {
         Signature::try_new(key_pair.private_key(), message).expect(context)
     }
 
+    fn checked_torii_test_keypair(
+        seed: Vec<u8>,
+        algorithm: Algorithm,
+        context: &'static str,
+    ) -> KeyPair {
+        KeyPair::try_from_seed(seed, algorithm).expect(context)
+    }
+
+    #[test]
+    fn checked_torii_test_keypair_rejects_all_zero_seed_material() {
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Torii fixtures must reject invalid Ed25519 seed material"
+        );
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Secp256k1).is_err(),
+            "checked Torii fixtures must reject invalid secp256k1 seed material"
+        );
+    }
+
     fn checked_torii_test_transaction(
         builder: TransactionBuilder,
         keypair: &KeyPair,
@@ -47319,7 +47355,11 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(all(feature = "app_api", feature = "push"))]
     fn push_test_identity(seed: u8) -> (KeyPair, AccountId) {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
+        let key_pair = checked_torii_test_keypair(
+            vec![seed; 32],
+            iroha_crypto::Algorithm::Ed25519,
+            "derive push fixture key",
+        );
         let account_id = AccountId::new(key_pair.public_key().clone());
         (key_pair, account_id)
     }
@@ -49730,9 +49770,10 @@ pub(crate) mod tests_runtime_handlers {
 
     fn install_evm_da_receipt_signer_for_test(app: &mut SharedAppState) {
         let app_mut = Arc::get_mut(app).expect("unique app state");
-        app_mut.da_receipt_signer = KeyPair::from_seed(
+        app_mut.da_receipt_signer = checked_torii_test_keypair(
             b"iroha:torii:test:evm-attestor".to_vec(),
             Algorithm::Secp256k1,
+            "derive EVM DA receipt signer fixture key",
         );
     }
 
@@ -59776,7 +59817,9 @@ mod tests {
             expires_at_ms: execution.expires_at_ms,
         };
         RamLfeOutputOpening {
-            signature: SignatureOf::new(signer.private_key(), &payload).into(),
+            signature: SignatureOf::try_new(signer.private_key(), &payload)
+                .expect("sign RAM-LFE output opening fixture")
+                .into(),
             payload,
         }
     }
@@ -59794,7 +59837,9 @@ mod tests {
             expires_at_ms: None,
         };
         RamLfeOutputOpening {
-            signature: SignatureOf::new(signer.private_key(), &payload).into(),
+            signature: SignatureOf::try_new(signer.private_key(), &payload)
+                .expect("sign dummy RAM-LFE output opening fixture")
+                .into(),
             payload,
         }
     }
@@ -60479,7 +60524,8 @@ mod tests {
                 claimed_at_unix: claimed_at,
             },
         };
-        let signature = SignatureOf::new(worker_key.private_key(), &payload);
+        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
+            .expect("sign repair worker claim fixture");
 
         let auth = enforce_sorafs_repair_worker_auth(
             &app,
@@ -60522,7 +60568,8 @@ mod tests {
                 claimed_at_unix: claimed_at,
             },
         };
-        let signature = SignatureOf::new(worker_key.private_key(), &payload);
+        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
+            .expect("sign repair worker alias claim fixture");
 
         let auth = enforce_sorafs_repair_worker_auth(
             &app,
@@ -60568,7 +60615,8 @@ mod tests {
                 reason: "no-permission".into(),
             },
         };
-        let signature = SignatureOf::new(worker_key.private_key(), &payload);
+        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
+            .expect("sign repair worker fail fixture");
 
         let auth = enforce_sorafs_repair_worker_auth(
             &app,
@@ -60615,7 +60663,8 @@ mod tests {
                 claimed_at_unix: claimed_at,
             },
         };
-        let signature = SignatureOf::new(worker_key.private_key(), &payload);
+        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
+            .expect("sign repair worker digest-mismatch fixture");
 
         let auth = enforce_sorafs_repair_worker_auth(
             &app,

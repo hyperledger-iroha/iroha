@@ -42,11 +42,20 @@ impl QueueDrainExt for Arc<Queue> {
     }
 }
 
+fn checked_random_queue_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked queue transaction keypair")
+}
+
+#[test]
+fn queue_regression_fixture_uses_checked_randomness() {
+    let _key_pair = checked_random_queue_keypair();
+}
+
 fn build_state() -> (Arc<State>, ChainId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let key_pair = KeyPair::random();
+    let key_pair = checked_random_queue_keypair();
     let (public_key, _) = key_pair.clone().into_parts();
     let domain_id: DomainId =
         DomainId::try_new("queue-regressions", "universal").expect("static domain id");

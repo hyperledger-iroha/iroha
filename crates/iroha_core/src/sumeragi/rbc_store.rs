@@ -1634,8 +1634,21 @@ mod tests {
     }
 
     fn test_peer_id(seed: u8) -> PeerId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid peer keypair");
         PeerId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn test_peer_id_uses_checked_seed_derivation() {
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+        assert!(
+            test_peer_id(1) != test_peer_id(2),
+            "distinct fixture seeds must derive distinct peers"
+        );
     }
 
     fn sample_persisted_session(

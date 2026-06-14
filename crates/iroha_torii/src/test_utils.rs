@@ -37,6 +37,21 @@ use iroha_executor_data_model::permission::{
     governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
 };
 use nonzero_ext::nonzero;
+
+fn checked_random_keypair(context: &str) -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_random()
+        .unwrap_or_else(|err| panic!("{context}: checked random key generation failed: {err}"))
+}
+
+fn checked_random_keypair_with_algorithm(
+    algorithm: Algorithm,
+    context: &str,
+) -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+        panic!("{context}: checked random {algorithm:?} key generation failed: {err}")
+    })
+}
+
 /// Parameters for invoking a contract within Torii integration tests.
 pub struct ContractCallOptions<'a> {
     /// Optional entry point function to call on the contract; defaults to main when `None`.
@@ -83,7 +98,10 @@ pub fn apply_queued_in_one_block(
     let applied = accepted.len();
 
     let latest_block = state.view().latest_block();
-    let leader = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+    let leader = checked_random_keypair_with_algorithm(
+        iroha_crypto::Algorithm::BlsNormal,
+        "apply queued block leader fixture",
+    );
     let new_block = BlockBuilder::new(accepted)
         .chain(0, latest_block.as_deref())
         .sign(leader.private_key())
@@ -237,7 +255,7 @@ pub struct AuthorityCreds {
 
 /// Generate a random authority with matching private key (domain `wonderland`).
 pub fn random_authority() -> AuthorityCreds {
-    let kp = iroha_crypto::KeyPair::random();
+    let kp = checked_random_keypair("random authority fixture");
     let account = AccountId::of(kp.public_key().clone());
     let private_key = ExposedPrivateKey(kp.private_key().clone());
     AuthorityCreds {
@@ -370,7 +388,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         parameters::{actual as A, defaults},
     };
     use iroha_crypto::{
-        KeyPair,
         soranet::handshake::{
             DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
         },
@@ -379,20 +396,23 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     use iroha_data_model::peer::Peer;
     use iroha_logger::Level;
     use iroha_primitives::addr::socket_addr;
-    use nonzero_ext::nonzero;
 
     A::Root {
         common: A::Common {
             chain: ChainId::from("test-chain"),
-            key_pair: KeyPair::random(),
+            key_pair: checked_random_keypair("minimal root node key fixture"),
             peer: Peer::new(
                 socket_addr!(127.0.0.1:0),
-                KeyPair::random().public_key().clone(),
+                checked_random_keypair("minimal root peer public key fixture")
+                    .public_key()
+                    .clone(),
             ),
             trusted_peers: WithOrigin::inline(A::TrustedPeers {
                 myself: Peer::new(
                     socket_addr!(127.0.0.1:0),
-                    KeyPair::random().public_key().clone(),
+                    checked_random_keypair("minimal root trusted peer fixture")
+                        .public_key()
+                        .clone(),
                 ),
                 others: iroha_primitives::unique_vec::UniqueVec::new(),
                 pops: std::collections::BTreeMap::new(),
@@ -523,7 +543,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             quic_max_idle_timeout: None,
         },
         genesis: A::Genesis {
-            public_key: KeyPair::random().public_key().clone(),
+            public_key: checked_random_keypair("minimal root genesis public key fixture")
+                .public_key()
+                .clone(),
             file: None,
             manifest_json: None,
             expected_hash: None,
@@ -1476,8 +1498,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         crypto: A::Crypto::default(),
         settlement: A::Settlement::default(),
         streaming: A::Streaming {
-            key_material: StreamingKeyMaterial::new(KeyPair::random())
-                .expect("streaming key material"),
+            key_material: StreamingKeyMaterial::new(checked_random_keypair(
+                "minimal root streaming key fixture",
+            ))
+            .expect("streaming key material"),
             session_store_dir: PathBuf::from(defaults::streaming::SESSION_STORE_DIR),
             feature_bits: defaults::streaming::FEATURE_BITS,
             soranet: A::StreamingSoranet::from_defaults(),
@@ -1499,6 +1523,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
 mod tests {
     use std::{borrow::Cow, sync::Arc};
 
+    use super::checked_random_keypair;
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
@@ -1524,6 +1549,25 @@ mod tests {
     }
 
     #[test]
+    fn shared_random_fixture_helpers_emit_default_keys() {
+        let creds = super::random_authority();
+        assert_eq!(
+            creds.account.signatory().algorithm(),
+            iroha_crypto::Algorithm::default()
+        );
+
+        let cfg = super::mk_minimal_root_cfg();
+        assert_eq!(
+            cfg.common.key_pair.algorithm(),
+            iroha_crypto::Algorithm::default()
+        );
+        assert_eq!(
+            cfg.genesis.public_key.algorithm(),
+            iroha_crypto::Algorithm::default()
+        );
+    }
+
+    #[test]
     fn apply_queued_in_one_block_overrides_chain_id() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -1538,7 +1582,7 @@ mod tests {
             events,
         ));
 
-        let keypair = iroha_crypto::KeyPair::random();
+        let keypair = checked_random_keypair("queued transaction signer fixture");
         let authority = AccountId::new(keypair.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert(

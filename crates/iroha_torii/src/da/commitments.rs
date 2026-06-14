@@ -332,6 +332,12 @@ mod tests {
     use super::*;
     use crate::{NoritoJson, mk_app_state_for_tests};
 
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm, context: &str) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{context}: checked random {algorithm:?} key generation failed: {err}")
+        })
+    }
+
     fn sample_record(lane: u32, epoch: u64, sequence: u64) -> DaCommitmentRecord {
         let mut storage_ticket = [0x22; 32];
         storage_ticket[..4].copy_from_slice(&lane.to_be_bytes());
@@ -423,7 +429,10 @@ mod tests {
 
         let bundle = DaCommitmentBundle::new(records);
         let bundle_for_store = bundle.clone();
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_random_keypair_with_algorithm(
+            Algorithm::BlsNormal,
+            "DA commitment block fixture",
+        );
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,

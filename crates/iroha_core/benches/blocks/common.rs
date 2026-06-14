@@ -355,7 +355,10 @@ fn construct_domain_id(i: usize) -> DomainId {
 }
 
 fn generate_account_id(seed: u128) -> AccountId {
-    let keypair = KeyPair::from_seed(seed.to_le_bytes().to_vec(), Algorithm::Ed25519);
+    let mut seed_material = b"iroha-core-block-bench-account".to_vec();
+    seed_material.extend_from_slice(&seed.to_le_bytes());
+    let keypair = KeyPair::try_from_seed(seed_material, Algorithm::Ed25519)
+        .expect("derive block benchmark account key");
     AccountId::new(keypair.public_key().clone())
 }
 

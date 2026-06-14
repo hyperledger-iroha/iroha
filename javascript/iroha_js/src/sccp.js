@@ -9150,10 +9150,7 @@ export function parseEthereumMainnetNativeEvmProverBundleManifest(
     throw new TypeError("nativeProverBundle JSON manifest must be a string");
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
-  return validateEthereumMainnetNativeEvmProverBundle(
-    JSON.parse(json),
-    options,
-  );
+  return validateEthereumMainnetNativeEvmProverBundle(JSON.parse(json), options);
 }
 
 export function parseBscTestnetNativeEvmProverBundleManifest(
@@ -16661,9 +16658,7 @@ export class EthereumMainnetSccp {
       options.execution_provider ??
       this.executionProvider;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({
-        executionProvider: provider,
-      });
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
     }
     const transactionHashInput = maybeStrictOptionalResultField(
       input,
@@ -17208,18 +17203,14 @@ export class EthereumMainnetSccp {
       this.executionProvider;
     let providerValidated = false;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({
-        executionProvider: provider,
-      });
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
       providerValidated = true;
     }
     if (typeof submit === "function") {
       return submit(submission, options);
     }
     if (!providerValidated) {
-      await this.validateExecutionProviderMainnet({
-        executionProvider: provider,
-      });
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
     }
     const boundBridgeAddress =
       wrappedEthereumMainnetProofResultBridgeAddress(input);
@@ -17471,9 +17462,7 @@ export class BscMainnetSccp {
       options.execution_provider ??
       this.executionProvider;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({
-        executionProvider: provider,
-      });
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
     }
     const transactionHashInput = maybeStrictOptionalResultField(
       input,
@@ -17861,18 +17850,14 @@ export class BscMainnetSccp {
       this.executionProvider;
     let providerValidated = false;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({
-        executionProvider: provider,
-      });
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
       providerValidated = true;
     }
     if (typeof submit === "function") {
       return submit(submission, options);
     }
     if (!providerValidated) {
-      await this.validateExecutionProviderMainnet({
-        executionProvider: provider,
-      });
+      await this.validateExecutionProviderMainnet({ executionProvider: provider });
     }
     const boundBridgeAddress = wrappedBscMainnetProofResultBridgeAddress(input);
     const explicitTo =

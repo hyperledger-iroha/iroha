@@ -98,7 +98,7 @@ determinista y multiplataforma; no depende de tooling ad hoc.
 3. **Firmar con material de claves configurado.** Cargar el par de claves del operador desde la
    configuración del harness (por ejemplo, `gateway_attestor.key_path`). Las claves deben usar
    el esquema que exigen los manifiestos de gobernanza — hoy `Ed25519`. El harness
-   llama `iroha_crypto::Signature::new(key_pair.private_key(), &payload_bytes)` y registra
+   llama `iroha_crypto::Signature::try_new(key_pair.private_key(), &payload_bytes)` y registra
    la firma y el identificador de algoritmo.
 4. **Envolver en un sobre Norito.** Construir una estructura `SignedGatewayReport`.
 
@@ -115,7 +115,7 @@ determinista y multiplataforma; no depende de tooling ad hoc.
    let payload_bytes = norito::json::to_vec(&report)?;
    let report_json_value: Value = norito::json::from_slice(&payload_bytes)?;
    let digest = blake3::hash(&payload_bytes);
-   let signature = Signature::new(key_pair.private_key(), &payload_bytes);
+   let signature = Signature::try_new(key_pair.private_key(), &payload_bytes)?;
    let (pk_alg, pk_bytes) = key_pair.public_key().try_to_bytes()?;
    let envelope = json!({
        "attestation": {

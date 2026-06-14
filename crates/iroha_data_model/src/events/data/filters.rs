@@ -1786,18 +1786,27 @@ mod tests {
     use super::*;
     use crate::nexus::UniversalAccountId;
 
+    fn checked_random_account_id() -> AccountId {
+        AccountId::new(
+            KeyPair::try_random()
+                .expect("test fixture random key generation should succeed")
+                .into_parts()
+                .0,
+        )
+    }
+
     #[test]
     #[cfg(feature = "transparent_api")]
     fn entity_scope() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let account_id = checked_random_account_id();
         let definition_id: crate::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let asset_id = AssetId::new(definition_id, account_id.clone());
-        let domain_owner_id = AccountId::new(KeyPair::random().into_parts().0);
+        let domain_owner_id = checked_random_account_id();
 
         let domain = Domain {
             id: domain_id.clone(),
@@ -1845,7 +1854,7 @@ mod tests {
 
     #[test]
     fn asset_filter_matches_by_asset_definition_only() {
-        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let account_id = checked_random_account_id();
         let matching_definition = crate::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
@@ -1874,14 +1883,13 @@ mod tests {
 
     #[test]
     fn asset_filter_matches_by_asset_id_only() {
-        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let account_id = checked_random_account_id();
         let definition = crate::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let matching_asset = AssetId::new(definition.clone(), account_id.clone());
-        let other_asset =
-            AssetId::new(definition, AccountId::new(KeyPair::random().into_parts().0));
+        let other_asset = AssetId::new(definition, checked_random_account_id());
         let matching_event = AssetEvent::Added(AssetChanged {
             asset: matching_asset.clone(),
             amount: Numeric::new(5, 0),
@@ -1900,7 +1908,7 @@ mod tests {
 
     #[test]
     fn asset_filter_matches_with_asset_and_asset_definition_matchers() {
-        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let account_id = checked_random_account_id();
         let matching_definition = crate::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
@@ -1930,7 +1938,7 @@ mod tests {
 
     #[test]
     fn asset_filter_behavior_is_unchanged_without_asset_definition_matcher() {
-        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let account_id = checked_random_account_id();
         let definition = crate::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
@@ -1941,7 +1949,7 @@ mod tests {
             amount: Numeric::new(7, 0),
         });
         let created = AssetEvent::Created(Asset::new(
-            AssetId::new(definition, AccountId::new(KeyPair::random().into_parts().0)),
+            AssetId::new(definition, checked_random_account_id()),
             0_u32,
         ));
 
@@ -1952,8 +1960,8 @@ mod tests {
 
     #[test]
     fn escrow_filter_matches_by_scope_status_and_event_kind() {
-        let seller = AccountId::new(KeyPair::random().into_parts().0);
-        let buyer = AccountId::new(KeyPair::random().into_parts().0);
+        let seller = checked_random_account_id();
+        let buyer = checked_random_account_id();
         let asset_definition = crate::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
@@ -1965,7 +1973,7 @@ mod tests {
             buyer: Some(buyer.clone()),
             asset_definition,
             amount: Numeric::new(7, 0),
-            custody: AccountId::new(KeyPair::random().into_parts().0),
+            custody: checked_random_account_id(),
             status: crate::escrow::AssetEscrowStatus::PaymentSent,
             kind: crate::escrow::AssetEscrowKind::Marketplace,
             remaining_amount: Numeric::new(7, 0),

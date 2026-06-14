@@ -61,6 +61,8 @@ pub const SCCP_DOMAIN_BSC: u32 = 2;
 pub const SCCP_DOMAIN_SOL: u32 = 3;
 pub const SCCP_DOMAIN_TON: u32 = 4;
 pub const SCCP_DOMAIN_TRON: u32 = 5;
+/// Public Sora Nexus chain id bound into SORA-origin SCCP finality proofs.
+pub const SCCP_NEXUS_FINALITY_CHAIN_ID_V1: &str = "00000000-0000-0000-0000-000000000753";
 /// TAIRA testnet SCCP route id used for the initial XOR bridge to TRON Nile.
 pub const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: &str = "taira_tron_xor";
 /// TAIRA SCCP asset key for XOR in the initial TRON bridge route.
@@ -708,6 +710,7 @@ fn decode_ascii_lower_hex_nibble(byte: u8) -> Option<u8> {
     }
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn decode_fixed_hex_bytes<const N: usize>(value: &str) -> Option<[u8; N]> {
     let raw = value
         .strip_prefix("0x")
@@ -776,13 +779,38 @@ mod json_utils {
         })
     }
 
+    fn unsigned_decimal_string_is_canonical(value: &str) -> bool {
+        !value.is_empty()
+            && value.as_bytes().iter().all(u8::is_ascii_digit)
+            && (value == "0" || !value.starts_with('0'))
+    }
+
+    fn parse_canonical_decimal_u64_string(value: &str) -> Result<u64, Error> {
+        if !unsigned_decimal_string_is_canonical(value) {
+            return Err(Error::Message(
+                "expected canonical unsigned u64 decimal string".into(),
+            ));
+        }
+        value
+            .parse::<u64>()
+            .map_err(|err| Error::Message(format!("failed to parse u64 string: {err}")))
+    }
+
+    fn parse_canonical_decimal_u128_string(value: &str) -> Result<u128, Error> {
+        if !unsigned_decimal_string_is_canonical(value) {
+            return Err(Error::Message(
+                "expected canonical unsigned u128 decimal string".into(),
+            ));
+        }
+        value
+            .parse::<u128>()
+            .map_err(|err| Error::Message(format!("failed to parse u128 string: {err}")))
+    }
+
     fn parse_decimal_u64(parser: &mut Parser<'_>) -> Result<u64, Error> {
         parser.skip_ws();
         if parser.peek() == Some(b'"') {
-            return parser
-                .parse_string()?
-                .parse::<u64>()
-                .map_err(|err| Error::Message(format!("failed to parse u64 string: {err}")));
+            return parse_canonical_decimal_u64_string(&parser.parse_string()?);
         }
         parser.parse_u64()
     }
@@ -790,10 +818,7 @@ mod json_utils {
     fn parse_decimal_u128(parser: &mut Parser<'_>) -> Result<u128, Error> {
         parser.skip_ws();
         if parser.peek() == Some(b'"') {
-            return parser
-                .parse_string()?
-                .parse::<u128>()
-                .map_err(|err| Error::Message(format!("failed to parse u128 string: {err}")));
+            return parse_canonical_decimal_u128_string(&parser.parse_string()?);
         }
         parser.parse_u64().map(u128::from)
     }
@@ -3489,7 +3514,7 @@ macro_rules! impl_str_json_enum {
             ) -> Result<Self, norito::json::Error> {
                 let value = parser.parse_string()?;
                 value.parse().map_err(|_| {
-                    norito::json::Error::Message(format!("{err}: `{value}`", err = $err))
+                    norito::json::Error::Message($err.into())
                 })
             }
 
@@ -3503,7 +3528,7 @@ macro_rules! impl_str_json_enum {
                     )));
                 };
                 value.parse().map_err(|_| {
-                    norito::json::Error::Message(format!("{err}: `{value}`", err = $err))
+                    norito::json::Error::Message($err.into())
                 })
             }
         }
@@ -3603,10 +3628,7 @@ macro_rules! impl_external_tagged_tuple_json_enum {
                     $(
                         $label => Ok(Self::$variant(<$payload as norito::json::JsonDeserialize>::json_from_value(payload)?)),
                     )+
-                    other => Err(norito::json::Error::Message(format!(
-                        "{}: unknown variant `{}`",
-                        $err, other
-                    ))),
+                    _ => Err(norito::json::Error::Message($err.into())),
                 }
             }
         }
@@ -3758,9 +3780,9 @@ impl norito::json::JsonDeserialize for SccpNormalizedCodecValueV1 {
             "SoraAssetId" => Ok(Self::SoraAssetId {
                 bytes: json_fixed_hex_field::<32>("SccpNormalizedCodecValueV1", payload, "bytes")?,
             }),
-            other => Err(norito::json::Error::Message(format!(
-                "unsupported SCCP normalized codec value variant `{other}`"
-            ))),
+            _ => Err(norito::json::Error::Message(
+                "unsupported SCCP normalized codec value variant".into(),
+            )),
         }
     }
 }
@@ -4230,9 +4252,7 @@ impl norito::json::JsonDeserialize for SccpDestinationVerifierPlanV1 {
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
         value.parse().map_err(|_| {
-            norito::json::Error::Message(format!(
-                "unsupported SCCP destination verifier plan `{value}`"
-            ))
+            norito::json::Error::Message("unsupported SCCP destination verifier plan".into())
         })
     }
 }
@@ -32743,7 +32763,7 @@ pub fn recover_nexus_sccp_message_transparent_proof_with_source_verifier_materia
 
 pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityProofV1) -> bool {
     if proof.version != 1
-        || proof.chain_id.is_empty()
+        || proof.chain_id != SCCP_NEXUS_FINALITY_CHAIN_ID_V1
         || proof.height == 0
         || proof.block_header_bytes.is_empty()
     {
@@ -36316,6 +36336,31 @@ mod tests {
             .to_vec()
     }
 
+    fn checked_sccp_fixture_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(seed, algorithm).expect("derive SCCP fixture key")
+    }
+
+    fn assert_json_error_redacts<T>(
+        json: &str,
+        expected_category: &str,
+        forbidden_fragments: &[&str],
+    ) where
+        T: norito::json::JsonDeserialize + core::fmt::Debug,
+    {
+        let err = norito::json::from_str::<T>(json).expect_err("JSON value must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains(expected_category),
+            "JSON error `{message}` must contain category `{expected_category}`",
+        );
+        for forbidden in forbidden_fragments {
+            assert!(
+                !message.contains(forbidden),
+                "JSON error `{message}` must redact `{forbidden}`",
+            );
+        }
+    }
+
     fn assert_norito_enum_tag_roundtrips<T>(value: T, expected_tag: u32)
     where
         T: norito::NoritoSerialize
@@ -36368,8 +36413,19 @@ mod tests {
     }
 
     #[test]
+    fn sccp_fixture_keypair_uses_checked_seed_derivation() {
+        let seed = b"iroha:sccp:test:checked-key-helper".to_vec();
+        let key_pair = checked_sccp_fixture_keypair(seed.clone(), Algorithm::Ed25519);
+        let expected =
+            KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("direct checked SCCP key");
+
+        assert_eq!(key_pair.public_key(), expected.public_key());
+        assert!(KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err());
+    }
+
+    #[test]
     fn sccp_fixture_checked_signature_verifies() {
-        let signer = KeyPair::from_seed(vec![0xA7; 32], Algorithm::Ed25519);
+        let signer = checked_sccp_fixture_keypair(vec![0xA7; 32], Algorithm::Ed25519);
         let message = b"sccp fixture checked signing";
         let signature =
             checked_sccp_fixture_signature(&signer, message, "sign SCCP fixture test payload");
@@ -36521,6 +36577,35 @@ mod tests {
     }
 
     #[test]
+    fn sccp_public_json_enum_errors_redact_unknown_values() {
+        assert_json_error_redacts::<SccpLaunchModeV1>(
+            r#""secret-token-launch-mode""#,
+            "unsupported SCCP launch mode",
+            &["secret-token-launch-mode"],
+        );
+        assert_json_error_redacts::<SccpProofFinalityModelV1>(
+            r#""secret-token-finality-model""#,
+            "unsupported SCCP proof finality model",
+            &["secret-token-finality-model"],
+        );
+        assert_json_error_redacts::<SccpDestinationVerifierPlanV1>(
+            r#""secret-token-destination-plan""#,
+            "unsupported SCCP destination verifier plan",
+            &["secret-token-destination-plan"],
+        );
+        assert_json_error_redacts::<SccpPayloadV1>(
+            r#"{"secret-token-payload-variant":{}}"#,
+            "unsupported SCCP payload variant",
+            &["secret-token-payload-variant"],
+        );
+        assert_json_error_redacts::<SccpNormalizedCodecValueV1>(
+            r#"{"secret-token-codec-variant":{}}"#,
+            "unsupported SCCP normalized codec value variant",
+            &["secret-token-codec-variant"],
+        );
+    }
+
+    #[test]
     fn sccp_public_json_hex_helpers_reject_hex_aliases() {
         let burn_payload = BurnPayloadV1 {
             version: 1,
@@ -36639,6 +36724,95 @@ mod tests {
                 "{reason} must not decode through json_utils::vec_bytes_hex"
             );
         }
+    }
+
+    #[test]
+    fn sccp_public_json_decimal_strings_reject_aliases() {
+        let payload = TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_ETH,
+            nonce: 12,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"alice".to_vec(),
+            recipient_codec: SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        };
+        let canonical_json =
+            norito::json::to_string(&payload).expect("serialize transfer payload JSON");
+        assert!(canonical_json.contains(r#""nonce":"12""#));
+        assert!(canonical_json.contains(r#""amount":"77""#));
+        assert_eq!(
+            norito::json::from_str::<TransferPayloadV1>(&canonical_json)
+                .expect("decode canonical decimal-string JSON"),
+            payload
+        );
+
+        for (needle, replacement, reason) in [
+            (r#""nonce":"12""#, r#""nonce":12"#, "numeric u64"),
+            (r#""amount":"77""#, r#""amount":77"#, "numeric u128"),
+        ] {
+            let json = replace_first(&canonical_json, needle, replacement);
+            assert_eq!(
+                norito::json::from_str::<TransferPayloadV1>(&json)
+                    .unwrap_or_else(|err| panic!("{reason} JSON must remain compatible: {err}")),
+                payload
+            );
+        }
+
+        for (needle, replacement, reason) in [
+            (
+                r#""nonce":"12""#,
+                r#""nonce":"012""#,
+                "leading-zero u64 string",
+            ),
+            (
+                r#""nonce":"12""#,
+                r#""nonce":"+12""#,
+                "plus-signed u64 string",
+            ),
+            (r#""nonce":"12""#, r#""nonce":" 12 ""#, "padded u64 string"),
+            (
+                r#""amount":"77""#,
+                r#""amount":"077""#,
+                "leading-zero u128 string",
+            ),
+            (
+                r#""amount":"77""#,
+                r#""amount":"+77""#,
+                "plus-signed u128 string",
+            ),
+            (
+                r#""amount":"77""#,
+                r#""amount":" 77 ""#,
+                "padded u128 string",
+            ),
+        ] {
+            let json = replace_first(&canonical_json, needle, replacement);
+            assert!(
+                norito::json::from_str::<TransferPayloadV1>(&json).is_err(),
+                "{reason} must not decode through decimal string helpers"
+            );
+        }
+
+        let max_amount_payload = TransferPayloadV1 {
+            amount: u128::MAX,
+            ..payload
+        };
+        let max_amount_json =
+            norito::json::to_string(&max_amount_payload).expect("serialize u128::MAX payload");
+        assert!(max_amount_json.contains(&format!(r#""amount":"{}""#, u128::MAX)));
+        assert_eq!(
+            norito::json::from_str::<TransferPayloadV1>(&max_amount_json)
+                .expect("decode canonical u128::MAX decimal string"),
+            max_amount_payload
+        );
     }
 
     fn sample_test_evm_word_public_inputs() -> SccpEvmWordPublicInputsV1 {
@@ -37256,7 +37430,7 @@ mod tests {
     }
 
     fn sample_secp256k1_signer() -> iroha_crypto::KeyPair {
-        iroha_crypto::KeyPair::from_seed(
+        checked_sccp_fixture_keypair(
             b"iroha:sccp:test:evm-attestor".to_vec(),
             iroha_crypto::Algorithm::Secp256k1,
         )
@@ -37330,19 +37504,19 @@ mod tests {
 
     fn sample_bsc_validator_keypairs() -> [KeyPair; 4] {
         [
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:bsc-validator:0".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:bsc-validator:1".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:bsc-validator:2".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:bsc-validator:3".to_vec(),
                 Algorithm::Secp256k1,
             ),
@@ -37351,19 +37525,19 @@ mod tests {
 
     fn sample_bsc_next_validator_keypairs() -> [KeyPair; 4] {
         [
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:bsc-next-validator:0".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:bsc-next-validator:1".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:bsc-next-validator:2".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:bsc-next-validator:3".to_vec(),
                 Algorithm::Secp256k1,
             ),
@@ -37372,19 +37546,19 @@ mod tests {
 
     fn sample_bsc_third_validator_keypairs() -> [KeyPair; 4] {
         [
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:bsc-third-validator:0".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:bsc-third-validator:1".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:bsc-third-validator:2".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:bsc-third-validator:3".to_vec(),
                 Algorithm::Secp256k1,
             ),
@@ -37894,7 +38068,7 @@ mod tests {
     }
 
     fn sample_tron_transaction_signer() -> KeyPair {
-        KeyPair::from_seed(
+        checked_sccp_fixture_keypair(
             b"iroha:sccp:test:tron-transaction-signer".to_vec(),
             Algorithm::Secp256k1,
         )
@@ -38332,7 +38506,7 @@ mod tests {
             .get_or_init(|| {
                 (0..SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES)
                     .map(|index| {
-                        KeyPair::from_seed(
+                        checked_sccp_fixture_keypair(
                             format!("iroha:sccp:test:eth-sync-committee:{index}").into_bytes(),
                             Algorithm::BlsNormal,
                         )
@@ -38348,7 +38522,7 @@ mod tests {
             .get_or_init(|| {
                 (0..SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES)
                     .map(|index| {
-                        KeyPair::from_seed(
+                        checked_sccp_fixture_keypair(
                             format!("iroha:sccp:test:eth-next-sync-committee:{index}").into_bytes(),
                             Algorithm::BlsNormal,
                         )
@@ -38528,19 +38702,19 @@ mod tests {
 
     fn sample_ton_validator_keypairs() -> [KeyPair; 4] {
         [
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:ton-validator:0".to_vec(),
                 Algorithm::Ed25519,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:ton-validator:1".to_vec(),
                 Algorithm::Ed25519,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:ton-validator:2".to_vec(),
                 Algorithm::Ed25519,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:ton-validator:3".to_vec(),
                 Algorithm::Ed25519,
             ),
@@ -38549,19 +38723,19 @@ mod tests {
 
     fn sample_ton_next_validator_keypairs() -> [KeyPair; 4] {
         [
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:ton-next-validator:0".to_vec(),
                 Algorithm::Ed25519,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:ton-next-validator:1".to_vec(),
                 Algorithm::Ed25519,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:ton-next-validator:2".to_vec(),
                 Algorithm::Ed25519,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:ton-next-validator:3".to_vec(),
                 Algorithm::Ed25519,
             ),
@@ -38570,19 +38744,19 @@ mod tests {
 
     fn sample_ton_third_validator_keypairs() -> [KeyPair; 4] {
         [
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:ton-third-validator:0".to_vec(),
                 Algorithm::Ed25519,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:ton-third-validator:1".to_vec(),
                 Algorithm::Ed25519,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:ton-third-validator:2".to_vec(),
                 Algorithm::Ed25519,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:ton-third-validator:3".to_vec(),
                 Algorithm::Ed25519,
             ),
@@ -38790,19 +38964,19 @@ mod tests {
 
     fn sample_tron_witness_keypairs() -> [KeyPair; 4] {
         [
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:tron-witness:0".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:tron-witness:1".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:tron-witness:2".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:tron-witness:3".to_vec(),
                 Algorithm::Secp256k1,
             ),
@@ -38811,19 +38985,19 @@ mod tests {
 
     fn sample_tron_next_witness_keypairs() -> [KeyPair; 4] {
         [
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:tron-witness-next:0".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:tron-witness-next:1".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:tron-witness-next:2".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:tron-witness-next:3".to_vec(),
                 Algorithm::Secp256k1,
             ),
@@ -38832,19 +39006,19 @@ mod tests {
 
     fn sample_tron_intermediate_witness_keypairs() -> [KeyPair; 4] {
         [
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:tron-witness-mid:0".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:tron-witness-mid:1".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:tron-witness-mid:2".to_vec(),
                 Algorithm::Secp256k1,
             ),
-            KeyPair::from_seed(
+            checked_sccp_fixture_keypair(
                 b"iroha:sccp:test:tron-witness-mid:3".to_vec(),
                 Algorithm::Secp256k1,
             ),
@@ -39230,10 +39404,22 @@ mod tests {
     }
     fn sample_solana_vote_keypairs() -> [KeyPair; 4] {
         [
-            KeyPair::from_seed(b"iroha:sccp:test:sol-vote:0".to_vec(), Algorithm::Ed25519),
-            KeyPair::from_seed(b"iroha:sccp:test:sol-vote:1".to_vec(), Algorithm::Ed25519),
-            KeyPair::from_seed(b"iroha:sccp:test:sol-vote:2".to_vec(), Algorithm::Ed25519),
-            KeyPair::from_seed(b"iroha:sccp:test:sol-vote:3".to_vec(), Algorithm::Ed25519),
+            checked_sccp_fixture_keypair(
+                b"iroha:sccp:test:sol-vote:0".to_vec(),
+                Algorithm::Ed25519,
+            ),
+            checked_sccp_fixture_keypair(
+                b"iroha:sccp:test:sol-vote:1".to_vec(),
+                Algorithm::Ed25519,
+            ),
+            checked_sccp_fixture_keypair(
+                b"iroha:sccp:test:sol-vote:2".to_vec(),
+                Algorithm::Ed25519,
+            ),
+            checked_sccp_fixture_keypair(
+                b"iroha:sccp:test:sol-vote:3".to_vec(),
+                Algorithm::Ed25519,
+            ),
         ]
     }
 
@@ -40056,7 +40242,7 @@ mod tests {
         assert!(sccp_evm_signer_address(&signer).is_some());
         assert!(sccp_evm_sign_digest(&signer, &[0xA5; 32]).is_some());
 
-        let ed25519_signer = KeyPair::from_seed(
+        let ed25519_signer = checked_sccp_fixture_keypair(
             b"iroha:sccp:test:wrong-evm-signer".to_vec(),
             Algorithm::Ed25519,
         );
@@ -41067,7 +41253,7 @@ mod tests {
     fn sample_finality_proof(commitment_root: H256) -> Vec<u8> {
         to_bytes(&NexusBridgeFinalityProofV1 {
             version: 1,
-            chain_id: "00000000-0000-0000-0000-000000000753".to_owned(),
+            chain_id: SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 7,
             block_hash: [7u8; 32],
             commitment_root,
@@ -41101,11 +41287,11 @@ mod tests {
     #[cfg(feature = "bls")]
     fn signed_nexus_finality_proof(commitment_root: H256) -> NexusBridgeFinalityProofV1 {
         let keypairs = [
-            iroha_crypto::KeyPair::from_seed(vec![1; 32], Algorithm::BlsNormal),
-            iroha_crypto::KeyPair::from_seed(vec![2; 32], Algorithm::BlsNormal),
-            iroha_crypto::KeyPair::from_seed(vec![3; 32], Algorithm::BlsNormal),
+            checked_sccp_fixture_keypair(vec![1; 32], Algorithm::BlsNormal),
+            checked_sccp_fixture_keypair(vec![2; 32], Algorithm::BlsNormal),
+            checked_sccp_fixture_keypair(vec![3; 32], Algorithm::BlsNormal),
         ];
-        let chain_id = "00000000-0000-0000-0000-000000000753".to_owned();
+        let chain_id = SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned();
         let mut commit_qc = NexusCommitQcV1 {
             version: 1,
             phase: NexusConsensusPhaseV1::Commit,
@@ -52641,7 +52827,7 @@ mod tests {
             "TRON source-call proofs must reject unknown Transaction.Result fields"
         );
 
-        let wrong_signer = KeyPair::from_seed(
+        let wrong_signer = checked_sccp_fixture_keypair(
             b"iroha:sccp:test:tron-non-owner-transaction-signer".to_vec(),
             Algorithm::Secp256k1,
         );
@@ -69231,7 +69417,7 @@ mod tests {
         ));
 
         let mut non_bls_validator = proof;
-        let ed25519 = iroha_crypto::KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let ed25519 = checked_sccp_fixture_keypair(vec![9; 32], Algorithm::Ed25519);
         non_bls_validator.commit_qc.validator_public_keys[0] = ed25519.public_key().to_string();
         assert!(verify_nexus_bridge_finality_proof_structure(
             &non_bls_validator
@@ -69274,9 +69460,20 @@ mod tests {
         proof.version = 2;
         assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
 
-        let mut proof = valid.clone();
-        proof.chain_id.clear();
-        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+        for chain_id in [
+            String::new(),
+            format!(" {SCCP_NEXUS_FINALITY_CHAIN_ID_V1} "),
+            SCCP_NEXUS_FINALITY_CHAIN_ID_V1.replace('-', ""),
+            "00000000-0000-0000-0000-000000000754".to_owned(),
+            "iroha3-nexus".to_owned(),
+        ] {
+            let mut proof = valid.clone();
+            proof.chain_id = chain_id.clone();
+            assert!(
+                !verify_nexus_bridge_finality_proof_structure(&proof),
+                "accepted non-canonical Nexus finality chain id {chain_id:?}"
+            );
+        }
 
         let mut proof = valid.clone();
         proof.block_header_bytes.clear();
@@ -73244,7 +73441,7 @@ mod tests {
         let manifest = sample_reference_evm_attestation_manifest();
         let deployment_binding =
             sample_evm_destination_binding(&manifest, [0x11; 32], [0x33; 20], [0x22; 20]);
-        let ed25519_signer = iroha_crypto::KeyPair::from_seed(
+        let ed25519_signer = checked_sccp_fixture_keypair(
             b"iroha:sccp:test:wrong-attestor".to_vec(),
             iroha_crypto::Algorithm::Ed25519,
         );

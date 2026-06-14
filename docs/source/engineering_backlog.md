@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-13
+Last updated: 2026-06-14
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -1914,7 +1914,27 @@ redistributable schemas, and official trust/revocation bundles.
   surface config/candidate derivation errors through existing `Result` paths;
   Izanami workload, Nexus gas, NPoS validator, post-topology, and network-builder
   key material now uses `KeyPair::try_random` / `KeyPair::try_from_seed` with
-  explicit `Result` propagation instead of panic-only `KeyPair` wrappers;
+  explicit `Result` propagation instead of panic-only `KeyPair` wrappers, and
+  the shared `iroha_test_network` peer-builder random streaming/BLS fallback
+  plus local `NetworkPeer` unit fixtures now go through checked random
+  constructors before preserving their existing infallible test-harness
+  contracts; Torii's shared test utilities now do the same for queued-block,
+  authority, minimal-root, genesis, streaming, and transaction-signer fixture
+  keys; Torii DA ingest, commitment, and persistence fixtures now route SSM
+  publisher, receipt/spool/receipt-log, BLS block, and receipt-log poison
+  signers through checked random helpers as well; data-model Nexus endorsement
+  unit fixtures now route endorsement signer and committee member keys through
+  checked random helpers before body-hash and quorum validation, and the
+  role permission-epoch account fixture now uses checked Ed25519 key generation;
+  the grouped model-derive block-signature repro fixture now uses checked random
+  key generation before signing its sample header, and Hijiri positive-attestation
+  reward-account fixtures now use checked random key generation; the grouped
+  wallet-flow hex dump account fixtures now use checked random key generation
+  before emitting canonical instruction encodings; account-controller multisig
+  member fixtures now use checked default and Secp256k1 random helpers while
+  preserving the deterministic CTAP2 seed-vector coverage; the Private Kaigi
+  sample relay-manifest account fixture now uses checked random public-key
+  generation;
   `MultisigRegister::from_spec` now also returns `Result` and generates its
   temporary registration anchor account through checked default key generation;
   the transaction-gossip frame-cap probe now uses a fixed checked Ed25519 seed
@@ -2206,13 +2226,20 @@ redistributable schemas, and official trust/revocation bundles.
 						  `KeyPair::try_from_seed` / `SignatureOf::try_new`, with aggregation
 						  guards, invalid-signature, unknown-provider, version/connector mismatch,
 						  mismatched-scale, dispute, governance, and Twitter binding regressions
-						  rerun; and the
+						  rerun; Sumeragi localnet smoke route/bootstrap, transfer-load,
+						  RAM-LFE email resolver, and receipt-signing fixtures now also use checked
+						  deterministic Ed25519 seed expansion and checked RAM-LFE receipt
+						  signatures before realistic localnet and receipt regressions consume
+						  them; and the
 						  config client API snapshot fixture now derives its deterministic public
 						  key through `KeyPair::try_from_seed`; the high-level `iroha` Rust SDK
 						  account-address I105 fixtures now also derive deterministic Ed25519
 						  account keys through `KeyPair::try_from_seed`, and the `iroha`
 						  user-config timeout helper fixture now also derives its deterministic
-						  account key through `KeyPair::try_from_seed`; the
+						  account key through `KeyPair::try_from_seed`; the tracked root extracted
+						  test-account fixture snippet now also uses checked deterministic Ed25519
+						  seed expansion, leaving the repository-wide Rust raw-constructor scan with
+						  only the intentional ML-DSA compatibility assertion; the
 						  `iroha_genesis` manifest-normalize helper now generates its temporary
 						  signing key through checked default key generation and reports entropy
 						  failures with binary-specific context; the `iroha_crypto` SoraNet
@@ -5145,7 +5172,9 @@ redistributable schemas, and official trust/revocation bundles.
     logged vote-emission failures instead of unwinding the commit/precommit
     path, while native AMX vote, merge committee, and RBC ready/deliver
     wire-message signing now share the same checked consensus preimage helper
-    and skip logged local emission failures; contract
+    and skip logged local emission failures; the consensus-preimage signing
+    regression now also derives its BLS fixture key through
+    `KeyPair::try_from_seed`; contract
     manifest provenance signing now exposes `ContractManifest::try_signed`, and
     the CLI build/deploy, Torii app API deployment prep, and Connect Norito
     governance propose-deploy bridge paths propagate signing failures through
@@ -5270,6 +5299,17 @@ redistributable schemas, and official trust/revocation bundles.
     integration sorting account-order fixtures now use checked random Ed25519
     key generation before metadata sorting regressions consume generated
     identities;
+    integration CLI local config fixtures now use checked random Ed25519 key
+    generation before client TOML/env regressions consume account material;
+    integration transfer-domain negative-owner fixtures now use checked random
+    Ed25519 key generation before four-peer genesis/domain-transfer regressions
+    consume generated owner identities;
+    integration address-canonicalisation alias-query fixtures now use checked
+    random Ed25519 key generation before four-peer account-query regressions
+    consume generated alias identities;
+    integration by-call trigger permission-client fixtures now use checked
+    random Ed25519 key generation before four-peer trigger-registration
+    regressions consume generated authority identities;
     high-level `iroha` Nexus app facade wallet-signature, error-code,
     unsupported-key, and submit/status failure fixtures now use checked
     Ed25519/secp256k1 key generation before draft/finalize regressions consume
@@ -5284,6 +5324,24 @@ redistributable schemas, and official trust/revocation bundles.
     core genesis bootstrap request fixtures now use checked random Ed25519 key
     generation before request roundtrip encoding consumes the expected public
     key;
+    core queue regression transaction-authority fixtures now use checked random
+    Ed25519 key generation before expiry and concurrent-drain regressions sign
+    queued transactions;
+    core queue stress transaction-authority fixtures now use checked random
+    Ed25519 key generation before Arc-drain stress regressions sign expiring
+    queued transactions;
+    core IVM syscall admission transaction fixtures now use checked random
+    Ed25519 key generation before unknown-syscall admission regressions sign
+    IVM bytecode transactions;
+    core contract-manifest trigger signer fixtures now use checked random
+    Ed25519 key generation before manifest trigger activation regressions sign
+    contract manifests;
+    core governance minimum-duration, threshold, and protected-namespace
+    fixtures now use checked random Ed25519 key generation before ballot,
+    finalize, and manifest-provenance regressions consume signer material;
+    core governance proposal-validation and unlock-sweep fixtures now use
+    checked random Ed25519 key generation before proposal authority and
+    lock-expiry regressions consume account key material;
     core commit roster journal certificate fixtures now use checked BLS key
     generation before journal persistence, retention, and stake-snapshot
     regressions consume validator checkpoints;
@@ -5300,6 +5358,11 @@ redistributable schemas, and official trust/revocation bundles.
     core offline note account, certificate, audit, redeem, and escrow fixtures
     now use checked deterministic Ed25519 seed expansion before offline lineage
     and duplicate-replay regressions consume them;
+    integration offline-note certificate fixtures now use checked deterministic
+    Ed25519 seed expansion and `Signature::try_new` before the four-peer
+    issue/audit/redeem duplicate-replay regression consumes them, while the
+    dormant V2 fixture remains unregistered until the current data-model/ZK API
+    exposes its referenced V2 symbols;
     data-model streaming ticket event account fixtures now use checked
     deterministic Ed25519 seed expansion before privacy-route and ticket
     roundtrip regressions consume them;
@@ -5320,6 +5383,10 @@ redistributable schemas, and official trust/revocation bundles.
     feature-gated core ZK-ACE STARK account fixtures now use checked
     deterministic Ed25519 seed expansion before STARK prover regressions consume
     them;
+    core ZK OpenVerify STARK prover and offline-note guardrail/real-prover
+    account plus one-use key-certificate fixtures now use checked deterministic
+    Ed25519 seed expansion before STARK and offline recursive proof regressions
+    consume them;
     gated Torii council persist integration candidate accounts and BLS VRF
     keypairs now use checked domain-separated Ed25519/BLS seed expansion before
     persist/derive-vrf regressions consume them;
@@ -5329,6 +5396,9 @@ redistributable schemas, and official trust/revocation bundles.
     Torii ISO 20022 account, config-signer, and account-address parser fixtures
     now use checked deterministic Ed25519 seed expansion before ISO bridge
     regressions consume them;
+    Torii SoraFS API alias-proof and signed manifest-envelope fixture signers
+    now use checked deterministic Ed25519 seed expansion before gateway
+    capability regressions consume them;
     core lane-compliance policy account fixtures now use checked deterministic
     Ed25519 seed expansion before compliance policy regressions consume them;
     core tiered-state governance approval measured-bytes fixtures now use
@@ -5336,6 +5406,33 @@ redistributable schemas, and official trust/revocation bundles.
     consume them;
     core block-sync consensus-filter deterministic BLS key fixtures now use
     checked seed expansion before commit-role quorum regressions consume them;
+    core Sumeragi evidence QC validator-set fixtures now use checked BLS seed
+    expansion before invalid-QC evidence regressions consume them;
+    core RBC store persisted-session peer fixtures now use checked deterministic
+    Ed25519 seed expansion before session-roster roundtrip regressions consume
+    them;
+    core Sumeragi reschedule paced retransmit peer fixtures now use checked BLS
+    seed expansion before retransmit target-order regressions consume them;
+    core Sumeragi roster deterministic BLS key lists, permissioned roster
+    sorting keys, and non-BLS active-topology fixtures now use checked seed
+    expansion before roster/topology regressions consume them;
+    core Sumeragi RBC rebroadcaster roster and outsider peer fixtures now use
+    checked Ed25519 seed expansion before rebroadcaster selection regressions
+    consume them;
+    core Sumeragi public-key classification fixtures now use checked
+    Ed25519/BLS seed expansion before BLS-normal validator identity regressions
+    consume them;
+    core Sumeragi message QC, certified-block fetch, block-created, priority,
+    and compact-fetch fixtures now use checked Ed25519 seed expansion before
+    message wire, certified-fetch, and compact RBC regressions consume them;
+    feature-gated core Sumeragi main-loop deterministic, retransmit, seeded BLS
+    peer, P2P refresh, NPoS canonicalization, and canonical payload
+    previous-roster fixtures now use checked seed expansion before main-loop
+    regressions consume them;
+    core state default streaming key material, ZK-ACE identity account helpers,
+    and governance-stage decision fixtures now use checked Ed25519 seed
+    expansion before streaming config, identity roundtrip, and quorum
+    regressions consume them;
     executor multisig account and transaction helpers now use checked
     deterministic Ed25519 seed expansion before quorum reachability and
     proposer authorization regressions consume them;
@@ -5403,6 +5500,9 @@ redistributable schemas, and official trust/revocation bundles.
     quarantined Sumeragi vNext re-chain and view-change votes now use
     `Signature::try_new`, verify canonical vote signatures, and reject
     wrong-mode consensus-domain preimages in focused regressions;
+    quarantined Sumeragi vNext preaggregated aggregate-signature non-BLS signer
+    fixtures now use checked Ed25519 seed expansion before unsupported-key
+    rejection consumes them;
     peer trust gossip roundtrip and adversarial trust-record fixtures now share a
     checked `Signature::try_new` helper, matching the production trust-gossip
     signing path in focused regressions;
@@ -5423,7 +5523,9 @@ redistributable schemas, and official trust/revocation bundles.
     checked builder signature;
     SoraFS gateway conformance attestations now sign reports through
     `Signature::try_new`, with regression coverage that verifies the emitted
-    envelope signature and rejects a wrong key;
+    envelope signature and rejects a wrong key, and the conformance docs plus
+    translated copies now show the checked signing helper instead of the
+    compatibility signer;
     irohad Soracloud runtime provider advert/admission fixtures and recording
     mutation-sink heartbeat/Inrou provenance fixtures now use checked signing,
     with remote provider hydration and local heartbeat/Inrou regressions covering
@@ -5443,11 +5545,18 @@ redistributable schemas, and official trust/revocation bundles.
     Torii SoraFS repair worker and discovery alias-proof fixtures now use
     checked `SignatureOf::try_new` / `Signature::try_new`, with repair positive,
     invalid-signature, fresh-alias, and expired-alias regressions rerun under
-    `app_api`;
+    `app_api`; Torii `lib.rs` routed-read escrow, push identity, EVM DA receipt
+    signer, RAM-LFE output-opening, and SoraFS repair-worker auth fixtures now use
+    checked seed derivation and `SignatureOf::try_new`, with push, identifier,
+    repair, and routed-read regressions rerun;
     Torii grouped core/Nexus/governance test fixtures now use checked
     `Signature::try_new` and `KeyPair::try_from_seed`, with portfolio filtering,
     bridge finality, Nexus disabled/enabled lanes, push rejection/success, and
     gated governance VRF ordering regressions rerun;
+    Torii routing overlong multisig selector, contract bundle, repair-worker
+    action, and account transaction filter fixtures now use checked seed and
+    signature constructors before selector, receipt, repair, and filter
+    regressions consume them;
     integration App API canonical request and DA/Taikai ingest fixtures now use
     checked `Signature::try_new`, with canonical GET/POST auth, Taikai missing
     metadata/malformed-SSM rejection, replication/proof tags, DA retention, and
@@ -5455,6 +5564,9 @@ redistributable schemas, and official trust/revocation bundles.
     Torii hot-path benchmark account/authority fixtures now use checked
     `KeyPair::try_from_seed`, with the benchmark target checked and linted under
     `app_api`;
+    `iroha_core` query and block benchmark account fixtures now use checked
+    `KeyPair::try_from_seed`, with block benchmark account seeds domain-framed
+    to keep seed zero deterministic without all-zero material;
     SoraFS gateway conformance wrong-key fixtures now use checked
     `KeyPair::try_from_seed`, with the attestation signature acceptance and
     wrong-key rejection regression rerun;
@@ -5576,7 +5688,10 @@ redistributable schemas, and official trust/revocation bundles.
     block/header, commit-QC, and SCCP message-bundle fixtures now share checked
     `Signature::try_new`, `SignatureOf::try_from_hash`, and
     `TransactionBuilder::try_sign` helpers, with a wrong-key BLS block-signature
-    regression covering adversarial verification failure; Kagami Kura
+    regression covering adversarial verification failure;
+    SCCP BSC, TON, TRON, Solana, Ethereum sync committee, Nexus finality, and
+    EVM attestor fixture key families now share checked seed derivation before
+    source-proof and submission-package regressions consume them; Kagami Kura
     block-store test fixtures now use checked transaction and block signing,
     verify the fixture transaction signature before append, and reject a wrong
     block-signature key in the focused regression; `iroha_crypto` packed
@@ -5709,6 +5824,9 @@ redistributable schemas, and official trust/revocation bundles.
 	tamper/swap/mismatch, mutation-signer, generated provenance, control-plane
 	snapshot, and broad receipt regressions rerun; Torii sources now scan clean of
 	raw `Signature::new` and `SignatureOf::from_hash` constructors;
+	integration restart-peer Soracloud private-upload provenance and app-auth
+	header fixtures now use checked `Signature::try_new`, with the four-peer
+	uploaded-model receipt restart-recovery regression rerun;
 	Torii identifier-resolution shared receipt and output-opening fixtures now
 	use checked `KeyPair::try_from_seed` and `SignatureOf::try_new`, with shared
 	fixture, signed receipt roundtrip, proof-mode/resolver mismatch, replay,

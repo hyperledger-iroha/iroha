@@ -725,6 +725,7 @@ pub struct AccountReadResponse {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         ValidationFail,
         account::{AccountAlias, AccountAliasDomain, AccountId},
@@ -739,6 +740,11 @@ mod tests {
         PipelineTransactionStatusResponse, QueueErrorSnapshot, TAIRA_CHAIN_DISCRIMINANT,
         network_profile, network_profile_for_discriminant,
     };
+
+    fn checked_test_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("Torii shared test fixture key derivation should succeed")
+    }
 
     #[test]
     fn error_envelope_new_sets_fields() {
@@ -899,8 +905,18 @@ mod tests {
     }
 
     #[test]
+    fn account_read_response_fixture_uses_checked_key_derivation() {
+        let key_pair = checked_test_keypair(0x23);
+        let expected = KeyPair::try_from_seed(vec![0x23; 32], Algorithm::Ed25519)
+            .expect("direct checked Torii shared fixture key derivation");
+
+        assert_eq!(key_pair.public_key(), expected.public_key());
+        assert!(KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err());
+    }
+
+    #[test]
     fn account_read_response_roundtrip_preserves_subject_metadata() {
-        let key_pair = iroha_crypto::KeyPair::random();
+        let key_pair = checked_test_keypair(0x23);
         let response = AccountReadResponse {
             account_id: AccountId::new(key_pair.public_key().clone()),
             label: Some(AccountAlias::new(

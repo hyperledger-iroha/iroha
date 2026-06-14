@@ -367,7 +367,8 @@ mod tests {
         let perm = Permission::new("can_audit".into(), Json::new(norito::json!({})));
         let _domain: crate::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
-        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let keypair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("test fixture Ed25519 key generation should succeed");
         let account_id = AccountId::new(keypair.public_key().clone());
         let role = Role::new(id, account_id.clone())
             .add_permission_with_epoch(perm.clone(), 42)

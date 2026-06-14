@@ -1558,6 +1558,12 @@ mod tests {
         public_key
     }
 
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{algorithm:?} account-address fixture key generation should succeed: {err}")
+        })
+    }
+
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -2144,7 +2150,8 @@ mod tests {
 
     #[test]
     fn account_address_encodes_secp256k1_controller() {
-        let (public_key, _) = KeyPair::random_with_algorithm(Algorithm::Secp256k1).into_parts();
+        let (public_key, _) =
+            checked_random_keypair_with_algorithm(Algorithm::Secp256k1).into_parts();
         let account = AccountId::new(public_key.clone());
         let address = AccountAddress::from_account_id(&account).expect("encode secp256k1");
         let controller = address
@@ -2155,7 +2162,7 @@ mod tests {
 
     #[test]
     fn account_address_encodes_mldsa_controller_with_extended_length() {
-        let (public_key, _) = KeyPair::random_with_algorithm(Algorithm::MlDsa).into_parts();
+        let (public_key, _) = checked_random_keypair_with_algorithm(Algorithm::MlDsa).into_parts();
         let (_algorithm, key_payload) = public_key
             .try_to_bytes()
             .expect("fixture ML-DSA public key must be well-formed");

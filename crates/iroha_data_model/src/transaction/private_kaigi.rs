@@ -291,6 +291,13 @@ mod tests {
     };
     use crate::{domain::DomainId, kaigi::KaigiRelayHop, name::Name};
 
+    fn checked_random_public_key() -> iroha_crypto::PublicKey {
+        KeyPair::try_random()
+            .expect("test fixture random key generation should succeed")
+            .public_key()
+            .clone()
+    }
+
     fn sample_template() -> PrivateKaigiTemplate {
         PrivateKaigiTemplate {
             id: KaigiId::new(
@@ -307,9 +314,7 @@ mod tests {
             room_policy: KaigiRoomPolicy::Authenticated,
             relay_manifest: Some(KaigiRelayManifest {
                 hops: vec![KaigiRelayHop {
-                    relay_id: crate::account::AccountId::new(
-                        KeyPair::random().public_key().clone(),
-                    ),
+                    relay_id: crate::account::AccountId::new(checked_random_public_key()),
                     hpke_public_key: vec![1, 2, 3],
                     weight: 1,
                 }],

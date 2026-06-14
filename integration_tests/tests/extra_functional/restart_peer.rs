@@ -398,7 +398,7 @@ fn soracloud_service_bundle_provenance(
     )?;
     Ok(ManifestProvenance {
         signer: ALICE_KEYPAIR.public_key().clone(),
-        signature: Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+        signature: Signature::try_new(ALICE_KEYPAIR.private_key(), &payload)?,
     })
 }
 
@@ -454,7 +454,7 @@ fn uploaded_model_bundle_provenance(
     let payload = encode_uploaded_model_bundle_register_provenance_payload(bundle.clone())?;
     Ok(ManifestProvenance {
         signer: ALICE_KEYPAIR.public_key().clone(),
-        signature: Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+        signature: Signature::try_new(ALICE_KEYPAIR.private_key(), &payload)?,
     })
 }
 
@@ -487,7 +487,7 @@ fn uploaded_model_finalize_provenance(
     )?;
     Ok(ManifestProvenance {
         signer: ALICE_KEYPAIR.public_key().clone(),
-        signature: Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+        signature: Signature::try_new(ALICE_KEYPAIR.private_key(), &payload)?,
     })
 }
 
@@ -1080,7 +1080,7 @@ fn add_canonical_app_headers(
     );
     let uri = signing_uri(url)?;
     let message = canonical_request_signature_message(&method, &uri, body, timestamp_ms, &nonce);
-    let signature = Signature::new(client.key_pair.private_key(), &message);
+    let signature = Signature::try_new(client.key_pair.private_key(), &message)?;
     Ok(request
         .header(HEADER_ACCOUNT, client.account.to_string())
         .header(HEADER_SIGNATURE, signature_header_value(&signature))

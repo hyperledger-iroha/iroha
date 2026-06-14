@@ -944,7 +944,8 @@ mod tests {
     }
 
     fn sample_qc(seed: u8) -> consensus::Qc {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive sample QC validator key");
         let validator = PeerId::from(key_pair.public_key().clone());
         let validator_set = vec![validator];
         consensus::Qc {
@@ -972,7 +973,8 @@ mod tests {
     }
 
     fn sample_certified_block_fetch_response(seed: u8) -> CertifiedBlockFetchResponse {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive sample certified block key");
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(key_pair.private_key())
@@ -1111,7 +1113,8 @@ mod tests {
     #[test]
     fn block_created_from_newblock_ref_and_move_equivalent() {
         // Build a minimal NewBlock and sign it.
-        let kp = KeyPair::from_seed(b"seed-seed".to_vec(), Algorithm::Ed25519);
+        let kp = KeyPair::try_from_seed(b"seed-seed".to_vec(), Algorithm::Ed25519)
+            .expect("derive block-created fixture key");
         let da_bundle = DaCommitmentBundle::new(vec![DaCommitmentRecord::new(
             LaneId::new(1),
             2,
@@ -1143,7 +1146,8 @@ mod tests {
 
     #[test]
     fn block_created_from_newblock_ref_preserves_previous_roster_evidence() {
-        let kp = KeyPair::from_seed(b"seed-seed".to_vec(), Algorithm::Ed25519);
+        let kp = KeyPair::try_from_seed(b"seed-seed".to_vec(), Algorithm::Ed25519)
+            .expect("derive previous-roster fixture key");
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
         let parent_state_root = Hash::prehashed([0x12; 32]);
         let post_state_root = Hash::prehashed([0x34; 32]);
@@ -1188,7 +1192,8 @@ mod tests {
 
     #[test]
     fn block_created_frontier_wire_constructors_match_formal_gate() {
-        let kp = KeyPair::from_seed(b"frontier-wire".to_vec(), Algorithm::Ed25519);
+        let kp = KeyPair::try_from_seed(b"frontier-wire".to_vec(), Algorithm::Ed25519)
+            .expect("derive frontier-wire fixture key");
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(kp.private_key())
@@ -1409,7 +1414,8 @@ mod tests {
         let block = response.block.clone();
         let block_hash = block.hash();
         let requester = PeerId::from(
-            KeyPair::from_seed(vec![0x91; 32], Algorithm::Ed25519)
+            KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
+                .expect("derive block-message priority requester key")
                 .public_key()
                 .clone(),
         );
@@ -1800,7 +1806,8 @@ mod tests {
         );
 
         let mut roster = sample_certified_block_fetch_response(45);
-        let extra = KeyPair::from_seed(vec![45; 32], Algorithm::Ed25519);
+        let extra = KeyPair::try_from_seed(vec![45; 32], Algorithm::Ed25519)
+            .expect("derive mutated roster fixture key");
         roster
             .validator_checkpoint
             .validator_set
@@ -2323,7 +2330,8 @@ mod tests {
         }
 
         let requester = PeerId::from(
-            KeyPair::from_seed(vec![0xC3; 32], Algorithm::Ed25519)
+            KeyPair::try_from_seed(vec![0xC3; 32], Algorithm::Ed25519)
+                .expect("derive compact fetch requester key")
                 .public_key()
                 .clone(),
         );

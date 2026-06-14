@@ -28,6 +28,20 @@ fn start_network(
     sandbox::start_network_blocking_or_skip(builder, context)
 }
 
+fn checked_random_account_id() -> AccountId {
+    AccountId::new(
+        KeyPair::try_random()
+            .expect("generate checked transfer-domain account keypair")
+            .into_parts()
+            .0,
+    )
+}
+
+#[test]
+fn transfer_domain_account_fixture_uses_checked_randomness() {
+    let _account_id = checked_random_account_id();
+}
+
 fn wait_for_domain_owner(
     client: &Client,
     domain_id: &DomainId,
@@ -487,8 +501,8 @@ fn domain_owner_transfer() -> Result<()> {
 fn not_allowed_to_transfer_other_user_domain() -> Result<()> {
     let users_domain: DomainId = DomainId::try_new("users", "universal")?;
     let foo_domain: DomainId = DomainId::try_new("foo", "universal")?;
-    let user1 = AccountId::new(KeyPair::random().into_parts().0);
-    let user2 = AccountId::new(KeyPair::random().into_parts().0);
+    let user1 = checked_random_account_id();
+    let user2 = checked_random_account_id();
     let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
 
     let builder = NetworkBuilder::new()

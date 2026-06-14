@@ -12517,6 +12517,38 @@ RbcDeliverPendingStepNeverMutatesCommitArtifacts ==
 RbcDeliverPendingStepAlwaysKeepsDeliveredEvidenceWithoutFinality ==
   [] [RbcDeliverPendingStepKeepsDeliveredEvidenceWithoutFinality]_vars
 
+RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope ==
+  /\ RbcChunkGateNeverBypassesHeaderDigestEvidence
+  /\ RbcChunkStepAlwaysAdvancesChunkEvidence
+  /\ RbcChunkStepAlwaysHandsOffByCoverage
+  /\ RbcInitExitOnlyByChunkOrFault
+  /\ RbcChunkCountIncreaseOnlyByChunk
+  /\ RbcChunkCountDecreaseOnlyByProposalOrInit
+  /\ RbcChunkingEntryOnlyByChunk
+  /\ RbcChunkingExitOnlyByChunkOrFault
+  /\ RbcChunkCompletionEntryOnlyByChunk
+  /\ RbcChunksCompleteExitOnlyByReadyOrFault
+  /\ RbcReadyGateNeverBypassesChunkEvidence
+  /\ RbcReadyStepAlwaysAdvancesReadyEvidence
+  /\ RbcReadyStepAlwaysHandsOffByQuorum
+  /\ RbcReadyQuorumStepAlwaysEnablesDeliverHandoff
+  /\ RbcReadyVotesIncreaseOnlyByReady
+  /\ RbcReadyVotesDecreaseOnlyByProposalOrInit
+  /\ RbcReadyPartialEntryOnlyByReady
+  /\ RbcReadyPartialExitOnlyByReadyOrFault
+  /\ RbcReadyQuorumEntryOnlyByReady
+  /\ RbcReadyQuorumExitOnlyByDeliverOrFault
+  /\ RbcDeliverGateNeverBypassesCompleteEvidence
+  /\ RbcReadyQuorumNeverLacksDeliverGate
+  /\ RbcDeliverStepAlwaysPreservesCompleteEvidence
+  /\ RbcDeliverStepAlwaysHandsOffByCommitEvidence
+  /\ RbcDeliverFinalityGateNeverBypassesBufferedCommitEvidence
+  /\ RbcDeliverFinalityStepAlwaysInstallsCommitArtifacts
+  /\ RbcDeliverFinalityStepAlwaysCompletesCommittedDelivery
+  /\ RbcDeliverPendingGateNeverBypassesMissingBufferedCommitEvidence
+  /\ RbcDeliverPendingStepNeverMutatesCommitArtifacts
+  /\ RbcDeliverPendingStepAlwaysKeepsDeliveredEvidenceWithoutFinality
+
 PendingProtocolStepsNeverChangeGst ==
   [] [PendingProtocolStepsPreserveGst]_vars
 

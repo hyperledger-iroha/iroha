@@ -72,10 +72,24 @@ The Rust readiness path requires those route allowlist and canary hashes to use
 the canonical lowercase `0x` spelling; bare hex, `0X` prefixes, uppercase byte
 aliases, and padded strings stay blockers. Deployment-bound EVM lane readiness
 replays that same canonical check for copied route-canary transaction hashes.
-Normalized codec JSON fixed-byte variants use the same canonical lowercase `0x`
-syntax; bare, `0X`, uppercase-byte, and padded aliases are rejected while
-syntactically valid zero byte payloads remain allowed unless a later semantic
-gate requires non-zero material.
+Normalized codec JSON fixed-byte variants and shared public SCCP JSON hex
+helpers use the same canonical lowercase `0x` syntax for fixed hashes,
+byte-vector fields, and vector-of-byte-vector fields; bare, `0X`,
+uppercase-byte, and padded aliases are rejected while syntactically valid zero
+byte payloads remain allowed unless a later semantic gate requires non-zero
+material.
+Public SCCP JSON decimal-string helpers also keep string spellings canonical:
+quoted `u64`/`u128` values must be unsigned ASCII decimal with no leading zero,
+plus sign, or padding. JSON number values remain accepted for backward-compatible
+operator input, but string aliases cannot produce alternate spellings for the
+same value.
+Public SCCP JSON enum decoders report only fixed error categories for unknown
+string values or externally tagged variants, so rejected operator-supplied
+tokens are not echoed into logs or release evidence.
+Release-readiness and strict release-bundle source inventories pin the Rust
+normalized-codec, shared hex-helper, decimal-string helper, and enum-diagnostic
+regressions so public JSON canonicalization and redaction cannot be removed
+without blocking release evidence.
 Release-readiness and strict release-bundle source inventories pin this optional
 canary-summary exactness so failed, partial, replayed, or drifted top-level
 summaries cannot be treated as production-shaped route profiles.
@@ -636,6 +650,10 @@ artifacts.
   validates every validator PoP, and enforces the same two-thirds-plus-one
   signer quorum used by core finality checks. Builds without the SCCP `bls`
   feature fail closed for this cryptographic helper.
+  These proofs must bind the exact public Sora Nexus chain id
+  `00000000-0000-0000-0000-000000000753`; padded strings, hyphenless aliases,
+  the Kagami profile alias `iroha3-nexus`, and wrong UUIDs fail structural
+  validation before QC review.
 - Non-SORA-origin messages (`remote -> SORA/Nexus or another supported target`)
   carry a Norito-encoded `SccpSourceChainProofEnvelopeV1`. Raw Nexus finality
   bytes are rejected for these messages, and source-chain envelopes are rejected

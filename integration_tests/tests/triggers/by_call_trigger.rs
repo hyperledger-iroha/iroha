@@ -50,6 +50,15 @@ where
     Ok(())
 }
 
+fn checked_random_trigger_account_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked trigger account keypair")
+}
+
+#[test]
+fn trigger_account_fixture_uses_checked_randomness() {
+    let _keypair = checked_random_trigger_account_keypair();
+}
+
 async fn submit_instruction_and_wait(
     network: &sandbox::SerializedNetwork,
     client: iroha::client::Client,
@@ -729,7 +738,7 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
         stringify!(only_account_with_permission_can_register_trigger),
         || async {
             let alice_account_id = ALICE_ID.clone();
-            let rabbit_keys = KeyPair::random();
+            let rabbit_keys = checked_random_trigger_account_keypair();
             let rabbit_account_id = AccountId::new(rabbit_keys.public_key().clone());
             let rabbit_account = Account::new(rabbit_account_id.clone());
 
