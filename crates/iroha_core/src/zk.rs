@@ -25149,6 +25149,16 @@ mod kagemusha_recursive_keygen_shape_tests {
 
     #[test]
     fn recursive_verifier_default_is_keygen_placeholder() {
+        let native_verifier = pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<
+            4,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::default();
+        assert!(native_verifier.round_accumulators.is_empty());
+        assert!(native_verifier.generator_folds.is_empty());
+        assert!(native_verifier.final_msm.msm.term_muls.is_empty());
+        assert!(native_verifier.final_msm.msm.sum_adds.is_empty());
+
         let verifier = pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
             4,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
@@ -53504,6 +53514,198 @@ mod pasta_tiny {
         }
     }
 
+    fn synthesize_non_native_vesta_ipa_verifier_native_scalar_keygen_shape<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        config: NonNativeVestaIpaVerifierNativeScalarConfig,
+        mut layouter: impl Layouter<Scalar>,
+    ) -> Result<(), PlonkError> {
+        let rounds = ipa_power_of_two_rounds(LEN).ok_or(PlonkError::Synthesis)?;
+        let transcript_round_values = vec![Scalar::from(0); rounds];
+        let transcript_round_states = vec![Scalar::from(0); rounds + 1];
+        let scalar_witness = NativePastaFpScalar::default();
+        layouter.assign_region(
+            || "non_native_vesta_ipa_verifier_native_scalar",
+            |mut region| {
+                config.link.enable(&mut region, 0)?;
+
+                assign_native_pasta_fp_ipa_transcript_binding_region(
+                    &mut region,
+                    &config.transcript_binding,
+                    Scalar::from(0),
+                    &transcript_round_values,
+                    &transcript_round_values,
+                    &transcript_round_values,
+                    Scalar::from(0),
+                    Scalar::from(0),
+                    &transcript_round_states,
+                )?;
+
+                let final_b_layer = config.b_reduction.vectors.len().saturating_sub(1);
+                for (layer_index, config_layer) in config.b_reduction.vectors.iter().enumerate() {
+                    let expose_public = layer_index == 0 || layer_index == final_b_layer;
+                    for scalar_config in config_layer {
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            scalar_config,
+                            &scalar_witness,
+                            expose_public,
+                        )?;
+                    }
+                }
+                for scalar_config in &config.b_reduction.challenges {
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        scalar_config,
+                        &scalar_witness,
+                        true,
+                    )?;
+                }
+                for scalar_config in &config.b_reduction.challenge_inverses {
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        scalar_config,
+                        &scalar_witness,
+                        true,
+                    )?;
+                }
+                config.b_reduction.link.enable(&mut region, 0)?;
+
+                for round_config in &config.round_accumulators {
+                    round_config.link.enable(&mut region, 0)?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &round_config.challenge,
+                        &scalar_witness,
+                        false,
+                    )?;
+                    assign_native_pasta_fp_scalar_region(
+                        &mut region,
+                        &round_config.challenge_inverse,
+                        &scalar_witness,
+                        false,
+                    )?;
+                    assign_non_native_vesta_affine_windowed_msm_native_scalar_keygen_shape::<
+                        3,
+                        WINDOWS,
+                        WINDOW_BITS,
+                    >(&mut region, &round_config.msm)?;
+                }
+
+                for config_round in &config.generator_folds {
+                    for generator_config in config_round {
+                        generator_config.link.enable(&mut region, 0)?;
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            &generator_config.challenge,
+                            &scalar_witness,
+                            false,
+                        )?;
+                        assign_native_pasta_fp_scalar_region(
+                            &mut region,
+                            &generator_config.challenge_inverse,
+                            &scalar_witness,
+                            false,
+                        )?;
+                        assign_non_native_vesta_affine_windowed_msm_native_scalar_keygen_shape::<
+                            2,
+                            WINDOWS,
+                            WINDOW_BITS,
+                        >(&mut region, &generator_config.g_msm)?;
+                        assign_non_native_vesta_affine_windowed_msm_native_scalar_keygen_shape::<
+                            2,
+                            WINDOWS,
+                            WINDOW_BITS,
+                        >(&mut region, &generator_config.h_msm)?;
+                    }
+                }
+
+                config.final_msm.product_link.enable(&mut region, 0)?;
+                assign_non_native_vesta_affine_windowed_msm_native_scalar_keygen_shape::<
+                    3,
+                    WINDOWS,
+                    WINDOW_BITS,
+                >(&mut region, &config.final_msm.msm)
+            },
+        )
+    }
+
+    fn assign_non_native_vesta_affine_windowed_msm_native_scalar_keygen_shape<
+        const TERMS: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineWindowedMsmNativeScalarConfig,
+    ) -> Result<(), PlonkError> {
+        let sum_witness = NonNativeVestaAffineCompleteAdd::default();
+        config.link.enable(region, 0)?;
+        for term_config in &config.term_muls {
+            assign_non_native_vesta_affine_windowed_scalar_mul_native_scalar_keygen_shape::<
+                WINDOWS,
+                WINDOW_BITS,
+            >(region, term_config)?;
+        }
+        for sum_config in &config.sum_adds {
+            assign_non_native_vesta_affine_complete_add_region(region, sum_config, &sum_witness)?;
+        }
+        Ok(())
+    }
+
+    fn assign_non_native_vesta_affine_windowed_scalar_mul_native_scalar_keygen_shape<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineWindowedScalarMulNativeScalarConfig,
+    ) -> Result<(), PlonkError> {
+        let scalar_witness =
+            NativePastaFpFixedWindowDecomposition::<WINDOWS, WINDOW_BITS>::default();
+        let table_witness = NonNativeVestaAffineFixedWindowTable::<WINDOW_BITS>::default();
+        let selection_witness = NonNativeVestaAffineFixedWindowSelect::<WINDOW_BITS>::default();
+        let complete_add_witness = NonNativeVestaAffineCompleteAdd::default();
+
+        config.link.enable(region, 0)?;
+        assign_native_pasta_fp_fixed_window_decomposition_region(
+            region,
+            &config.scalar,
+            &scalar_witness,
+        )?;
+        for table_config in &config.tables {
+            assign_non_native_vesta_affine_fixed_window_table_region(
+                region,
+                table_config,
+                &table_witness,
+            )?;
+        }
+        for selection_config in &config.selections {
+            assign_non_native_vesta_affine_fixed_window_select_region(
+                region,
+                selection_config,
+                &selection_witness,
+            )?;
+        }
+        for transition_configs in &config.window_base_doubles {
+            for double_config in transition_configs {
+                assign_non_native_vesta_affine_complete_add_region(
+                    region,
+                    double_config,
+                    &complete_add_witness,
+                )?;
+            }
+        }
+        for sum_config in &config.sum_adds {
+            assign_non_native_vesta_affine_complete_add_region(
+                region,
+                sum_config,
+                &complete_add_witness,
+            )?;
+        }
+        Ok(())
+    }
+
     fn synthesize_non_native_vesta_ipa_verifier_shared_table_native_scalar_keygen_shape<
         const LEN: usize,
         const WINDOWS: usize,
@@ -66095,17 +66297,15 @@ mod pasta_tiny {
         for NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>
     {
         fn default() -> Self {
+            Self::keygen_placeholder()
+        }
+    }
+
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize>
+        NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>
+    {
+        fn keygen_placeholder() -> Self {
             let rounds = ipa_power_of_two_rounds(LEN).unwrap_or(0);
-            let mut layer_len = LEN;
-            let mut generator_folds = Vec::with_capacity(rounds);
-            for _ in 0..rounds {
-                let half = layer_len / 2;
-                generator_folds.push(vec![
-                    NonNativeVestaIpaGeneratorFoldNativeScalar::default();
-                    half
-                ]);
-                layer_len = half;
-            }
             Self {
                 transcript_header_projection: Scalar::from(0),
                 transcript_round_projections: vec![Scalar::from(0); rounds],
@@ -66115,19 +66315,24 @@ mod pasta_tiny {
                 transcript_binding_digest: Scalar::from(0),
                 transcript_round_states: vec![Scalar::from(0); rounds + 1],
                 b_reduction: Box::new(NativePastaFpIpaBVectorReduction::default()),
-                round_accumulators: vec![
-                    NonNativeVestaIpaRoundAccumulatorNativeScalar::default();
-                    rounds
-                ],
-                generator_folds,
-                final_msm: Box::new(NonNativeVestaIpaFinalWindowedMsmNativeScalar::default()),
+                round_accumulators: Vec::new(),
+                generator_folds: Vec::new(),
+                final_msm: Box::new(NonNativeVestaIpaFinalWindowedMsmNativeScalar {
+                    msm: Box::new(NonNativeVestaAffineWindowedMsmNativeScalar {
+                        term_muls: Vec::new(),
+                        sum_adds: Vec::new(),
+                    }),
+                }),
             }
         }
-    }
 
-    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize>
-        NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>
-    {
+        fn is_keygen_placeholder(&self) -> bool {
+            self.round_accumulators.is_empty()
+                && self.generator_folds.is_empty()
+                && self.final_msm.msm.term_muls.is_empty()
+                && self.final_msm.msm.sum_adds.is_empty()
+        }
+
         /// Build an honest multi-round IPA verifier composition witness.
         ///
         /// # Errors
@@ -66986,6 +67191,13 @@ mod pasta_tiny {
             config: Self::Config,
             mut layouter: impl Layouter<Scalar>,
         ) -> Result<(), PlonkError> {
+            if self.is_keygen_placeholder() {
+                return synthesize_non_native_vesta_ipa_verifier_native_scalar_keygen_shape::<
+                    LEN,
+                    WINDOWS,
+                    WINDOW_BITS,
+                >(config, layouter);
+            }
             if !nested_vec_lengths_match(&self.b_reduction.vectors, &config.b_reduction.vectors)
                 || self.b_reduction.challenges.len() != config.b_reduction.challenges.len()
                 || self.b_reduction.challenge_inverses.len()

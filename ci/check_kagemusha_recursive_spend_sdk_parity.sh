@@ -447,6 +447,14 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/HttpClientTransport.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/NoritoRpcClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/NoritoRpcException.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/NoritoRpcFlowController.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/NoritoRpcRequestOptions.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/SubscriptionToriiClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiCanonicalRequestAuth.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/TransportSecurity.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/StreamingTransportExecutor.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportExecutor.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportRequest.java",
@@ -463,7 +471,19 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkRootsJson.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkRootsRequest.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkRootsResponse.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStream.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamListener.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamObserver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamOptions.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamSubscription.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/PlatformWebSocketConnector.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketListener.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketObserver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketOptions.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketSession.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketSubscription.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeyAttestation.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationResult.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerificationException.java",
@@ -540,6 +560,20 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SourceSccpProofs.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TronSccpProver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionActionRequest.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionActionResponse.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionCreateRequest.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionCreateResponse.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionJsonParser.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionListParams.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionListResponse.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionPlanCreateRequest.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionPlanCreateResponse.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionPlanListParams.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionPlanListResponse.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionStatus.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionToriiException.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionUsageRequest.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountIdLiteralTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java",
@@ -550,12 +584,20 @@ SOURCE_PATHS = (
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportPendingQueueTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoderTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/NoritoRpcClientTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ClientConfigNoritoRpcTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/SubscriptionToriiClientTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServer.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServerTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/DirectoryPendingTransactionQueueTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueueTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/OfflineJournalPendingTransactionQueueTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClientTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamSubscriptionTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/transport/UrlConnectionTransportExecutorTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketClientTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketSubscriptionTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectEnvelopeCodecTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectErrorTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectQueueJournalTests.java",
@@ -614,15 +656,35 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptCanonicalEncoder.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptVerifier.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/NoritoRpcClient.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/NoritoRpcException.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/NoritoRpcFlowController.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/NoritoRpcRequestOptions.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/SubscriptionToriiClient.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ToriiCanonicalRequestAuth.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ToriiRequestBuilder.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/TransportSecurity.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ZkMerklePath.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ZkRoots.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStream.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamClient.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamListener.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamObserver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamOptions.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamSubscription.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/StreamingTransportExecutor.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportExecutor.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportRequest.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportResponse.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportStreamResponse.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/UrlConnectionTransportExecutor.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/PlatformWebSocketConnector.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketClient.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketListener.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketObserver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketOptions.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketSession.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketSubscription.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectCiphertext.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectCrypto.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectDirection.kt",
@@ -675,6 +737,20 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashes.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionActionRequest.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionActionResponse.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionCreateRequest.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionCreateResponse.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionJsonParser.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionListParams.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionListResponse.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionPlanCreateRequest.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionPlanCreateResponse.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionPlanListParams.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionPlanListResponse.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionStatus.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionToriiException.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionUsageRequest.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePath.kt",
@@ -697,6 +773,7 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientV2ReadinessTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/TransportSecurityClientTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamClientTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/transport/UrlConnectionTransportExecutorTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectCryptoTest.kt",
@@ -738,7 +815,23 @@ SOURCE_PATHS = (
     "javascript/iroha_js/src/address.js",
     "javascript/iroha_js/dist/address.js",
     "javascript/iroha_js/src/canonicalRequest.js",
+    "javascript/iroha_js/src/connect.browser.js",
+    "javascript/iroha_js/src/connectError.js",
+    "javascript/iroha_js/src/connectJournalRecord.js",
+    "javascript/iroha_js/src/connectPreviewFlow.js",
+    "javascript/iroha_js/src/connectQueueDiagnostics.js",
+    "javascript/iroha_js/src/connectQueueJournal.js",
+    "javascript/iroha_js/src/connectRetryPolicy.js",
+    "javascript/iroha_js/src/connectSession.js",
     "javascript/iroha_js/dist/canonicalRequest.js",
+    "javascript/iroha_js/dist/connect.browser.js",
+    "javascript/iroha_js/dist/connectError.js",
+    "javascript/iroha_js/dist/connectJournalRecord.js",
+    "javascript/iroha_js/dist/connectPreviewFlow.js",
+    "javascript/iroha_js/dist/connectQueueDiagnostics.js",
+    "javascript/iroha_js/dist/connectQueueJournal.js",
+    "javascript/iroha_js/dist/connectRetryPolicy.js",
+    "javascript/iroha_js/dist/connectSession.js",
     "javascript/iroha_js/src/curveRegistry.js",
     "javascript/iroha_js/dist/curveRegistry.js",
     "javascript/iroha_js/src/crypto.js",
@@ -763,6 +856,15 @@ SOURCE_PATHS = (
     "fixtures/soracloud/identifier_receipt_vectors_v1.json",
     "javascript/iroha_js/test/address.test.js",
     "javascript/iroha_js/test/canonicalRequest.test.js",
+    "javascript/iroha_js/test/connect.browser.test.js",
+    "javascript/iroha_js/test/connectError.test.js",
+    "javascript/iroha_js/test/connectJournalRecord.test.js",
+    "javascript/iroha_js/test/connectPreviewFlow.test.js",
+    "javascript/iroha_js/test/connectQueueDiagnostics.test.js",
+    "javascript/iroha_js/test/connectQueueJournal.test.js",
+    "javascript/iroha_js/test/connectRetryPolicy.test.js",
+    "javascript/iroha_js/test/connectSession.test.js",
+    "javascript/iroha_js/test/connectWebSocket.test.js",
     "javascript/iroha_js/test/crypto.browser.test.js",
     "javascript/iroha_js/test/instructionBuilders.test.js",
     "javascript/iroha_js/test/transactionBuilder.test.js",
@@ -770,9 +872,12 @@ SOURCE_PATHS = (
     "javascript/iroha_js/test/offlineCashLifecycle.test.js",
     "javascript/iroha_js/test/package_dist.test.js",
     "javascript/iroha_js/test/privacyNative.test.js",
+    "javascript/iroha_js/test/toriiCanonicalAuth.test.js",
     "javascript/iroha_js/test/toriiClient.identifier.test.js",
+    "javascript/iroha_js/test/toriiClient.isoAlias.test.js",
     "javascript/iroha_js/test/toriiClient.ramLfe.test.js",
     "javascript/iroha_js/test/toriiClient.test.js",
+    "javascript/iroha_js/test/toriiSubscriptions.test.js",
     "python/iroha_python/src/iroha_python/__init__.py",
     "python/iroha_python/src/iroha_python/_privacy_backends.py",
     "python/iroha_python/src/iroha_python/address.py",
@@ -889,6 +994,7 @@ JVM_SDK_TEST_COMMAND = "ci/check_kagemusha_recursive_spend_jvm_sdk.sh"
 SWIFT_SDK_PARSE_COMMAND = "ci/check_kagemusha_recursive_spend_swift_sdk.sh"
 CSHARP_SDK_TEST_COMMAND = "ci/check_kagemusha_recursive_spend_csharp_sdk.sh"
 JS_SDK_INSTALL_COMMAND = "npm ci --prefix javascript/iroha_js"
+JS_SDK_NATIVE_BUILD_COMMAND = "npm run build:native --prefix javascript/iroha_js"
 JS_SDK_TEST_COMMAND = "ci/check_kagemusha_recursive_spend_js_sdk.sh"
 MAIN_JOB_NEEDS_LINE = (
     "    needs: [kagemusha_native_bridge_tests, kagemusha_swift_sdk_parse, "
@@ -1569,6 +1675,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-transport-inspector-attestation-coverage",
     ),
     (
+        "Mobile SCCP runner coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-sccp-runner-coverage",
+    ),
+    (
+        "Mobile Torii RPC/subscription/WebSocket runner coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-torii-rpc-subscription-websocket-runner-coverage",
+    ),
+    (
         "JVM Offline Note V2 decoder placeholder negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-decoder-placeholder",
     ),
@@ -1817,6 +1931,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-install-workflow",
     ),
     (
+        "JavaScript SDK native build workflow negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-native-build-workflow",
+    ),
+    (
         "JavaScript SDK test workflow negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-test-workflow",
     ),
@@ -1849,6 +1967,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-identifier-receipt-filter-script",
     ),
     (
+        "JavaScript Torii runner coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-torii-runner-coverage",
+    ),
+    (
+        "JavaScript Connect runner coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-connect-runner-coverage",
+    ),
+    (
         "JavaScript SDK workflow inventory negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-workflow-inventory",
     ),
@@ -1863,6 +1989,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "JavaScript SDK test ordering workflow negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-test-order-workflow",
+    ),
+    (
+        "JavaScript SDK native build ordering workflow negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-native-build-order-workflow",
     ),
     (
         "JavaScript SDK dependency workflow negative control",
@@ -2405,6 +2535,7 @@ def check_workflow_runs_javascript_sdk_tests(errors):
         job_block,
     )
     install_match = workflow_command_match(job_block, JS_SDK_INSTALL_COMMAND)
+    native_build_match = workflow_command_match(job_block, JS_SDK_NATIVE_BUILD_COMMAND)
     test_match = workflow_command_match(job_block, JS_SDK_TEST_COMMAND)
     require(
         re.search(r"(?m)^\s+runs-on:\s+ubuntu-latest\s*$", job_block) is not None,
@@ -2432,6 +2563,11 @@ def check_workflow_runs_javascript_sdk_tests(errors):
         errors,
     )
     require(
+        native_build_match is not None,
+        "Kagemusha payload workflow must build the JavaScript SDK native host",
+        errors,
+    )
+    require(
         test_match is not None,
         "Kagemusha payload workflow must run the JavaScript recursive spend SDK tests",
         errors,
@@ -2446,6 +2582,18 @@ def check_workflow_runs_javascript_sdk_tests(errors):
         require(
             install_match.start() < test_match.start(),
             "Kagemusha payload workflow must install JavaScript SDK dependencies before running JavaScript tests",
+            errors,
+        )
+    if install_match is not None and native_build_match is not None:
+        require(
+            install_match.start() < native_build_match.start(),
+            "Kagemusha payload workflow must install JavaScript SDK dependencies before building the native host",
+            errors,
+        )
+    if native_build_match is not None and test_match is not None:
+        require(
+            native_build_match.start() < test_match.start(),
+            "Kagemusha payload workflow must build the JavaScript SDK native host before running JavaScript tests",
             errors,
         )
     require(
@@ -2503,8 +2651,49 @@ def check_javascript_sdk_script(errors):
         and "encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags" in script
         and "encodeIdentifierResolutionReceiptAttestation rejects padded proof backend" in script
         and "verifyIdentifierResolutionReceipt matches shared receipt vectors" in script
+        and "ToriiClient attaches canonical signing headers for app endpoints" in script
+        and "ToriiClient canonical auth uses raw Node transport for UTF-8 account headers" in script
+        and "ToriiClient canonical auth rejects UTF-8 account headers when no supported transport is available" in script
+        and "ToriiClient canonical auth rejects non-byte private key arrays" in script
+        and "subscription plan and create endpoints send normalized payloads" in script
+        and "subscription action endpoints send normalized payloads" in script
+        and "getSubscription returns null on 404" in script
+        and "buildConnectWebSocketUrl rejects token query parameters" in script
+        and "buildConnectWebSocketUrl rejects endpoint host overrides" in script
+        and "buildConnectWebSocketUrl rejects endpoint protocol mismatches" in script
+        and "openConnectWebSocket injects Sec-WebSocket-Protocol when headers are unavailable" in script
+        and "openConnectWebSocket emits telemetry when allowInsecure is used" in script
+        and "resolveAliasByIndex enforces non-negative indices before issuing requests" in script
+        and "resolveAlias attaches canonical auth when provided" in script
+        and "lookupAliasesByAccount validates options before issuing requests" in script
+        and "generateConnectSid" in script
+        and "createConnectSessionPreview" in script
+        and "connectErrorFrom returns existing ConnectError" in script
+        and "connect queue overflow maps to queueOverflow category" in script
+        and "connect retry" in script
+        and "memory journal" in script
+        and "indexeddb journal" in script
+        and "connect journal" in script
+        and "connect queue diagnostics" in script
+        and "Connect session vector fixture matches browser crypto helpers" in script
+        and "Connect browser wallet signature encoder validates algorithm labels before byte encoding" in script
+        and "createConnectAppSession" in script
+        and "bootstrapConnectPreviewSession" in script
+        and "ConnectJournalRecord" in script
+        and "fromCiphertext applies retention automatically" in script
+        and "decode accepts array-like payloads" in script
+        and "decode rejects" in script
         and "test/address.test.js" in script
         and "test/canonicalRequest.test.js" in script
+        and "test/connect.browser.test.js" in script
+        and "test/connectError.test.js" in script
+        and "test/connectJournalRecord.test.js" in script
+        and "test/connectPreviewFlow.test.js" in script
+        and "test/connectQueueDiagnostics.test.js" in script
+        and "test/connectQueueJournal.test.js" in script
+        and "test/connectRetryPolicy.test.js" in script
+        and "test/connectSession.test.js" in script
+        and "test/connectWebSocket.test.js" in script
         and "test/crypto.browser.test.js" in script
         and "test/instructionBuilders.test.js" in script
         and "test/kagemushaFfiContractParity.test.js" in script
@@ -2512,10 +2701,13 @@ def check_javascript_sdk_script(errors):
         and "test/offlineCashLifecycle.test.js" in script
         and "test/package_dist.test.js" in script
         and "test/privacyNative.test.js" in script
+        and "test/toriiCanonicalAuth.test.js" in script
         and "test/toriiClient.identifier.test.js" in script
+        and "test/toriiClient.isoAlias.test.js" in script
         and "test/toriiClient.test.js" in script
+        and "test/toriiSubscriptions.test.js" in script
         and "test/transactionBuilder.test.js" in script,
-        "Kagemusha JavaScript SDK script must run recursive spend, address exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, verifier-key exactness, identifier receipt exactness, browser-stub, privacy native, package-dist, transaction-builder, and runtime-gate meta tests",
+        "Kagemusha JavaScript SDK script must run recursive spend, address exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, Torii canonical auth/subscription/Connect/ISO alias exactness, verifier-key exactness, identifier receipt exactness, browser-stub, privacy native, package-dist, transaction-builder, and runtime-gate meta tests",
         errors,
     )
 
@@ -4329,6 +4521,7 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest",
         "org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest",
         "org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamClientTest",
+        "org.hyperledger.iroha.sdk.client.TransportSecurityClientTest",
         "org.hyperledger.iroha.sdk.client.transport.UrlConnectionTransportExecutorTest",
         "org.hyperledger.iroha.sdk.connect.ConnectCryptoTest",
         "org.hyperledger.iroha.sdk.connect.ConnectEnvelopeCodecTest",
@@ -4355,6 +4548,11 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest",
         "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest",
         "org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest",
+        "org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest",
+        "org.hyperledger.iroha.sdk.sccp.TronSccpProverTest",
+        "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest",
+        "org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest",
+        "org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest",
         "org.hyperledger.iroha.sdk.norito.NoritoHeaderTest",
         "org.hyperledger.iroha.sdk.norito.NoritoColumnarTest",
         "org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapterParityTest",
@@ -4400,6 +4598,11 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
             "org.hyperledger.iroha.android.connect.ConnectErrorTests,"
             "org.hyperledger.iroha.android.tools.PendingQueueInspectorTests,"
             "org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifierTests,"
+            "org.hyperledger.iroha.android.sccp.EvmSccpProverTests,"
+            "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,"
+            "org.hyperledger.iroha.android.sccp.SolanaSccpProverTests,"
+            "org.hyperledger.iroha.android.sccp.TonSccpProverTests,"
+            "org.hyperledger.iroha.android.sccp.TronSccpProverTests,"
             "org.hyperledger.iroha.android.address.AccountIdLiteralTests,"
             "org.hyperledger.iroha.android.address.AccountAddressTests,"
             "org.hyperledger.iroha.android.client.CanonicalRequestSignerTests,"
@@ -4423,6 +4626,20 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "Kagemusha JVM SDK script must run the focused Android Kagemusha harness mains",
         errors,
     )
+    for test_class in (
+        "org.hyperledger.iroha.android.client.NoritoRpcClientTests",
+        "org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests",
+        "org.hyperledger.iroha.android.client.SubscriptionToriiClientTests",
+        "org.hyperledger.iroha.android.client.stream.ToriiEventStreamSubscriptionTests",
+        "org.hyperledger.iroha.android.client.websocket.ToriiWebSocketClientTests",
+        "org.hyperledger.iroha.android.client.websocket.ToriiWebSocketSubscriptionTests",
+        "org.hyperledger.iroha.android.client.mock.ToriiMockServerTests",
+    ):
+        require(
+            test_class in script,
+            f"Kagemusha JVM SDK script must run Android Torii RPC/subscription harness {test_class}",
+            errors,
+        )
     require(
         ":core:test" in script
         and "--tests org.hyperledger.iroha.android.GradleHarnessTests" in script,
@@ -6213,6 +6430,1087 @@ def check_mobile_transport_inspector_attestation_coverage(texts, errors):
             "TEE_CHALLENGE",
         ),
         "Android attestation verifier tests",
+        errors,
+    )
+
+
+def check_mobile_torii_rpc_subscription_websocket_runner_coverage(texts, errors):
+    for relative, label, needles in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/NoritoRpcClient.kt",
+            "Kotlin Norito RPC client",
+            (
+                "class NoritoRpcClient",
+                "NoritoRpcRequestOptions",
+                "NoritoRpcFlowController",
+                "TransportRequest.builder()",
+                "callTransaction",
+                "TelemetryObserver",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/NoritoRpcClient.java",
+            "Android Norito RPC client",
+            (
+                "public final class NoritoRpcClient",
+                "NoritoRpcRequestOptions",
+                "NoritoRpcFlowController",
+                "TransportRequest.builder()",
+                "callTransaction",
+                "TelemetryObserver",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/TransportSecurity.kt",
+            "Kotlin Torii transport security gates",
+            (
+                "requireHttpRequestAllowed",
+                "requireWebSocketRequestAllowed",
+                "headersContainCredentials",
+                "bodyContainsSensitiveMaterial",
+                "sameAuthority",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/TransportSecurity.java",
+            "Android Torii transport security gates",
+            (
+                "requireHttpRequestAllowed",
+                "requireWebSocketRequestAllowed",
+                "headersContainCredentials",
+                "bodyContainsSensitiveMaterial",
+                "sameAuthority",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ToriiRequestBuilder.kt",
+            "Kotlin Torii request builder security integration",
+            (
+                "internal object ToriiRequestBuilder",
+                "buildSubmitRequest",
+                "buildSubmitJsonRequest",
+                "buildSubmitEntrypointRequest",
+                "buildStatusRequest",
+                "buildJsonIngressRequest",
+                "TransportSecurity.requireHttpRequestAllowed",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java",
+            "Android Torii request builder security integration",
+            (
+                "final class ToriiRequestBuilder",
+                "buildSubmitRequest",
+                "buildSubmitJsonRequest",
+                "buildSubmitEntrypointRequest",
+                "buildStatusRequest",
+                "buildJsonIngressRequest",
+                "TransportSecurity.requireHttpRequestAllowed",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/SubscriptionToriiClient.kt",
+            "Kotlin Subscription Torii client",
+            (
+                "class SubscriptionToriiClient",
+                "listSubscriptionPlans",
+                "createSubscriptionPlan",
+                "createSubscription",
+                "recordSubscriptionUsage",
+                "unsupportedServerSideSigning",
+                "TransportSecurity.requireHttpRequestAllowed",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/SubscriptionToriiClient.java",
+            "Android Subscription Torii client",
+            (
+                "public final class SubscriptionToriiClient",
+                "listSubscriptionPlans",
+                "createSubscriptionPlan",
+                "createSubscription",
+                "recordSubscriptionUsage",
+                "unsupportedServerSideSigning",
+                "TransportSecurity.requireHttpRequestAllowed",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamSubscription.kt",
+            "Kotlin Torii SSE subscription lifecycle",
+            (
+                "class ToriiEventStreamSubscription",
+                "streamGeneration",
+                "onReconnectScheduled",
+                "generation != streamGeneration.get()",
+                "delegate.onEvent",
+                "delegate.onClosed",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamSubscription.java",
+            "Android Torii SSE subscription lifecycle",
+            (
+                "public final class ToriiEventStreamSubscription",
+                "streamGeneration",
+                "onReconnectScheduled",
+                "generation != streamGeneration.get()",
+                "delegate.onEvent",
+                "delegate.onClosed",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketClient.kt",
+            "Kotlin Torii WebSocket client",
+            (
+                "class ToriiWebSocketClient",
+                "PlatformWebSocketConnector.createDefault",
+                "ToriiWebSocketSessionImpl",
+                "TransportSecurity.requireWebSocketRequestAllowed",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketClient.java",
+            "Android Torii WebSocket client",
+            (
+                "public final class ToriiWebSocketClient",
+                "PlatformWebSocketConnector.createDefault",
+                "ToriiWebSocketSessionImpl",
+                "TransportSecurity.requireWebSocketRequestAllowed",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketSubscription.kt",
+            "Kotlin Torii WebSocket subscription lifecycle",
+            (
+                "class ToriiWebSocketSubscription",
+                "sessionGeneration",
+                "onReconnectScheduled",
+                "generation != sessionGeneration.get()",
+                "delegate.onText",
+                "NullSession",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketSubscription.java",
+            "Android Torii WebSocket subscription lifecycle",
+            (
+                "public final class ToriiWebSocketSubscription",
+                "sessionGeneration",
+                "onReconnectScheduled",
+                "generation != sessionGeneration.get()",
+                "delegate.onText",
+                "NullSession",
+            ),
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServer.java",
+            "Android Torii mock server harness",
+            (
+                "class ToriiMockServer",
+                "enqueueSubmitResponse",
+                "enqueueStatusResponse",
+                "enqueueEventStream",
+                "submittedTransactions",
+                "statusRequests",
+                "eventStreamRequests",
+            ),
+        ),
+    ):
+        require_contains(texts, relative, needles, label, errors)
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/TransportSecurityClientTest.kt",
+        (
+            "noritoRpcRejectsInsecureAuthorizationHeader",
+            "noritoRpcRejectsCredentialedAbsoluteHostOverride",
+            "subscriptionClientRejectsRemovedServerSideSigningFlow",
+            "transportSecurityRejectsInsecureCanonicalAuthHeaders",
+            "eventStreamRejectsInsecureAuthorizationHeader",
+            "websocketRejectsInsecureAuthorizationHeader",
+        ),
+        "Kotlin Torii transport security tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/NoritoRpcClientTests.java",
+        (
+            "defaultHeadersAndPayloadAreApplied",
+            "requestOverridesApplyHeadersMethodAndQuery",
+            "nonSuccessStatusRaisesException",
+            "rejectsInsecureAuthorizationHeader",
+            "rejectsCredentialedAbsoluteHostOverride",
+            "observersReceiveCallbacks",
+            "flowControllerGuardsLifecycle",
+            "telemetrySignalsEmitForRpcCalls",
+            "callTransactionUsesCodecAdapter",
+        ),
+        "Android Norito RPC client tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ClientConfigNoritoRpcTests.java",
+        (
+            "configProducesNoritoRpcClientWithHeadersAndObservers",
+            "flowControllerCarriesOver",
+            "executorReuseSharesObservers",
+        ),
+        "Android ClientConfig Norito RPC tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/SubscriptionToriiClientTests.java",
+        (
+            "listPlansParsesResponse",
+            "createPlanBuildsBody",
+            "createPlanRejectsInsecureTransportForPrivateKeyBody",
+            "listSubscriptionsParsesResponse",
+            "createSubscriptionBuildsBody",
+            "getSubscriptionHandlesNotFound",
+            "subscriptionActionsAndUsagePostBodies",
+            "listParamsRejectInvalidStatus",
+            "usageRequestRejectsInvalidDelta",
+            "propagatesNon2xxResponses",
+            "configBuildsSubscriptionToriiClient",
+            "transportBuildsSubscriptionToriiClient",
+        ),
+        "Android Subscription Torii client tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamSubscriptionTests.java",
+        (
+            "reconnectsAfterClosure",
+            "reconnectsOnceWhenErrorAndClose",
+            "staleCloseDoesNotReconnect",
+            "staleEventsAreIgnored",
+            "stopsWhenClosed",
+            "observerReceivesNotifications",
+        ),
+        "Android Torii SSE subscription tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketClientTests.java",
+        (
+            "connectDeliversEvents",
+            "connectorFailuresPropagate",
+            "connectRejectsInsecureCredentialedWebSocket",
+        ),
+        "Android Torii WebSocket client tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketSubscriptionTests.java",
+        (
+            "reconnectsAfterClosure",
+            "reconnectsOnceWhenErrorAndClose",
+            "staleCloseDoesNotReconnect",
+            "staleMessagesAreIgnored",
+            "stopsWhenClosed",
+            "observerReceivesNotifications",
+        ),
+        "Android Torii WebSocket subscription tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServerTests.java",
+        (
+            "recordsSubmitRequests",
+            "servesQueuedStatusResponsesPerHash",
+            "servesEventStreams",
+        ),
+        "Android Torii mock server tests",
+        errors,
+    )
+
+
+def check_mobile_sccp_runner_coverage(texts, errors):
+    for relative, label, needles in (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt",
+            "Kotlin SCCP EVM prover",
+            (
+                "object SccpEvm",
+                "GROTH16_BN254_PROOF_BACKEND_V1",
+                "SOURCE_STATE_MAX_PROOF_BYTES",
+                "buildProofRequest",
+                "wrapProofResult",
+                "callbackRequestSnapshot",
+                "buildSubmission",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java",
+            "Android SCCP EVM prover",
+            (
+                "class EvmSccpProver",
+                "GROTH16_BN254_PROOF_BACKEND_V1",
+                "SOURCE_STATE_MAX_PROOF_BYTES",
+                "buildProofRequest",
+                "wrapProofResult",
+                "callbackRequestSnapshot",
+                "buildSubmission",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt",
+            "Kotlin SCCP TRON prover",
+            (
+                "object SccpTron",
+                "GROTH16_BN254_PROOF_BACKEND_V1",
+                "canonicalRouteCanaryEvidenceBytes",
+                "routeCanaryEvidenceHash",
+                "buildProofRequest",
+                "wrapProofResult",
+                "callbackRequestSnapshot",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TronSccpProver.java",
+            "Android SCCP TRON prover",
+            (
+                "class TronSccpProver",
+                "GROTH16_BN254_PROOF_BACKEND_V1",
+                "canonicalRouteCanaryEvidenceBytes",
+                "routeCanaryEvidenceHash",
+                "buildProofRequest",
+                "wrapProofResult",
+                "callbackRequestSnapshot",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt",
+            "Kotlin SCCP TON prover",
+            (
+                "object SccpTon",
+                "MESSAGE_BODY_BOC_V1",
+                "SOURCE_STATE_MAX_PROOF_BYTES",
+                "canonicalRouteCanaryEvidenceBytes",
+                "routeCanaryEvidenceHash",
+                "buildProofRequest",
+                "wrapProofResult",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java",
+            "Android SCCP TON prover",
+            (
+                "class TonSccpProver",
+                "MESSAGE_BODY_BOC_V1",
+                "SOURCE_STATE_MAX_PROOF_BYTES",
+                "canonicalRouteCanaryEvidenceBytes",
+                "routeCanaryEvidenceHash",
+                "buildProofRequest",
+                "wrapProofResult",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SolanaSccpProver.kt",
+            "Kotlin SCCP Solana prover",
+            (
+                "object SccpSolana",
+                "RECURSIVE_PROOF_BACKEND_V1",
+                "SOURCE_STATE_MAX_PROOF_BYTES",
+                "canonicalRouteCanaryEvidenceBytes",
+                "routeCanaryEvidenceHash",
+                "buildProofRequest",
+                "wrapProofResult",
+                "BORSH_INSTRUCTION_V1",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SolanaSccpProver.java",
+            "Android SCCP Solana prover",
+            (
+                "class SolanaSccpProver",
+                "RECURSIVE_PROOF_BACKEND_V1",
+                "SOURCE_STATE_MAX_PROOF_BYTES",
+                "canonicalRouteCanaryEvidenceBytes",
+                "routeCanaryEvidenceHash",
+                "buildProofRequest",
+                "wrapProofResult",
+                "BORSH_INSTRUCTION_V1",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashes.kt",
+            "Kotlin SCCP source proof hashes",
+            (
+                "object SccpSourceProofs",
+                "sourceAdapterVerifierVkHash",
+                "canonicalSourceVerifierMaterialBytes",
+                "destinationBindingHash",
+                "evmDestinationBindingHash",
+                "tronDestinationBindingHash",
+            ),
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SourceSccpProofs.java",
+            "Android SCCP source proof hashes",
+            (
+                "class SourceSccpProofs",
+                "sourceAdapterVerifierVkHash",
+                "canonicalSourceVerifierMaterialBytes",
+                "destinationBindingHash",
+                "evmDestinationBindingHash",
+                "tronDestinationBindingHash",
+            ),
+        ),
+    ):
+        require_contains(texts, relative, needles, label, errors)
+    for relative, label, needles in (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
+            "Kotlin SCCP EVM prover tests",
+            (
+                "proofRequestBindsPublicSignalsAndRelayContext",
+                "proverRequiresLinkedProofEngine",
+                "proverWrapsExternalProofBytes",
+                "rejectsMalformedGroth16ProofTuple",
+                "buildsContractCallSubmission",
+                "ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift",
+                "bscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift",
+            ),
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
+            "Android SCCP EVM prover tests",
+            (
+                "proofRequestBindsPublicSignalsAndRelayContext",
+                "proverRequiresLinkedProofEngine",
+                "proverWrapsExternalProofBytes",
+                "rejectsMalformedGroth16ProofTuple",
+                "buildsContractCallSubmission",
+                "bscMainnetInboundFacadeUsesMainnetRpcAndRejectsDrift",
+                "mainnetFacadesSnapshotWitnessProviderInputs",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt",
+            "Kotlin SCCP TRON prover tests",
+            (
+                "derivesTronRouteCanaryEvidenceHash",
+                "derivesGroth16PublicSignalWords",
+                "proofRequestBindsPublicSignalsAndRelayContext",
+                "proverRequiresLinkedProofEngine",
+                "rejectsMalformedGroth16ProofTuple",
+                "buildsContractCallSubmission",
+            ),
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java",
+            "Android SCCP TRON prover tests",
+            (
+                "derivesTronRouteCanaryEvidenceHash",
+                "derivesGroth16PublicSignalWords",
+                "proofRequestBindsPublicSignalsAndRelayContext",
+                "proverRequiresLinkedProofEngine",
+                "rejectsMalformedGroth16ProofTuple",
+                "buildsContractCallSubmission",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
+            "Kotlin SCCP TON prover tests",
+            (
+                "derivesTonRouteCanaryEvidenceHash",
+                "buildsTonMessageBodyBoc",
+                "derivesTonBocRootHashFromOrdinaryCells",
+                "derivesTonShardProofHashFromWitnessMaterial",
+                "buildsTonFullLightClientAuditRoleProofRequests",
+                "proofRequestBindsRelayContextAndDeployment",
+                "proofRequestRejectsNoncanonicalOrMismatchedBundleBytes",
+                "proofRequestHashMatchesCrossSdkVector",
+            ),
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
+            "Android SCCP TON prover tests",
+            (
+                "derivesTonRouteCanaryEvidenceHash",
+                "buildsTonMessageBodyBoc",
+                "derivesTonBocRootHashFromOrdinaryCells",
+                "derivesTonShardProofHashFromWitnessMaterial",
+                "buildsTonFullLightClientAuditRoleProofRequests",
+                "proofRequestBindsRelayContextAndDeployment",
+                "proofRequestRejectsNoncanonicalOrMismatchedBundleBytes",
+                "proofRequestHashMatchesCrossSdkVector",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt",
+            "Kotlin SCCP Solana prover tests",
+            (
+                "derivesSolanaRouteCanaryEvidenceHash",
+                "buildsSolanaSccpProofRequest",
+                "buildsMessageProofHashFromInclusionWitness",
+                "buildsSolanaFullLightClientAuditRoleProofRequests",
+                "bindsSourceAdapterDeploymentContextForUiProvers",
+                "buildsSolanaProgramInstructionSubmission",
+                "proverWrapsExternalProofBytes",
+            ),
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java",
+            "Android SCCP Solana prover tests",
+            (
+                "derivesSolanaRouteCanaryEvidenceHash",
+                "normalizesWitnessAndBuildsDeterministicRequest",
+                "buildsMessageProofHashFromInclusionWitness",
+                "buildsSolanaFullLightClientAuditRoleProofRequests",
+                "bindsSourceAdapterDeploymentContextForUiProvers",
+                "buildsSolanaProgramInstructionSubmission",
+                "proverWrapsExternalProofBytes",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt",
+            "Kotlin SCCP source proof hash tests",
+            (
+                "derivesSourceAdapterVerifierVkHashesForUiTooling",
+                "derivesEvmAndTronDestinationBindingsForUiTooling",
+                "derivesSourceMaterialAndDeploymentRecordHashesForUiTooling",
+                "derivesSourceProofHashesFromWitnessMaterial",
+                "derivesEthBeaconExecutionPayloadSszRootsFromWitnessMaterial",
+            ),
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SourceSccpProofsTests.java",
+            "Android SCCP source proof hash tests",
+            (
+                "derivesSourceAdapterVerifierVkHashesForUiTooling",
+                "derivesEvmAndTronDestinationBindingsForUiTooling",
+                "derivesSourceMaterialAndDeploymentRecordHashesForUiTooling",
+                "derivesEthBeaconExecutionPayloadSszRootsFromWitnessMaterial",
+                "derivesEthereumReceiptRootAndSyncCommitteeGuardsForUiTooling",
+            ),
+        ),
+    ):
+        require_contains(texts, relative, needles, label, errors)
+
+
+def check_javascript_torii_runner_coverage(texts, errors):
+    runner = read(JS_SDK_TEST_COMMAND)
+    for needle in (
+        "ToriiClient attaches canonical signing headers for app endpoints",
+        "ToriiClient canonical auth uses raw Node transport for UTF-8 account headers",
+        "ToriiClient canonical auth rejects UTF-8 account headers when no supported transport is available",
+        "ToriiClient canonical auth rejects non-byte private key arrays",
+        "subscription plan and create endpoints send normalized payloads",
+        "subscription action endpoints send normalized payloads",
+        "getSubscription returns null on 404",
+        "buildConnectWebSocketUrl rejects token query parameters",
+        "buildConnectWebSocketUrl rejects endpoint host overrides",
+        "buildConnectWebSocketUrl rejects endpoint protocol mismatches",
+        "openConnectWebSocket injects Sec-WebSocket-Protocol when headers are unavailable",
+        "openConnectWebSocket emits telemetry when allowInsecure is used",
+        "resolveAliasByIndex enforces non-negative indices before issuing requests",
+        "resolveAlias attaches canonical auth when provided",
+        "lookupAliasesByAccount validates options before issuing requests",
+        "test/connectWebSocket.test.js",
+        "test/toriiCanonicalAuth.test.js",
+        "test/toriiClient.isoAlias.test.js",
+        "test/toriiSubscriptions.test.js",
+    ):
+        require(
+            needle in runner,
+            f"Kagemusha JavaScript SDK Torii runner coverage missing {needle}",
+            errors,
+        )
+
+    for relative in ("javascript/iroha_js/src/index.js", "javascript/iroha_js/dist/index.js"):
+        require_contains(
+            texts,
+            relative,
+            (
+                "buildConnectWebSocketUrl,",
+                "openConnectWebSocket,",
+            ),
+            f"{relative} Connect WebSocket exports",
+            errors,
+        )
+
+    for relative in ("javascript/iroha_js/src/toriiClient.js", "javascript/iroha_js/dist/toriiClient.js"):
+        require_contains(
+            texts,
+            relative,
+            (
+                "buildCanonicalRequestHeaders",
+                "RAW_UTF8_HEADERS_INIT_KEY",
+                "RAW_UTF8_HEADER_SUPPORT_FLAG",
+                "headerValueRequiresRawUtf8Transport",
+                "canUseNodeRawUtf8Transport",
+                "performNodeRawUtf8Request",
+                "buildRawUtf8HttpRequestBuffer",
+                "ToriiClient._normalizeCanonicalAuth",
+                "async listSubscriptionPlans",
+                "async createSubscriptionPlan",
+                "async createSubscription(",
+                "async getSubscription",
+                "async pauseSubscription",
+                "async resumeSubscription",
+                "async cancelSubscription",
+                "async recordSubscriptionUsage",
+                "normalizeSubscriptionActionRequest",
+                "normalizeSubscriptionUsageRequest",
+                "buildConnectWebSocketDescriptor",
+                "buildConnectWebSocketUrlInternal",
+                "openConnectWebSocketInternal",
+                "attachProtocolToken",
+                "emitConnectInsecureTelemetry",
+                "async resolveAlias(",
+                "async resolveAliasByIndex",
+                "async lookupAliasesByAccount",
+                "ALIAS_CANONICAL_AUTH_OPTION_KEYS",
+                "ALIAS_BY_ACCOUNT_OPTION_KEYS",
+            ),
+            f"{relative} Torii canonical auth/subscription/Connect WebSocket/ISO alias surface",
+            errors,
+        )
+
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiCanonicalAuth.test.js",
+        (
+            "ToriiClient attaches canonical signing headers for app endpoints",
+            "ToriiClient canonical auth uses raw Node transport for UTF-8 account headers",
+            "ToriiClient canonical auth rejects UTF-8 account headers when no supported transport is available",
+            "ToriiClient canonical auth accepts byte-array private keys",
+            "ToriiClient canonical auth rejects non-byte private key arrays",
+            "markFetchSupportsRawUtf8Headers",
+            "createServer",
+            "__irohaSupportsRawUtf8Headers",
+            "expected raw request to carry the UTF-8 account header bytes",
+        ),
+        "JavaScript Torii canonical auth tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiSubscriptions.test.js",
+        (
+            "subscription plan and create endpoints send normalized payloads",
+            "subscription list endpoints build query params and normalize responses",
+            "subscription action endpoints send normalized payloads",
+            "getSubscription returns null on 404",
+            "createSubscriptionPlan",
+            "createSubscription",
+            "pauseSubscription",
+            "resumeSubscription",
+            "cancelSubscription",
+            "keepSubscription",
+            "chargeSubscriptionNow",
+            "recordSubscriptionUsage",
+            "private_key",
+            "charge_at_ms",
+            "usage_trigger_id",
+        ),
+        "JavaScript Torii subscription tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/connectWebSocket.test.js",
+        (
+            "buildConnectWebSocketUrl normalizes schemes and appends query",
+            "buildConnectWebSocketUrl rejects token query parameters",
+            "buildConnectWebSocketUrl removes unrelated query params to keep URLs referrer-safe",
+            "buildConnectWebSocketUrl rejects insecure protocols unless allowInsecure is set",
+            "buildConnectWebSocketUrl rejects endpoint host overrides",
+            "buildConnectWebSocketUrl rejects endpoint protocol mismatches",
+            "ToriiClient openConnectWebSocket delegates to provided implementation",
+            "openConnectWebSocket injects Sec-WebSocket-Protocol when headers are unavailable",
+            "ToriiClient.openConnectWebSocket inherits allowInsecure from the client",
+            "openConnectWebSocket emits telemetry when allowInsecure is used",
+            "decodeProtocolToken",
+            "Authorization: \"Bearer preview-token\"",
+            "iroha-connect\\.token\\.v1\\.",
+        ),
+        "JavaScript Connect WebSocket tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiClient.isoAlias.test.js",
+        (
+            "resolveAliasByIndex enforces non-negative indices before issuing requests",
+            "resolveAliasByIndex rejects non-numeric indices early",
+            "resolveAlias normalises IBAN input and parses alias responses",
+            "resolveAlias attaches canonical auth when provided",
+            "resolveAlias returns null for missing aliases and rejects when runtime is disabled",
+            "resolveAliasByIndex posts payloads and normalises responses",
+            "lookupAliasesByAccount posts canonical account ids with optional filters",
+            "lookupAliasesByAccount validates options before issuing requests",
+            "validation should occur before network requests",
+            "canonicalRequestSignatureMessage",
+            "X-Iroha-Account",
+        ),
+        "JavaScript ISO alias tests",
+        errors,
+    )
+
+
+def check_javascript_connect_runner_coverage(texts, errors):
+    runner = read(JS_SDK_TEST_COMMAND)
+    for needle in (
+        "generateConnectSid",
+        "createConnectSessionPreview",
+        "connectErrorFrom returns existing ConnectError",
+        "connect queue overflow maps to queueOverflow category",
+        "connect retry",
+        "memory journal",
+        "indexeddb journal",
+        "connect journal",
+        "connect queue diagnostics",
+        "Connect session vector fixture matches browser crypto helpers",
+        "Connect browser wallet signature encoder validates algorithm labels before byte encoding",
+        "createConnectAppSession",
+        "bootstrapConnectPreviewSession",
+        "ConnectJournalRecord",
+        "fromCiphertext applies retention automatically",
+        "decode accepts array-like payloads",
+        "decode rejects",
+        "test/connect.browser.test.js",
+        "test/connectError.test.js",
+        "test/connectJournalRecord.test.js",
+        "test/connectPreviewFlow.test.js",
+        "test/connectQueueDiagnostics.test.js",
+        "test/connectQueueJournal.test.js",
+        "test/connectRetryPolicy.test.js",
+        "test/connectSession.test.js",
+    ):
+        require(
+            needle in runner,
+            f"Kagemusha JavaScript SDK Connect runner coverage missing {needle}",
+            errors,
+        )
+
+    for relative in ("javascript/iroha_js/src/index.js", "javascript/iroha_js/dist/index.js"):
+        require_contains(
+            texts,
+            relative,
+            (
+                "export { ConnectRetryPolicy }",
+                "ConnectError,",
+                "connectErrorFrom,",
+                "ConnectQueueError,",
+                "generateConnectSid,",
+                "createConnectSessionPreview,",
+                "export { bootstrapConnectPreviewSession }",
+                "appendConnectQueueMetric,",
+                "defaultConnectQueueRoot,",
+                "exportConnectQueueEvidence,",
+                "export { ConnectQueueJournal }",
+                "ConnectJournalRecord,",
+                "ConnectJournalError,",
+            ),
+            f"{relative} Connect public exports",
+            errors,
+        )
+
+    require_contains(
+        texts,
+        "javascript/iroha_js/index.d.ts",
+        (
+            "export class ConnectRetryPolicy",
+            "export type ConnectErrorCategory",
+            "export class ConnectError",
+            "export class ConnectQueueError",
+            "export type ConnectDirection",
+            "export class ConnectJournalRecord",
+            "export class ConnectQueueJournal",
+            "export function connectErrorFrom",
+            "export function generateConnectSid",
+            "export function createConnectSessionPreview",
+            "export function defaultConnectQueueRoot",
+            "export function appendConnectQueueMetric",
+            "export function exportConnectQueueEvidence",
+            "export function bootstrapConnectPreviewSession",
+        ),
+        "JavaScript Connect TypeScript declarations",
+        errors,
+    )
+
+    for relative in ("javascript/iroha_js/src/connectSession.js", "javascript/iroha_js/dist/connectSession.js"):
+        require_contains(
+            texts,
+            relative,
+            (
+                "SID_PREFIX",
+                "CONNECT_URI_SCHEME",
+                "export function generateConnectSid",
+                "export function createConnectSessionPreview",
+                "buildConnectUri",
+                "normalizeBinary",
+            ),
+            f"{relative} Connect session surface",
+            errors,
+        )
+
+    for relative in ("javascript/iroha_js/src/connectError.js", "javascript/iroha_js/dist/connectError.js"):
+        require_contains(
+            texts,
+            relative,
+            (
+                "export class ConnectError",
+                "export const ConnectErrorCategory",
+                "export class ConnectQueueError",
+                "httpErrorDetails",
+                "timeoutErrorDetails",
+                "transportErrorDetails",
+                "codecErrorDetails",
+                "export function connectErrorFrom",
+            ),
+            f"{relative} Connect error surface",
+            errors,
+        )
+
+    for relative in (
+        "javascript/iroha_js/src/connectRetryPolicy.js",
+        "javascript/iroha_js/dist/connectRetryPolicy.js",
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "GAMMA",
+                "deterministicSample",
+                "normalizeSeedBytes",
+                "export class ConnectRetryPolicy",
+                "capMillis",
+                "delayMillis",
+            ),
+            f"{relative} Connect retry policy surface",
+            errors,
+        )
+
+    for relative in (
+        "javascript/iroha_js/src/connectJournalRecord.js",
+        "javascript/iroha_js/dist/connectJournalRecord.js",
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "NORITO_HEADER_LEN",
+                "NORITO_MAGIC",
+                'SCHEMA_NAME = "ConnectJournalRecordV1"',
+                "export class ConnectJournalRecord",
+                "static fromCiphertext",
+                "static decode",
+            ),
+            f"{relative} Connect journal record surface",
+            errors,
+        )
+
+    for relative in (
+        "javascript/iroha_js/src/connectQueueJournal.js",
+        "javascript/iroha_js/dist/connectQueueJournal.js",
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "DEFAULT_MAX_RECORDS",
+                "export class ConnectQueueJournal",
+                "async append",
+                "async records",
+                "async popOldest",
+                "normalizeSessionId",
+            ),
+            f"{relative} Connect queue journal surface",
+            errors,
+        )
+
+    for relative in (
+        "javascript/iroha_js/src/connectQueueDiagnostics.js",
+        "javascript/iroha_js/dist/connectQueueDiagnostics.js",
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "CONNECT_QUEUE_ROOT_ENV",
+                "export function defaultConnectQueueRoot",
+                "export function deriveConnectSessionDirectory",
+                "export async function readConnectQueueSnapshot",
+                "export async function appendConnectQueueMetric",
+                "export async function exportConnectQueueEvidence",
+            ),
+            f"{relative} Connect queue diagnostics surface",
+            errors,
+        )
+
+    for relative in (
+        "javascript/iroha_js/src/connectPreviewFlow.js",
+        "javascript/iroha_js/dist/connectPreviewFlow.js",
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "export async function bootstrapConnectPreviewSession",
+                "createConnectSessionPreview",
+                "toriiClient.createConnectSession",
+                "token_management",
+            ),
+            f"{relative} Connect preview flow surface",
+            errors,
+        )
+
+    for relative in ("javascript/iroha_js/src/connect.browser.js", "javascript/iroha_js/dist/connect.browser.js"):
+        require_contains(
+            texts,
+            relative,
+            (
+                "export function createConnectSessionPreview",
+                "export async function registerConnectSession",
+                "export async function deleteConnectSession",
+                "export function resolveConnectLaunchUri",
+                "export function rewriteConnectUriProtocol",
+                "export function openConnectWebSocket",
+                "export function createConnectAppSession",
+            ),
+            f"{relative} Connect browser surface",
+            errors,
+        )
+
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/connectSession.test.js",
+        (
+            "generateConnectSid derives deterministic sid",
+            "createConnectSessionPreview builds URIs and reuses supplied keypair",
+            "createConnectSessionPreview generates keypair when omitted",
+            "generateConnectSid accepts base64url inputs",
+            "generateConnectSid rejects invalid base64 inputs",
+            "generateConnectSid rejects invalid byte arrays",
+        ),
+        "JavaScript Connect session tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/connectError.test.js",
+        (
+            "connectErrorFrom returns existing ConnectError",
+            "connect queue overflow maps to queueOverflow category",
+            "connect queue expiration maps to timeout category",
+            "http status errors derive authorization category",
+            "network socket failures map to transport category",
+            "tls failures map to authorization category",
+            "timeout detection handles timeouts codes and names",
+            "syntax errors surface codec category",
+            "http timeout status maps to timeout category",
+            "http rate limit status maps to retryable transport category",
+            "http 4xx client errors no longer map to authorization by default",
+        ),
+        "JavaScript Connect error tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/connectRetryPolicy.test.js",
+        (
+            "connect retry cap saturates",
+            "connect retry deterministic series for zero seed",
+            "connect retry deterministic series for sequential seed",
+            "connect retry delay bounded by cap",
+            "connect retry accepts array-like seeds",
+            "connect retry rejects non-byte seeds",
+        ),
+        "JavaScript Connect retry policy tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/connectQueueJournal.test.js",
+        (
+            "memory journal round-trip",
+            "memory journal pop oldest removes entries",
+            "memory journal enforces limits",
+            "indexeddb journal persists entries",
+            "connect journal rejects invalid session id strings",
+            "connect journal rejects empty binary session ids",
+            "connect journal rejects non-byte session ids",
+            "connect journal accepts array-like session ids",
+            "connect journal rejects fractional retention",
+            "indexeddb journal drops corrupted entries and keeps valid records",
+        ),
+        "JavaScript Connect queue journal tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/connectQueueDiagnostics.test.js",
+        (
+            "connect queue diagnostics snapshot + evidence",
+            "connect queue root resolves config before env and gates env usage",
+            "connect queue diagnostics encodes non-base64 session ids as utf8",
+            "connect queue diagnostics rejects empty binary session ids",
+            "connect queue diagnostics rejects non-byte session ids",
+            "connect queue diagnostics accepts array-like session ids",
+        ),
+        "JavaScript Connect queue diagnostics tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/connect.browser.test.js",
+        (
+            "Connect session vector fixture matches browser crypto helpers",
+            "Connect browser wallet signature encoder validates algorithm labels before byte encoding",
+            "createConnectSessionPreview is deterministic with fixed nonce and keypair",
+            "buildConnectWebSocketUrl switches schemes for secure and insecure Torii urls",
+            "registerConnectSession posts sid and node directly to Torii",
+            "deleteConnectSession tolerates missing sessions and uses DELETE",
+            "resolveConnectLaunchUri prefers canonical session deeplinks",
+            "rewriteConnectUriProtocol swaps the scheme without changing the session payload",
+            "resolveConnectLaunchUriForProtocol rewrites the selected launch URI",
+            "openConnectWebSocket sends the connect token as the first subprotocol",
+            "createConnectAppSession handles approval and sign success",
+            "createConnectAppSession rejects unsupported wallet signature algorithm tags",
+            "createConnectAppSession surfaces wallet rejection",
+            "createConnectAppSession surfaces wallet sign errors",
+            "createConnectAppSession surfaces encrypted close frames",
+        ),
+        "JavaScript Connect browser tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/connectPreviewFlow.test.js",
+        (
+            "bootstrapConnectPreviewSession registers by default",
+            "bootstrapConnectPreviewSession honours overrides and can skip registration",
+        ),
+        "JavaScript Connect preview flow tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/connectJournalRecord.test.js",
+        (
+            "ConnectJournalRecord encode/decode roundtrip",
+            "ConnectJournalRecord header matches Norito v1 defaults",
+            "fromCiphertext applies retention automatically",
+            "ConnectJournalRecord accepts array-like ciphertext and payload hash",
+            "ConnectJournalRecord rejects non-byte array payloads",
+            "decode accepts array-like payloads",
+            "ConnectJournalRecord rejects non-integer inputs",
+            "ConnectJournalRecord rejects uint64 overflow sequences",
+            "decode rejects tampered payloads",
+            "decode accepts header padding",
+            "decode rejects schema mismatch",
+        ),
+        "JavaScript Connect journal record tests",
         errors,
     )
 
@@ -12173,6 +13471,10 @@ def run_checks(texts):
     check_mobile_account_address_canonical_coverage(texts, errors)
     check_mobile_connect_runner_coverage(texts, errors)
     check_mobile_transport_inspector_attestation_coverage(texts, errors)
+    check_mobile_torii_rpc_subscription_websocket_runner_coverage(texts, errors)
+    check_mobile_sccp_runner_coverage(texts, errors)
+    check_javascript_torii_runner_coverage(texts, errors)
+    check_javascript_connect_runner_coverage(texts, errors)
     check_javascript(texts, errors)
     check_python(texts, errors)
     check_swift(texts, errors)
@@ -14596,6 +15898,204 @@ if mode == "--negative-control-mobile-transport-inspector-attestation-coverage":
         "negative control failed: mobile transport/inspector/attestation coverage drift was not detected"
     )
 
+if mode == "--negative-control-mobile-sccp-runner-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
+            "Kotlin SCCP EVM prover tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
+            "Android SCCP EVM prover tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt",
+            "Kotlin SCCP TRON prover tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java",
+            "Android SCCP TRON prover tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
+            "Kotlin SCCP TON prover tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
+            "Android SCCP TON prover tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt",
+            "Kotlin SCCP Solana prover tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java",
+            "Android SCCP Solana prover tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt",
+            "Kotlin SCCP source proof hash tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SourceSccpProofsTests.java",
+            "Android SCCP source proof hash tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original
+        for old, new in (
+            (
+                "proofRequestBindsPublicSignalsAndRelayContext",
+                "proofRequestSkipsRelayContextBinding",
+            ),
+            (
+                "derivesTronRouteCanaryEvidenceHash",
+                "tronRouteCanaryEvidenceHashDrifts",
+            ),
+            (
+                "derivesTonRouteCanaryEvidenceHash",
+                "tonRouteCanaryEvidenceHashDrifts",
+            ),
+            (
+                "derivesSolanaRouteCanaryEvidenceHash",
+                "solanaRouteCanaryEvidenceHashDrifts",
+            ),
+            (
+                "derivesSourceAdapterVerifierVkHashesForUiTooling",
+                "sourceAdapterVerifierVkHashesDriftForUiTooling",
+            ),
+        ):
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile SCCP runner coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile SCCP runner coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile SCCP runner coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile SCCP runner coverage drift was not detected")
+
+if mode == "--negative-control-mobile-torii-rpc-subscription-websocket-runner-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/TransportSecurityClientTest.kt",
+            "Kotlin Torii transport security tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/NoritoRpcClientTests.java",
+            "Android Norito RPC client tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ClientConfigNoritoRpcTests.java",
+            "Android ClientConfig Norito RPC tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/SubscriptionToriiClientTests.java",
+            "Android Subscription Torii client tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamSubscriptionTests.java",
+            "Android Torii SSE subscription tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketClientTests.java",
+            "Android Torii WebSocket client tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketSubscriptionTests.java",
+            "Android Torii WebSocket subscription tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServerTests.java",
+            "Android Torii mock server tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original
+        for old, new in (
+            (
+                "noritoRpcRejectsInsecureAuthorizationHeader",
+                "noritoRpcAllowsInsecureAuthorizationHeader",
+            ),
+            (
+                "defaultHeadersAndPayloadAreApplied",
+                "defaultHeadersAndPayloadAreSkipped",
+            ),
+            (
+                "configProducesNoritoRpcClientWithHeadersAndObservers",
+                "configProducesNoritoRpcClientWithoutObservers",
+            ),
+            (
+                "createPlanRejectsInsecureTransportForPrivateKeyBody",
+                "createPlanAllowsInsecureTransportForPrivateKeyBody",
+            ),
+            (
+                "staleEventsAreIgnored",
+                "staleEventsAreDelivered",
+            ),
+            (
+                "connectRejectsInsecureCredentialedWebSocket",
+                "connectAllowsInsecureCredentialedWebSocket",
+            ),
+            (
+                "staleMessagesAreIgnored",
+                "staleMessagesAreDelivered",
+            ),
+            (
+                "recordsSubmitRequests",
+                "dropsSubmitRequests",
+            ),
+        ):
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile Torii RPC/subscription/WebSocket coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile Torii RPC/subscription/WebSocket coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile Torii RPC/subscription/WebSocket coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: mobile Torii RPC/subscription/WebSocket coverage drift was not detected"
+    )
+
 if mode == "--negative-control-jvm-sdk-android-harness-script":
     target = JVM_SDK_TEST_COMMAND
     original = read(target)
@@ -15833,6 +17333,25 @@ if mode == "--negative-control-js-sdk-install-workflow":
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK install workflow drift was not detected")
 
+if mode == "--negative-control-js-sdk-native-build-workflow":
+    target = WORKFLOW_PATH
+    original = read(target)
+    mutated = original.replace(
+        f"        run: {JS_SDK_NATIVE_BUILD_COMMAND}",
+        "        run: npm run build:dist --prefix javascript/iroha_js",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate JavaScript SDK native build workflow command")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JavaScript SDK native build workflow drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript SDK native build workflow drift was not detected")
+
 if mode == "--negative-control-js-sdk-test-workflow":
     target = WORKFLOW_PATH
     original = read(target)
@@ -15993,6 +17512,144 @@ if mode == "--negative-control-js-sdk-identifier-receipt-filter-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK identifier receipt filter drift was not detected")
 
+if mode == "--negative-control-js-torii-runner-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/test/toriiCanonicalAuth.test.js",
+            "ToriiClient attaches canonical signing headers for app endpoints",
+            "ToriiClient skips canonical signing headers for app endpoints",
+            "JavaScript Torii canonical auth tests",
+        ),
+        (
+            "javascript/iroha_js/test/toriiSubscriptions.test.js",
+            "subscription action endpoints send normalized payloads",
+            "subscription action endpoints skip normalized payloads",
+            "JavaScript Torii subscription tests",
+        ),
+        (
+            "javascript/iroha_js/test/connectWebSocket.test.js",
+            "buildConnectWebSocketUrl rejects token query parameters",
+            "buildConnectWebSocketUrl allows token query parameters",
+            "JavaScript Connect WebSocket tests",
+        ),
+        (
+            "javascript/iroha_js/test/toriiClient.isoAlias.test.js",
+            "resolveAliasByIndex enforces non-negative indices before issuing requests",
+            "resolveAliasByIndex allows negative indices before issuing requests",
+            "JavaScript ISO alias tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, old, new, label in targets:
+        original = read(target)
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript Torii runner coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JavaScript Torii runner coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JavaScript Torii runner coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript Torii runner coverage drift was not detected")
+
+if mode == "--negative-control-js-connect-runner-coverage":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/test/connectSession.test.js",
+            "generateConnectSid derives deterministic sid",
+            "generateConnectSid derives random sid",
+            "JavaScript Connect session tests",
+        ),
+        (
+            "javascript/iroha_js/test/connectError.test.js",
+            "connect queue overflow maps to queueOverflow category",
+            "connect queue overflow maps to success category",
+            "JavaScript Connect error tests",
+        ),
+        (
+            "javascript/iroha_js/test/connectRetryPolicy.test.js",
+            "connect retry deterministic series for zero seed",
+            "connect retry random series for zero seed",
+            "JavaScript Connect retry policy tests",
+        ),
+        (
+            "javascript/iroha_js/test/connectQueueJournal.test.js",
+            "memory journal enforces limits",
+            "memory journal ignores limits",
+            "JavaScript Connect queue journal tests",
+        ),
+        (
+            "javascript/iroha_js/test/connectQueueDiagnostics.test.js",
+            "connect queue diagnostics snapshot + evidence",
+            "connect queue diagnostics drops evidence",
+            "JavaScript Connect queue diagnostics tests",
+        ),
+        (
+            "javascript/iroha_js/test/connect.browser.test.js",
+            "createConnectAppSession handles approval and sign success",
+            "createConnectAppSession skips approval and sign success",
+            "JavaScript Connect browser tests",
+        ),
+        (
+            "javascript/iroha_js/test/connectPreviewFlow.test.js",
+            "bootstrapConnectPreviewSession registers by default",
+            "bootstrapConnectPreviewSession skips default registration",
+            "JavaScript Connect preview flow tests",
+        ),
+        (
+            "javascript/iroha_js/test/connectJournalRecord.test.js",
+            "ConnectJournalRecord header matches Norito v1 defaults",
+            "ConnectJournalRecord header ignores Norito v1 defaults",
+            "JavaScript Connect journal record tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, old, new, label in targets:
+        original = read(target)
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript Connect runner coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JavaScript Connect runner coverage drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JavaScript Connect runner coverage drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript Connect runner coverage drift was not detected")
+
 if mode == "--negative-control-js-sdk-workflow-inventory":
     target = WORKFLOW_PATH
     original = read(target)
@@ -16090,6 +17747,31 @@ if mode == "--negative-control-js-sdk-test-order-workflow":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: JavaScript SDK test ordering drift was not detected")
+
+if mode == "--negative-control-js-sdk-native-build-order-workflow":
+    target = WORKFLOW_PATH
+    original = read(target)
+    native_build_block = (
+        "      - name: Build JavaScript SDK native host\n"
+        f"        run: {JS_SDK_NATIVE_BUILD_COMMAND}\n"
+    )
+    test_line = f"        run: {JS_SDK_TEST_COMMAND}"
+    mutated = original.replace(native_build_block, "", 1)
+    mutated = mutated.replace(
+        f"{test_line}\n",
+        f"{test_line}\n{native_build_block}",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to move JavaScript SDK native build after tests")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected JavaScript SDK native build ordering drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript SDK native build ordering drift was not detected")
 
 if mode == "--negative-control-js-sdk-needs-workflow":
     target = WORKFLOW_PATH

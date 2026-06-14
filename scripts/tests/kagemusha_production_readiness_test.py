@@ -16963,7 +16963,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     stdout_fds.append(stdout.fileno())
                     stdout.write(b"compact child output\n")
 
-                def wait(self) -> int:
+                def wait(self, timeout: float | None = None) -> int:
                     return 23
 
             with mock.patch.object(
@@ -16995,6 +16995,64 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 )
             ],
         )
+
+    def test_compact_key_staged_runner_writes_fsynced_heartbeats_while_waiting(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log_path = root / "compact-keygen.log"
+            wait_timeouts: list[float | None] = []
+            fsync_fds: list[int] = []
+
+            class FakePopen:
+                def __init__(
+                    self,
+                    command: list[str],
+                    cwd: Path,
+                    stdout: object,
+                    stderr: object,
+                ) -> None:
+                    self.command = command
+                    self.stdout = stdout
+                    stdout.write(b"compact child start\n")
+
+                def wait(self, timeout: float | None = None) -> int:
+                    wait_timeouts.append(timeout)
+                    if len(wait_timeouts) == 1:
+                        raise compact_key_staged_runner.subprocess.TimeoutExpired(
+                            self.command,
+                            timeout,
+                        )
+                    self.stdout.write(b"compact child done\n")
+                    return 0
+
+            with mock.patch.object(
+                compact_key_staged_runner.subprocess,
+                "Popen",
+                FakePopen,
+            ), mock.patch.object(
+                compact_key_staged_runner.os,
+                "fsync",
+                side_effect=lambda fd: fsync_fds.append(fd),
+            ):
+                status = compact_key_staged_runner._run_command_to_log(
+                    ["iroha", "compact"],
+                    root,
+                    log_path,
+                    heartbeat_interval_seconds=0.001,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(wait_timeouts, [0.001, 0.001])
+        self.assertIn("compact child start\n", log_text)
+        self.assertIn(
+            "[kagemusha-staged-runner] compact-keygen heartbeat elapsed_seconds=",
+            log_text,
+        )
+        self.assertIn("compact child done\n", log_text)
+        self.assertGreaterEqual(len(fsync_fds), 2)
 
     def test_compact_key_staged_runner_removes_temp_log_on_spawn_failure(
         self,
@@ -20234,7 +20292,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     stdout_fds.append(stdout.fileno())
                     stdout.write(b"lineage child output\n")
 
-                def wait(self) -> int:
+                def wait(self, timeout: float | None = None) -> int:
                     return 31
 
             with mock.patch.object(
@@ -20266,6 +20324,64 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 )
             ],
         )
+
+    def test_lineage_proof_staged_runner_writes_fsynced_heartbeats_while_waiting(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log_path = root / "lineage-proof.log"
+            wait_timeouts: list[float | None] = []
+            fsync_fds: list[int] = []
+
+            class FakePopen:
+                def __init__(
+                    self,
+                    command: list[str],
+                    cwd: Path,
+                    stdout: object,
+                    stderr: object,
+                ) -> None:
+                    self.command = command
+                    self.stdout = stdout
+                    stdout.write(b"lineage child start\n")
+
+                def wait(self, timeout: float | None = None) -> int:
+                    wait_timeouts.append(timeout)
+                    if len(wait_timeouts) == 1:
+                        raise lineage_staged_runner.subprocess.TimeoutExpired(
+                            self.command,
+                            timeout,
+                        )
+                    self.stdout.write(b"lineage child done\n")
+                    return 0
+
+            with mock.patch.object(
+                lineage_staged_runner.subprocess,
+                "Popen",
+                FakePopen,
+            ), mock.patch.object(
+                lineage_staged_runner.os,
+                "fsync",
+                side_effect=lambda fd: fsync_fds.append(fd),
+            ):
+                status = lineage_staged_runner._run_command_to_log(
+                    ["iroha", "lineage"],
+                    root,
+                    log_path,
+                    heartbeat_interval_seconds=0.001,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(wait_timeouts, [0.001, 0.001])
+        self.assertIn("lineage child start\n", log_text)
+        self.assertIn(
+            "[kagemusha-staged-runner] lineage-proof heartbeat elapsed_seconds=",
+            log_text,
+        )
+        self.assertIn("lineage child done\n", log_text)
+        self.assertGreaterEqual(len(fsync_fds), 2)
 
     def test_lineage_proof_staged_runner_removes_temp_log_on_spawn_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

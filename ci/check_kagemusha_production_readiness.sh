@@ -2806,6 +2806,7 @@ TEXT_REQUIREMENTS = {
         "lineage-proof-execution.json",
         "LINEAGE_KEY_ARTIFACTS_BY_PROFILE",
         "MAX_EXECUTION_REPORT_BYTES",
+        "STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0",
         "def _secret_path_error",
         'if device_lab._contains_control_character(path_text):\n        return f"{label} must not contain control characters"',
         'if "\\\\" in path_text:\n        return f"{label} must not contain backslashes"',
@@ -2870,6 +2871,9 @@ TEXT_REQUIREMENTS = {
         "subprocess.Popen(",
         "stdout=log_handle",
         "stderr=subprocess.STDOUT",
+        "process.wait(timeout=heartbeat_interval_seconds)",
+        "except subprocess.TimeoutExpired:",
+        "[kagemusha-staged-runner] lineage-proof heartbeat ",
         "os.fchmod(log_handle.fileno(), 0o600)",
         "os.fsync(log_handle.fileno())",
         "shlex.split(DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND)",
@@ -2894,6 +2898,7 @@ TEXT_REQUIREMENTS = {
         "recursive-compact-key-execution.json",
         "MAX_EXECUTION_REPORT_BYTES",
         "MAX_RUN_REPORT_BYTES",
+        "STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0",
         "CONTROL_EXIT_MARKER_REDACTION",
         "SECRET_EXIT_MARKER_REDACTION",
         "def _secret_path_error",
@@ -2962,6 +2967,9 @@ TEXT_REQUIREMENTS = {
         "subprocess.Popen(",
         "stdout=log_handle",
         "stderr=subprocess.STDOUT",
+        "process.wait(timeout=heartbeat_interval_seconds)",
+        "except subprocess.TimeoutExpired:",
+        "[kagemusha-staged-runner] compact-keygen heartbeat ",
         "os.fchmod(log_handle.fileno(), 0o600)",
         "os.fsync(log_handle.fileno())",
         "shlex.split(DEFAULT_COMPACT_KEY_COMMAND)",
@@ -5612,6 +5620,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-child-log-file",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-heartbeat",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-heartbeat",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-execution-log-sha256",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-execution-log-sha256",
@@ -12649,8 +12659,8 @@ if mode == "--negative-control-lineage-proof-staged-runner-supervisor-output-pip
         "Reserved-lineage proof staged runner supervisor output pipe",
         lambda: override_text(
             "scripts/kagemusha_run_lineage_proof_staged.py",
-            "exit_code = process.wait()",
-            'sys.stdout.buffer.write(b"")\n        exit_code = process.wait()',
+            "                break\n            except subprocess.TimeoutExpired:",
+            "                sys.stdout.buffer.write(b\"\")\n                break\n            except subprocess.TimeoutExpired:",
         ),
     )
     raise SystemExit(0)
@@ -12660,8 +12670,44 @@ if mode == "--negative-control-compact-key-staged-runner-supervisor-output-pipe"
         "ABI-7 recursive compact key staged runner supervisor output pipe",
         lambda: override_text(
             "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
-            "exit_code = process.wait()",
-            'sys.stdout.buffer.write(b"")\n        exit_code = process.wait()',
+            "                break\n            except subprocess.TimeoutExpired:",
+            "                sys.stdout.buffer.write(b\"\")\n                break\n            except subprocess.TimeoutExpired:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-staged-runner-heartbeat":
+    run_negative_control(
+        "Reserved-lineage proof staged runner heartbeat observability",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0",
+                "STAGED_COMMAND_HEARTBEAT_SECONDS = 0.0",
+            ),
+            override_text(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "[kagemusha-staged-runner] lineage-proof heartbeat ",
+                "[kagemusha-staged-runner] lineage-proof quiet ",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-heartbeat":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner heartbeat observability",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0",
+                "STAGED_COMMAND_HEARTBEAT_SECONDS = 0.0",
+            ),
+            override_text(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "[kagemusha-staged-runner] compact-keygen heartbeat ",
+                "[kagemusha-staged-runner] compact-keygen quiet ",
+            ),
         ),
     )
     raise SystemExit(0)

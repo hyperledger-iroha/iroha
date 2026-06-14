@@ -1,6 +1,150 @@
 # Status
 
-Last updated: 2026-06-13
+Last updated: 2026-06-14
+
+## 2026-06-14 JavaScript Connect Runner Coverage
+
+- Expanded the focused Node 20 JavaScript SDK runner to include Connect
+  session preview/SID, error mapping, retry backoff, queue journal,
+  diagnostics, browser app-session, preview bootstrap, and Norito journal
+  record suites.
+- Added the Connect source, dist, and test files to the SDK parity inventory
+  and workflow path filters, plus a new
+  `--negative-control-js-connect-runner-coverage` mode that mutates
+  representative test names across all covered Connect suites.
+- Extended the JavaScript parity meta-test and roadmap so Connect lifecycle,
+  queue, browser, and journal-record coverage cannot be dropped silently while
+  the C# SDK remains a Windows-machine TODO.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-connect-runner-coverage`
+  - `cd javascript/iroha_js && /Users/mtakemiya/.npm/_npx/ebaba8b9e55fd0a9/node_modules/node/bin/node --test test/connectSession.test.js test/connectError.test.js test/connectRetryPolicy.test.js test/connectQueueJournal.test.js test/connectQueueDiagnostics.test.js test/connect.browser.test.js test/connectPreviewFlow.test.js test/connectJournalRecord.test.js`
+  - `node --test --test-name-pattern 'recursive Kagemusha SDK parity negative controls fail when drift is undetected' javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh` (1261 tests: 122 pass, 1139 skipped, 0 fail)
+
+## 2026-06-14 Kagemusha Staged Evidence Runner Heartbeats
+
+- Built the optimized release `iroha` CLI for production evidence generation
+  with `cargo build --release -p iroha_cli --bin iroha`; the build completed
+  successfully after existing `iroha_core` dead-code warnings.
+- Started a fresh release-mode ABI-7 recursive compact-key staged run under
+  `target/kagemusha-recursive-compact-keygen-staged-live-20260613-release`.
+  The live run is still computing the initial verifier key and has not yet
+  produced a zero exit marker or final key artifacts, so compact-key evidence
+  cannot be finalized yet.
+- Added periodic fsynced heartbeat lines to the lineage-proof and compact-key
+  staged command helpers so future long-running production evidence jobs remain
+  observable while keeping child stdout/stderr directly bound to the staged log
+  file.
+- Extended the production-readiness negative-control inventory, GitHub workflow,
+  and JavaScript parity meta-test so removing the staged-runner heartbeat
+  interval or heartbeat log labels is caught, and repaired the existing
+  supervisor-output-pipe negative controls for the new wait loop.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `python3 -m py_compile scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/kagemusha_run_lineage_proof_staged.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_writes_child_output_directly_to_log_file scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_writes_fsynced_heartbeats_while_waiting scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_writes_child_output_directly_to_log_file scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_writes_fsynced_heartbeats_while_waiting`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-heartbeat`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-heartbeat`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha staged runner negative controls pin heartbeat observability"`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/kagemusha_run_lineage_proof_staged.py scripts/tests/kagemusha_production_readiness_test.py docs/source/offline_kagemusha.md roadmap.md status.md`
+  - `rg -n '^(<{7}|={7}|>{7})' .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/kagemusha_run_lineage_proof_staged.py scripts/tests/kagemusha_production_readiness_test.py docs/source/offline_kagemusha.md roadmap.md status.md` (no matches)
+
+## 2026-06-14 JavaScript Torii Runner Coverage
+
+- Rebuilt the JavaScript native host and refreshed the tracked checksum
+  manifest so the focused Node 20 SDK runner validates the local
+  `iroha_js_host.node` artifact instead of failing on stale metadata.
+- Updated the GitHub JavaScript SDK job to build that native host after
+  dependency installation and before the focused runner, with parity
+  negative controls for deleting or misordering the build step.
+- Wired the focused JavaScript SDK runner to execute Torii canonical auth,
+  subscription, Connect WebSocket, and ISO alias suites alongside the existing
+  Kagemusha recursive-spend, canonical request, event-filter, verifier-key,
+  identifier receipt, Nexus, privacy native, package, and transaction-builder
+  coverage.
+- Extended the SDK parity inventory, workflow path filters, CI
+  negative-control list, and JavaScript parity meta-test so raw UTF-8 canonical
+  auth headers, subscription payload normalization, Connect WebSocket token and
+  origin guards, insecure-transport telemetry, and alias validation/auth
+  coverage cannot drift silently.
+- Updated the roadmap JavaScript SDK runner section to include the new Torii
+  canonical auth/subscription/Connect WebSocket/ISO alias coverage and native
+  host build requirement.
+- Validation passed:
+  - `npm run build:native --prefix javascript/iroha_js`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-torii-runner-coverage`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-native-build-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-native-build-order-workflow`
+  - `cd javascript/iroha_js && /Users/mtakemiya/.npm/_npx/ebaba8b9e55fd0a9/node_modules/node/bin/node --test test/toriiCanonicalAuth.test.js test/toriiSubscriptions.test.js test/connectWebSocket.test.js test/toriiClient.isoAlias.test.js`
+  - `node --test --test-name-pattern 'recursive Kagemusha SDK parity negative controls fail when drift is undetected' javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+
+## 2026-06-14 Mobile Torii RPC, Subscription, and WebSocket Runner Coverage
+
+- Wired the focused JVM SDK runner to execute the Kotlin/JVM
+  `TransportSecurityClientTest` and Android Java Norito RPC, ClientConfig RPC,
+  Subscription Torii, SSE subscription, WebSocket client/subscription, and
+  Torii mock-server harness suites.
+- Extended the SDK parity inventory, workflow path filters, CI
+  negative-control list, and JavaScript parity meta-test so credentialed HTTP
+  and WebSocket transport rejection, local-signed subscription policy, request
+  observer and flow-controller wiring, SSE/WebSocket reconnect behavior, stale
+  event/message suppression, and localhost Torii mock-server request recording
+  cannot drift silently.
+- Updated the roadmap focused JVM runner section to include Torii
+  RPC/subscription/WebSocket and mock-server coverage.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-torii-rpc-subscription-websocket-runner-coverage`
+  - `node --test --test-name-pattern 'recursive Kagemusha SDK parity negative controls fail when drift is undetected' javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.client.TransportSecurityClientTest --console=plain`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.NoritoRpcClientTests,org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests,org.hyperledger.iroha.android.client.SubscriptionToriiClientTests,org.hyperledger.iroha.android.client.stream.ToriiEventStreamSubscriptionTests,org.hyperledger.iroha.android.client.websocket.ToriiWebSocketClientTests,org.hyperledger.iroha.android.client.websocket.ToriiWebSocketSubscriptionTests,org.hyperledger.iroha.android.client.mock.ToriiMockServerTests ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+
+## 2026-06-14 Mobile SCCP Runner Coverage
+
+- Wired the focused JVM SDK runner to execute Kotlin/JVM SCCP EVM-family,
+  TRON, TON, Solana, and source proof-hash tests.
+- Extended the Android Java harness lane to execute the matching SCCP
+  main-method suites through `GradleHarnessTests`.
+- Extended the SDK parity inventory, workflow path filters, CI
+  negative-control list, and JavaScript parity meta-test so SCCP mobile
+  runner coverage cannot drift silently across deterministic proof request
+  hashing, proof result wrapping, route-canary hashes, source verifier
+  material hashes, destination-binding hashes, callback request snapshots,
+  malformed Groth16 rejection, noncanonical TON bundle rejection, Solana
+  deployment binding, and EVM/BSC inbound drift checks.
+- Updated the roadmap JVM runner section to include mobile SCCP coverage.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-sccp-runner-coverage`
+  - `node --test --test-name-pattern 'recursive Kagemusha SDK parity negative controls fail when drift is undetected' javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --tests org.hyperledger.iroha.sdk.sccp.TronSccpProverTest --tests org.hyperledger.iroha.sdk.sccp.TonSccpProverTest --tests org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest --tests org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest --console=plain`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests,org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,org.hyperledger.iroha.android.sccp.SolanaSccpProverTests,org.hyperledger.iroha.android.sccp.TonSccpProverTests,org.hyperledger.iroha.android.sccp.TronSccpProverTests ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
 
 ## 2026-06-13 Kagemusha Android JNI and Pixel 6 Clean-APK Evidence
 

@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-13
+Last updated: 2026-06-14
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -312,6 +312,18 @@ and completed history lives in [`status.md`](./status.md).
   attestation verifier coverage must keep modern envelope decoding, queued
   transaction hash reporting, StrongBox/TEE policy, challenge matching, and
   trust-anchor requirements pinned in the same gate.
+  Kotlin/JVM and Android Java Torii RPC/subscription/WebSocket coverage must
+  keep credentialed transport rejection, local-signed subscription request
+  policy, observer/flow-controller wiring, SSE/WebSocket reconnect and stale
+  event suppression, and the localhost Torii mock-server harness pinned in the
+  focused JVM gate and parity inventory.
+  Kotlin/JVM and Android Java SCCP runner coverage must stay pinned in the
+  same focused JVM gate for EVM-family, TRON, TON, Solana, and shared source
+  proof-hash helpers. The runner and parity inventory must keep deterministic
+  proof-request/result wrapping, callback request snapshots, route-canary
+  hashes, source verifier material hashes, destination-binding hashes,
+  malformed Groth16 proof rejection, noncanonical TON bundle rejection, Solana
+  deployment binding, and EVM/BSC inbound drift checks visible to SDK CI.
   Kotlin/JVM and Android Java recursive-spend request codecs must keep
   init/append/verify/redeem archive schemas, compact request payload layouts,
   raw embedded archive payloads, Norito `Option` child-length framing, Rust
@@ -345,8 +357,17 @@ and completed history lives in [`status.md`](./status.md).
   account-address exactness, Offline Cash issuer-key configuration snapshot,
   canonical request auth exactness, Nexus wallet signature-algorithm exactness,
   Torii event-filter verifier/proof exactness, verifier-key selector exactness,
+  Torii canonical auth raw-header behavior, Torii subscription request/response
+  normalization, Connect WebSocket token/referrer/insecure-transport guards,
+  Connect session SID/preview generation, error taxonomy, retry backoff, queue
+  journal/diagnostics, browser app-session, preview bootstrap, Norito journal
+  record coverage, ISO alias validation/canonical-auth coverage,
   identifier-receipt adversarial and shared-vector exactness, package/browser,
   privacy native bridge, and transaction-builder archive test names together.
+  The GitHub JS SDK job must build the local native host with
+  `npm run build:native --prefix javascript/iroha_js` after dependency install
+  and before the focused runner, so clean workers do not depend on stale or
+  absent `iroha_js_host.node` artifacts.
   The typed recursive-spend request codecs must continue rejecting padded or
   signed decimal-string `blockHeight` values and numeric negative zero across
   init, append, verify, and redeem before native dispatch, while still allowing
@@ -680,7 +701,11 @@ and completed history lives in [`status.md`](./status.md).
   now force helper-controlled output parents to `0700`, validation scratch
   files and final evidence JSON outputs to `0600`, and identity-bind validation
   scratch-file cleanup under `--artifact-dir`
-  before unlinking those temp files. The staged finalizers also
+  before unlinking those temp files. The lineage and compact-key staged runners
+  also emit periodic fsynced heartbeat lines into their child logs while waiting
+  on long-running proof/keygen commands, so silent production evidence jobs
+  remain observable without routing child output through Python pipes. The
+  staged finalizers also
   force published artifact directories and finalizer temporary staging
   directories to `0700`, force copied/published lineage, compact-key, log, and
   evidence JSON files to `0600`, identity-bind the published artifact directory

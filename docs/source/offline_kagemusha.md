@@ -816,7 +816,10 @@ execution-report SHA-256 of the child log. The keygen and
 proof children write combined stdout/stderr directly to their temporary staged
 log files, and those logs are flushed and fsynced after each child exits so a
 supervisor interruption does not make child output depend on a Python-owned
-pipe. The runner also creates or tightens its staged root, `artifacts`
+pipe. Long-running proof and compact-key children also emit periodic fsynced
+heartbeat lines into those same staged logs while waiting, so an operator can
+distinguish a healthy silent prover from a dead or abandoned temporary output.
+The runner also creates or tightens its staged root, `artifacts`
 directory, and `artifacts/kagemusha` directory to `0700`, and writes staged
 child logs, execution reports, run reports, elapsed-time files, and exit
 markers as `0600` files before accepting them. Each temporary child log is

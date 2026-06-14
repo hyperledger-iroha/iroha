@@ -146,6 +146,14 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/HttpClientTransport.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/NoritoRpcClient.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/NoritoRpcException.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/NoritoRpcFlowController.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/NoritoRpcRequestOptions.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/SubscriptionToriiClient.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiCanonicalRequestAuth.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/TransportSecurity.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/StreamingTransportExecutor.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportExecutor.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/transport/TransportRequest.java"
@@ -162,7 +170,19 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkRootsJson.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkRootsRequest.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ZkRootsResponse.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStream.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClient.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamListener.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamObserver.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamOptions.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamSubscription.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/PlatformWebSocketConnector.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketClient.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketListener.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketObserver.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketOptions.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketSession.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketSubscription.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeyAttestation.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationResult.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerificationException.java"
@@ -217,14 +237,45 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineToriiException.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineV2Readiness.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tools/PendingQueueInspector.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/BscMainnetSccp.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/BscSccpProver.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpMessageProofBundles.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SolanaSccpProver.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SourceSccpProofs.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TronSccpProver.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionActionRequest.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionActionResponse.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionCreateRequest.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionCreateResponse.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionJsonParser.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionListParams.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionListResponse.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionPlanCreateRequest.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionPlanCreateResponse.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionPlanListParams.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionPlanListResponse.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionStatus.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionToriiException.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionUsageRequest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/CanonicalRequestSignerTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ConfidentialAssetToriiClientTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/IdentifierReceiptCanonicalEncoderTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/NoritoRpcClientTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ClientConfigNoritoRpcTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/SubscriptionToriiClientTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServer.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServerTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClientTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamSubscriptionTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/transport/UrlConnectionTransportExecutorTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketClientTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketSubscriptionTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectEnvelopeCodecTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectErrorTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectQueueJournalTests.java"
@@ -279,6 +330,11 @@ on:
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixturesTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeCodecTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tools/PendingQueueInspectorTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SourceSccpProofsTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java"
       - "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json"
       - "java/iroha_android/src/test/resources/transaction_payloads.json"
       - "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java"
@@ -301,15 +357,35 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptCanonicalEncoder.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptVerifier.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/NoritoRpcClient.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/NoritoRpcException.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/NoritoRpcFlowController.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/NoritoRpcRequestOptions.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/SubscriptionToriiClient.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ToriiCanonicalRequestAuth.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ToriiRequestBuilder.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/TransportSecurity.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ZkMerklePath.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ZkRoots.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStream.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamClient.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamListener.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamObserver.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamOptions.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamSubscription.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/StreamingTransportExecutor.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportExecutor.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportRequest.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportResponse.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/TransportStreamResponse.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/transport/UrlConnectionTransportExecutor.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/PlatformWebSocketConnector.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketClient.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketListener.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketObserver.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketOptions.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketSession.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/websocket/ToriiWebSocketSubscription.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectCiphertext.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectCrypto.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectDirection.kt"
@@ -371,6 +447,26 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineSettlementProofs.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineToriiException.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineV2Readiness.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SccpMessageProofBundles.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SolanaSccpProver.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashes.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionActionRequest.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionActionResponse.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionCreateRequest.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionCreateResponse.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionJsonParser.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionListParams.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionListResponse.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionPlanCreateRequest.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionPlanCreateResponse.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionPlanListParams.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionPlanListResponse.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionStatus.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionToriiException.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionUsageRequest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountIdLiteralTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountAddressTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/I105CanonicalTest.kt"
@@ -379,6 +475,7 @@ on:
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientV2ReadinessTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/TransportSecurityClientTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/stream/ToriiEventStreamClientTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/transport/UrlConnectionTransportExecutorTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectCryptoTest.kt"
@@ -406,6 +503,11 @@ on:
       - "kotlin/core-jvm/src/test/resources/offline/redeem_proof_fixtures.json"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoColumnarTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoHeaderTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ConfidentialNoteTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePathTest.kt"
@@ -433,6 +535,14 @@ on:
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs"
       - "javascript/iroha_js/src/address.js"
       - "javascript/iroha_js/src/canonicalRequest.js"
+      - "javascript/iroha_js/src/connect.browser.js"
+      - "javascript/iroha_js/src/connectError.js"
+      - "javascript/iroha_js/src/connectJournalRecord.js"
+      - "javascript/iroha_js/src/connectPreviewFlow.js"
+      - "javascript/iroha_js/src/connectQueueDiagnostics.js"
+      - "javascript/iroha_js/src/connectQueueJournal.js"
+      - "javascript/iroha_js/src/connectRetryPolicy.js"
+      - "javascript/iroha_js/src/connectSession.js"
       - "javascript/iroha_js/src/curveRegistry.js"
       - "javascript/iroha_js/src/crypto.js"
       - "javascript/iroha_js/src/crypto.browser.js"
@@ -444,6 +554,14 @@ on:
       - "javascript/iroha_js/src/transaction.js"
       - "javascript/iroha_js/dist/address.js"
       - "javascript/iroha_js/dist/canonicalRequest.js"
+      - "javascript/iroha_js/dist/connect.browser.js"
+      - "javascript/iroha_js/dist/connectError.js"
+      - "javascript/iroha_js/dist/connectJournalRecord.js"
+      - "javascript/iroha_js/dist/connectPreviewFlow.js"
+      - "javascript/iroha_js/dist/connectQueueDiagnostics.js"
+      - "javascript/iroha_js/dist/connectQueueJournal.js"
+      - "javascript/iroha_js/dist/connectRetryPolicy.js"
+      - "javascript/iroha_js/dist/connectSession.js"
       - "javascript/iroha_js/dist/curveRegistry.js"
       - "javascript/iroha_js/dist/crypto.js"
       - "javascript/iroha_js/dist/crypto.browser.js"
@@ -459,6 +577,15 @@ on:
       - "fixtures/soracloud/identifier_receipt_vectors_v1.json"
       - "javascript/iroha_js/test/address.test.js"
       - "javascript/iroha_js/test/canonicalRequest.test.js"
+      - "javascript/iroha_js/test/connect.browser.test.js"
+      - "javascript/iroha_js/test/connectError.test.js"
+      - "javascript/iroha_js/test/connectJournalRecord.test.js"
+      - "javascript/iroha_js/test/connectPreviewFlow.test.js"
+      - "javascript/iroha_js/test/connectQueueDiagnostics.test.js"
+      - "javascript/iroha_js/test/connectQueueJournal.test.js"
+      - "javascript/iroha_js/test/connectRetryPolicy.test.js"
+      - "javascript/iroha_js/test/connectSession.test.js"
+      - "javascript/iroha_js/test/connectWebSocket.test.js"
       - "javascript/iroha_js/test/crypto.browser.test.js"
       - "javascript/iroha_js/test/instructionBuilders.test.js"
       - "javascript/iroha_js/test/transactionBuilder.test.js"
@@ -466,9 +593,12 @@ on:
       - "javascript/iroha_js/test/offlineCashLifecycle.test.js"
       - "javascript/iroha_js/test/package_dist.test.js"
       - "javascript/iroha_js/test/privacyNative.test.js"
+      - "javascript/iroha_js/test/toriiCanonicalAuth.test.js"
       - "javascript/iroha_js/test/toriiClient.identifier.test.js"
+      - "javascript/iroha_js/test/toriiClient.isoAlias.test.js"
       - "javascript/iroha_js/test/toriiClient.ramLfe.test.js"
       - "javascript/iroha_js/test/toriiClient.test.js"
+      - "javascript/iroha_js/test/toriiSubscriptions.test.js"
       - "python/iroha_python/src/iroha_python/__init__.py"
       - "python/iroha_python/src/iroha_python/_privacy_backends.py"
       - "python/iroha_python/src/iroha_python/address.py"
@@ -557,7 +687,7 @@ jobs:
 
   kagemusha_javascript_sdk_tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -567,6 +697,8 @@ jobs:
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - name: Install JavaScript SDK dependencies
         run: npm ci --prefix javascript/iroha_js
+      - name: Build JavaScript SDK native host
+        run: npm run build:native --prefix javascript/iroha_js
       - name: Kagemusha recursive spend JavaScript SDK tests
         run: ci/check_kagemusha_recursive_spend_js_sdk.sh
 
@@ -789,6 +921,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-account-address-canonical-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-connect-runner-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-transport-inspector-attestation-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-sccp-runner-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-torii-rpc-subscription-websocket-runner-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-decoder-placeholder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-instruction-wrapper
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-instruction-decoder
@@ -851,6 +985,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-node-cache-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-node-setup-order-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-install-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-native-build-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-test-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-transaction-builder-filter-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-privacy-native-filter-script
@@ -859,10 +994,13 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-event-filter-filter-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-verifier-key-filter-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-identifier-receipt-filter-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-torii-runner-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-connect-runner-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-workflow-inventory
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-privacy-workflow-inventory-matrix
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-install-order-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-test-order-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-native-build-order-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-needs-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-parity-meta-test-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-negative-controls-order-workflow
@@ -1460,6 +1598,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-child-log-file
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-heartbeat
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-heartbeat
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-execution-log-sha256
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-execution-log-sha256

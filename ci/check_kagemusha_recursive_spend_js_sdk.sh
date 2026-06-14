@@ -63,9 +63,18 @@ case "${NODE_VERSION}" in
     ;;
 esac
 
-"${NODE_BIN}" --test --test-name-pattern "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs|buildKagemusha|privacy native availability probes build and verify with Norito request archives|privacy native wrappers require binary Norito request archives|fromAccount rejects control and Unicode-confusable curve algorithm aliases|offline cash configuration snapshot requires cached issuer key and ABI|canonical request signing: rejects padded auth fields|streamEvents rejects unsupported production backend event filters before fetch|streamEvents rejects malformed verifying key event names before fetch|streamEvents rejects malformed proof event hashes before fetch|ZK-ACE verifier-key references reject padded selector metadata|privacy proof envelopes preserve pending production backend tags|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend|verifyIdentifierResolutionReceipt matches shared receipt vectors|NexusAppClient rejects non-Ed25519 wallet signatures|NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags" \
+"${NODE_BIN}" --test --test-name-pattern "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs|buildKagemusha|privacy native availability probes build and verify with Norito request archives|privacy native wrappers require binary Norito request archives|fromAccount rejects control and Unicode-confusable curve algorithm aliases|offline cash configuration snapshot requires cached issuer key and ABI|canonical request signing: rejects padded auth fields|streamEvents rejects unsupported production backend event filters before fetch|streamEvents rejects malformed verifying key event names before fetch|streamEvents rejects malformed proof event hashes before fetch|ZK-ACE verifier-key references reject padded selector metadata|privacy proof envelopes preserve pending production backend tags|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend|verifyIdentifierResolutionReceipt matches shared receipt vectors|NexusAppClient rejects non-Ed25519 wallet signatures|NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags|ToriiClient attaches canonical signing headers for app endpoints|ToriiClient canonical auth uses raw Node transport for UTF-8 account headers|ToriiClient canonical auth rejects UTF-8 account headers when no supported transport is available|ToriiClient canonical auth rejects non-byte private key arrays|subscription plan and create endpoints send normalized payloads|subscription action endpoints send normalized payloads|getSubscription returns null on 404|buildConnectWebSocketUrl rejects token query parameters|buildConnectWebSocketUrl rejects endpoint host overrides|buildConnectWebSocketUrl rejects endpoint protocol mismatches|openConnectWebSocket injects Sec-WebSocket-Protocol when headers are unavailable|openConnectWebSocket emits telemetry when allowInsecure is used|resolveAliasByIndex enforces non-negative indices before issuing requests|resolveAlias attaches canonical auth when provided|lookupAliasesByAccount validates options before issuing requests|generateConnectSid|createConnectSessionPreview|connectErrorFrom returns existing ConnectError|connect queue overflow maps to queueOverflow category|connect retry|memory journal|indexeddb journal|connect journal|connect queue diagnostics|Connect session vector fixture matches browser crypto helpers|Connect browser wallet signature encoder validates algorithm labels before byte encoding|createConnectAppSession|bootstrapConnectPreviewSession|ConnectJournalRecord|fromCiphertext applies retention automatically|decode accepts array-like payloads|decode rejects" \
   test/address.test.js \
   test/canonicalRequest.test.js \
+  test/connect.browser.test.js \
+  test/connectError.test.js \
+  test/connectJournalRecord.test.js \
+  test/connectPreviewFlow.test.js \
+  test/connectQueueDiagnostics.test.js \
+  test/connectQueueJournal.test.js \
+  test/connectRetryPolicy.test.js \
+  test/connectSession.test.js \
+  test/connectWebSocket.test.js \
   test/crypto.browser.test.js \
   test/instructionBuilders.test.js \
   test/kagemushaFfiContractParity.test.js \
@@ -74,6 +83,9 @@ esac
   test/offlineCashLifecycle.test.js \
   test/package_dist.test.js \
   test/privacyNative.test.js \
+  test/toriiCanonicalAuth.test.js \
   test/toriiClient.identifier.test.js \
+  test/toriiClient.isoAlias.test.js \
   test/toriiClient.test.js \
+  test/toriiSubscriptions.test.js \
   test/transactionBuilder.test.js
