@@ -5144,8 +5144,13 @@ mod tests {
         Signature::from_bytes(&payload)
     }
 
+    fn sample_offline_certificate_keypair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0xAA; 32], Algorithm::Ed25519)
+            .expect("derive offline certificate fixture key")
+    }
+
     fn sample_offline_certificate(account_id: AccountId) -> OfflineNoteKeyCertificate {
-        let keypair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
+        let keypair = sample_offline_certificate_keypair();
         let (_algorithm, public_key) = keypair
             .public_key()
             .try_to_bytes()
@@ -5164,6 +5169,20 @@ mod tests {
             one_use: true,
             issuer_signature: sample_signature(0x44),
         }
+    }
+
+    #[test]
+    fn sample_offline_certificate_uses_checked_seed_derivation() {
+        let (account_id, _) = gen_account_in("wonderland");
+        let certificate = sample_offline_certificate(account_id.clone());
+        let keypair = sample_offline_certificate_keypair();
+        let (_algorithm, expected_public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
+
+        assert_eq!(certificate.account_id, account_id);
+        assert_eq!(certificate.public_key, expected_public_key.to_vec());
     }
 
     #[test]

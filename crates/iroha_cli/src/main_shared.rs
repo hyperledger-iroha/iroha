@@ -3080,9 +3080,14 @@ mod asset {
         use iroha_crypto::Algorithm;
         use iroha_primitives::numeric::Numeric;
 
+        fn fixture_key_pair(seed: u8) -> KeyPair {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("fixture seed must derive a valid keypair")
+        }
+
         fn sample_transfer_args(ensure_destination: bool) -> (Transfer, AccountId, AssetId) {
-            let src = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
-            let dest = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
+            let src = fixture_key_pair(1);
+            let dest = fixture_key_pair(2);
             let owner = AccountId::new(src.public_key().clone());
             let to = AccountId::new(dest.public_key().clone());
             let asset_def_id = AssetDefinitionId::new(
@@ -3101,6 +3106,15 @@ mod asset {
                 no_wait: false,
             };
             (args, to, asset_id)
+        }
+
+        #[test]
+        fn fixture_key_pair_uses_checked_seed_derivation() {
+            assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
+            assert!(
+                KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+                "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+            );
         }
 
         fn assert_transfer_destination(instruction: &InstructionBox, to: &AccountId) {
@@ -7556,10 +7570,24 @@ mod settlement {
             use std::io::Write;
             use tempfile::NamedTempFile;
 
+            fn fixture_key_pair(seed: u8) -> KeyPair {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("fixture seed must derive a valid keypair")
+            }
+
             fn account_with_seed(domain: &DomainId, seed: u8) -> AccountId {
-                let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+                let key_pair = fixture_key_pair(seed);
                 let _ = domain;
                 AccountId::new(key_pair.public_key().clone())
+            }
+
+            #[test]
+            fn fixture_key_pair_uses_checked_seed_derivation() {
+                assert_eq!(fixture_key_pair(0x11).algorithm(), Algorithm::Ed25519);
+                assert!(
+                    KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+                    "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+                );
             }
 
             fn sample_dvp() -> DvpIsi {
@@ -8155,14 +8183,15 @@ mod tests {
     use tokio::runtime::Runtime;
     use url::Url;
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     fn sample_canonical_i105_literal(seed: u8) -> String {
-        AccountId::new(
-            KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        )
-        .canonical_i105()
-        .expect("canonical I105")
+        AccountId::new(fixture_key_pair(seed).public_key().clone())
+            .canonical_i105()
+            .expect("canonical I105")
     }
 
     fn sample_noncanonical_i105_literal(seed: u8) -> String {
@@ -8252,8 +8281,17 @@ mod tests {
     fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {
         let _domain = iroha::data_model::domain::DomainId::try_new(domain_literal, "universal")
             .expect("domain");
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(7).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     #[test]
@@ -8698,7 +8736,7 @@ mod tests {
     #[test]
     fn resolve_account_id_with_rejects_public_key_domain() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
-        let key_pair = KeyPair::from_seed(vec![7_u8; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(7);
         let literal = format!("{}@{}", key_pair.public_key(), domain);
 
         let err =
@@ -8747,7 +8785,7 @@ mod tests {
 
     #[test]
     fn parse_register_account_id_rejects_canonical_hex() {
-        let key_pair = KeyPair::from_seed(vec![14_u8; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(14);
         let literal = AccountId::new(key_pair.public_key().clone())
             .to_canonical_hex()
             .expect("canonical hex");
@@ -8830,7 +8868,7 @@ mod tests {
 
     #[test]
     fn resolve_account_id_with_resolves_encoded_literal() {
-        let key_pair = KeyPair::from_seed(vec![9_u8; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(9);
         let account = AccountId::new(key_pair.public_key().clone());
         let canonical = account.canonical_i105().expect("canonical I105");
         let resolved = resolve_account_id_with(&canonical).expect("local resolve");
@@ -9140,7 +9178,7 @@ transaction_status_timeout = "77s"
 
     impl CaptureContext {
         fn new(account: AccountId) -> Self {
-            let key_pair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+            let key_pair = fixture_key_pair(0xA5);
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account,
@@ -9270,11 +9308,7 @@ transaction_status_timeout = "77s"
 
     #[test]
     fn multisig_register_run_defaults_to_domainless_home_domain() {
-        let account = AccountId::new(
-            KeyPair::from_seed(vec![0xD6; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let account = AccountId::new(fixture_key_pair(0xD6).public_key().clone());
         let mut ctx = CaptureContext::new(account.clone());
         let register = multisig::Register {
             signatories: vec![account.to_string()],
@@ -9615,9 +9649,23 @@ mod multisig_json_tests {
     use std::collections::BTreeMap;
     use std::num::{NonZeroU16, NonZeroU64};
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     fn multisig_account() -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![0xD6; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(0xD6);
         AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(0xD6).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     #[test]
@@ -9663,6 +9711,11 @@ mod cli_integration_harness_tests {
     use std::cmp::Ordering as CmpOrdering;
     use std::num::NonZeroU64;
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     struct DummyExec;
 
     impl QueryExecutor for DummyExec {
@@ -9700,8 +9753,17 @@ mod cli_integration_harness_tests {
     }
 
     fn sample_account_id(_domain: &str, seed: u8) -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     #[test]
@@ -12206,6 +12268,11 @@ mod cli_integration_harness {
     #[cfg(feature = "ids_projection")]
     use norito::codec::Decode;
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     /// Minimal mock server for iterable queries; returns static payloads by type.
     pub struct MockQueryServer {
         pub domains: Vec<iroha::data_model::domain::Domain>,
@@ -12238,8 +12305,17 @@ mod cli_integration_harness {
     }
 
     fn sample_account_id(_domain: &str, seed: u8) -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     #[cfg(feature = "ids_projection")]

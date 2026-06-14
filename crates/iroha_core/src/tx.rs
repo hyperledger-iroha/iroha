@@ -6048,6 +6048,17 @@ pub mod tests {
         state::{State, StateBlock, StateReadOnly, World},
     };
 
+    fn checked_signature_of<T: norito::codec::Encode>(
+        private_key: &PrivateKey,
+        payload: &T,
+    ) -> SignatureOf<T> {
+        SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
+    }
+
+    fn checked_fixture_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(seed, algorithm).expect("test fixture key derivation should succeed")
+    }
+
     fn single_lane_assignment(catalog: &DataSpaceCatalog) -> super::LaneAssignment<'_> {
         super::LaneAssignment {
             lane_id: TestLaneId::SINGLE,
@@ -6503,11 +6514,11 @@ pub mod tests {
         let signatures = vec![
             iroha_data_model::transaction::signed::MultisigSignature::new(
                 member_ed.public_key().clone(),
-                SignatureOf::new(member_ed.private_key(), &payload),
+                checked_signature_of(member_ed.private_key(), &payload),
             ),
             iroha_data_model::transaction::signed::MultisigSignature::new(
                 member_secp.public_key().clone(),
-                SignatureOf::new(member_secp.private_key(), &payload),
+                checked_signature_of(member_secp.private_key(), &payload),
             ),
         ];
         let mut tx = tx;
@@ -6543,7 +6554,7 @@ pub mod tests {
         // Attach a signature from an unknown signer.
         let payload = tx.payload().clone();
         let rogue = iroha_crypto::KeyPair::random();
-        let rogue_sig = SignatureOf::new(rogue.private_key(), &payload);
+        let rogue_sig = checked_signature_of(rogue.private_key(), &payload);
         tx.set_multisig_signatures(
             iroha_data_model::transaction::signed::MultisigSignatures::new(vec![
                 iroha_data_model::transaction::signed::MultisigSignature::new(
@@ -6584,7 +6595,7 @@ pub mod tests {
         let payload = tx.payload().clone();
         tx.set_multisig_signatures(MultisigSignatures::new(vec![MultisigSignature::new(
             signer.public_key().clone(),
-            SignatureOf::new(signer.private_key(), &payload),
+            checked_signature_of(signer.private_key(), &payload),
         )]));
 
         let limits = TransactionParameters::default();
@@ -7225,7 +7236,7 @@ pub mod tests {
             .sign_multisig(vec![signer.private_key()]);
 
         let payload = tx.payload().clone();
-        let member_signature = SignatureOf::new(signer.private_key(), &payload);
+        let member_signature = checked_signature_of(signer.private_key(), &payload);
         tx.set_multisig_signatures(MultisigSignatures::new(vec![
             MultisigSignature::new(signer.public_key().clone(), member_signature.clone()),
             MultisigSignature::new(signer.public_key().clone(), member_signature.clone()),
@@ -8478,7 +8489,8 @@ pub mod tests {
 
     #[test]
     fn fraud_policy_attester_signature_precheck_uses_checked_public_key_algorithm() {
-        let attester = KeyPair::from_seed(b"fraud-attester-ed25519".to_vec(), Algorithm::Ed25519);
+        let attester =
+            checked_fixture_keypair(b"fraud-attester-ed25519".to_vec(), Algorithm::Ed25519);
         let assessment = FraudAssessment::new(
             Vec::new(),
             iroha_data_model::fraud::types::FraudAssessmentParts {
@@ -11117,8 +11129,8 @@ pub mod tests {
     #[test]
     fn state_manifest_quorum_requires_approvers() {
         let chain: ChainId = "lane-manifest-quorum".parse().unwrap();
-        let primary_keypair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-        let secondary_keypair = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
+        let primary_keypair = checked_fixture_keypair(vec![0x11; 32], Algorithm::Ed25519);
+        let secondary_keypair = checked_fixture_keypair(vec![0x22; 32], Algorithm::Ed25519);
         let primary_id = AccountId::new(primary_keypair.public_key().clone());
         let secondary_id = AccountId::new(secondary_keypair.public_key().clone());
 

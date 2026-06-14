@@ -16251,8 +16251,21 @@ mod zk_ace_stark_prover_tests {
     use super::*;
 
     fn account(seed: u8) -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid account keypair");
         AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn account_fixture_uses_checked_seed_derivation() {
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+        assert!(
+            account(1) != account(2),
+            "distinct fixture seeds must derive distinct accounts"
+        );
     }
 
     fn asset_definition_id() -> AssetDefinitionId {
@@ -24448,7 +24461,8 @@ mod offline_note_instance_guardrail_tests {
     }
 
     fn sample_account(seed: u8) -> AccountId {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid account keypair");
         AccountId::new(keypair.public_key().clone())
     }
 
@@ -24461,7 +24475,8 @@ mod offline_note_instance_guardrail_tests {
     }
 
     fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificate {
-        let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let note_keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid offline note keypair");
         let (_algorithm, public_key) = note_keypair
             .public_key()
             .try_to_bytes()
@@ -24480,6 +24495,24 @@ mod offline_note_instance_guardrail_tests {
             one_use: true,
             issuer_signature: sample_signature(seed.wrapping_add(1)),
         }
+    }
+
+    #[test]
+    fn sample_fixture_keypairs_use_checked_seed_derivation() {
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+        assert!(
+            sample_account(0xC1) != sample_account(0xC2),
+            "distinct fixture seeds must derive distinct accounts"
+        );
+        let account = sample_account(0xC1);
+        let certificate = sample_certificate(&account, 0xD1);
+        assert!(
+            !certificate.public_key.is_empty(),
+            "offline note certificates must expose the checked fixture public key"
+        );
     }
 
     fn placeholder_recursive_proof() -> OfflineNoteRecursiveProof {
@@ -37714,7 +37747,8 @@ mod offline_note_real_prover_tests {
     }
 
     fn sample_account(seed: u8) -> AccountId {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid account keypair");
         AccountId::new(keypair.public_key().clone())
     }
 
@@ -37727,7 +37761,8 @@ mod offline_note_real_prover_tests {
     }
 
     fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificate {
-        let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let note_keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid offline note keypair");
         let (_algorithm, public_key) = note_keypair
             .public_key()
             .try_to_bytes()
@@ -37746,6 +37781,24 @@ mod offline_note_real_prover_tests {
             one_use: true,
             issuer_signature: sample_signature(seed.wrapping_add(1)),
         }
+    }
+
+    #[test]
+    fn sample_fixture_keypairs_use_checked_seed_derivation() {
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+        assert!(
+            sample_account(0xA1) != sample_account(0xA2),
+            "distinct fixture seeds must derive distinct accounts"
+        );
+        let account = sample_account(0xA1);
+        let certificate = sample_certificate(&account, 0xB1);
+        assert!(
+            !certificate.public_key.is_empty(),
+            "offline note certificates must expose the checked fixture public key"
+        );
     }
 
     fn placeholder_recursive_proof() -> OfflineNoteRecursiveProof {

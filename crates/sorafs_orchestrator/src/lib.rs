@@ -5857,6 +5857,7 @@ mod tests {
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use futures::executor::block_on;
+    #[cfg(feature = "local-quic-proxy")]
     use iroha_data_model::soranet::privacy_metrics::{
         SoranetPrivacyEventActiveSampleV1, SoranetPrivacyEventHandshakeFailureV1,
         SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventThrottleV1,

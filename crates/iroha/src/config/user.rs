@@ -577,7 +577,9 @@ mod tests {
     use super::*;
 
     fn root_with_timeouts(ttl: Duration, timeout: Duration) -> Root {
-        let key_pair = KeyPair::from_seed(b"iroha:config:user:tests".to_vec(), Algorithm::Ed25519);
+        let key_pair =
+            KeyPair::try_from_seed(b"iroha:config:user:tests".to_vec(), Algorithm::Ed25519)
+                .expect("derive user-config fixture key");
         Root {
             chain: ChainId::from_str("test-chain").expect("chain id"),
             torii_url: WithOrigin::inline(
@@ -613,6 +615,17 @@ mod tests {
             sorafs: Sorafs::default(),
             soracloud: Soracloud::default(),
         }
+    }
+
+    #[test]
+    fn root_with_timeouts_uses_checked_fixture_seed_derivation() {
+        let root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        let expected =
+            KeyPair::try_from_seed(b"iroha:config:user:tests".to_vec(), Algorithm::Ed25519)
+                .expect("derive expected user-config fixture key");
+
+        assert_eq!(root.account.public_key.value(), expected.public_key());
+        assert_eq!(root.account.private_key.value(), expected.private_key());
     }
 
     #[test]

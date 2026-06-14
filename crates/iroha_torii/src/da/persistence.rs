@@ -1047,6 +1047,10 @@ mod temp_artifact_tests {
 
     use super::*;
 
+    fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
+        Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+    }
+
     fn poison_replay_cursor_store(store: &ReplayCursorStore) {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let _guard = store.inner.lock().expect("initial cursor lock");
@@ -1089,7 +1093,7 @@ mod temp_artifact_tests {
             operator_signature: Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER),
         };
         let unsigned = unsigned_receipt_bytes(&receipt, sequence).expect("test receipt encodes");
-        receipt.operator_signature = Signature::new(signer.private_key(), &unsigned);
+        receipt.operator_signature = checked_signature(signer.private_key(), &unsigned);
         receipt
     }
 

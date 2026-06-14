@@ -95,6 +95,19 @@ fn start_test_network() -> Option<(sandbox::SerializedNetwork, tokio::runtime::R
     ))
 }
 
+fn repo_outsider_key_pair() -> KeyPair {
+    KeyPair::try_from_seed(vec![42; 32], Algorithm::Ed25519).expect("fixture repo outsider key")
+}
+
+#[test]
+fn repo_outsider_fixture_uses_checked_seed_derivation() {
+    let key_pair = repo_outsider_key_pair();
+    let expected = KeyPair::try_from_seed(vec![42; 32], Algorithm::Ed25519)
+        .expect("fixture repo outsider key");
+
+    assert_eq!(key_pair.public_key(), expected.public_key());
+}
+
 fn repo_instr_box<T>(instruction: T) -> InstructionBox
 where
     RepoInstructionBox: From<T>,
@@ -577,7 +590,7 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         "bond".parse()?,
     );
 
-    let outsider_keypair = KeyPair::from_seed(vec![42; 32], Algorithm::Ed25519);
+    let outsider_keypair = repo_outsider_key_pair();
     let outsider_id = AccountId::new(outsider_keypair.public_key().clone());
 
     let setup_instructions: Vec<InstructionBox> = vec![

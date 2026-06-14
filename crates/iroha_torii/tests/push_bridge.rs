@@ -36,7 +36,8 @@ fn world_with_account(account_id: &AccountId) -> World {
 
 fn push_identity(seed: u8) -> (iroha_crypto::KeyPair, AccountId) {
     let key_pair =
-        iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
+        iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("derive push identity key");
     let account_id = AccountId::new(key_pair.public_key().clone());
     (key_pair, account_id)
 }

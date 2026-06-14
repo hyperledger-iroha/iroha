@@ -2990,11 +2990,20 @@ mod tests {
         HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32]))
     }
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked consensus fixture keypair")
+    }
+
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm)
+            .expect("generate checked consensus fixture keypair")
+    }
+
     fn sample_roster() -> Vec<PeerId> {
         (0..3)
             .map(|_| {
                 PeerId::new(
-                    KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                    checked_random_keypair_with_algorithm(Algorithm::BlsNormal)
                         .public_key()
                         .clone(),
                 )
@@ -3078,7 +3087,7 @@ mod tests {
             lane_id: LaneId::new(1),
             block_height: 42,
             payer_account_id: crate::account::AccountId::new(
-                KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                checked_random_keypair_with_algorithm(Algorithm::Ed25519)
                     .public_key()
                     .clone(),
             ),
@@ -3284,7 +3293,7 @@ mod tests {
 
     fn sample_reconfig() -> Reconfig {
         let peers = (0..2)
-            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+            .map(|_| PeerId::new(checked_random_keypair().public_key().clone()))
             .collect();
         Reconfig {
             new_roster: peers,
@@ -3308,7 +3317,7 @@ mod tests {
             0,
             3,
         );
-        let leader_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader_key = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_, leader_private) = leader_key.into_parts();
         let leader_signature = BlockSignature::new(
             0,
@@ -3513,7 +3522,7 @@ mod tests {
 
     #[test]
     fn censorship_evidence_roundtrip_codec() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let payload = crate::transaction::TransactionSubmissionReceiptPayload {
             tx_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
             entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
@@ -3522,7 +3531,9 @@ mod tests {
             submitted_at_height: 2,
             signer: key_pair.public_key().clone(),
         };
-        let receipt = crate::transaction::TransactionSubmissionReceipt::sign(payload, &key_pair);
+        let receipt =
+            crate::transaction::TransactionSubmissionReceipt::try_sign(payload, &key_pair)
+                .expect("checked censorship evidence receipt fixture signature");
         let tx_hash = receipt.payload.tx_hash;
         let ev = Evidence {
             kind: EvidenceKind::Censorship,

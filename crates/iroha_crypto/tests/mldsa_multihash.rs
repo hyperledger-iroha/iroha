@@ -6,7 +6,8 @@ use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
 
 #[test]
 fn mldsa_public_key_multihash_roundtrip() {
-    let kp = KeyPair::from_seed(b"iroha:ml-dsa:multihash:pk".to_vec(), Algorithm::MlDsa);
+    let kp = KeyPair::try_from_seed(b"iroha:ml-dsa:multihash:pk".to_vec(), Algorithm::MlDsa)
+        .expect("fixture seed derives ML-DSA public-key fixture");
     let (algorithm, public_bytes) = kp
         .public_key()
         .try_to_bytes()
@@ -34,7 +35,8 @@ fn mldsa_public_key_multihash_roundtrip() {
 
 #[test]
 fn mldsa_private_key_multihash_roundtrip_exposed() {
-    let kp = KeyPair::from_seed(b"iroha:ml-dsa:multihash:sk".to_vec(), Algorithm::MlDsa);
+    let kp = KeyPair::try_from_seed(b"iroha:ml-dsa:multihash:sk".to_vec(), Algorithm::MlDsa)
+        .expect("fixture seed derives ML-DSA private-key fixture");
     let sk = mldsa65::SecretKey::from_bytes(&kp.private_key().to_bytes().1)
         .expect("seeded ML-DSA secret key");
     let prikey =

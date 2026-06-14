@@ -412,6 +412,11 @@ mod tests {
         AccountId::new(key_pair.public_key().clone())
     }
 
+    fn fixture_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], algorithm)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     fn open_domain(domain_id: DomainId, policy: AccountAdmissionPolicy) -> Domain {
         let mut metadata = Metadata::default();
         metadata.insert((*POLICY_METADATA_KEY).clone(), Json::new(policy));
@@ -465,8 +470,8 @@ mod tests {
 
     #[test]
     fn implicit_admission_controller_checks_use_checked_algorithm_access() {
-        let ed25519 = KeyPair::from_seed(b"implicit-ed25519".to_vec(), Algorithm::Ed25519);
-        let secp256k1 = KeyPair::from_seed(b"implicit-secp256k1".to_vec(), Algorithm::Secp256k1);
+        let ed25519 = fixture_keypair(0x41, Algorithm::Ed25519);
+        let secp256k1 = fixture_keypair(0x42, Algorithm::Secp256k1);
         let allowed = [Algorithm::Ed25519];
         let allowed_curve_ids =
             iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(&allowed);
@@ -489,6 +494,18 @@ mod tests {
             err,
             AccountAdmissionError::AlgorithmNotAllowed(Algorithm::Secp256k1)
         ));
+    }
+
+    #[test]
+    fn fixture_keypair_uses_checked_seed_derivation() {
+        assert_eq!(
+            fixture_keypair(0x43, Algorithm::Ed25519).algorithm(),
+            Algorithm::Ed25519
+        );
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     #[test]

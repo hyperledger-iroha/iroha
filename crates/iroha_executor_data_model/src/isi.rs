@@ -704,12 +704,20 @@ pub mod multisig {
 
         use super::*;
 
+        fn fixture_key_pair(seed: u8) -> KeyPair {
+            assert_ne!(seed, 0, "multisig fixture seeds must be nonzero");
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("derive multisig fixture key")
+        }
+
+        fn fixture_account(seed: u8) -> AccountId {
+            AccountId::of(fixture_key_pair(seed).public_key().clone())
+        }
+
         fn sample_spec() -> MultisigSpec {
-            let alice = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
-            let bob = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
             let mut signatories = BTreeMap::new();
-            signatories.insert(AccountId::of(alice.public_key().clone()), 1);
-            signatories.insert(AccountId::of(bob.public_key().clone()), 1);
+            signatories.insert(fixture_account(1), 1);
+            signatories.insert(fixture_account(2), 1);
             MultisigSpec::new(
                 signatories,
                 NonZeroU16::new(2).expect("nonzero quorum"),
@@ -720,11 +728,19 @@ pub mod multisig {
         fn sample_instruction_box() -> InstructionBox {
             let domain: DomainId =
                 DomainId::try_new("multisig", "universal").expect("valid domain");
-            let registrar = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
-            let multisig_account = AccountId::of(registrar.public_key().clone());
+            let multisig_account = fixture_account(3);
             let spec = sample_spec();
             let register = MultisigRegister::with_account(multisig_account, Some(domain), spec);
             InstructionBox::from(register)
+        }
+
+        #[test]
+        fn fixture_account_uses_checked_seed_derivation() {
+            let account = fixture_account(42);
+            let expected = AccountId::of(fixture_key_pair(42).public_key().clone());
+
+            assert_eq!(account, expected);
+            assert!(KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err());
         }
 
         #[test]
@@ -744,8 +760,7 @@ pub mod multisig {
         fn multisig_register_json_includes_account_field() {
             let domain: DomainId =
                 DomainId::try_new("multisig", "universal").expect("valid domain");
-            let registrar = KeyPair::from_seed(vec![42; 32], Algorithm::Ed25519);
-            let multisig_account = AccountId::of(registrar.public_key().clone());
+            let multisig_account = fixture_account(42);
             let spec = sample_spec();
             let register = MultisigRegister::with_account(multisig_account, Some(domain), spec);
             let rendered =
@@ -797,8 +812,7 @@ pub mod multisig {
 
         #[test]
         fn multisig_register_json_defaults_home_domain_to_none() {
-            let key = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
-            let account = AccountId::of(key.public_key().clone());
+            let account = fixture_account(7);
             let account_json = norito::json::to_json(&account).expect("account json");
             let spec = sample_spec();
             let spec_json = norito::json::to_json(&spec).expect("spec json");
@@ -810,8 +824,7 @@ pub mod multisig {
 
         #[test]
         fn multisig_cancel_instruction_roundtrip_preserves_target_hash() {
-            let canceler = KeyPair::from_seed(vec![11; 32], Algorithm::Ed25519);
-            let multisig_account = AccountId::of(canceler.public_key().clone());
+            let multisig_account = fixture_account(11);
             let instructions_hash = HashOf::new(&vec![sample_instruction_box()]);
             let cancel = MultisigCancel::new(multisig_account.clone(), instructions_hash);
             let instruction_box = InstructionBox::from(cancel.clone());
@@ -829,8 +842,7 @@ pub mod multisig {
 
         #[test]
         fn multisig_terminal_state_roundtrip_preserves_status() {
-            let controller = KeyPair::from_seed(vec![12; 32], Algorithm::Ed25519);
-            let multisig_account = AccountId::of(controller.public_key().clone());
+            let multisig_account = fixture_account(12);
             let instructions = vec![sample_instruction_box()];
             let instructions_hash = HashOf::new(&instructions);
             let proposal = MultisigProposalValue::new(

@@ -405,13 +405,17 @@ mod tests {
 
     use super::*;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked query fixture keypair")
+    }
+
     #[test]
     fn assemble_sets_norito_accept_header() {
         let head = ClientQueryRequestHead {
             torii_url: Url::parse("http://127.0.0.1:8080").expect("url"),
             headers: HashMap::new(),
             account_id: iroha_test_samples::ALICE_ID.clone(),
-            key_pair: KeyPair::random(),
+            key_pair: checked_random_keypair(),
             request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             accept_header: APPLICATION_NORITO,
         };

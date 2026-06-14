@@ -732,6 +732,14 @@ mod tests {
         InboundBlockMessage::new(msg, None)
     }
 
+    fn checked_block_signature(
+        private_key: &iroha_crypto::PrivateKey,
+        block_hash: HashOf<BlockHeader>,
+    ) -> SignatureOf<BlockHeader> {
+        SignatureOf::try_from_hash(private_key, block_hash)
+            .expect("test block signing should succeed")
+    }
+
     fn test_signed_block(height: u64, view: u64) -> SignedBlock {
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("block height must be non-zero"),
@@ -743,7 +751,7 @@ mod tests {
         );
         let key_pair = KeyPair::random();
         let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
         SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None)
     }
@@ -3284,7 +3292,7 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
         let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
 
@@ -3512,7 +3520,7 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
         let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
         let msg = BlockMessage::BlockCreated(message::BlockCreated {
@@ -3589,7 +3597,7 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
         let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
         let update = message::BlockSyncUpdate::from(&block);
@@ -3655,7 +3663,7 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
         let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
         let block_hash = block.hash();
@@ -3789,7 +3797,7 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
         let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
         let update = message::BlockSyncUpdate::from(&block);
@@ -3938,7 +3946,7 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
         let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
         let update = message::BlockSyncUpdate::from(&block);
@@ -3958,7 +3966,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let overflow_signature = SignatureOf::from_hash(&private_key, overflow_header.hash());
+        let overflow_signature = checked_block_signature(&private_key, overflow_header.hash());
         let overflow_block_signature = BlockSignature::new(0, overflow_signature);
         let overflow_block = SignedBlock::presigned_with_da(
             overflow_block_signature,
@@ -4056,7 +4064,7 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
         let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
         let update = message::BlockSyncUpdate::from(&block);
@@ -4076,7 +4084,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let overflow_signature = SignatureOf::from_hash(&private_key, overflow_header.hash());
+        let overflow_signature = checked_block_signature(&private_key, overflow_header.hash());
         let overflow_block_signature = BlockSignature::new(0, overflow_signature);
         let overflow_block = SignedBlock::presigned_with_da(
             overflow_block_signature,
@@ -4411,8 +4419,8 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let (_, private_key) = key_pair.into_parts();
-        let signature_one = SignatureOf::from_hash(&private_key, header_one.hash());
-        let signature_two = SignatureOf::from_hash(&private_key, header_two.hash());
+        let signature_one = checked_block_signature(&private_key, header_one.hash());
+        let signature_two = checked_block_signature(&private_key, header_two.hash());
         let block_one = SignedBlock::presigned_with_da(
             BlockSignature::new(0, signature_one),
             header_one,
@@ -4546,8 +4554,8 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let (_, private_key) = key_pair.into_parts();
-        let signature_one = SignatureOf::from_hash(&private_key, header_one.hash());
-        let signature_two = SignatureOf::from_hash(&private_key, header_two.hash());
+        let signature_one = checked_block_signature(&private_key, header_one.hash());
+        let signature_two = checked_block_signature(&private_key, header_two.hash());
         let block_one = SignedBlock::presigned_with_da(
             BlockSignature::new(0, signature_one),
             header_one,
@@ -4659,7 +4667,7 @@ mod tests {
         let (_, leader_private) = leader_key.into_parts();
         let leader_signature = BlockSignature::new(
             0,
-            SignatureOf::from_hash(&leader_private, block_header.hash()),
+            checked_block_signature(&leader_private, block_header.hash()),
         );
         let init = BlockMessage::RbcInit(crate::sumeragi::consensus::RbcInit {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([3u8; 32])),
@@ -4856,7 +4864,7 @@ mod tests {
         let (_, leader_private) = leader_key.into_parts();
         let leader_signature = BlockSignature::new(
             0,
-            SignatureOf::from_hash(&leader_private, block_header.hash()),
+            checked_block_signature(&leader_private, block_header.hash()),
         );
         let init = BlockMessage::RbcInit(crate::sumeragi::consensus::RbcInit {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([3u8; 32])),
@@ -5637,7 +5645,7 @@ mod tests {
         let (_, leader_private) = leader_key.into_parts();
         let leader_signature = BlockSignature::new(
             0,
-            SignatureOf::from_hash(&leader_private, block_header.hash()),
+            checked_block_signature(&leader_private, block_header.hash()),
         );
         let msg = BlockMessage::RbcInit(crate::sumeragi::consensus::RbcInit {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([3u8; 32])),
@@ -9086,7 +9094,7 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
         let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
         let block_created = message::BlockCreated {
@@ -9225,7 +9233,7 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let (_, private_key) = key_pair.into_parts();
-        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
         let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
         let block_created = message::BlockCreated {

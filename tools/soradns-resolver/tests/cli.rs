@@ -242,7 +242,8 @@ fn sample_directory_bundle() -> (ResolverAttestationDocumentV1, Vec<u8>, Vec<u8>
             .expect("canonicalize directory");
     let directory_sha = sha256_digest(&directory_bytes);
 
-    let builder_keys = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+    let builder_keys = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+        .expect("fixture SoraDNS directory builder key");
     let mut record = ResolverDirectoryRecordV1 {
         root_hash,
         record_version: 1,

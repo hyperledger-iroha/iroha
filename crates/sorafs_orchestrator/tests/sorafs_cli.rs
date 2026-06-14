@@ -17,6 +17,7 @@ use blake3::hash as blake3_hash;
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use hex::{decode as hex_decode, encode as hex_encode};
 use httpmock::prelude::*;
+#[cfg(feature = "local-quic-proxy")]
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use iroha_data_model::account::AccountId;
@@ -47,20 +48,22 @@ fn sorafs_cli_cmd() -> AssertCommand {
 }
 
 fn deterministic_ed25519_authority_and_private_key() -> (String, String) {
-    let keypair = KeyPair::from_seed(
+    let keypair = KeyPair::try_from_seed(
         b"sorafs-cli-manifest-submit-authority".to_vec(),
         Algorithm::Ed25519,
-    );
+    )
+    .expect("fixture SoraFS CLI manifest authority key");
     let authority = AccountId::new(keypair.public_key().clone()).to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
     (authority, private_key)
 }
 
 fn write_deploy_client_config(dir: &Path, torii_url: &str) -> (PathBuf, String) {
-    let keypair = KeyPair::from_seed(
+    let keypair = KeyPair::try_from_seed(
         b"sorafs-cli-deploy-authority-seed".to_vec(),
         Algorithm::Ed25519,
-    );
+    )
+    .expect("fixture SoraFS CLI deploy authority key");
     let public_key = keypair.public_key().to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
     let path = dir.join("client.toml");
@@ -86,10 +89,11 @@ fn write_deploy_client_config_with_chain(
     torii_url: &str,
     chain: &str,
 ) -> (PathBuf, String) {
-    let keypair = KeyPair::from_seed(
+    let keypair = KeyPair::try_from_seed(
         b"sorafs-cli-deploy-authority-seed".to_vec(),
         Algorithm::Ed25519,
-    );
+    )
+    .expect("fixture SoraFS CLI deploy authority key");
     let public_key = keypair.public_key().to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
     let path = dir.join("client-known-chain.toml");
@@ -4576,6 +4580,68 @@ fn fetch_command_persists_scoreboard_via_flag() {
     );
 }
 
+#[cfg(not(feature = "local-quic-proxy"))]
+#[test]
+fn fetch_command_rejects_local_proxy_manifest_without_runtime_feature() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload: Vec<u8> = (0..64).map(|idx| idx as u8).collect();
+    let plan = CarBuildPlan::single_file(&payload).expect("plan");
+    let plan_json =
+        chunk_fetch_specs_to_string(&plan.chunk_fetch_specs()).expect("plan json") + "\n";
+    let plan_path = tempdir.path().join("plan.json");
+    fs::write(&plan_path, plan_json.as_bytes()).expect("write plan json");
+
+    let manifest_id_hex = hex_encode(blake3_hash(&payload).as_bytes());
+    let provider_id_hex = "cd".repeat(32);
+    let stream_token_b64 =
+        make_stream_token_b64(&manifest_id_hex, &provider_id_hex, "sorafs.sf1@1.0.0", 2);
+    let policy_path = tempdir.path().join("proxy_config.json");
+    let manifest_out_path = tempdir.path().join("proxy_manifest.json");
+
+    let mut local_proxy = Map::new();
+    local_proxy.insert("bind_addr".into(), Value::from("127.0.0.1:0"));
+    local_proxy.insert("telemetry_label".into(), Value::from("test-proxy"));
+    local_proxy.insert("proxy_mode".into(), Value::from("bridge"));
+    local_proxy.insert("emit_browser_manifest".into(), Value::from(true));
+
+    let mut root = Map::new();
+    root.insert("local_proxy".into(), Value::Object(local_proxy));
+
+    let rendered =
+        norito::json::to_string_pretty(&Value::Object(root)).expect("render orchestrator config");
+    fs::write(&policy_path, rendered.as_bytes()).expect("write orchestrator config");
+
+    let output = sorafs_cli_cmd()
+        .arg("fetch")
+        .arg(format!("--plan={}", plan_path.display()))
+        .arg(format!("--manifest-id={manifest_id_hex}"))
+        .arg(format!(
+            "--provider=name=proxy-gw,provider-id={provider_id_hex},base-url=http://127.0.0.1:9/,stream-token={stream_token_b64}",
+        ))
+        .arg(format!("--orchestrator-config={}", policy_path.display()))
+        .arg(format!(
+            "--local-proxy-manifest-out={}",
+            manifest_out_path.display()
+        ))
+        .output()
+        .expect("command executes");
+
+    assert!(
+        !output.status.success(),
+        "command should fail when proxy runtime support is not compiled in"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires local QUIC proxy runtime support"),
+        "stderr should mention missing proxy runtime feature: {stderr}"
+    );
+    assert!(
+        !manifest_out_path.exists(),
+        "no proxy manifest should be written when runtime support is unavailable"
+    );
+}
+
+#[cfg(feature = "local-quic-proxy")]
 #[test]
 fn fetch_command_writes_local_proxy_manifest() {
     let tempdir = tempdir().expect("tempdir");

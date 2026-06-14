@@ -105,6 +105,11 @@ const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
 const TEST_SNS_LEASE_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(120);
 const TEST_SNS_LEASE_VISIBILITY_POLL: Duration = Duration::from_millis(250);
 
+fn checked_key_pair_from_seed(seed: impl Into<Vec<u8>>, algorithm: Algorithm) -> KeyPair {
+    KeyPair::try_from_seed(seed.into(), algorithm)
+        .expect("fixture seed must derive a valid keypair")
+}
+
 pub use crate::config::genesis as genesis_factory;
 /// Build the default minimal genesis with additional post-topology transactions.
 ///
@@ -5303,7 +5308,7 @@ impl NetworkBuilder {
                 iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
                     .parse()
                     .expect("default nexus fee asset id");
-            let bootstrap_gas_keypair = KeyPair::from_seed(
+            let bootstrap_gas_keypair = checked_key_pair_from_seed(
                 b"iroha_test_network::npos_bootstrap_gas_account".to_vec(),
                 Algorithm::Ed25519,
             );
@@ -7408,12 +7413,12 @@ impl NetworkPeerBuilder {
 
         let streaming_key_pair = seed
             .as_ref()
-            .map(|seed_bytes| KeyPair::from_seed(seed_bytes.clone(), Algorithm::Ed25519))
+            .map(|seed_bytes| checked_key_pair_from_seed(seed_bytes.clone(), Algorithm::Ed25519))
             .unwrap_or_else(KeyPair::random);
 
         let bls_key = if let Some(mut seed_bytes) = seed.clone() {
             seed_bytes.extend_from_slice(b":bls");
-            KeyPair::from_seed(seed_bytes, Algorithm::BlsNormal)
+            checked_key_pair_from_seed(seed_bytes, Algorithm::BlsNormal)
         } else {
             KeyPair::random_with_algorithm(Algorithm::BlsNormal)
         };
@@ -7940,7 +7945,8 @@ mod sora_profile_tests {
 
     #[test]
     fn sora_profile_detection_pop_survives_trusted_peers_pop_override() {
-        let other = KeyPair::from_seed(b"sora-profile-pop-merge".to_vec(), Algorithm::BlsNormal);
+        let other =
+            checked_key_pair_from_seed(b"sora-profile-pop-merge".to_vec(), Algorithm::BlsNormal);
         let other_pop =
             iroha_crypto::bls_normal_pop_prove(other.private_key()).expect("BLS PoP generation");
         let other_pk = other.public_key().to_string();
@@ -12310,6 +12316,18 @@ exit 0
     fn peer_builder_mnemonic_has_no_whitespace() {
         let builder = NetworkPeerBuilder::new();
         assert!(builder.mnemonic.chars().all(|c| !c.is_whitespace()));
+    }
+
+    #[test]
+    fn checked_key_pair_from_seed_uses_checked_derivation() {
+        assert_eq!(
+            checked_key_pair_from_seed(vec![1; 32], Algorithm::Ed25519).algorithm(),
+            Algorithm::Ed25519
+        );
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     #[test]

@@ -1489,7 +1489,8 @@ mod tests {
     const FIXTURE_PATH: &str = "../../IrohaSwift/Tests/IrohaSwiftTests/Fixtures/vpn_vectors.json";
 
     fn sample_helper_ticket(expires_at_ms: u64) -> VpnHelperTicketV1 {
-        let metering_key_pair = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
+        let metering_key_pair = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
         VpnHelperTicketV1 {
             session_id: [0xAB; 16],
             quote_id: [0xBC; 32],

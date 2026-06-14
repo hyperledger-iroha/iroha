@@ -15889,6 +15889,10 @@ pub mod isi {
             zk::{OpenVerifyEnvelope, ZkAceWitnessV1},
         };
 
+        fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
+            Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+        }
+
         #[test]
         fn derive_ballot_nullifier_is_unambiguous_for_delimiters() {
             let commit = [0x42; 32];
@@ -24030,7 +24034,7 @@ pub mod isi {
             let msg_hash = endorsement.body_hash();
             endorsement.signatures.push(DomainEndorsementSignature {
                 signer: kp.public_key().clone(),
-                signature: Signature::new(kp.private_key(), msg_hash.as_ref()),
+                signature: checked_signature(kp.private_key(), msg_hash.as_ref()),
             });
             new_domain.metadata.insert(
                 Name::from_str("endorsement").expect("name"),
@@ -24147,7 +24151,7 @@ pub mod isi {
             let msg_hash = endorsement.body_hash();
             endorsement.signatures.push(DomainEndorsementSignature {
                 signer: kp.public_key().clone(),
-                signature: Signature::new(kp.private_key(), msg_hash.as_ref()),
+                signature: checked_signature(kp.private_key(), msg_hash.as_ref()),
             });
             let key: iroha_data_model::name::Name = "endorsement".parse().expect("name");
             let mut domain = Domain::new(domain_id.clone());
@@ -24173,7 +24177,7 @@ pub mod isi {
                 .signatures
                 .push(DomainEndorsementSignature {
                     signer: kp.public_key().clone(),
-                    signature: Signature::new(kp.private_key(), msg_hash_dupe.as_ref()),
+                    signature: checked_signature(kp.private_key(), msg_hash_dupe.as_ref()),
                 });
             let mut dup_domain = Domain::new(domain_id.clone());
             dup_domain.metadata.insert(key, Json::new(endorsement_dupe));
@@ -24261,7 +24265,7 @@ pub mod isi {
             let msg_hash = endorsement.body_hash();
             endorsement.signatures.push(DomainEndorsementSignature {
                 signer: kp.public_key().clone(),
-                signature: Signature::new(kp.private_key(), msg_hash.as_ref()),
+                signature: checked_signature(kp.private_key(), msg_hash.as_ref()),
             });
             new_domain.metadata.insert(
                 Name::from_str("endorsement").expect("name"),
@@ -29044,7 +29048,7 @@ pub mod isi {
             };
             let body_hash = endorsement.body_hash();
             for kp in signers {
-                let sig = iroha_crypto::Signature::new(kp.private_key(), body_hash.as_ref());
+                let sig = checked_signature(kp.private_key(), body_hash.as_ref());
                 endorsement.signatures.push(DomainEndorsementSignature {
                     signer: kp.public_key().clone(),
                     signature: sig,

@@ -14,7 +14,8 @@ use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
 fn seeded_authority(seed: u8) -> AccountId {
-    let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+    let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+        .expect("seeded Kotodama authority keypair should be valid");
     AccountId::new(keypair.public_key().clone())
 }
 

@@ -16,6 +16,15 @@ use iroha_data_model::{
 };
 use nonzero_ext::nonzero;
 
+fn checked_random_account_id() -> iroha_data_model::AccountId {
+    iroha_data_model::AccountId::new(
+        iroha_crypto::KeyPair::try_random()
+            .expect("generate checked query-response account keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
 #[test]
 fn parameters_query_response_roundtrips_norito() {
     let params = Parameters::default();
@@ -162,7 +171,7 @@ fn rwa_iterable_query_response_roundtrips_header_and_json() {
         iroha_data_model::Metadata::default(),
         Vec::new(),
         RwaControlPolicy::default(),
-        iroha_data_model::AccountId::new(iroha_crypto::KeyPair::random().public_key().clone()),
+        checked_random_account_id(),
     );
     let batch = QueryOutputBatchBoxTuple {
         tuple: vec![QueryOutputBatchBox::Rwa(vec![rwa.clone()])],

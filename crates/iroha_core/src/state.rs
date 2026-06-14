@@ -30302,8 +30302,8 @@ mod block_proof_tests {
         ChainId,
         account::AccountId,
         block::{BlockHeader, BlockSignature},
-        domain::DomainId,
         transaction::signed::{TransactionBuilder, TransactionResultInner},
+        trigger::DataTriggerSequence,
     };
     use nonzero_ext::nonzero;
 
@@ -30319,7 +30319,6 @@ mod block_proof_tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "block-proof-tests".parse().expect("chain id");
-        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
@@ -30329,16 +30328,15 @@ mod block_proof_tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let signature = BlockSignature::new(
             0,
-            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+            SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                .expect("test block signing should succeed"),
         );
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block
             .set_transaction_results(
                 Vec::new(),
                 &[entry_hash],
-                vec![TransactionResultInner::Ok(
-                    crate::trigger::DataTriggerSequence::default(),
-                )],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
             )
             .expect("test block entrypoint hash should match payload");
 
@@ -31274,7 +31272,8 @@ mod replay_validation_tests {
         block.set_execution_context(None);
         let signature = BlockSignature::new(
             signatory_idx,
-            SignatureOf::from_hash(private_key, block.header().hash()),
+            SignatureOf::try_from_hash(private_key, block.header().hash())
+                .expect("test block signing should succeed"),
         );
         block
             .replace_signatures(BTreeSet::from([signature]))
@@ -31842,7 +31841,8 @@ mod replay_validation_tests {
         };
         let signature = BlockSignature::new(
             0,
-            SignatureOf::from_hash(signer_key, signed_block.header().hash()),
+            SignatureOf::try_from_hash(signer_key, signed_block.header().hash())
+                .expect("test block signing should succeed"),
         );
         let mut signature_set = BTreeSet::new();
         signature_set.insert(signature);
@@ -32046,7 +32046,8 @@ mod replay_validation_tests {
         let mut signed_block2: SignedBlock = block2.into();
         let forged_signature = BlockSignature::new(
             0,
-            SignatureOf::from_hash(mismatched_signer, signed_block2.header().hash()),
+            SignatureOf::try_from_hash(mismatched_signer, signed_block2.header().hash())
+                .expect("test block signing should succeed"),
         );
         signed_block2
             .replace_signatures(BTreeSet::from([forged_signature]))
@@ -39620,7 +39621,8 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let signature = iroha_data_model::block::BlockSignature::new(
             0,
-            iroha_crypto::SignatureOf::from_hash(keypair.private_key(), header.hash()),
+            iroha_crypto::SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                .expect("test block signing should succeed"),
         );
         let mut block = SignedBlock::presigned(signature, header, Vec::<SignedTransaction>::new());
         block.set_external_entrypoints(vec![sealed_entrypoint]);
@@ -42614,7 +42616,8 @@ mod tests {
         let signatures: Vec<Vec<u8>> = signers
             .iter()
             .map(|keypair| {
-                Signature::new(keypair.private_key(), &preimage)
+                Signature::try_new(keypair.private_key(), &preimage)
+                    .expect("test fixture signing should succeed")
                     .payload()
                     .to_vec()
             })
@@ -47568,7 +47571,8 @@ mod tests {
         let signatures: Vec<Vec<u8>> = [kp_a, kp_b]
             .iter()
             .map(|kp| {
-                Signature::new(kp.private_key(), &preimage)
+                Signature::try_new(kp.private_key(), &preimage)
+                    .expect("test fixture signing should succeed")
                     .payload()
                     .to_vec()
             })
@@ -47665,7 +47669,8 @@ mod tests {
         let signatures: Vec<Vec<u8>> = [kp_a, kp_b]
             .iter()
             .map(|kp| {
-                Signature::new(kp.private_key(), &preimage)
+                Signature::try_new(kp.private_key(), &preimage)
+                    .expect("test fixture signing should succeed")
                     .payload()
                     .to_vec()
             })
@@ -47789,7 +47794,8 @@ mod tests {
         let signatures: Vec<Vec<u8>> = [&kp_a, &kp_b]
             .into_iter()
             .map(|kp| {
-                Signature::new(kp.private_key(), &preimage)
+                Signature::try_new(kp.private_key(), &preimage)
+                    .expect("test fixture signing should succeed")
                     .payload()
                     .to_vec()
             })
@@ -47880,7 +47886,8 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let signature = iroha_data_model::block::BlockSignature::new(
             0,
-            iroha_crypto::SignatureOf::from_hash(kp.private_key(), header.hash()),
+            iroha_crypto::SignatureOf::try_from_hash(kp.private_key(), header.hash())
+                .expect("test block signing should succeed"),
         );
         let canonical_block = Arc::new(SignedBlock::presigned(signature, header, Vec::new()));
         let block_hash = canonical_block.hash();
@@ -48137,7 +48144,8 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let signature = iroha_data_model::block::BlockSignature::new(
             0,
-            iroha_crypto::SignatureOf::from_hash(block_keypair.private_key(), header.hash()),
+            iroha_crypto::SignatureOf::try_from_hash(block_keypair.private_key(), header.hash())
+                .expect("test block signing should succeed"),
         );
         let canonical_block = Arc::new(SignedBlock::presigned(signature, header, Vec::new()));
         let canonical_hash = canonical_block.hash();
@@ -55988,7 +55996,9 @@ mod tests {
         for idx in signers {
             let idx_u32 = u32::try_from(*idx).expect("signer index fits in u32");
             signers_set.insert(idx_u32);
-            let signature = Signature::new(keypairs[*idx].private_key(), message_digest.as_ref());
+            let signature =
+                Signature::try_new(keypairs[*idx].private_key(), message_digest.as_ref())
+                    .expect("test fixture signing should succeed");
             signature_payloads.push(signature.payload().to_vec());
         }
         let signature_refs: Vec<&[u8]> = signature_payloads.iter().map(Vec::as_slice).collect();

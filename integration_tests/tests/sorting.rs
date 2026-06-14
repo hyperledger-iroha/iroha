@@ -10,7 +10,7 @@ use eyre::{Result, WrapErr as _};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
-    crypto::KeyPair,
+    crypto::{KeyPair, PublicKey},
     data_model::{account::Account, name::Name, prelude::*, query::parameters::SortOrder},
 };
 use iroha_test_network::*;
@@ -25,6 +25,18 @@ fn start_network(
     context: &'static str,
 ) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(builder, context).unwrap()
+}
+
+fn checked_random_public_key() -> PublicKey {
+    KeyPair::try_random()
+        .expect("generate checked sorting account keypair")
+        .into_parts()
+        .0
+}
+
+#[test]
+fn sorting_account_public_key_fixture_uses_checked_randomness() {
+    let _public_key = checked_random_public_key();
 }
 
 #[test]
@@ -360,7 +372,7 @@ fn correct_sorting_of_entities() -> Result<()> {
 
     let n = 10u32;
     let mut public_keys = (0..n)
-        .map(|_| KeyPair::random().into_parts().0)
+        .map(|_| checked_random_public_key())
         .collect::<Vec<_>>();
     public_keys.sort_unstable();
     for i in 0..n {
@@ -569,7 +581,7 @@ fn sort_only_elements_which_have_sorting_key() -> Result<()> {
 
     let n = 10u32;
     let mut public_keys = (0..n)
-        .map(|_| KeyPair::random().into_parts().0)
+        .map(|_| checked_random_public_key())
         .collect::<Vec<_>>();
     public_keys.sort_unstable();
     for i in 0..n {

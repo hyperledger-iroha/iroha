@@ -4355,6 +4355,11 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "org.hyperledger.iroha.sdk.privacy.ConfidentialNoteTest",
         "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest",
         "org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathTest",
+        "org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest",
+        "org.hyperledger.iroha.sdk.sccp.TronSccpProverTest",
+        "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest",
+        "org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest",
+        "org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest",
         "org.hyperledger.iroha.sdk.norito.NoritoHeaderTest",
         "org.hyperledger.iroha.sdk.norito.NoritoColumnarTest",
         "org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapterParityTest",
@@ -4400,6 +4405,11 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
             "org.hyperledger.iroha.android.connect.ConnectErrorTests,"
             "org.hyperledger.iroha.android.tools.PendingQueueInspectorTests,"
             "org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifierTests,"
+            "org.hyperledger.iroha.android.sccp.EvmSccpProverTests,"
+            "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,"
+            "org.hyperledger.iroha.android.sccp.SolanaSccpProverTests,"
+            "org.hyperledger.iroha.android.sccp.TonSccpProverTests,"
+            "org.hyperledger.iroha.android.sccp.TronSccpProverTests,"
             "org.hyperledger.iroha.android.address.AccountIdLiteralTests,"
             "org.hyperledger.iroha.android.address.AccountAddressTests,"
             "org.hyperledger.iroha.android.client.CanonicalRequestSignerTests,"

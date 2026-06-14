@@ -489,16 +489,30 @@ mod tests {
         }
     }
 
+    fn sample_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     fn sample_private_key() -> (PrivateKey, String) {
-        let key_pair = KeyPair::from_seed(vec![1_u8; 32], Algorithm::Ed25519);
+        let key_pair = sample_key_pair(1);
         let private_key = key_pair.private_key().clone();
         let private_key_str = ExposedPrivateKey(private_key.clone()).to_string();
         (private_key, private_key_str)
     }
 
     fn sample_account_id(seed: u8) -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = sample_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn sample_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(sample_key_pair(3).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     fn sample_plan(provider: AccountId, asset_definition: AssetDefinitionId) -> SubscriptionPlan {

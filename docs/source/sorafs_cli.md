@@ -400,7 +400,13 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
 - Guard directory endpoints may now carry a `"tags"` array—mark SoraNet exits
   capable of proxying Norito streaming traffic with `"norito-stream"` so the
   orchestrator prioritises those URLs when preparing privacy routes.
-- `--local-proxy-manifest-out=PATH` captures the QUIC proxy manifest (certificate, ALPN, guard cache key, cache-tagging salt, telemetry hints, and Kaigi room policy hint) emitted by the orchestrator. Feed the manifest to the browser extension or SDK adapters; the JSON summary mirrors the same payload under `local_proxy_manifest`.
+- `--local-proxy-manifest-out=PATH` captures the QUIC proxy manifest
+  (certificate, ALPN, guard cache key, cache-tagging salt, telemetry hints, and
+  Kaigi room policy hint) emitted by the orchestrator. It requires a
+  `local_proxy` config with `emit_browser_manifest = true` and a CLI binary
+  built with the `local-quic-proxy` feature. Feed the manifest to the browser
+  extension or SDK adapters; the JSON summary mirrors the same payload under
+  `local_proxy_manifest`.
 - `--local-proxy-kaigi-spool=PATH`/`--local-proxy-kaigi-policy=public|authenticated` override the Kaigi spool directory and advertised room policy for a single run, matching the Norito overrides.
 
 - `chunk_count`, `assembled_bytes`, and `payload` (base64) for quick integrity
@@ -408,7 +414,12 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
 - `provider_reports`, mirroring the multi-source fetch outcome with success /
   failure counts and the disabled flag for each provider.
 - `chunk_receipts`, recording which provider ultimately served every chunk.
-- `local_proxy_manifest`, populated when `local_proxy` is enabled in the orchestrator config. The object mirrors the browser handshake manifest (certificate PEM, ALPN label, guard cache key, cache-tagging salt, telemetry hints) and the same payload is written to `--local-proxy-manifest-out=PATH` for browser extensions.
+- `local_proxy_manifest`, populated when `local_proxy` is enabled in the
+  orchestrator config, `emit_browser_manifest` is true, and local QUIC proxy
+  runtime support is compiled in. The object mirrors the browser handshake
+  manifest (certificate PEM, ALPN label, guard cache key, cache-tagging salt,
+  telemetry hints) and the same payload is written to
+  `--local-proxy-manifest-out=PATH` for browser extensions.
 - `manifest_digest_hex`, `manifest_payload_digest_hex`, `manifest_car_digest_hex`, `manifest_content_length`, `manifest_chunk_count`, `manifest_chunk_profile_handle`, and `manifest_governance` surface the manifest metadata downloaded from the gateway. These fields mirror the manifest response returned by `/v1/sorafs/storage/manifest/{id}`, confirm that the orchestrator rebuilt the CAR archive against the expected payload, and expose the council signatures bundled with the manifest (`manifest_governance.council_signatures`).
 - `car_archive` now contains the assembled CAR diagnostics (`payload_digest_hex`, `archive_digest_hex`, `cid_hex`, `root_cids_hex`, `size`) alongside `verified=true` and `por_leaf_count`, proving that the CAR bytes emitted by the gateway match the manifest digests and PoR tree recorded on ingest.
 - `ineligible_providers`, listing any aliases filtered out by capability or

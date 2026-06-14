@@ -1010,7 +1010,9 @@ mod codec_tests {
         fn new(seed: u8) -> Self {
             let _domain = DomainId::try_new("wonderland", "universal").expect("domain");
             let (public_key, private_key) =
-                KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("fixture seed derives Ed25519 keypair")
+                    .into_parts();
             let id = account::AccountId::new(public_key);
             Self { id, private_key }
         }
@@ -1512,8 +1514,9 @@ mod predicate_tests {
     };
 
     fn test_authority() -> AccountId {
-        let (public_key, _private_key) =
-            KeyPair::from_seed(vec![0x24; 32], Algorithm::Ed25519).into_parts();
+        let (public_key, _private_key) = KeyPair::try_from_seed(vec![0x24; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair")
+            .into_parts();
         AccountId::new(public_key)
     }
 

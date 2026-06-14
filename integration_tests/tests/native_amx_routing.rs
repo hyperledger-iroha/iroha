@@ -78,16 +78,40 @@ impl AsRef<Table> for ConfigLayer {
 fn validator_account(index: usize) -> AccountId {
     let mut seed = b"integration_tests::native_amx_routing::validator".to_vec();
     seed.extend_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
-    let key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+    let key_pair =
+        KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("fixture Native AMX validator key");
     AccountId::new(key_pair.public_key().clone())
 }
 
 fn gas_account() -> AccountId {
-    let key_pair = KeyPair::from_seed(
+    let key_pair = KeyPair::try_from_seed(
         b"integration_tests::native_amx_routing::gas".to_vec(),
         Algorithm::Ed25519,
-    );
+    )
+    .expect("fixture Native AMX gas key");
     AccountId::new(key_pair.public_key().clone())
+}
+
+#[test]
+fn native_amx_account_fixtures_use_checked_seed_derivation() {
+    let mut validator_seed = b"integration_tests::native_amx_routing::validator".to_vec();
+    validator_seed.extend_from_slice(&0_u64.to_le_bytes());
+    let expected_validator = KeyPair::try_from_seed(validator_seed, Algorithm::Ed25519)
+        .expect("fixture Native AMX validator key");
+    assert_eq!(
+        validator_account(0),
+        AccountId::new(expected_validator.public_key().clone()),
+    );
+
+    let expected_gas = KeyPair::try_from_seed(
+        b"integration_tests::native_amx_routing::gas".to_vec(),
+        Algorithm::Ed25519,
+    )
+    .expect("fixture Native AMX gas key");
+    assert_eq!(
+        gas_account(),
+        AccountId::new(expected_gas.public_key().clone())
+    );
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {

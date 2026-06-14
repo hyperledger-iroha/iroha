@@ -786,7 +786,8 @@ mod tests {
     }
 
     fn account(seed: u8) -> crate::account::AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked escrow fixture account keypair");
         crate::account::AccountId::new(key_pair.public_key().clone())
     }
 

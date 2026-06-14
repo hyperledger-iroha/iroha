@@ -2426,6 +2426,11 @@ mod tests {
         CachedSegment::new(envelope, Arc::<[u8]>::from(payload), qos)
     }
 
+    fn cache_admission_fixture_keypair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0xAB; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("derive cache admission fixture key")
+    }
+
     fn cache_admission_gossip(
         shard: TaikaiShardId,
         sequence: u64,
@@ -2434,7 +2439,7 @@ mod tests {
     ) -> CacheAdmissionGossip {
         let issuer = GuardDirectoryId::new("soranet/cache");
         let cached = dummy_segment(sequence, 512, QosClass::Priority);
-        let key_pair = KeyPair::from_seed(vec![0xAB; 32], iroha_crypto::Algorithm::Ed25519);
+        let key_pair = cache_admission_fixture_keypair();
         let record = CacheAdmissionRecord::from_segment(
             shard,
             issuer,
@@ -2450,6 +2455,16 @@ mod tests {
         let body =
             CacheAdmissionGossipBody::with_nonce(envelope, issued_ms, ttl, &mut rng).unwrap();
         CacheAdmissionGossip::sign(body, &key_pair).expect("gossip")
+    }
+
+    #[test]
+    fn cache_admission_fixture_keypair_uses_checked_seed_derivation() {
+        let key_pair = cache_admission_fixture_keypair();
+        let expected = KeyPair::try_from_seed(vec![0xAB; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("derive expected cache admission fixture key");
+
+        assert_eq!(key_pair.public_key(), expected.public_key());
+        assert_eq!(key_pair.private_key(), expected.private_key());
     }
 
     #[test]
@@ -2472,7 +2487,7 @@ mod tests {
         let cached = dummy_segment(12, 512, QosClass::Priority);
         let issued_ms = 1_726_000_200_000;
         let ttl = Duration::from_secs(15);
-        let key_pair = KeyPair::from_seed(vec![0xAB; 32], iroha_crypto::Algorithm::Ed25519);
+        let key_pair = cache_admission_fixture_keypair();
         let record = CacheAdmissionRecord::from_segment(
             TaikaiShardId(5),
             issuer,

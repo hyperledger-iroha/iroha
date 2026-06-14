@@ -35,7 +35,8 @@ fn build_user_config(inline_toml: &str) -> UserConfig {
 #[test]
 fn trusted_peers_pop_accepts_complete_roster() {
     let base = base_keypair();
-    let other = KeyPair::from_seed(b"trusted-peers-pop-ok".to_vec(), Algorithm::BlsNormal);
+    let other = KeyPair::try_from_seed(b"trusted-peers-pop-ok".to_vec(), Algorithm::BlsNormal)
+        .expect("fixture seed derives BLS trusted peer keypair");
     let base_pop_hex = hex::encode(bls_normal_pop_prove(base.private_key()).expect("pop"));
     let other_pop_hex = hex::encode(bls_normal_pop_prove(other.private_key()).expect("pop"));
     let inline = format!(
@@ -65,7 +66,8 @@ pop_hex = "{other_pop_hex}"
 #[test]
 fn trusted_peers_pop_can_mark_validator_subset() {
     let base = base_keypair();
-    let other = KeyPair::from_seed(b"trusted-peers-pop-missing".to_vec(), Algorithm::BlsNormal);
+    let other = KeyPair::try_from_seed(b"trusted-peers-pop-missing".to_vec(), Algorithm::BlsNormal)
+        .expect("fixture seed derives BLS non-validator peer keypair");
     let base_pop_hex = hex::encode(bls_normal_pop_prove(base.private_key()).expect("pop"));
     let inline = format!(
         r#"
@@ -135,7 +137,8 @@ pop_hex = "not-hex"
 #[test]
 fn trusted_peers_pop_rejects_extraneous_keys() {
     let base = base_keypair();
-    let extra = KeyPair::from_seed(b"trusted-peers-pop-extra".to_vec(), Algorithm::BlsNormal);
+    let extra = KeyPair::try_from_seed(b"trusted-peers-pop-extra".to_vec(), Algorithm::BlsNormal)
+        .expect("fixture seed derives extraneous BLS peer keypair");
     let base_pop_hex = hex::encode(bls_normal_pop_prove(base.private_key()).expect("pop"));
     let extra_pop_hex = hex::encode(bls_normal_pop_prove(extra.private_key()).expect("pop"));
     let inline = format!(

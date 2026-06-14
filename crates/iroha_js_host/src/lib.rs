@@ -11376,7 +11376,7 @@ fn privacy_production_localnet_peer_ids_are_valid(peer_ids: &[&str; 4]) -> bool 
 }
 
 fn privacy_production_localnet_artifact_hashes_are_valid(
-    acceptance: PrivacyProductionLocalnetEvidenceV1,
+    acceptance: &PrivacyProductionLocalnetEvidenceV1,
 ) -> bool {
     let hashes = [
         acceptance.smoke_tx_hash,
@@ -11405,7 +11405,7 @@ fn privacy_production_localnet_artifact_hashes_are_valid(
 }
 
 fn privacy_production_localnet_evidence_is_valid(
-    acceptance: PrivacyProductionLocalnetEvidenceV1,
+    acceptance: &PrivacyProductionLocalnetEvidenceV1,
     expected_chain_id: &str,
 ) -> bool {
     privacy_production_localnet_run_id_is_valid(acceptance.run_id)
@@ -11609,7 +11609,10 @@ fn privacy_production_evidence_row_is_valid(
         && privacy_production_evidence_required_state_is_valid(row, entry)
         && privacy_production_evidence_hash_is_valid(row.fuzz_artifact_hash)
         && privacy_production_evidence_hash_is_valid(row.performance_artifact_hash)
-        && privacy_production_localnet_evidence_is_valid(row.localnet_acceptance, expected_chain_id)
+        && privacy_production_localnet_evidence_is_valid(
+            &row.localnet_acceptance,
+            expected_chain_id,
+        )
         && privacy_production_gate_evidence_is_valid(entry, &row.gate_evidence)
 }
 
@@ -18007,7 +18010,8 @@ mod tests {
     #[test]
     fn crypto_multihash_helpers_use_checked_formatters() {
         let seed = vec![0x5A; 32];
-        let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+        let keypair =
+            KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("fixture seed keypair");
         let (_, public_payload) = keypair
             .public_key()
             .try_to_bytes()
@@ -23739,7 +23743,8 @@ mod tests {
 
     #[test]
     fn smart_contract_code_instruction_json_roundtrip() {
-        let signing_key = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
+        let signing_key = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
+            .expect("fixture seed keypair");
         let manifest = ContractManifest {
             code_hash: Some(Hash::prehashed(sample_hash(0xAA))),
             abi_hash: Some(Hash::prehashed(sample_hash(0xBB))),

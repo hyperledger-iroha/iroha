@@ -565,6 +565,24 @@ fn normalize_width(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    fn fixture_account_i105(seed: u8) -> String {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
+        iroha::data_model::account::AccountId::new(key_pair.public_key().clone())
+            .canonical_i105()
+            .expect("canonical I105")
+    }
+
+    #[test]
+    fn fixture_account_i105_uses_checked_seed_derivation() {
+        assert!(!fixture_account_i105(0x10).is_empty());
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+    }
 
     #[test]
     fn lane_summary_formats_rows() {
@@ -647,15 +665,7 @@ mod tests {
 
     #[test]
     fn validator_summary_formats_activation_and_status() {
-        use iroha_crypto::{Algorithm, KeyPair};
-
-        let validator = iroha::data_model::account::AccountId::new(
-            KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        )
-        .canonical_i105()
-        .expect("canonical I105");
+        let validator = fixture_account_i105(0x11);
         let record = Map::from_iter([
             ("lane_id".into(), Value::from(0u64)),
             ("validator".into(), Value::from(validator.clone())),
@@ -688,22 +698,8 @@ mod tests {
 
     #[test]
     fn stake_summary_marks_pending_unbonds() {
-        use iroha_crypto::{Algorithm, KeyPair};
-
-        let validator = iroha::data_model::account::AccountId::new(
-            KeyPair::from_seed(vec![0x12; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        )
-        .canonical_i105()
-        .expect("canonical I105");
-        let staker = iroha::data_model::account::AccountId::new(
-            KeyPair::from_seed(vec![0x13; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        )
-        .canonical_i105()
-        .expect("canonical I105");
+        let validator = fixture_account_i105(0x12);
+        let staker = fixture_account_i105(0x13);
         let pending = Map::from_iter([
             ("request_id".into(), Value::from("deadbeef")),
             ("amount".into(), Value::from("250")),

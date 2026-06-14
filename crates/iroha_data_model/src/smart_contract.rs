@@ -527,7 +527,8 @@ impl ContractAddress {
             Vec::with_capacity(b"iroha:contract-subject:v1:".len() + self.as_ref().len());
         seed.extend_from_slice(b"iroha:contract-subject:v1:");
         seed.extend_from_slice(self.as_ref().as_bytes());
-        let keypair = iroha_crypto::KeyPair::from_seed(seed, iroha_crypto::Algorithm::Ed25519);
+        let keypair = iroha_crypto::KeyPair::try_from_seed(seed, iroha_crypto::Algorithm::Ed25519)
+            .expect("contract subject seed derives Ed25519 keypair");
         AccountId::new(keypair.public_key().clone())
     }
 

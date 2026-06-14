@@ -286,12 +286,14 @@ mod tests {
     }
 
     fn sponsor_account_id() -> AccountId {
-        let sponsor_keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
+        let sponsor_keypair = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
+            .expect("derive checked Nexus sponsor fixture keypair");
         AccountId::new(sponsor_keypair.public_key().clone())
     }
 
     fn sample_peer_id(seed: u8) -> PeerId {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked Nexus peer fixture keypair");
         PeerId::new(keypair.public_key().clone())
     }
 

@@ -1368,7 +1368,8 @@ mod tests {
             vec!["router::dex.universal".parse().expect("contract alias")],
         )
         .expect("dapp link");
-        let keypair = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
         let publisher = AccountId::new(keypair.public_key().clone());
         let mut release = MusubiRelease::new(
             package,
@@ -1395,7 +1396,8 @@ mod tests {
         let package = "dex.universal/swap-core@1.2.3"
             .parse::<MusubiPackageRef>()
             .expect("package ref");
-        let keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![9; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
         let publisher = AccountId::new(keypair.public_key().clone());
         let release = MusubiRelease::new(
             package,
@@ -1416,7 +1418,8 @@ mod tests {
         let package = "dex.universal/swap-core@1.2.3"
             .parse::<MusubiPackageRef>()
             .expect("package ref");
-        let keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![9; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
         let publisher = AccountId::new(keypair.public_key().clone());
         let release = MusubiRelease::new(
             package,
@@ -1439,7 +1442,8 @@ mod tests {
         let package = "dex.universal/swap-core@1.2.3"
             .parse::<MusubiPackageRef>()
             .expect("package ref");
-        let keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![9; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
         let publisher = AccountId::new(keypair.public_key().clone());
         let release = MusubiRelease::new(
             package,

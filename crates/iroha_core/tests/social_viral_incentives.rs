@@ -10,7 +10,7 @@ use iroha_core::{
     smartcontracts::Execute as _,
     state::{State, StateTransaction, World, WorldReadOnly},
 };
-use iroha_crypto::{Hash, KeyPair, SignatureOf};
+use iroha_crypto::{Hash, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::{
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
@@ -33,6 +33,7 @@ use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+use norito::codec::Encode;
 
 fn oracle_config() -> iroha_config::parameters::actual::Oracle {
     use iroha_config::parameters::actual::{
@@ -131,6 +132,10 @@ fn twitter_binding_attestation(
     }
 }
 
+fn checked_signature_of<T: Encode>(private_key: &PrivateKey, payload: &T) -> SignatureOf<T> {
+    SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
+}
+
 fn twitter_binding_observation(
     provider: &AccountId,
     signer: &KeyPair,
@@ -148,7 +153,7 @@ fn twitter_binding_observation(
         outcome: ObservationOutcome::Value(attestation.observation_value()),
         timestamp_ms: Some(attestation.observed_at_ms),
     };
-    let signature = SignatureOf::new(signer.private_key(), &body);
+    let signature = checked_signature_of(signer.private_key(), &body);
     Observation { body, signature }
 }
 

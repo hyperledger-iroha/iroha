@@ -10140,6 +10140,10 @@ Temporal properties:
   TLC-fast configs wire the aggregate alongside those constituent obligations so
   both the local classifiers and their combined progress-mutation frame stay
   checked.
+- The aggregate `RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope` theorem
+  composes the progress-mutation classifier with the live header/digest, CHUNK,
+  and READY handoff-envelope invariants, so any reachable RBC progress mutation
+  stays tied to the proved evidence-causality envelope.
 - `RbcHeaderInstallationOnlyByProposalOrInit` proves that RBC header evidence
   can move from absent to present only through an honest proposal starting RBC
   from `Idle` or an explicit RBC INIT repair/recovery step.
@@ -10235,6 +10239,10 @@ Temporal properties:
 - `RbcCorruptedInitRepairAlwaysResetsEvidence` proves that an RBC INIT repair
   from `Corrupted` enters a clean `Init` state with header/digest restored,
   CHUNK/READY counters reset, and no committed or commit-certificate artifacts.
+- The aggregate `RbcCorruptionRepairAlwaysMatchesFaultEnvelope` theorem composes
+  Byzantine fault admission, digest invalidation, corrupted-state confinement,
+  corruption entry/exit, and clean INIT repair obligations into one
+  fault-to-repair envelope for the RBC corruption path.
 - `RbcInitGateNeverBypassesRepairableState` proves that the live RBC INIT gate
   is enabled only from idle, withheld, or corrupted RBC states, so INIT cannot
   restart an already progressed valid session.

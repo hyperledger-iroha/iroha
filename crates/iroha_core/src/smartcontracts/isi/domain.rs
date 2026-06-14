@@ -3663,6 +3663,11 @@ mod tests {
         State::new_for_testing(World::default(), kura, query)
     }
 
+    fn fixture_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], algorithm)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     fn seed_domain(state: &mut State, domain_id: &DomainId, owner: &AccountId) {
         let domain = Domain {
             id: domain_id.clone(),
@@ -3708,11 +3713,8 @@ mod tests {
         let allowed = [Algorithm::Ed25519];
         let allowed_curve_ids =
             iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(&allowed);
-        let ed25519 = KeyPair::from_seed(b"domain-controller-ed25519".to_vec(), Algorithm::Ed25519);
-        let secp256k1 = KeyPair::from_seed(
-            b"domain-controller-secp256k1".to_vec(),
-            Algorithm::Secp256k1,
-        );
+        let ed25519 = fixture_keypair(0x51, Algorithm::Ed25519);
+        let secp256k1 = fixture_keypair(0x52, Algorithm::Secp256k1);
 
         let allowed_policy = MultisigPolicy::new(
             1,
@@ -3742,6 +3744,18 @@ mod tests {
             err,
             InstructionExecutionError::InvariantViolation(_)
         ));
+    }
+
+    #[test]
+    fn fixture_keypair_uses_checked_seed_derivation() {
+        assert_eq!(
+            fixture_keypair(0x53, Algorithm::Ed25519).algorithm(),
+            Algorithm::Ed25519
+        );
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     #[test]

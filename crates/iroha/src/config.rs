@@ -282,6 +282,10 @@ mod tests {
 
     use super::*;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked config fixture keypair")
+    }
+
     #[test]
     fn web_login_ok() {
         let _ok: WebLogin = "alice".parse().expect("input is valid");
@@ -387,7 +391,7 @@ mod tests {
 
     #[test]
     fn full_env_fallback() {
-        let key = KeyPair::random();
+        let key = checked_random_keypair();
         let env = MockEnv::new()
             .set("CHAIN", "wonder")
             .set("TORII_URL", "http://localhost:8080")

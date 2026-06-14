@@ -226,7 +226,8 @@ mod tests {
     use crate::{account::AccountId, nexus::DataSpaceId, smart_contract::ContractAddress};
 
     fn account() -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![0xD1; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519)
+            .expect("derive checked smart-contract-code fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
 

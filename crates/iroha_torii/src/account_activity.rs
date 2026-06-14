@@ -321,11 +321,18 @@ mod tests {
     use super::*;
 
     fn account(seed: u8) -> AccountId {
-        AccountId::new(
-            KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        )
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
+        AccountId::new(keypair.public_key().clone())
+    }
+
+    #[test]
+    fn account_fixture_uses_checked_seed_derivation() {
+        assert_ne!(account(1), account(2));
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], iroha_crypto::Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     fn asset_id(account: AccountId) -> AssetId {

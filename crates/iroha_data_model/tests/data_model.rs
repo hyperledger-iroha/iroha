@@ -6,11 +6,20 @@ use iroha_data_model::{parameter::BlockParameters, prelude::*};
 use iroha_schema::Ident;
 // Lightweight DSL does not track predicate depth; skip related tests.
 
+fn checked_random_account_id() -> AccountId {
+    AccountId::new(
+        KeyPair::try_random()
+            .expect("generate checked data-model smoke account keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
 #[test]
 fn transfer_isi_should_be_valid() {
     let _domain: DomainId = DomainId::try_new("crypto", "universal").expect("domain");
-    let source_account = AccountId::new(KeyPair::random().public_key().clone());
-    let destination_account = AccountId::new(KeyPair::random().public_key().clone());
+    let source_account = checked_random_account_id();
+    let destination_account = checked_random_account_id();
     let asset_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         DomainId::try_new("crypto", "universal").unwrap(),
         "btc".parse().unwrap(),
@@ -48,7 +57,7 @@ fn compound_predicate_roundtrip() {
 #[test]
 fn role_permission_changed_permission_accessor_exposes_inner_permission() {
     let role_id: RoleId = "moderator".parse().expect("valid role id");
-    let account_ref = AccountId::new(KeyPair::random().public_key().clone()).to_string();
+    let account_ref = checked_random_account_id().to_string();
     let permission = Permission::new(
         Ident::from_str("CanModifyAccountMetadata").expect("valid identifier"),
         norito::json!({"account": account_ref}),
@@ -62,7 +71,7 @@ fn role_permission_changed_permission_accessor_exposes_inner_permission() {
 #[test]
 fn account_permission_changed_permission_accessor_exposes_inner_permission() {
     let _domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
-    let account_id = AccountId::new(KeyPair::random().public_key().clone());
+    let account_id = checked_random_account_id();
     let account_ref = account_id.to_string();
     let permission = Permission::new(
         Ident::from_str("CanModifyAccountMetadata").expect("valid identifier"),

@@ -30769,7 +30769,8 @@ mod tests {
         );
 
         let reviewer_key_pair =
-            crate::KeyPair::from_seed(vec![0xA7; 32], crate::Algorithm::Ed25519);
+            crate::KeyPair::try_from_seed(vec![0xA7; 32], crate::Algorithm::Ed25519)
+                .expect("fixture seed derives reviewer Ed25519 keypair");
         let audit_report_bytes = [
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
             b"external-review-approved: independent BFV full-bootstrap release audit report v1",
@@ -31285,7 +31286,8 @@ mod tests {
             "release audit packages must reject caller-pinned manifest digests as package digest aliases",
         );
         let alternate_reviewer_key_pair =
-            crate::KeyPair::from_seed(vec![0xA8; 32], crate::Algorithm::Ed25519);
+            crate::KeyPair::try_from_seed(vec![0xA8; 32], crate::Algorithm::Ed25519)
+                .expect("fixture seed derives alternate reviewer Ed25519 keypair");
         assert_error_contains(
             validate_bfv_full_bootstrap_release_audit_package_trusted_reviewer_v1(
                 &package,
@@ -33509,7 +33511,8 @@ mod tests {
         );
 
         let wrong_signer_signature =
-            SignatureOf::new(alternate_reviewer_key_pair.private_key(), &signoff.payload);
+            SignatureOf::try_new(alternate_reviewer_key_pair.private_key(), &signoff.payload)
+                .expect("checked wrong-reviewer release audit fixture signature");
         let wrong_signer_signoff = BfvFullBootstrapReleaseAuditSignoffV1 {
             signature: wrong_signer_signature,
             ..signoff.clone()

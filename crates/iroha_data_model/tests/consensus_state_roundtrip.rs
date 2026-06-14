@@ -36,12 +36,18 @@ where
     assert_eq!(decoded, *value, "roundtrip must preserve value");
 }
 
+fn checked_random_peer_id() -> PeerId {
+    PeerId::from(
+        KeyPair::try_random()
+            .expect("generate checked consensus-state peer keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
 #[test]
 fn qc_roundtrip() {
-    let validator_set = vec![
-        PeerId::from(KeyPair::random().public_key().clone()),
-        PeerId::from(KeyPair::random().public_key().clone()),
-    ];
+    let validator_set = vec![checked_random_peer_id(), checked_random_peer_id()];
     let qc = Qc {
         phase: CertPhase::Commit,
         subject_block_hash: sample_block_hash(0x10),

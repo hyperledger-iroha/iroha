@@ -3546,9 +3546,9 @@ fn json_fixed_hex_field<const N: usize>(
             "`{field}` field in {type_name} payload must be a hex string"
         )));
     };
-    decode_fixed_hex_bytes::<N>(raw).ok_or_else(|| {
+    decode_canonical_0x_lower_hex_fixed::<N>(raw).ok_or_else(|| {
         norito::json::Error::Message(format!(
-            "`{field}` field in {type_name} payload must be a {N}-byte hex string"
+            "`{field}` field in {type_name} payload must be a canonical lowercase 0x-prefixed {N}-byte hex string"
         ))
     })
 }
@@ -5274,15 +5274,23 @@ pub fn sccp_evm_mainnet_destination_rollout_with_binding_v1(
         verifier_code_hash,
         Some(verifier_key_hash),
     )?;
-    let network_id = decode_fixed_hex_bytes::<32>(&destination_network_id)?;
+    let network_id = required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(
+        destination_network_id.as_str(),
+    ))?;
     if sccp_evm_mainnet_network_id_word_for_domain(domain).as_ref() != Some(&network_id) {
         return None;
     }
-    let bridge_address = decode_fixed_hex_bytes::<20>(&destination_bridge_address)?;
+    let bridge_address = required_canonical_0x_lower_hex_string_is_nonzero::<20>(Some(
+        destination_bridge_address.as_str(),
+    ))?;
     let verifier_address =
         decode_evm_hex_address(rollout.verifier_identity.as_deref()?.as_bytes())?;
-    let verifier_code_hash = decode_fixed_hex_bytes::<32>(rollout.verifier_code_hash.as_deref()?)?;
-    let verifier_key_hash = decode_fixed_hex_bytes::<32>(rollout.verifier_key_hash.as_deref()?)?;
+    let verifier_code_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.verifier_code_hash.as_deref(),
+    )?;
+    let verifier_key_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.verifier_key_hash.as_deref(),
+    )?;
     let binding = sccp_evm_destination_binding_from_deployment_material(
         domain,
         network_id,
@@ -5340,7 +5348,10 @@ pub fn sccp_solana_mainnet_destination_rollout_with_live_evidence_v1(
 
     let executable = decode_standard_base64(&programdata_executable_base64)?;
     let executable_hash = sccp_solana_verifier_program_code_hash_v1(&executable)?;
-    if required_hex_string_is_nonzero::<32>(rollout.verifier_code_hash.as_deref()).as_ref()
+    if required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.verifier_code_hash.as_deref(),
+    )
+    .as_ref()
         != Some(&executable_hash)
     {
         return None;
@@ -5398,9 +5409,10 @@ pub fn sccp_ton_mainnet_destination_rollout_with_live_evidence_v1(
     )?;
     sccp_apply_static_destination_binding(&mut rollout)?;
 
-    let expected_code_hash =
-        required_hex_string_is_nonzero::<32>(rollout.verifier_code_hash.as_deref())?;
-    let code_boc = decode_hex_bytes(&ton_verifier_code_boc)?;
+    let expected_code_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.verifier_code_hash.as_deref(),
+    )?;
+    let code_boc = decode_canonical_0x_lower_hex_bytes(&ton_verifier_code_boc)?;
     let code_boc_root_hash = sccp_ton_boc_single_root_hash(&code_boc)?;
     if code_boc_root_hash != expected_code_hash {
         return None;
@@ -5447,9 +5459,15 @@ pub fn sccp_tron_mainnet_destination_rollout_with_binding_v1(
         verifier_code_hash,
         Some(verifier_key_hash),
     )?;
-    let network_id = decode_fixed_hex_bytes::<32>(&destination_network_id)?;
-    let verifier_code_hash = decode_fixed_hex_bytes::<32>(rollout.verifier_code_hash.as_deref()?)?;
-    let verifier_key_hash = decode_fixed_hex_bytes::<32>(rollout.verifier_key_hash.as_deref()?)?;
+    let network_id = required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(
+        destination_network_id.as_str(),
+    ))?;
+    let verifier_code_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.verifier_code_hash.as_deref(),
+    )?;
+    let verifier_key_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.verifier_key_hash.as_deref(),
+    )?;
     let binding = sccp_tron_destination_binding_from_deployment_material(
         network_id,
         rollout.verifier_identity.as_deref()?,
@@ -5460,31 +5478,6 @@ pub fn sccp_tron_mainnet_destination_rollout_with_binding_v1(
     rollout.destination_binding_key = Some(binding.key);
     rollout.destination_binding_hash = Some(encode_0x_lower_hex(&binding.binding_hash));
     sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_TRON, &rollout).then_some(rollout)
-}
-
-fn hex32_string_is_nonzero(value: &str) -> bool {
-    let raw = value
-        .strip_prefix("0x")
-        .or_else(|| value.strip_prefix("0X"))
-        .unwrap_or(value)
-        .as_bytes();
-    if raw.len() != 64 {
-        return false;
-    }
-
-    let mut has_nonzero = false;
-    for byte in raw {
-        let Some(value) = (match byte {
-            b'0'..=b'9' => Some(byte - b'0'),
-            b'a'..=b'f' => Some(byte - b'a' + 10),
-            b'A'..=b'F' => Some(byte - b'A' + 10),
-            _ => None,
-        }) else {
-            return false;
-        };
-        has_nonzero |= value != 0;
-    }
-    has_nonzero
 }
 
 fn non_empty_metadata(value: Option<&str>) -> bool {
@@ -5568,25 +5561,92 @@ fn sccp_destination_rollout_verifier_key_hash_is_ready(
     rollout: &SccpDestinationRolloutV1,
 ) -> bool {
     if sccp_destination_rollout_requires_verifier_key_hash(domain) {
-        return rollout
-            .verifier_key_hash
-            .as_deref()
-            .is_some_and(hex32_string_is_nonzero);
+        return rollout.verifier_key_hash.as_deref().is_some_and(|hash| {
+            required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(hash)).is_some()
+        });
     }
 
     rollout.verifier_key_hash.is_none()
 }
 
-fn required_hex_string_is_nonzero<const N: usize>(value: Option<&str>) -> Option<[u8; N]> {
-    let raw = decode_fixed_hex_bytes::<N>(value?)?;
+fn required_canonical_0x_lower_hex_string_is_nonzero<const N: usize>(
+    value: Option<&str>,
+) -> Option<[u8; N]> {
+    let raw = decode_canonical_0x_lower_hex_fixed::<N>(value?)?;
     raw.iter().any(|byte| *byte != 0).then_some(raw)
+}
+
+fn decode_canonical_0x_lower_hex_fixed<const N: usize>(value: &str) -> Option<[u8; N]> {
+    let raw = value.strip_prefix("0x")?.as_bytes();
+    if raw.len() != N * 2 {
+        return None;
+    }
+
+    let mut out = [0u8; N];
+    for (idx, chunk) in raw.chunks_exact(2).enumerate() {
+        let decode = |byte| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
+        let hi = decode(chunk[0])?;
+        let lo = decode(chunk[1])?;
+        out[idx] = (hi << 4) | lo;
+    }
+    Some(out)
+}
+
+fn required_raw_lower_hex_string_is_nonzero<const N: usize>(value: &str) -> Option<[u8; N]> {
+    let raw = value.as_bytes();
+    if raw.len() != N * 2 {
+        return None;
+    }
+
+    let mut has_nonzero = false;
+    let mut out = [0u8; N];
+    for (idx, chunk) in raw.chunks_exact(2).enumerate() {
+        let decode = |byte| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
+        let hi = decode(chunk[0])?;
+        let lo = decode(chunk[1])?;
+        let byte = (hi << 4) | lo;
+        has_nonzero |= byte != 0;
+        out[idx] = byte;
+    }
+    has_nonzero.then_some(out)
+}
+
+fn decode_canonical_0x_lower_hex_bytes(value: &str) -> Option<Vec<u8>> {
+    let raw = value.strip_prefix("0x")?.as_bytes();
+    if raw.is_empty() || !raw.len().is_multiple_of(2) {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(raw.len() / 2);
+    for chunk in raw.chunks_exact(2) {
+        let decode = |byte| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
+        let hi = decode(chunk[0])?;
+        let lo = decode(chunk[1])?;
+        out.push((hi << 4) | lo);
+    }
+    Some(out)
 }
 
 fn sccp_destination_binding_hash_matches(
     rollout: &SccpDestinationRolloutV1,
     expected_hash: &H256,
 ) -> bool {
-    required_hex_string_is_nonzero::<32>(rollout.destination_binding_hash.as_deref()).as_ref()
+    required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.destination_binding_hash.as_deref(),
+    )
+    .as_ref()
         == Some(expected_hash)
 }
 
@@ -5601,9 +5661,9 @@ fn sccp_evm_destination_rollout_binding_metadata_is_ready(
     domain: u32,
     rollout: &SccpDestinationRolloutV1,
 ) -> bool {
-    let Some(network_id) =
-        required_hex_string_is_nonzero::<32>(rollout.destination_network_id.as_deref())
-    else {
+    let Some(network_id) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.destination_network_id.as_deref(),
+    ) else {
         return false;
     };
     let Some(expected_network_id) = sccp_evm_mainnet_network_id_word_for_domain(domain) else {
@@ -5612,9 +5672,9 @@ fn sccp_evm_destination_rollout_binding_metadata_is_ready(
     if network_id != expected_network_id {
         return false;
     }
-    let Some(bridge_address) =
-        required_hex_string_is_nonzero::<20>(rollout.destination_bridge_address.as_deref())
-    else {
+    let Some(bridge_address) = required_canonical_0x_lower_hex_string_is_nonzero::<20>(
+        rollout.destination_bridge_address.as_deref(),
+    ) else {
         return false;
     };
     let Some(verifier_identity) = rollout.verifier_identity.as_deref() else {
@@ -5623,14 +5683,14 @@ fn sccp_evm_destination_rollout_binding_metadata_is_ready(
     let Some(verifier_address) = decode_evm_hex_address(verifier_identity.as_bytes()) else {
         return false;
     };
-    let Some(verifier_code_hash) =
-        required_hex_string_is_nonzero::<32>(rollout.verifier_code_hash.as_deref())
-    else {
+    let Some(verifier_code_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.verifier_code_hash.as_deref(),
+    ) else {
         return false;
     };
-    let Some(verifier_key_hash) =
-        required_hex_string_is_nonzero::<32>(rollout.verifier_key_hash.as_deref())
-    else {
+    let Some(verifier_key_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.verifier_key_hash.as_deref(),
+    ) else {
         return false;
     };
     let Some(binding) = sccp_evm_destination_binding_from_deployment_material(
@@ -5651,22 +5711,22 @@ fn sccp_evm_destination_rollout_binding_metadata_is_ready(
 fn sccp_tron_destination_rollout_binding_metadata_is_ready(
     rollout: &SccpDestinationRolloutV1,
 ) -> bool {
-    let Some(network_id) =
-        required_hex_string_is_nonzero::<32>(rollout.destination_network_id.as_deref())
-    else {
+    let Some(network_id) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.destination_network_id.as_deref(),
+    ) else {
         return false;
     };
     if rollout.destination_bridge_address.is_some() {
         return false;
     }
-    let Some(verifier_code_hash) =
-        required_hex_string_is_nonzero::<32>(rollout.verifier_code_hash.as_deref())
-    else {
+    let Some(verifier_code_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.verifier_code_hash.as_deref(),
+    ) else {
         return false;
     };
-    let Some(verifier_key_hash) =
-        required_hex_string_is_nonzero::<32>(rollout.verifier_key_hash.as_deref())
-    else {
+    let Some(verifier_key_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.verifier_key_hash.as_deref(),
+    ) else {
         return false;
     };
     let Some(verifier_identity) = rollout.verifier_identity.as_deref() else {
@@ -5916,7 +5976,7 @@ fn solana_destination_rollout_programdata_evidence(
         return None;
     }
     let metadata_hash = blake2b256_bytes(&programdata_metadata);
-    if required_hex_string_is_nonzero::<32>(
+    if required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         rollout.solana_programdata_metadata_blake2b256.as_deref(),
     )
     .as_ref()
@@ -5928,12 +5988,15 @@ fn solana_destination_rollout_programdata_evidence(
     let programdata_executable =
         decode_standard_base64(rollout.solana_programdata_executable_base64.as_deref()?)?;
     let executable_hash = sccp_solana_verifier_program_code_hash_v1(&programdata_executable)?;
-    if required_hex_string_is_nonzero::<32>(
+    if required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         rollout.solana_programdata_executable_blake2b256.as_deref(),
     )
     .as_ref()
         != Some(&executable_hash)
-        || required_hex_string_is_nonzero::<32>(rollout.verifier_code_hash.as_deref()).as_ref()
+        || required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+            rollout.verifier_code_hash.as_deref(),
+        )
+        .as_ref()
             != Some(&executable_hash)
     {
         return None;
@@ -5992,7 +6055,11 @@ fn sccp_ton_destination_rollout_live_account_evidence_is_ready(
     if rollout.ton_account_status.as_deref() != Some("active") {
         return false;
     }
-    if required_hex_string_is_nonzero::<32>(rollout.ton_account_state_hash.as_deref()).is_none() {
+    if required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.ton_account_state_hash.as_deref(),
+    )
+    .is_none()
+    {
         return false;
     }
     if !rollout
@@ -6002,19 +6069,22 @@ fn sccp_ton_destination_rollout_live_account_evidence_is_ready(
     {
         return false;
     }
-    if required_hex_string_is_nonzero::<32>(rollout.ton_last_transaction_hash.as_deref()).is_none()
+    if required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.ton_last_transaction_hash.as_deref(),
+    )
+    .is_none()
     {
         return false;
     }
 
-    let Some(verifier_code_hash) =
-        required_hex_string_is_nonzero::<32>(rollout.verifier_code_hash.as_deref())
-    else {
+    let Some(verifier_code_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.verifier_code_hash.as_deref(),
+    ) else {
         return false;
     };
-    let Some(code_boc_root_hash) =
-        required_hex_string_is_nonzero::<32>(rollout.ton_verifier_code_boc_root_hash.as_deref())
-    else {
+    let Some(code_boc_root_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.ton_verifier_code_boc_root_hash.as_deref(),
+    ) else {
         return false;
     };
     if code_boc_root_hash != verifier_code_hash {
@@ -6023,7 +6093,7 @@ fn sccp_ton_destination_rollout_live_account_evidence_is_ready(
     let Some(code_boc) = rollout
         .ton_verifier_code_boc
         .as_deref()
-        .and_then(decode_hex_bytes)
+        .and_then(decode_canonical_0x_lower_hex_bytes)
     else {
         return false;
     };
@@ -6074,10 +6144,9 @@ pub fn sccp_destination_rollout_is_production_ready(
         && rollout.anchors_ready
         && rollout.blockers.is_empty()
         && non_empty_metadata(rollout.verifier_identity.as_deref())
-        && rollout
-            .verifier_code_hash
-            .as_deref()
-            .is_some_and(hex32_string_is_nonzero)
+        && rollout.verifier_code_hash.as_deref().is_some_and(|hash| {
+            required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(hash)).is_some()
+        })
         && sccp_destination_rollout_verifier_key_hash_is_ready(domain, rollout)
         && sccp_destination_rollout_binding_metadata_is_ready(domain, rollout)
         && sccp_destination_rollout_live_chain_metadata_is_ready(domain, rollout)
@@ -6298,16 +6367,16 @@ pub fn canonical_sccp_evm_route_canary_evidence_bytes_v1(
         return None;
     }
     if destination_binding_hash
-        != required_hex_string_is_nonzero::<32>(
+        != required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.destination_binding_hash.as_deref(),
         )?
     {
         return None;
     }
-    let bridge_address = required_hex_string_is_nonzero::<20>(
+    let bridge_address = required_canonical_0x_lower_hex_string_is_nonzero::<20>(
         destination_rollout.destination_bridge_address.as_deref(),
     )?;
-    let network_id = required_hex_string_is_nonzero::<32>(
+    let network_id = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         destination_rollout.destination_network_id.as_deref(),
     )?;
     let verifier_backend = sccp_verifier_backend_for_domain(domain)?;
@@ -6479,13 +6548,13 @@ pub fn canonical_sccp_tron_route_canary_evidence_bytes_v1(
         return None;
     }
     if destination_binding_hash
-        != required_hex_string_is_nonzero::<32>(
+        != required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.destination_binding_hash.as_deref(),
         )?
     {
         return None;
     }
-    let network_id = required_hex_string_is_nonzero::<32>(
+    let network_id = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         destination_rollout.destination_network_id.as_deref(),
     )?;
     let verifier_identity = destination_rollout.verifier_identity.as_deref()?;
@@ -6625,14 +6694,14 @@ pub fn canonical_sccp_ton_route_canary_evidence_bytes_v1(
         return None;
     }
     if destination_binding_hash
-        != required_hex_string_is_nonzero::<32>(
+        != required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.destination_binding_hash.as_deref(),
         )?
     {
         return None;
     }
     if account_state_hash
-        != required_hex_string_is_nonzero::<32>(
+        != required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.ton_account_state_hash.as_deref(),
         )?
     {
@@ -6642,15 +6711,16 @@ pub fn canonical_sccp_ton_route_canary_evidence_bytes_v1(
         return None;
     }
     if last_transaction_hash
-        != required_hex_string_is_nonzero::<32>(
+        != required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.ton_last_transaction_hash.as_deref(),
         )?
     {
         return None;
     }
-    let verifier_code_hash =
-        required_hex_string_is_nonzero::<32>(destination_rollout.verifier_code_hash.as_deref())?;
-    let verifier_code_boc_root_hash = required_hex_string_is_nonzero::<32>(
+    let verifier_code_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        destination_rollout.verifier_code_hash.as_deref(),
+    )?;
+    let verifier_code_boc_root_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         destination_rollout
             .ton_verifier_code_boc_root_hash
             .as_deref(),
@@ -6726,14 +6796,15 @@ pub fn canonical_sccp_solana_route_canary_evidence_bytes_v1(
         return None;
     }
     if destination_binding_hash
-        != required_hex_string_is_nonzero::<32>(
+        != required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.destination_binding_hash.as_deref(),
         )?
     {
         return None;
     }
-    let verifier_code_hash =
-        required_hex_string_is_nonzero::<32>(destination_rollout.verifier_code_hash.as_deref())?;
+    let verifier_code_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        destination_rollout.verifier_code_hash.as_deref(),
+    )?;
     let (
         verifier_program,
         programdata_address,
@@ -6810,7 +6881,7 @@ pub fn sccp_route_allowlist_hash_from_deployment_materials_v1(
         return None;
     }
 
-    let destination_binding_hash = required_hex_string_is_nonzero::<32>(
+    let destination_binding_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         destination_rollout.destination_binding_hash.as_deref(),
     )?;
     sccp_route_allowlist_hash_for_lane_evidence_v1(
@@ -6842,8 +6913,9 @@ pub fn sccp_route_allowlist_with_canary_evidence_v1(
     route_canary_evidence_hash: H256,
     destination_binding_hash: H256,
 ) -> Option<SccpRouteAllowlistReadinessV1> {
-    let route_allowlist_hash =
-        required_hex_string_is_nonzero::<32>(allowlist.route_allowlist_hash.as_deref())?;
+    let route_allowlist_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.route_allowlist_hash.as_deref(),
+    )?;
     if !h256_is_nonzero(&route_canary_evidence_hash)
         || !h256_is_nonzero(&destination_binding_hash)
         || !sccp_nonzero_h256_values_are_pairwise_distinct(&[
@@ -6870,8 +6942,9 @@ pub fn sccp_route_allowlist_with_lane_canary_evidence_v1(
     source_verifier_material_hash: H256,
     source_adapter_engine_deployment_hash: H256,
 ) -> Option<SccpRouteAllowlistReadinessV1> {
-    let route_allowlist_hash =
-        required_hex_string_is_nonzero::<32>(allowlist.route_allowlist_hash.as_deref())?;
+    let route_allowlist_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.route_allowlist_hash.as_deref(),
+    )?;
     if !h256_is_nonzero(&source_verifier_material_hash)
         || !h256_is_nonzero(&source_adapter_engine_deployment_hash)
         || !sccp_nonzero_h256_values_are_pairwise_distinct(&[
@@ -6927,8 +7000,9 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
     {
         return None;
     }
-    let route_allowlist_hash =
-        required_hex_string_is_nonzero::<32>(allowlist.route_allowlist_hash.as_deref())?;
+    let route_allowlist_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.route_allowlist_hash.as_deref(),
+    )?;
     let route_canary_evidence_hash = sccp_evm_route_canary_evidence_hash_v1(
         allowlist.domain,
         route_allowlist_hash,
@@ -7030,8 +7104,9 @@ pub fn sccp_tron_route_allowlist_with_lane_canary_evidence_v1(
     {
         return None;
     }
-    let route_allowlist_hash =
-        required_hex_string_is_nonzero::<32>(allowlist.route_allowlist_hash.as_deref())?;
+    let route_allowlist_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.route_allowlist_hash.as_deref(),
+    )?;
     let route_canary_evidence_hash = sccp_tron_route_canary_evidence_hash_v1(
         route_allowlist_hash,
         destination_binding_hash,
@@ -7104,8 +7179,9 @@ pub fn sccp_ton_route_allowlist_with_lane_canary_evidence_v1(
     if allowlist.domain != SCCP_DOMAIN_TON || destination_rollout.domain != SCCP_DOMAIN_TON {
         return None;
     }
-    let route_allowlist_hash =
-        required_hex_string_is_nonzero::<32>(allowlist.route_allowlist_hash.as_deref())?;
+    let route_allowlist_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.route_allowlist_hash.as_deref(),
+    )?;
     let route_canary_evidence_hash = sccp_ton_route_canary_evidence_hash_v1(
         route_allowlist_hash,
         destination_binding_hash,
@@ -7141,8 +7217,9 @@ pub fn sccp_solana_route_allowlist_with_lane_canary_evidence_v1(
     if allowlist.domain != SCCP_DOMAIN_SOL || destination_rollout.domain != SCCP_DOMAIN_SOL {
         return None;
     }
-    let route_allowlist_hash =
-        required_hex_string_is_nonzero::<32>(allowlist.route_allowlist_hash.as_deref())?;
+    let route_allowlist_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.route_allowlist_hash.as_deref(),
+    )?;
     let route_canary_evidence_hash = sccp_solana_route_canary_evidence_hash_v1(
         route_allowlist_hash,
         destination_binding_hash,
@@ -7167,6 +7244,9 @@ fn sccp_route_allowlist_matches_domain_profile(
     if allowlist.route_allowlist_id.as_deref() != sccp_route_allowlist_id_for_domain(domain) {
         return false;
     }
+    if !sccp_route_allowlist_canary_summary_fields_match_profile(allowlist) {
+        return false;
+    }
 
     let evm_canary_fields_absent = sccp_route_allowlist_evm_canary_fields_absent(allowlist);
     let ton_canary_fields_absent = sccp_route_allowlist_ton_canary_fields_absent(allowlist);
@@ -7184,11 +7264,65 @@ fn sccp_route_allowlist_matches_domain_profile(
     }
 }
 
+fn sccp_route_allowlist_canary_summary_fields_absent(
+    allowlist: &SccpRouteAllowlistReadinessV1,
+) -> bool {
+    allowlist.route_canary_status.is_none()
+        && allowlist.route_canary_evidence_hash.is_none()
+        && allowlist.route_canary_route_allowlist_hash.is_none()
+        && allowlist.route_canary_destination_binding_hash.is_none()
+}
+
+fn sccp_route_allowlist_canary_summary_fields_match_profile(
+    allowlist: &SccpRouteAllowlistReadinessV1,
+) -> bool {
+    if sccp_route_allowlist_canary_summary_fields_absent(allowlist) {
+        return true;
+    }
+    if allowlist.route_canary_status.as_deref() != Some("passed") {
+        return false;
+    }
+    let Some(route_allowlist_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.route_allowlist_hash.as_deref(),
+    ) else {
+        return false;
+    };
+    let Some(route_canary_evidence_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.route_canary_evidence_hash.as_deref(),
+    ) else {
+        return false;
+    };
+    let Some(route_canary_route_allowlist_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+            allowlist.route_canary_route_allowlist_hash.as_deref(),
+        )
+    else {
+        return false;
+    };
+    let Some(route_canary_destination_binding_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+            allowlist.route_canary_destination_binding_hash.as_deref(),
+        )
+    else {
+        return false;
+    };
+
+    route_canary_route_allowlist_hash == route_allowlist_hash
+        && sccp_nonzero_h256_values_are_pairwise_distinct(&[
+            route_allowlist_hash,
+            route_canary_evidence_hash,
+            route_canary_destination_binding_hash,
+        ])
+}
+
 fn sccp_route_allowlist_hash_matches(
     allowlist: &SccpRouteAllowlistReadinessV1,
     expected_hash: &H256,
 ) -> bool {
-    required_hex_string_is_nonzero::<32>(allowlist.route_allowlist_hash.as_deref()).as_ref()
+    required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.route_allowlist_hash.as_deref(),
+    )
+    .as_ref()
         == Some(expected_hash)
 }
 
@@ -7263,7 +7397,7 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
     expected_route_allowlist_hash: &H256,
     destination_binding_hash: &H256,
 ) -> bool {
-    let Some(transaction_hash) = required_hex_string_is_nonzero::<32>(
+    let Some(transaction_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.evm_route_canary_transaction_hash.as_deref(),
     ) else {
         return false;
@@ -7277,7 +7411,7 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
     if receipt_block_number == 0 {
         return false;
     }
-    let Some(receipt_block_hash) = required_hex_string_is_nonzero::<32>(
+    let Some(receipt_block_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.evm_route_canary_receipt_block_hash.as_deref(),
     ) else {
         return false;
@@ -7285,45 +7419,45 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
     let Some(receipt_block_finalized) = allowlist.evm_route_canary_receipt_block_finalized else {
         return false;
     };
-    let Some(block_receipts_root) = required_hex_string_is_nonzero::<32>(
+    let Some(block_receipts_root) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.evm_route_canary_block_receipts_root.as_deref(),
     ) else {
         return false;
     };
-    let Some(call_data_sha256) = required_hex_string_is_nonzero::<32>(
+    let Some(call_data_sha256) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.evm_route_canary_call_data_sha256.as_deref(),
     ) else {
         return false;
     };
-    let Some(message_id) =
-        required_hex_string_is_nonzero::<32>(allowlist.evm_route_canary_message_id.as_deref())
-    else {
+    let Some(message_id) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.evm_route_canary_message_id.as_deref(),
+    ) else {
         return false;
     };
-    let Some(payload_hash) =
-        required_hex_string_is_nonzero::<32>(allowlist.evm_route_canary_payload_hash.as_deref())
-    else {
+    let Some(payload_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.evm_route_canary_payload_hash.as_deref(),
+    ) else {
         return false;
     };
     let Some(target_domain) = allowlist.evm_route_canary_target_domain else {
         return false;
     };
-    let Some(statement_hash) =
-        required_hex_string_is_nonzero::<32>(allowlist.evm_route_canary_statement_hash.as_deref())
-    else {
+    let Some(statement_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.evm_route_canary_statement_hash.as_deref(),
+    ) else {
         return false;
     };
-    let Some(commitment_root) =
-        required_hex_string_is_nonzero::<32>(allowlist.evm_route_canary_commitment_root.as_deref())
-    else {
+    let Some(commitment_root) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.evm_route_canary_commitment_root.as_deref(),
+    ) else {
         return false;
     };
-    let Some(finality_height) =
-        required_hex_string_is_nonzero::<32>(allowlist.evm_route_canary_finality_height.as_deref())
-    else {
+    let Some(finality_height) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.evm_route_canary_finality_height.as_deref(),
+    ) else {
         return false;
     };
-    let Some(finality_block_hash) = required_hex_string_is_nonzero::<32>(
+    let Some(finality_block_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.evm_route_canary_finality_block_hash.as_deref(),
     ) else {
         return false;
@@ -7376,12 +7510,12 @@ fn sccp_route_allowlist_tron_canary_evidence_is_bound(
     expected_route_allowlist_hash: &H256,
     destination_binding_hash: &H256,
 ) -> bool {
-    let Some(transaction_id) =
-        required_hex_string_is_nonzero::<32>(allowlist.tron_route_canary_transaction_id.as_deref())
-    else {
+    let Some(transaction_id) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.tron_route_canary_transaction_id.as_deref(),
+    ) else {
         return false;
     };
-    let Some(transaction_owner_address) = required_hex_string_is_nonzero::<21>(
+    let Some(transaction_owner_address) = required_canonical_0x_lower_hex_string_is_nonzero::<21>(
         allowlist
             .tron_route_canary_transaction_owner_address
             .as_deref(),
@@ -7408,40 +7542,40 @@ fn sccp_route_allowlist_tron_canary_evidence_is_bound(
     let Some(log_index) = allowlist.tron_route_canary_log_index else {
         return false;
     };
-    let Some(message_id) =
-        required_hex_string_is_nonzero::<32>(allowlist.tron_route_canary_message_id.as_deref())
-    else {
+    let Some(message_id) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.tron_route_canary_message_id.as_deref(),
+    ) else {
         return false;
     };
-    let Some(call_data_sha256) = required_hex_string_is_nonzero::<32>(
+    let Some(call_data_sha256) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.tron_route_canary_call_data_sha256.as_deref(),
     ) else {
         return false;
     };
-    let Some(payload_hash) =
-        required_hex_string_is_nonzero::<32>(allowlist.tron_route_canary_payload_hash.as_deref())
-    else {
+    let Some(payload_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.tron_route_canary_payload_hash.as_deref(),
+    ) else {
         return false;
     };
     if allowlist.tron_route_canary_target_domain != Some(SCCP_DOMAIN_TRON) {
         return false;
     }
-    let Some(statement_hash) =
-        required_hex_string_is_nonzero::<32>(allowlist.tron_route_canary_statement_hash.as_deref())
-    else {
+    let Some(statement_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.tron_route_canary_statement_hash.as_deref(),
+    ) else {
         return false;
     };
-    let Some(commitment_root) = required_hex_string_is_nonzero::<32>(
+    let Some(commitment_root) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.tron_route_canary_commitment_root.as_deref(),
     ) else {
         return false;
     };
-    let Some(finality_height) = required_hex_string_is_nonzero::<32>(
+    let Some(finality_height) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.tron_route_canary_finality_height.as_deref(),
     ) else {
         return false;
     };
-    let Some(finality_block_hash) = required_hex_string_is_nonzero::<32>(
+    let Some(finality_block_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.tron_route_canary_finality_block_hash.as_deref(),
     ) else {
         return false;
@@ -7458,12 +7592,12 @@ fn sccp_route_allowlist_tron_canary_evidence_is_bound(
     if allowlist.tron_route_canary_raw_data_owner_matches_transaction != Some(true) {
         return false;
     }
-    let Some(signature_sha256) = required_hex_string_is_nonzero::<32>(
+    let Some(signature_sha256) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.tron_route_canary_signature_sha256.as_deref(),
     ) else {
         return false;
     };
-    let Some(signature_recovered_address) = required_hex_string_is_nonzero::<21>(
+    let Some(signature_recovered_address) = required_canonical_0x_lower_hex_string_is_nonzero::<21>(
         allowlist
             .tron_route_canary_signature_recovered_address
             .as_deref(),
@@ -7525,7 +7659,7 @@ fn sccp_route_allowlist_ton_canary_evidence_is_bound(
     source_verifier_material_hash: &H256,
     source_adapter_engine_deployment_hash: &H256,
 ) -> bool {
-    let Some(account_state_hash) = required_hex_string_is_nonzero::<32>(
+    let Some(account_state_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.ton_route_canary_account_state_hash.as_deref(),
     ) else {
         return false;
@@ -7534,7 +7668,7 @@ fn sccp_route_allowlist_ton_canary_evidence_is_bound(
     else {
         return false;
     };
-    let Some(last_transaction_hash) = required_hex_string_is_nonzero::<32>(
+    let Some(last_transaction_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
         allowlist.ton_route_canary_last_transaction_hash.as_deref(),
     ) else {
         return false;
@@ -7584,19 +7718,23 @@ fn sccp_route_allowlist_canary_evidence_is_bound(
     if allowlist.route_canary_status.as_deref() != Some("passed") {
         return false;
     }
-    let Some(route_canary_evidence_hash) =
-        required_hex_string_is_nonzero::<32>(allowlist.route_canary_evidence_hash.as_deref())
+    let Some(route_canary_evidence_hash) = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        allowlist.route_canary_evidence_hash.as_deref(),
+    ) else {
+        return false;
+    };
+    let Some(route_canary_route_allowlist_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+            allowlist.route_canary_route_allowlist_hash.as_deref(),
+        )
     else {
         return false;
     };
-    let Some(route_canary_route_allowlist_hash) = required_hex_string_is_nonzero::<32>(
-        allowlist.route_canary_route_allowlist_hash.as_deref(),
-    ) else {
-        return false;
-    };
-    let Some(route_canary_destination_binding_hash) = required_hex_string_is_nonzero::<32>(
-        allowlist.route_canary_destination_binding_hash.as_deref(),
-    ) else {
+    let Some(route_canary_destination_binding_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+            allowlist.route_canary_destination_binding_hash.as_deref(),
+        )
+    else {
         return false;
     };
     if route_canary_route_allowlist_hash != *expected_route_allowlist_hash
@@ -7718,7 +7856,9 @@ pub fn sccp_route_allowlist_is_production_ready(
         && allowlist
             .route_allowlist_hash
             .as_deref()
-            .is_some_and(hex32_string_is_nonzero)
+            .is_some_and(|hash| {
+                required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(hash)).is_some()
+            })
         && sccp_route_allowlist_matches_domain_profile(domain, allowlist)
 }
 
@@ -8032,14 +8172,15 @@ fn sccp_destination_rollout_matches_source_adapter_engine(
         return true;
     }
 
-    required_hex_string_is_nonzero::<32>(rollout.destination_network_id.as_deref()).is_some_and(
-        |destination_network_id| {
-            destination_network_id
-                == source_adapter_engine
-                    .source_verifier_material
-                    .source_bridge_network_id
-        },
+    required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.destination_network_id.as_deref(),
     )
+    .is_some_and(|destination_network_id| {
+        destination_network_id
+            == source_adapter_engine
+                .source_verifier_material
+                .source_bridge_network_id
+    })
 }
 
 fn sccp_lane_production_readiness_from_components(
@@ -8078,8 +8219,9 @@ fn sccp_lane_production_readiness_from_components(
             .as_ref()
             .is_none_or(|hash| sccp_route_allowlist_hash_matches(&route_allowlist, hash))
     };
-    let destination_binding_hash =
-        required_hex_string_is_nonzero::<32>(rollout.destination_binding_hash.as_deref());
+    let destination_binding_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+        rollout.destination_binding_hash.as_deref(),
+    );
     let route_canary_evidence_bound = if route_allowlist_evidence_required {
         expected_route_allowlist_hash
             .as_ref()
@@ -8389,7 +8531,8 @@ fn sccp_manifest_matches_domain_production_backend(manifest: &SccpProofManifestV
         && manifest.local_domain != manifest.counterparty_domain
         && manifest.security_model == sccp_proof_security_model_v1()
         && manifest.anchor_governance == sccp_anchor_governance_v1()
-        && sccp_destination_binding_metadata_is_valid(&manifest.destination_binding)
+        && sccp_destination_binding_for_domain(domain).as_ref()
+            == Some(&manifest.destination_binding)
         && manifest.proof_family == SCCP_STARK_FRI_PROOF_FAMILY_V1
         && manifest.verifier_backend == expected_backend
         && manifest.message_backend == expected_message_backend
@@ -17555,22 +17698,30 @@ fn sccp_bsc_mainnet_destination_binding_is_deployment_bound(
         return false;
     }
 
-    let Some(network_id) = decode_fixed_hex_bytes::<32>(network_id) else {
+    let Some(network_id) = required_raw_lower_hex_string_is_nonzero::<32>(network_id) else {
         return false;
     };
     if network_id != sccp_bsc_mainnet_network_id_word_v1() {
         return false;
     }
-    let Some(verifier_address) = decode_fixed_hex_bytes::<20>(verifier_address) else {
+    let Some(verifier_address) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<20>(Some(verifier_address))
+    else {
         return false;
     };
-    let Some(bridge_address) = decode_fixed_hex_bytes::<20>(bridge_address) else {
+    let Some(bridge_address) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<20>(Some(bridge_address))
+    else {
         return false;
     };
-    let Some(verifier_code_hash) = decode_fixed_hex_bytes::<32>(verifier_code_hash) else {
+    let Some(verifier_code_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(verifier_code_hash))
+    else {
         return false;
     };
-    let Some(verifier_key_hash) = decode_fixed_hex_bytes::<32>(verifier_key_hash) else {
+    let Some(verifier_key_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(verifier_key_hash))
+    else {
         return false;
     };
 
@@ -17652,19 +17803,27 @@ fn sccp_evm_destination_binding_matches_deployment_material(
         return false;
     }
 
-    let Some(network_id) = decode_fixed_hex_bytes::<32>(network_id) else {
+    let Some(network_id) = required_raw_lower_hex_string_is_nonzero::<32>(network_id) else {
         return false;
     };
-    let Some(verifier_address) = decode_fixed_hex_bytes::<20>(verifier_address) else {
+    let Some(verifier_address) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<20>(Some(verifier_address))
+    else {
         return false;
     };
-    let Some(bridge_address) = decode_fixed_hex_bytes::<20>(bridge_address) else {
+    let Some(bridge_address) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<20>(Some(bridge_address))
+    else {
         return false;
     };
-    let Some(verifier_code_hash) = decode_fixed_hex_bytes::<32>(verifier_code_hash) else {
+    let Some(verifier_code_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(verifier_code_hash))
+    else {
         return false;
     };
-    let Some(verifier_key_hash) = decode_fixed_hex_bytes::<32>(verifier_key_hash) else {
+    let Some(verifier_key_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(verifier_key_hash))
+    else {
         return false;
     };
     build_sccp_evm_destination_binding(
@@ -17718,19 +17877,27 @@ fn sccp_evm_destination_binding_matches_request_deployment_material(
         return false;
     }
 
-    let Some(network_id) = decode_fixed_hex_bytes::<32>(network_id) else {
+    let Some(network_id) = required_raw_lower_hex_string_is_nonzero::<32>(network_id) else {
         return false;
     };
-    let Some(verifier_address) = decode_fixed_hex_bytes::<20>(verifier_address) else {
+    let Some(verifier_address) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<20>(Some(verifier_address))
+    else {
         return false;
     };
-    let Some(bridge_address) = decode_fixed_hex_bytes::<20>(bridge_address) else {
+    let Some(bridge_address) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<20>(Some(bridge_address))
+    else {
         return false;
     };
-    let Some(verifier_code_hash) = decode_fixed_hex_bytes::<32>(verifier_code_hash) else {
+    let Some(verifier_code_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(verifier_code_hash))
+    else {
         return false;
     };
-    let Some(verifier_key_hash) = decode_fixed_hex_bytes::<32>(verifier_key_hash) else {
+    let Some(verifier_key_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(verifier_key_hash))
+    else {
         return false;
     };
 
@@ -17902,13 +18069,17 @@ fn sccp_tron_destination_binding_matches_deployment_material(
         return false;
     }
 
-    let Some(network_id) = decode_fixed_hex_bytes::<32>(network_id) else {
+    let Some(network_id) = required_raw_lower_hex_string_is_nonzero::<32>(network_id) else {
         return false;
     };
-    let Some(verifier_code_hash) = decode_fixed_hex_bytes::<32>(verifier_code_hash) else {
+    let Some(verifier_code_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(verifier_code_hash))
+    else {
         return false;
     };
-    let Some(verifier_key_hash) = decode_fixed_hex_bytes::<32>(verifier_key_hash) else {
+    let Some(verifier_key_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(verifier_key_hash))
+    else {
         return false;
     };
     build_sccp_tron_destination_binding(
@@ -17959,13 +18130,17 @@ fn sccp_tron_destination_binding_matches_request_deployment_material(
         return false;
     }
 
-    let Some(network_id) = decode_fixed_hex_bytes::<32>(network_id) else {
+    let Some(network_id) = required_raw_lower_hex_string_is_nonzero::<32>(network_id) else {
         return false;
     };
-    let Some(verifier_code_hash) = decode_fixed_hex_bytes::<32>(verifier_code_hash) else {
+    let Some(verifier_code_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(verifier_code_hash))
+    else {
         return false;
     };
-    let Some(verifier_key_hash) = decode_fixed_hex_bytes::<32>(verifier_key_hash) else {
+    let Some(verifier_key_hash) =
+        required_canonical_0x_lower_hex_string_is_nonzero::<32>(Some(verifier_key_hash))
+    else {
         return false;
     };
 
@@ -19261,12 +19436,6 @@ fn decode_sccp_stark_open_verify_proof(
     Some((env, open, proof))
 }
 
-fn decode_sccp_message_transparent_open_verify_envelope(
-    proof_bytes: &[u8],
-) -> Option<(OpenVerifyEnvelope, StarkFriOpenProofV1)> {
-    decode_sccp_stark_open_verify_envelope(proof_bytes)
-}
-
 fn decode_sccp_message_transparent_open_verify_proof(
     proof_bytes: &[u8],
 ) -> Option<(
@@ -19277,15 +19446,69 @@ fn decode_sccp_message_transparent_open_verify_proof(
     decode_sccp_stark_open_verify_proof(proof_bytes)
 }
 
+fn sccp_message_transparent_open_verify_supported_lane_for_schema_and_vk(
+    public_inputs_schema: &[u8],
+    vk_hash: &H256,
+) -> Option<u32> {
+    SCCP_CORE_REMOTE_DOMAINS.iter().find_map(|domain| {
+        let Some(manifest) = sccp_proof_manifest_for_domain(*domain) else {
+            return None;
+        };
+        (sccp_message_transparent_open_verify_schema_descriptor(&manifest) == public_inputs_schema
+            && sccp_message_transparent_fastpq_verifier_commitment(&manifest).as_ref()
+                == Some(vk_hash))
+        .then_some(*domain)
+    })
+}
+
+fn sccp_message_transparent_public_inputs_from_open_verify_columns(
+    public_inputs: &[Vec<H256>],
+) -> Option<SccpMessageTransparentPublicInputsV1> {
+    if public_inputs.len() != 6 || public_inputs.iter().any(|column| column.len() != 1) {
+        return None;
+    }
+
+    let target_domain_word = public_inputs[2][0];
+    if target_domain_word[4..].iter().any(|byte| *byte != 0) {
+        return None;
+    }
+    let target_domain = u32::from_le_bytes(target_domain_word[..4].try_into().ok()?);
+
+    let finality_height_word = public_inputs[4][0];
+    if finality_height_word[8..].iter().any(|byte| *byte != 0) {
+        return None;
+    }
+    let finality_height = u64::from_le_bytes(finality_height_word[..8].try_into().ok()?);
+
+    Some(SccpMessageTransparentPublicInputsV1 {
+        version: 1,
+        message_id: public_inputs[0][0],
+        payload_hash: public_inputs[1][0],
+        target_domain,
+        commitment_root: public_inputs[3][0],
+        finality_height,
+        finality_block_hash: public_inputs[5][0],
+    })
+}
+
 pub fn summarize_sccp_message_transparent_open_verify_proof(
     proof_bytes: &[u8],
 ) -> Option<SccpOpenVerifyEnvelopeSummaryV1> {
-    let (env, open) = decode_sccp_message_transparent_open_verify_envelope(proof_bytes)?;
+    let (env, open, _) = decode_sccp_message_transparent_open_verify_proof(proof_bytes)?;
+    let schema_domain = sccp_message_transparent_open_verify_supported_lane_for_schema_and_vk(
+        &env.public_inputs,
+        &env.vk_hash,
+    )?;
+    let open_public_inputs =
+        sccp_message_transparent_public_inputs_from_open_verify_columns(&open.public_inputs)?;
+    let manifest = sccp_proof_manifest_for_domain(schema_domain)?;
     if env.circuit_id != SCCP_TRANSPARENT_OPEN_VERIFY_CIRCUIT_ID_V1
         || !h256_is_nonzero(&env.vk_hash)
         || env.public_inputs.is_empty()
         || !env.aux.is_empty()
         || open.public_inputs.is_empty()
+        || open_public_inputs.target_domain != schema_domain
+        || !sccp_transparent_public_inputs_match_manifest(&manifest, &open_public_inputs)
         || open.envelope_bytes.is_empty()
         || open.envelope_bytes.iter().all(|byte| *byte == 0)
     {
@@ -36041,6 +36264,31 @@ mod tests {
     const TEST_TON_CODE_BOC_ROOT_HASH: &str =
         "0x49725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe";
 
+    fn uppercase_0x_prefix(value: &str) -> String {
+        let raw = value.strip_prefix("0x").expect("canonical 0x prefix");
+        format!("0X{raw}")
+    }
+
+    fn uppercase_0x_hex_digits(value: &str) -> String {
+        let raw = value.strip_prefix("0x").expect("canonical 0x prefix");
+        format!("0x{}", raw.to_ascii_uppercase())
+    }
+
+    fn destination_binding_with_key_part(
+        mut binding: SccpDestinationBindingV1,
+        part_index: usize,
+        value: String,
+    ) -> SccpDestinationBindingV1 {
+        let mut parts = binding
+            .key
+            .split(':')
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        parts[part_index] = value;
+        binding.key = parts.join(":");
+        binding
+    }
+
     fn checked_sccp_fixture_signature(
         signer: &KeyPair,
         message: &[u8],
@@ -36161,6 +36409,106 @@ mod tests {
         let decoded = norito::json::from_str::<SccpNormalizedCodecValueV1>(&json)
             .expect("decode normalized codec JSON");
         assert_eq!(decoded, value);
+    }
+
+    #[test]
+    fn sccp_normalized_codec_value_json_rejects_hex_aliases() {
+        let evm = encode_0x_lower_hex(&[0xab; 20]);
+        let solana = encode_0x_lower_hex(&[0xcd; 32]);
+        let ton_account_hex = encode_0x_lower_hex(&[0xef; 32]);
+        let tron_payload_hex = encode_0x_lower_hex(&[0xab; 21]);
+        let asset = encode_0x_lower_hex(&[0xab; 32]);
+
+        let cases = [
+            (
+                format!(
+                    r#"{{"EvmHex":{{"bytes":"{}"}}}}"#,
+                    encode_lower_hex(&[0xab; 20])
+                ),
+                "EVM bare hex",
+            ),
+            (
+                format!(
+                    r#"{{"EvmHex":{{"bytes":"{}"}}}}"#,
+                    uppercase_0x_prefix(&evm)
+                ),
+                "EVM 0X prefix",
+            ),
+            (
+                format!(
+                    r#"{{"EvmHex":{{"bytes":"{}"}}}}"#,
+                    uppercase_0x_hex_digits(&evm)
+                ),
+                "EVM uppercase bytes",
+            ),
+            (
+                format!(
+                    r#"{{"SolanaBase58":{{"bytes":"{}"}}}}"#,
+                    uppercase_0x_prefix(&solana)
+                ),
+                "Solana 0X prefix",
+            ),
+            (
+                format!(
+                    r#"{{"SolanaBase58":{{"bytes":"{}"}}}}"#,
+                    uppercase_0x_hex_digits(&solana)
+                ),
+                "Solana uppercase bytes",
+            ),
+            (
+                format!(r#"{{"TonRaw":{{"workchain":0,"account":" {ton_account_hex} "}}}}"#),
+                "TON padded account",
+            ),
+            (
+                format!(
+                    r#"{{"TonRaw":{{"workchain":0,"account":"{}"}}}}"#,
+                    uppercase_0x_hex_digits(&ton_account_hex)
+                ),
+                "TON uppercase account bytes",
+            ),
+            (
+                format!(
+                    r#"{{"TronBase58Check":{{"payload":"{}"}}}}"#,
+                    uppercase_0x_prefix(&tron_payload_hex)
+                ),
+                "TRON 0X prefix",
+            ),
+            (
+                format!(
+                    r#"{{"TronBase58Check":{{"payload":"{}"}}}}"#,
+                    uppercase_0x_hex_digits(&tron_payload_hex)
+                ),
+                "TRON uppercase payload bytes",
+            ),
+            (
+                format!(
+                    r#"{{"SoraAssetId":{{"bytes":"{}"}}}}"#,
+                    encode_lower_hex(&[0x12; 32])
+                ),
+                "SORA asset bare hex",
+            ),
+            (
+                format!(
+                    r#"{{"SoraAssetId":{{"bytes":"{}"}}}}"#,
+                    uppercase_0x_hex_digits(&asset)
+                ),
+                "SORA asset uppercase bytes",
+            ),
+        ];
+
+        for (json, reason) in cases {
+            assert!(
+                norito::json::from_str::<SccpNormalizedCodecValueV1>(&json).is_err(),
+                "{reason} must not decode as canonical normalized codec JSON"
+            );
+        }
+
+        let zero_asset = r#"{"SoraAssetId":{"bytes":"0x0000000000000000000000000000000000000000000000000000000000000000"}}"#;
+        assert_eq!(
+            norito::json::from_str::<SccpNormalizedCodecValueV1>(zero_asset)
+                .expect("canonical zero byte payload is still syntactically valid"),
+            SccpNormalizedCodecValueV1::SoraAssetId { bytes: [0; 32] }
+        );
     }
 
     fn sample_test_evm_word_public_inputs() -> SccpEvmWordPublicInputsV1 {
@@ -57405,43 +57753,52 @@ mod tests {
 
     #[test]
     fn transparent_fastpq_open_verify_summary_rejects_metadata_only_envelopes() {
-        let open = StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: vec![vec![[0x55; 32]]],
-            envelope_bytes: vec![0xAA, 0xBB, 0xCC],
-        };
-        let open_proof_bytes = norito::to_bytes(&open).expect("encode open proof");
-        let proof_bytes = norito::to_bytes(&OpenVerifyEnvelope {
-            backend: BackendTag::Stark,
-            circuit_id: SCCP_TRANSPARENT_OPEN_VERIFY_CIRCUIT_ID_V1.to_owned(),
-            vk_hash: [0x66; 32],
-            public_inputs: vec![0x77, 0x88, 0x99],
-            proof_bytes: open_proof_bytes.clone(),
-            aux: vec![0xDE, 0xAD],
-        })
-        .expect("encode envelope");
+        let bundle = sample_tron_transfer_bundle(45);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+        assert!(summarize_sccp_message_transparent_open_verify_proof(&proof_bytes).is_some());
+
+        let mut env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode envelope");
+        env.aux = vec![0xDE, 0xAD];
 
         assert!(
-            summarize_sccp_message_transparent_open_verify_proof(&proof_bytes).is_none(),
+            summarize_sccp_message_transparent_open_verify_proof(
+                &norito::to_bytes(&env).expect("encode envelope with aux")
+            )
+            .is_none(),
             "transparent summaries must reject auxiliary envelope metadata"
+        );
+
+        let mut malformed_nested_env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode envelope");
+        let mut malformed_nested_open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&malformed_nested_env.proof_bytes).expect("decode open");
+        malformed_nested_open.envelope_bytes = vec![0xAA, 0xBB, 0xCC];
+        malformed_nested_env.proof_bytes =
+            norito::to_bytes(&malformed_nested_open).expect("encode malformed nested proof");
+        assert!(
+            summarize_sccp_message_transparent_open_verify_proof(
+                &norito::to_bytes(&malformed_nested_env)
+                    .expect("encode envelope with malformed nested proof")
+            )
+            .is_none(),
+            "transparent summaries must reject malformed nested FastPQ proof bytes"
         );
     }
 
     #[test]
     fn transparent_fastpq_open_verify_summary_rejects_bad_envelope_shapes() {
-        let open = StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: vec![vec![[0x55; 32]]],
-            envelope_bytes: vec![0xAA, 0xBB, 0xCC],
-        };
-        let mut env = OpenVerifyEnvelope {
-            backend: BackendTag::Stark,
-            circuit_id: SCCP_TRANSPARENT_OPEN_VERIFY_CIRCUIT_ID_V1.to_owned(),
-            vk_hash: [0x66; 32],
-            public_inputs: vec![0x77, 0x88, 0x99],
-            proof_bytes: norito::to_bytes(&open).expect("encode open proof"),
-            aux: Vec::new(),
-        };
+        let bundle = sample_tron_transfer_bundle(46);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON).expect("tron manifest");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+        assert!(summarize_sccp_message_transparent_open_verify_proof(&proof_bytes).is_some());
+        let mut env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode envelope");
+        let open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&env.proof_bytes).expect("decode open proof");
 
         let mut wrong_backend = env.clone();
         wrong_backend.backend = BackendTag::Groth16;
@@ -57470,6 +57827,16 @@ mod tests {
             .is_none()
         );
 
+        let mut wrong_vk = env.clone();
+        wrong_vk.vk_hash = [0x66; 32];
+        assert!(
+            summarize_sccp_message_transparent_open_verify_proof(
+                &norito::to_bytes(&wrong_vk).expect("encode wrong-vk envelope"),
+            )
+            .is_none(),
+            "transparent summaries must bind verifier keys to the manifest schema"
+        );
+
         let mut empty_schema = env.clone();
         empty_schema.public_inputs.clear();
         assert!(
@@ -57477,6 +57844,99 @@ mod tests {
                 &norito::to_bytes(&empty_schema).expect("encode empty schema envelope"),
             )
             .is_none()
+        );
+
+        let mut unknown_schema = env.clone();
+        unknown_schema.public_inputs.push(0x99);
+        assert!(
+            summarize_sccp_message_transparent_open_verify_proof(
+                &norito::to_bytes(&unknown_schema).expect("encode unknown-schema envelope"),
+            )
+            .is_none(),
+            "transparent summaries must reject schemas outside the SCCP manifest roster"
+        );
+
+        let mut cross_lane_schema = env.clone();
+        let eth_manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("ETH manifest");
+        cross_lane_schema.public_inputs =
+            sccp_message_transparent_open_verify_schema_descriptor(&eth_manifest);
+        assert!(
+            summarize_sccp_message_transparent_open_verify_proof(
+                &norito::to_bytes(&cross_lane_schema).expect("encode cross-lane schema envelope"),
+            )
+            .is_none(),
+            "transparent summaries must reject a schema copied from another SCCP lane unless the verifier key matches that lane"
+        );
+
+        let assert_rejected_columns = |columns: Vec<Vec<H256>>, reason: &str| {
+            let mut column_env = env.clone();
+            let mut column_open = open.clone();
+            column_open.public_inputs = columns;
+            column_env.proof_bytes =
+                norito::to_bytes(&column_open).expect("encode column-mutated open proof");
+            assert!(
+                summarize_sccp_message_transparent_open_verify_proof(
+                    &norito::to_bytes(&column_env).expect("encode column-mutated envelope"),
+                )
+                .is_none(),
+                "{reason}"
+            );
+        };
+
+        let mut extra_column = open.public_inputs.clone();
+        extra_column.push(vec![[0x77; 32]]);
+        assert_rejected_columns(
+            extra_column,
+            "transparent summaries must reject extra public-input columns",
+        );
+
+        let mut missing_column = open.public_inputs.clone();
+        missing_column.pop();
+        assert_rejected_columns(
+            missing_column,
+            "transparent summaries must reject missing public-input columns",
+        );
+
+        let mut empty_column = open.public_inputs.clone();
+        empty_column[0].clear();
+        assert_rejected_columns(
+            empty_column,
+            "transparent summaries must reject empty public-input columns",
+        );
+
+        let mut zero_message_id = open.public_inputs.clone();
+        zero_message_id[0][0] = [0; 32];
+        assert_rejected_columns(
+            zero_message_id,
+            "transparent summaries must reject zero message-id columns",
+        );
+
+        let mut wrong_target_domain = open.public_inputs.clone();
+        wrong_target_domain[2][0] = sccp_word_u32_le(SCCP_DOMAIN_BSC);
+        assert_rejected_columns(
+            wrong_target_domain,
+            "transparent summaries must bind public-input target domain to the manifest schema",
+        );
+
+        let mut noncanonical_target_domain = open.public_inputs.clone();
+        noncanonical_target_domain[2][0][4] = 1;
+        assert_rejected_columns(
+            noncanonical_target_domain,
+            "transparent summaries must reject non-canonical target-domain words",
+        );
+
+        let mut zero_finality_height = open.public_inputs.clone();
+        zero_finality_height[4][0] = [0; 32];
+        assert_rejected_columns(
+            zero_finality_height,
+            "transparent summaries must reject zero finality-height words",
+        );
+
+        let mut noncanonical_finality_height = open.public_inputs.clone();
+        noncanonical_finality_height[4][0][8] = 1;
+        assert_rejected_columns(
+            noncanonical_finality_height,
+            "transparent summaries must reject non-canonical finality-height words",
         );
 
         let mut empty_open_inputs = env.clone();
@@ -57891,6 +58351,109 @@ mod tests {
             SCCP_DOMAIN_ETH,
             &profiled
         ));
+        assert!(
+            sccp_profiled_route_allowlist_v1(SCCP_DOMAIN_ETH, exact_hash.replacen("0x", "0X", 1),)
+                .is_none(),
+            "route allowlist hashes must reject uppercase 0X aliases"
+        );
+        assert!(
+            sccp_profiled_route_allowlist_v1(SCCP_DOMAIN_ETH, format!("0x{}", "AA".repeat(32)),)
+                .is_none(),
+            "route allowlist hashes must reject uppercase byte aliases"
+        );
+        assert!(
+            sccp_profiled_route_allowlist_v1(SCCP_DOMAIN_ETH, "66".repeat(32)).is_none(),
+            "route allowlist hashes must keep the lowercase 0x prefix"
+        );
+        let mut padded_route_hash = profiled.clone();
+        padded_route_hash.route_allowlist_hash = Some(format!("{exact_hash} "));
+        assert!(
+            !sccp_route_allowlist_is_production_ready(SCCP_DOMAIN_ETH, &padded_route_hash),
+            "route allowlist hashes must reject trim-normalized aliases"
+        );
+        let mut control_route_id = profiled.clone();
+        control_route_id
+            .route_allowlist_id
+            .as_mut()
+            .expect("route allowlist id")
+            .push('\n');
+        assert!(
+            !sccp_route_allowlist_is_production_ready(SCCP_DOMAIN_ETH, &control_route_id),
+            "route allowlist ids must be exact canonical profile ids"
+        );
+
+        let mut valid_canary_summary = profiled.clone();
+        valid_canary_summary.route_canary_status = Some("passed".to_owned());
+        valid_canary_summary.route_canary_evidence_hash = Some(format!("0x{}", "67".repeat(32)));
+        valid_canary_summary.route_canary_route_allowlist_hash = Some(exact_hash.clone());
+        valid_canary_summary.route_canary_destination_binding_hash =
+            Some(format!("0x{}", "68".repeat(32)));
+        assert!(
+            sccp_route_allowlist_is_production_ready(SCCP_DOMAIN_ETH, &valid_canary_summary),
+            "profile readiness may carry a canonical summary before deployment-bound canary verification"
+        );
+        let mut padded_canary_status = valid_canary_summary.clone();
+        padded_canary_status.route_canary_status = Some("passed ".to_owned());
+        assert!(
+            !sccp_route_allowlist_is_production_ready(SCCP_DOMAIN_ETH, &padded_canary_status),
+            "route canary status must be exact"
+        );
+        let mut uppercase_canary_hash = valid_canary_summary.clone();
+        uppercase_canary_hash.route_canary_evidence_hash = Some(format!("0x{}", "AB".repeat(32)));
+        assert!(
+            !sccp_route_allowlist_is_production_ready(SCCP_DOMAIN_ETH, &uppercase_canary_hash),
+            "route canary evidence hashes must reject uppercase aliases"
+        );
+        let mut uppercase_summary_route_hash = valid_canary_summary.clone();
+        uppercase_summary_route_hash.route_canary_route_allowlist_hash =
+            Some(exact_hash.replacen("0x", "0X", 1));
+        assert!(
+            !sccp_route_allowlist_is_production_ready(
+                SCCP_DOMAIN_ETH,
+                &uppercase_summary_route_hash
+            ),
+            "route canary summary route hashes must keep canonical lowercase hex"
+        );
+        let mut padded_destination_hash = valid_canary_summary.clone();
+        let destination_hash = padded_destination_hash
+            .route_canary_destination_binding_hash
+            .clone()
+            .expect("destination hash");
+        padded_destination_hash.route_canary_destination_binding_hash =
+            Some(format!("{destination_hash} "));
+        assert!(
+            !sccp_route_allowlist_is_production_ready(SCCP_DOMAIN_ETH, &padded_destination_hash),
+            "route canary destination hashes must reject trim-normalized aliases"
+        );
+
+        let mut failed_canary_summary = valid_canary_summary.clone();
+        failed_canary_summary.route_canary_status = Some("failed".to_owned());
+        assert!(
+            !sccp_route_allowlist_is_production_ready(SCCP_DOMAIN_ETH, &failed_canary_summary),
+            "route allowlist profiles must not accept failed route-canary status"
+        );
+
+        let mut partial_canary_summary = profiled.clone();
+        partial_canary_summary.route_canary_status = Some("passed".to_owned());
+        assert!(
+            !sccp_route_allowlist_is_production_ready(SCCP_DOMAIN_ETH, &partial_canary_summary),
+            "route allowlist profiles must reject partial route-canary summaries"
+        );
+
+        let mut replayed_canary_summary = valid_canary_summary.clone();
+        replayed_canary_summary.route_canary_evidence_hash = Some(exact_hash.clone());
+        assert!(
+            !sccp_route_allowlist_is_production_ready(SCCP_DOMAIN_ETH, &replayed_canary_summary),
+            "route canary evidence hashes must not reuse the route allowlist hash"
+        );
+
+        let mut drifted_canary_route_hash = valid_canary_summary.clone();
+        drifted_canary_route_hash.route_canary_route_allowlist_hash =
+            Some(format!("0x{}", "69".repeat(32)));
+        assert!(
+            !sccp_route_allowlist_is_production_ready(SCCP_DOMAIN_ETH, &drifted_canary_route_hash),
+            "route canary summaries must bind back to the profile route allowlist hash"
+        );
 
         let mut eth_with_tron_canary = profiled.clone();
         eth_with_tron_canary.tron_route_canary_call_data_sha256 =
@@ -58650,7 +59213,7 @@ mod tests {
             "0x2222222222222222222222222222222222222222".to_owned(),
         )
         .expect("script-vector ETH destination rollout");
-        let destination_binding_hash = required_hex_string_is_nonzero::<32>(
+        let destination_binding_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.destination_binding_hash.as_deref(),
         )
         .expect("destination binding hash");
@@ -58676,6 +59239,31 @@ mod tests {
             )
             .expect("Python route allowlist vector")
         );
+        let route_canary_hash_for = |rollout: &SccpDestinationRolloutV1| {
+            sccp_evm_route_canary_evidence_hash_v1(
+                SCCP_DOMAIN_ETH,
+                route_allowlist_hash,
+                destination_binding_hash,
+                rollout,
+                [0x44; 32],
+                0,
+                0x1234,
+                [0x45; 32],
+                true,
+                [0x46; 32],
+                [0x88; 32],
+                [0x55; 32],
+                [0x99; 32],
+                SCCP_DOMAIN_ETH,
+                [0x66; 32],
+                [0x77; 32],
+                [0xaa; 32],
+                [0xab; 32],
+                1,
+                SCCP_DOMAIN_SORA,
+                true,
+            )
+        };
         assert!(
             sccp_evm_route_canary_evidence_hash_v1(
                 SCCP_DOMAIN_ETH,
@@ -58704,30 +59292,8 @@ mod tests {
             "EVM route canary evidence must reject route allowlist/destination binding hash role reuse"
         );
 
-        let route_canary_hash = sccp_evm_route_canary_evidence_hash_v1(
-            SCCP_DOMAIN_ETH,
-            route_allowlist_hash,
-            destination_binding_hash,
-            &destination_rollout,
-            [0x44; 32],
-            0,
-            0x1234,
-            [0x45; 32],
-            true,
-            [0x46; 32],
-            [0x88; 32],
-            [0x55; 32],
-            [0x99; 32],
-            SCCP_DOMAIN_ETH,
-            [0x66; 32],
-            [0x77; 32],
-            [0xaa; 32],
-            [0xab; 32],
-            1,
-            SCCP_DOMAIN_SORA,
-            true,
-        )
-        .expect("script-vector ETH route canary hash");
+        let route_canary_hash = route_canary_hash_for(&destination_rollout)
+            .expect("script-vector ETH route canary hash");
         assert_eq!(
             route_canary_hash,
             decode_fixed_hex_bytes::<32>(
@@ -58735,6 +59301,34 @@ mod tests {
             )
             .expect("Python route canary v4 vector"),
             "Rust EVM route-canary v4 transcript must match Python evidence tooling"
+        );
+
+        let mut prefixed_binding = destination_rollout.clone();
+        prefixed_binding.destination_binding_hash = prefixed_binding
+            .destination_binding_hash
+            .as_deref()
+            .map(uppercase_0x_prefix);
+        assert!(
+            route_canary_hash_for(&prefixed_binding).is_none(),
+            "EVM route canary evidence must reject non-canonical destination binding spelling"
+        );
+        let mut uppercase_bridge = destination_rollout.clone();
+        uppercase_bridge.destination_bridge_address = uppercase_bridge
+            .destination_bridge_address
+            .as_deref()
+            .map(uppercase_0x_prefix);
+        assert!(
+            route_canary_hash_for(&uppercase_bridge).is_none(),
+            "EVM route canary evidence must reject non-canonical bridge address spelling"
+        );
+        let mut uppercase_code = destination_rollout.clone();
+        uppercase_code.verifier_code_hash = uppercase_code
+            .verifier_code_hash
+            .as_deref()
+            .map(uppercase_0x_hex_digits);
+        assert!(
+            route_canary_hash_for(&uppercase_code).is_none(),
+            "EVM route canary evidence must reject uppercase rollout hash aliases"
         );
     }
 
@@ -58750,21 +59344,24 @@ mod tests {
             "f0VMRgECAwQF".to_owned(),
         )
         .expect("Solana destination rollout");
-        let destination_binding_hash = required_hex_string_is_nonzero::<32>(
+        let destination_binding_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.destination_binding_hash.as_deref(),
         )
         .expect("destination binding hash");
         let route_allowlist_hash = [0x31; 32];
         let source_material_hash = [0x33; 32];
         let source_deployment_hash = [0x34; 32];
-        let route_canary_hash = sccp_solana_route_canary_evidence_hash_v1(
-            route_allowlist_hash,
-            destination_binding_hash,
-            source_material_hash,
-            source_deployment_hash,
-            &destination_rollout,
-        )
-        .expect("Solana route canary hash");
+        let route_canary_hash_for = |rollout: &SccpDestinationRolloutV1| {
+            sccp_solana_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                rollout,
+            )
+        };
+        let route_canary_hash =
+            route_canary_hash_for(&destination_rollout).expect("Solana route canary hash");
         assert!(
             sccp_solana_route_canary_evidence_hash_v1(
                 destination_binding_hash,
@@ -58838,6 +59435,24 @@ mod tests {
             )
             .expect("Solana route canary script vector"),
             "Rust Solana route canary transcript must match the Python rollout script"
+        );
+        let mut prefixed_binding = destination_rollout.clone();
+        prefixed_binding.destination_binding_hash = prefixed_binding
+            .destination_binding_hash
+            .as_deref()
+            .map(uppercase_0x_prefix);
+        assert!(
+            route_canary_hash_for(&prefixed_binding).is_none(),
+            "Solana route canary evidence must reject non-canonical destination binding spelling"
+        );
+        let mut uppercase_code = destination_rollout.clone();
+        uppercase_code.verifier_code_hash = uppercase_code
+            .verifier_code_hash
+            .as_deref()
+            .map(uppercase_0x_hex_digits);
+        assert!(
+            route_canary_hash_for(&uppercase_code).is_none(),
+            "Solana route canary evidence must reject uppercase verifier-code hash aliases"
         );
 
         let allowlist = sccp_profiled_route_allowlist_v1(
@@ -59247,7 +59862,7 @@ mod tests {
                 replayed_canary_readiness.blockers
             );
         }
-        let destination_binding_hash = required_hex_string_is_nonzero::<32>(
+        let destination_binding_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.destination_binding_hash.as_deref(),
         )
         .expect("destination binding hash");
@@ -59309,6 +59924,29 @@ mod tests {
         assert!(readiness.routes_allowlisted);
         assert!(readiness.production_ready);
         assert!(readiness.blockers.is_empty());
+
+        let mut uppercase_transaction_hash = route_allowlist.clone();
+        uppercase_transaction_hash.evm_route_canary_transaction_hash =
+            Some(encode_0x_lower_hex(&[0xea; 32]).replacen("0x", "0X", 1));
+        let uppercase_transaction_readiness =
+            sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                SCCP_DOMAIN_ETH,
+                &source_material,
+                &source_deployment,
+                &destination_rollout,
+                &uppercase_transaction_hash,
+            )
+            .expect("uppercase route canary transaction readiness");
+        assert!(!uppercase_transaction_readiness.routes_allowlisted);
+        assert!(!uppercase_transaction_readiness.production_ready);
+        assert!(
+            uppercase_transaction_readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.contains("route canary evidence is not bound")),
+            "production lane readiness must reject uppercase route-canary transaction hash aliases: {:?}",
+            uppercase_transaction_readiness.blockers
+        );
 
         let foreign_target_source_deployment =
             sccp_source_adapter_engine_deployment_from_material_for_target_v1(
@@ -59480,7 +60118,7 @@ mod tests {
             missing_canary_readiness.blockers
         );
 
-        let destination_binding_hash = required_hex_string_is_nonzero::<32>(
+        let destination_binding_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.destination_binding_hash.as_deref(),
         )
         .expect("BSC destination binding hash");
@@ -59676,16 +60314,17 @@ mod tests {
             &destination_rollout,
         )
         .expect("evidence-bound TON route allowlist");
-        let route_allowlist_hash =
-            required_hex_string_is_nonzero::<32>(route_allowlist.route_allowlist_hash.as_deref())
-                .expect("route allowlist hash");
-        let destination_binding_hash = required_hex_string_is_nonzero::<32>(
+        let route_allowlist_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
+            route_allowlist.route_allowlist_hash.as_deref(),
+        )
+        .expect("route allowlist hash");
+        let destination_binding_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.destination_binding_hash.as_deref(),
         )
         .expect("destination binding hash");
         let source_material_hash = sccp_source_verifier_material_hash(&source_material);
         let source_deployment_hash = sccp_source_adapter_engine_deployment_hash(&source_deployment);
-        let account_state_hash = required_hex_string_is_nonzero::<32>(
+        let account_state_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.ton_account_state_hash.as_deref(),
         )
         .expect("TON account state hash");
@@ -59693,21 +60332,24 @@ mod tests {
             .ton_last_transaction_lt
             .clone()
             .expect("TON last transaction LT");
-        let last_transaction_hash = required_hex_string_is_nonzero::<32>(
+        let last_transaction_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.ton_last_transaction_hash.as_deref(),
         )
         .expect("TON last transaction hash");
-        let route_canary_hash = sccp_ton_route_canary_evidence_hash_v1(
-            route_allowlist_hash,
-            destination_binding_hash,
-            source_material_hash,
-            source_deployment_hash,
-            &destination_rollout,
-            account_state_hash,
-            &last_transaction_lt,
-            last_transaction_hash,
-        )
-        .expect("TON route canary hash");
+        let route_canary_hash_for = |rollout: &SccpDestinationRolloutV1| {
+            sccp_ton_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                rollout,
+                account_state_hash,
+                &last_transaction_lt,
+                last_transaction_hash,
+            )
+        };
+        let route_canary_hash =
+            route_canary_hash_for(&destination_rollout).expect("TON route canary hash");
         assert!(
             sccp_ton_route_canary_evidence_hash_v1(
                 destination_binding_hash,
@@ -59803,6 +60445,33 @@ mod tests {
                 "0xf2855793ffe735426c58635db37ec648119e931bfc3f1a4ad09974d3ffa605ae",
             )
             .expect("TON route canary vector")
+        );
+        let mut prefixed_binding = destination_rollout.clone();
+        prefixed_binding.destination_binding_hash = prefixed_binding
+            .destination_binding_hash
+            .as_deref()
+            .map(uppercase_0x_prefix);
+        assert!(
+            route_canary_hash_for(&prefixed_binding).is_none(),
+            "TON route canary evidence must reject non-canonical destination binding spelling"
+        );
+        let mut prefixed_account_state = destination_rollout.clone();
+        prefixed_account_state.ton_account_state_hash = prefixed_account_state
+            .ton_account_state_hash
+            .as_deref()
+            .map(uppercase_0x_prefix);
+        assert!(
+            route_canary_hash_for(&prefixed_account_state).is_none(),
+            "TON route canary evidence must reject non-canonical account-state hash spelling"
+        );
+        let mut uppercase_code_root = destination_rollout.clone();
+        uppercase_code_root.ton_verifier_code_boc_root_hash = uppercase_code_root
+            .ton_verifier_code_boc_root_hash
+            .as_deref()
+            .map(uppercase_0x_hex_digits);
+        assert!(
+            route_canary_hash_for(&uppercase_code_root).is_none(),
+            "TON route canary evidence must reject uppercase code-root hash aliases"
         );
 
         let mut missing_status = destination_rollout.clone();
@@ -59938,7 +60607,7 @@ mod tests {
             format!("0x{}", "33".repeat(32)),
         )
         .expect("TRON destination rollout");
-        let destination_binding_hash = required_hex_string_is_nonzero::<32>(
+        let destination_binding_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.destination_binding_hash.as_deref(),
         )
         .expect("TRON destination binding hash");
@@ -59953,6 +60622,41 @@ mod tests {
             "fea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
         )
         .expect("TRON route allowlist vector");
+        let route_canary_hash_for = |rollout: &SccpDestinationRolloutV1| {
+            sccp_tron_route_canary_evidence_hash_v1(
+                route_allowlist_hash,
+                destination_binding_hash,
+                rollout,
+                [0xfa; 32],
+                decode_fixed_hex_bytes::<21>("417e5f4552091a69125d5dfcb7b8c2659029395bdf")
+                    .expect("TRON route canary transaction owner vector"),
+                234,
+                567_000,
+                0,
+                [0xdd; 32],
+                decode_fixed_hex_bytes::<32>(
+                    "f96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+                )
+                .expect("TRON route canary call-data hash vector"),
+                [0xab; 32],
+                SCCP_DOMAIN_TRON,
+                [0xf1; 32],
+                [0xee; 32],
+                decode_fixed_hex_bytes::<32>(
+                    "000000000000000000000000000000000000000000000000000000000000007b",
+                )
+                .expect("TRON route canary finality height vector"),
+                [0xcd; 32],
+                1,
+                SCCP_DOMAIN_SORA,
+                true,
+                true,
+                [0xc4; 32],
+                decode_fixed_hex_bytes::<21>("417e5f4552091a69125d5dfcb7b8c2659029395bdf")
+                    .expect("TRON route canary recovered signer vector"),
+                true,
+            )
+        };
 
         assert!(
             sccp_tron_route_canary_evidence_hash_v1(
@@ -59993,45 +60697,40 @@ mod tests {
         );
 
         assert_eq!(
-            sccp_tron_route_canary_evidence_hash_v1(
-                route_allowlist_hash,
-                destination_binding_hash,
-                &destination_rollout,
-                [0xfa; 32],
-                decode_fixed_hex_bytes::<21>("417e5f4552091a69125d5dfcb7b8c2659029395bdf")
-                    .expect("TRON route canary transaction owner vector"),
-                234,
-                567_000,
-                0,
-                [0xdd; 32],
-                decode_fixed_hex_bytes::<32>(
-                    "f96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
-                )
-                .expect("TRON route canary call-data hash vector"),
-                [0xab; 32],
-                SCCP_DOMAIN_TRON,
-                [0xf1; 32],
-                [0xee; 32],
-                decode_fixed_hex_bytes::<32>(
-                    "000000000000000000000000000000000000000000000000000000000000007b",
-                )
-                .expect("TRON route canary finality height vector"),
-                [0xcd; 32],
-                1,
-                SCCP_DOMAIN_SORA,
-                true,
-                true,
-                [0xc4; 32],
-                decode_fixed_hex_bytes::<21>("417e5f4552091a69125d5dfcb7b8c2659029395bdf")
-                    .expect("TRON route canary recovered signer vector"),
-                true,
-            ),
+            route_canary_hash_for(&destination_rollout),
             Some(
                 decode_fixed_hex_bytes::<32>(
                     "e0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56",
                 )
                 .expect("TRON route canary vector")
             )
+        );
+        let mut prefixed_binding = destination_rollout.clone();
+        prefixed_binding.destination_binding_hash = prefixed_binding
+            .destination_binding_hash
+            .as_deref()
+            .map(uppercase_0x_prefix);
+        assert!(
+            route_canary_hash_for(&prefixed_binding).is_none(),
+            "TRON route canary evidence must reject non-canonical destination binding spelling"
+        );
+        let mut prefixed_network = destination_rollout.clone();
+        prefixed_network.destination_network_id = prefixed_network
+            .destination_network_id
+            .as_deref()
+            .map(uppercase_0x_prefix);
+        assert!(
+            route_canary_hash_for(&prefixed_network).is_none(),
+            "TRON route canary evidence must reject non-canonical network-id spelling"
+        );
+        let mut uppercase_code = destination_rollout.clone();
+        uppercase_code.verifier_code_hash = uppercase_code
+            .verifier_code_hash
+            .as_deref()
+            .map(uppercase_0x_hex_digits);
+        assert!(
+            route_canary_hash_for(&uppercase_code).is_none(),
+            "TRON route canary evidence must reject uppercase verifier-code hash aliases"
         );
     }
 
@@ -60090,7 +60789,7 @@ mod tests {
             &destination_rollout,
         )
         .expect("evidence-bound TRON route allowlist");
-        let destination_binding_hash = required_hex_string_is_nonzero::<32>(
+        let destination_binding_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             destination_rollout.destination_binding_hash.as_deref(),
         )
         .expect("TRON destination binding hash");
@@ -60150,14 +60849,14 @@ mod tests {
             true,
         )
         .expect("TRON transaction-bound canary route allowlist");
-        let route_canary_hash = required_hex_string_is_nonzero::<32>(
+        let route_canary_hash = required_canonical_0x_lower_hex_string_is_nonzero::<32>(
             route_allowlist.route_canary_evidence_hash.as_deref(),
         )
         .expect("TRON route canary hash");
         assert_eq!(
             Some(route_canary_hash),
             sccp_tron_route_canary_evidence_hash_v1(
-                required_hex_string_is_nonzero::<32>(
+                required_canonical_0x_lower_hex_string_is_nonzero::<32>(
                     route_allowlist.route_allowlist_hash.as_deref()
                 )
                 .expect("TRON route allowlist hash"),
@@ -62573,6 +63272,83 @@ mod tests {
             rollout.anchor_id.as_deref(),
             Some(SCCP_ETH_MAINNET_DESTINATION_ANCHOR_ID_V1)
         );
+        let lettered_rollout = sccp_evm_mainnet_destination_rollout_with_binding_v1(
+            SCCP_DOMAIN_ETH,
+            "0x1111111111111111111111111111111111111111".to_owned(),
+            format!("0x{}", "ab".repeat(32)),
+            format!("0x{}", "cd".repeat(32)),
+            encode_0x_lower_hex(&sccp_eth_mainnet_network_id_word_v1()),
+            format!("0x{}", "ef".repeat(20)),
+        )
+        .expect("lettered ETH destination rollout profile");
+        let mut uppercase_code_hash = lettered_rollout.clone();
+        uppercase_code_hash.verifier_code_hash = Some(format!("0x{}", "AB".repeat(32)));
+        assert!(
+            !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_ETH, &uppercase_code_hash),
+            "EVM destination verifier code hashes must reject uppercase byte aliases"
+        );
+        let mut uppercase_key_hash = lettered_rollout.clone();
+        uppercase_key_hash.verifier_key_hash = Some(format!("0x{}", "CD".repeat(32)));
+        assert!(
+            !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_ETH, &uppercase_key_hash),
+            "EVM destination verifier key hashes must reject uppercase byte aliases"
+        );
+        let mut uppercase_network_id = lettered_rollout.clone();
+        let network_alias = uppercase_network_id
+            .destination_network_id
+            .clone()
+            .expect("destination network id")
+            .replacen("0x", "0X", 1);
+        uppercase_network_id.destination_network_id = Some(network_alias);
+        assert!(
+            !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_ETH, &uppercase_network_id),
+            "EVM destination network ids must reject uppercase-prefix aliases"
+        );
+        let mut uppercase_bridge_address = lettered_rollout.clone();
+        uppercase_bridge_address.destination_bridge_address =
+            Some(format!("0x{}", "EF".repeat(20)));
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_ETH,
+                &uppercase_bridge_address
+            ),
+            "EVM destination bridge wrapper addresses must reject uppercase byte aliases"
+        );
+        let mut uppercase_binding_hash = lettered_rollout.clone();
+        let binding_alias = uppercase_binding_hash
+            .destination_binding_hash
+            .clone()
+            .expect("destination binding hash")
+            .replacen("0x", "0X", 1);
+        uppercase_binding_hash.destination_binding_hash = Some(binding_alias);
+        assert!(
+            !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_ETH, &uppercase_binding_hash),
+            "EVM destination binding hashes must reject uppercase-prefix aliases"
+        );
+        assert!(
+            sccp_evm_mainnet_destination_rollout_with_binding_v1(
+                SCCP_DOMAIN_ETH,
+                "0x1111111111111111111111111111111111111111".to_owned(),
+                format!("0x{}", "AB".repeat(32)),
+                format!("0x{}", "cd".repeat(32)),
+                encode_0x_lower_hex(&sccp_eth_mainnet_network_id_word_v1()),
+                format!("0x{}", "ef".repeat(20)),
+            )
+            .is_none(),
+            "EVM destination rollout construction must reject uppercase verifier code hashes"
+        );
+        assert!(
+            sccp_evm_mainnet_destination_rollout_with_binding_v1(
+                SCCP_DOMAIN_ETH,
+                "0x1111111111111111111111111111111111111111".to_owned(),
+                format!("0x{}", "ab".repeat(32)),
+                format!("0x{}", "cd".repeat(32)),
+                encode_0x_lower_hex(&sccp_eth_mainnet_network_id_word_v1()).replacen("0x", "0X", 1),
+                format!("0x{}", "ef".repeat(20)),
+            )
+            .is_none(),
+            "EVM destination rollout construction must reject uppercase-prefix network ids"
+        );
 
         let mut without_binding_key = rollout.clone();
         without_binding_key.destination_binding_key = None;
@@ -62831,6 +63607,36 @@ mod tests {
             rollout.solana_programdata_metadata_blake2b256.as_deref(),
             Some("0x2b5f26278ea949463e97c1dc5e53a821b82515b405454a1b0e3cd652c3b00209")
         );
+        let mut uppercase_verifier_code_hash = rollout.clone();
+        uppercase_verifier_code_hash.verifier_code_hash =
+            Some(verifier_code_hash.replacen("0x", "0X", 1));
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_SOL,
+                &uppercase_verifier_code_hash
+            ),
+            "Solana verifier code hashes must reject uppercase-prefix aliases"
+        );
+        let mut uppercase_metadata_hash = rollout.clone();
+        uppercase_metadata_hash.solana_programdata_metadata_blake2b256 =
+            Some("0X2b5f26278ea949463e97c1dc5e53a821b82515b405454a1b0e3cd652c3b00209".to_owned());
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_SOL,
+                &uppercase_metadata_hash
+            ),
+            "Solana ProgramData metadata hashes must reject uppercase-prefix aliases"
+        );
+        let mut uppercase_executable_hash = rollout.clone();
+        uppercase_executable_hash.solana_programdata_executable_blake2b256 =
+            Some(verifier_code_hash.to_ascii_uppercase());
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_SOL,
+                &uppercase_executable_hash
+            ),
+            "Solana executable hashes must reject uppercase aliases"
+        );
         let sol_binding =
             sccp_destination_binding_for_domain(SCCP_DOMAIN_SOL).expect("Solana binding");
         assert_eq!(
@@ -62921,6 +63727,19 @@ mod tests {
         assert!(
             sccp_solana_mainnet_destination_rollout_with_live_evidence_v1(
                 verifier_identity,
+                verifier_code_hash.replacen("0x", "0X", 1),
+                programdata_address.clone(),
+                "4321".to_owned(),
+                "5000".to_owned(),
+                "5001".to_owned(),
+                "f0VMRgECAwQF".to_owned(),
+            )
+            .is_none(),
+            "Solana destination rollout construction must reject uppercase-prefix code hashes"
+        );
+        assert!(
+            sccp_solana_mainnet_destination_rollout_with_live_evidence_v1(
+                "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3".to_owned(),
                 format!("0x{}", "44".repeat(32)),
                 programdata_address,
                 "4321".to_owned(),
@@ -62953,6 +63772,40 @@ mod tests {
         assert_eq!(
             rollout.anchor_id.as_deref(),
             Some(SCCP_TON_MAINNET_DESTINATION_ANCHOR_ID_V1)
+        );
+        let mut uppercase_account_state_hash = rollout.clone();
+        uppercase_account_state_hash.ton_account_state_hash =
+            Some(format!("0X{}", "67".repeat(32)));
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_TON,
+                &uppercase_account_state_hash
+            ),
+            "TON account state hashes must reject uppercase-prefix aliases"
+        );
+        let mut uppercase_last_transaction_hash = rollout.clone();
+        uppercase_last_transaction_hash.ton_last_transaction_hash =
+            Some(format!("0x{}", "AB".repeat(32)));
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_TON,
+                &uppercase_last_transaction_hash
+            ),
+            "TON last transaction hashes must reject uppercase byte aliases"
+        );
+        let mut uppercase_code_root = rollout.clone();
+        uppercase_code_root.ton_verifier_code_boc_root_hash =
+            Some(TEST_TON_CODE_BOC_ROOT_HASH.replacen("0x", "0X", 1));
+        assert!(
+            !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_TON, &uppercase_code_root),
+            "TON code BoC root hashes must reject uppercase-prefix aliases"
+        );
+        let mut uppercase_code_boc = rollout.clone();
+        uppercase_code_boc.ton_verifier_code_boc =
+            Some(TEST_TON_CODE_BOC_HEX.replacen("0x", "0X", 1));
+        assert!(
+            !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_TON, &uppercase_code_boc),
+            "TON code BoC bytes must reject uppercase-prefix aliases"
         );
 
         let mut generic =
@@ -63026,6 +63879,30 @@ mod tests {
             )
             .is_none(),
             "TON rollout construction must reject code-hash drift from the supplied BoC"
+        );
+        assert!(
+            sccp_ton_mainnet_destination_rollout_with_live_evidence_v1(
+                verifier_identity.clone(),
+                verifier_code_hash.replacen("0x", "0X", 1),
+                format!("0x{}", "67".repeat(32)),
+                "123456".to_owned(),
+                format!("0x{}", "68".repeat(32)),
+                TEST_TON_CODE_BOC_HEX.to_owned(),
+            )
+            .is_none(),
+            "TON rollout construction must reject uppercase-prefix verifier code hashes"
+        );
+        assert!(
+            sccp_ton_mainnet_destination_rollout_with_live_evidence_v1(
+                verifier_identity.clone(),
+                verifier_code_hash.clone(),
+                format!("0x{}", "67".repeat(32)),
+                "123456".to_owned(),
+                format!("0x{}", "68".repeat(32)),
+                TEST_TON_CODE_BOC_HEX.replacen("0x", "0X", 1),
+            )
+            .is_none(),
+            "TON rollout construction must reject uppercase-prefix code BoC bytes"
         );
 
         let mut wrong_anchor = rollout.clone();
@@ -63220,6 +64097,62 @@ mod tests {
             tvm_destination_profile.anchor_id.as_deref(),
             Some(SCCP_TRON_MAINNET_DESTINATION_ANCHOR_ID_V1)
         );
+        let mut uppercase_tron_code_hash = tvm_destination_profile.clone();
+        uppercase_tron_code_hash.verifier_code_hash = Some(code_hash.replacen("0x", "0X", 1));
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_TRON,
+                &uppercase_tron_code_hash
+            ),
+            "TRON verifier code hashes must reject uppercase-prefix aliases"
+        );
+        let mut uppercase_tron_key_hash = tvm_destination_profile.clone();
+        uppercase_tron_key_hash.verifier_key_hash = Some(format!("0X{}", "57".repeat(32)));
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_TRON,
+                &uppercase_tron_key_hash
+            ),
+            "TRON verifier key hashes must reject uppercase-prefix aliases"
+        );
+        let mut uppercase_tron_network_id = tvm_destination_profile.clone();
+        let tron_network_alias = uppercase_tron_network_id
+            .destination_network_id
+            .clone()
+            .expect("TRON destination network id")
+            .replacen("0x", "0X", 1);
+        uppercase_tron_network_id.destination_network_id = Some(tron_network_alias);
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_TRON,
+                &uppercase_tron_network_id
+            ),
+            "TRON destination network ids must reject uppercase-prefix aliases"
+        );
+        let mut uppercase_tron_binding_hash = tvm_destination_profile.clone();
+        let tron_binding_alias = uppercase_tron_binding_hash
+            .destination_binding_hash
+            .clone()
+            .expect("TRON destination binding hash")
+            .replacen("0x", "0X", 1);
+        uppercase_tron_binding_hash.destination_binding_hash = Some(tron_binding_alias);
+        assert!(
+            !sccp_destination_rollout_is_production_ready(
+                SCCP_DOMAIN_TRON,
+                &uppercase_tron_binding_hash
+            ),
+            "TRON destination binding hashes must reject uppercase-prefix aliases"
+        );
+        assert!(
+            sccp_tron_mainnet_destination_rollout_with_binding_v1(
+                "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned(),
+                code_hash.clone(),
+                format!("0x{}", "57".repeat(32)),
+                format!("0X{}", "5c".repeat(32)),
+            )
+            .is_none(),
+            "TRON destination rollout construction must reject uppercase-prefix network ids"
+        );
 
         let mut missing_tron_key = tvm_destination_profile.clone();
         missing_tron_key.verifier_key_hash = None;
@@ -63355,6 +64288,36 @@ mod tests {
         assert!(!sccp_source_verifier_material_is_production_ready(
             &wrong_circuit
         ));
+
+        let mut padded_anchor_id = material.clone();
+        padded_anchor_id.source_trust_anchor_id.push(' ');
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&padded_anchor_id),
+            "source trust anchor ids must be exact, not trim-normalized"
+        );
+
+        let mut control_consensus_id = material.clone();
+        control_consensus_id.consensus_verifier_id.push('\0');
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&control_consensus_id),
+            "consensus verifier ids must reject control-character aliases"
+        );
+
+        let mut padded_inclusion_id = material.clone();
+        padded_inclusion_id
+            .message_inclusion_verifier_id
+            .insert(0, ' ');
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&padded_inclusion_id),
+            "message-inclusion verifier ids must be exact, not trim-normalized"
+        );
+
+        let mut control_policy_id = material.clone();
+        control_policy_id.finality_policy_id.push('\n');
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&control_policy_id),
+            "finality policy ids must reject control-character aliases"
+        );
 
         let mut missing_anchor_id = material.clone();
         missing_anchor_id.source_trust_anchor_id.clear();
@@ -68951,6 +69914,19 @@ mod tests {
         );
         assert_rejected(
             production.clone(),
+            |manifest| manifest.destination_binding.key.push_str("-debug"),
+            "production manifests must carry the canonical destination binding key",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| {
+                manifest.destination_binding =
+                    sccp_destination_binding_for_domain(SCCP_DOMAIN_BSC).expect("BSC binding");
+            },
+            "production manifests must reject destination binding material replayed from another lane",
+        );
+        assert_rejected(
+            production.clone(),
             |manifest| manifest.proof_family = "debug-proof-family".to_owned(),
             "production manifests must use the canonical SCCP proof family",
         );
@@ -69073,6 +70049,81 @@ mod tests {
         );
         assert_ne!(eth_binding.key, bsc_binding.key);
         assert_ne!(eth_binding.binding_hash, bsc_binding.binding_hash);
+
+        let alias_sensitive_binding = build_sccp_evm_destination_binding(
+            &eth, [0xab; 32], [0xab; 20], [0xcd; 20], [0xef; 32], [0xde; 32],
+        )
+        .expect("alias-sensitive EVM binding");
+        assert!(sccp_evm_destination_binding_matches_deployment_material(
+            &eth,
+            &alias_sensitive_binding
+        ));
+        assert!(
+            !sccp_evm_destination_binding_matches_deployment_material(
+                &eth,
+                &destination_binding_with_key_part(
+                    alias_sensitive_binding.clone(),
+                    3,
+                    encode_lower_hex(&[0xab; 32]).to_ascii_uppercase(),
+                ),
+            ),
+            "EVM binding keys must reject uppercase raw network-id aliases"
+        );
+        assert!(
+            !sccp_evm_destination_binding_matches_deployment_material(
+                &eth,
+                &destination_binding_with_key_part(
+                    alias_sensitive_binding.clone(),
+                    3,
+                    encode_0x_lower_hex(&[0xab; 32]),
+                ),
+            ),
+            "EVM binding keys must reject 0x-prefixed network-id aliases"
+        );
+        assert!(
+            !sccp_evm_destination_binding_matches_deployment_material(
+                &eth,
+                &destination_binding_with_key_part(
+                    alias_sensitive_binding.clone(),
+                    4,
+                    format!("0X{}", encode_lower_hex(&[0xab; 20])),
+                ),
+            ),
+            "EVM binding keys must reject uppercase address prefixes"
+        );
+        assert!(
+            !sccp_evm_destination_binding_matches_deployment_material(
+                &eth,
+                &destination_binding_with_key_part(
+                    alias_sensitive_binding.clone(),
+                    5,
+                    uppercase_0x_hex_digits(&encode_0x_lower_hex(&[0xcd; 20])),
+                ),
+            ),
+            "EVM binding keys must reject uppercase bridge-address byte aliases"
+        );
+        assert!(
+            !sccp_evm_destination_binding_matches_deployment_material(
+                &eth,
+                &destination_binding_with_key_part(
+                    alias_sensitive_binding.clone(),
+                    6,
+                    encode_lower_hex(&[0xef; 32]),
+                ),
+            ),
+            "EVM binding keys must reject bare verifier-code hash aliases"
+        );
+        assert!(
+            !sccp_evm_destination_binding_matches_deployment_material(
+                &eth,
+                &destination_binding_with_key_part(
+                    alias_sensitive_binding,
+                    7,
+                    uppercase_0x_hex_digits(&encode_0x_lower_hex(&[0xde; 32])),
+                ),
+            ),
+            "EVM binding keys must reject uppercase verifier-key hash aliases"
+        );
 
         let changed_verifier =
             sample_evm_destination_binding(&eth, network_id, [0x44; 20], bridge_address);
@@ -69257,6 +70308,73 @@ mod tests {
         assert!(
             !sccp_tron_destination_binding_matches_deployment_material(&manifest, &forged_key),
             "TRON binding keys must be parsed and recomputed, not trusted"
+        );
+        let alias_sensitive_binding = build_sccp_tron_destination_binding(
+            &manifest,
+            [0xab; 32],
+            "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+            [0xef; 32],
+            [0xde; 32],
+        )
+        .expect("alias-sensitive TRON destination binding");
+        assert!(sccp_tron_destination_binding_matches_deployment_material(
+            &manifest,
+            &alias_sensitive_binding
+        ));
+        assert!(
+            !sccp_tron_destination_binding_matches_deployment_material(
+                &manifest,
+                &destination_binding_with_key_part(
+                    alias_sensitive_binding.clone(),
+                    3,
+                    encode_lower_hex(&[0xab; 32]).to_ascii_uppercase(),
+                ),
+            ),
+            "TRON binding keys must reject uppercase raw network-id aliases"
+        );
+        assert!(
+            !sccp_tron_destination_binding_matches_deployment_material(
+                &manifest,
+                &destination_binding_with_key_part(
+                    alias_sensitive_binding.clone(),
+                    3,
+                    encode_0x_lower_hex(&[0xab; 32]),
+                ),
+            ),
+            "TRON binding keys must reject 0x-prefixed network-id aliases"
+        );
+        assert!(
+            !sccp_tron_destination_binding_matches_deployment_material(
+                &manifest,
+                &destination_binding_with_key_part(
+                    alias_sensitive_binding.clone(),
+                    5,
+                    format!("0X{}", encode_lower_hex(&[0xef; 32])),
+                ),
+            ),
+            "TRON binding keys must reject uppercase verifier-code hash prefixes"
+        );
+        assert!(
+            !sccp_tron_destination_binding_matches_deployment_material(
+                &manifest,
+                &destination_binding_with_key_part(
+                    alias_sensitive_binding.clone(),
+                    5,
+                    uppercase_0x_hex_digits(&encode_0x_lower_hex(&[0xef; 32])),
+                ),
+            ),
+            "TRON binding keys must reject uppercase verifier-code hash byte aliases"
+        );
+        assert!(
+            !sccp_tron_destination_binding_matches_deployment_material(
+                &manifest,
+                &destination_binding_with_key_part(
+                    alias_sensitive_binding,
+                    6,
+                    encode_lower_hex(&[0xde; 32]),
+                ),
+            ),
+            "TRON binding keys must reject bare verifier-key hash aliases"
         );
         assert!(
             build_sccp_tron_destination_binding(

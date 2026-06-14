@@ -69,8 +69,9 @@ fn manifest_chunk_root_mismatch_detected() {
 
 #[test]
 fn key_update_signature_mismatch_rejected() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let viewer_keys = KeyPair::random();
+    let publisher_keys = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked streaming publisher Ed25519 keypair");
+    let viewer_keys = KeyPair::try_random().expect("generate checked streaming viewer keypair");
     let publisher_peer = streaming::make_peer(&publisher_keys, 27_100);
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_101);
 

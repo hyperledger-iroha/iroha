@@ -206,7 +206,8 @@ async fn offline_note_v2_issue_audit_redeem_real_proofs_on_four_peers() -> Resul
 }
 
 fn signed_certificate(seed: u8, key_id: &str) -> Result<OfflineNoteKeyCertificateV2> {
-    let note_key = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+    let note_key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+        .expect("derive offline note V2 key from deterministic fixture seed");
     let (algorithm, public_key) = note_key.public_key().try_to_bytes()?;
     eyre::ensure!(algorithm == Algorithm::Ed25519, "note key must be Ed25519");
     let mut certificate = OfflineNoteKeyCertificateV2 {
@@ -221,10 +222,12 @@ fn signed_certificate(seed: u8, key_id: &str) -> Result<OfflineNoteKeyCertificat
         assertion_public_key: public_key.to_vec(),
         assertion_usage_count_limit: Some(1),
         one_use: true,
-        issuer_signature: Signature::new(ALICE_KEYPAIR.private_key(), b"placeholder"),
+        issuer_signature: Signature::try_new(ALICE_KEYPAIR.private_key(), b"placeholder")
+            .expect("placeholder offline note V2 certificate signature must be valid"),
     };
     let payload = certificate.signing_bytes()?;
-    certificate.issuer_signature = Signature::new(ALICE_KEYPAIR.private_key(), &payload);
+    certificate.issuer_signature = Signature::try_new(ALICE_KEYPAIR.private_key(), &payload)
+        .expect("offline note V2 certificate signature must be valid");
     Ok(certificate)
 }
 

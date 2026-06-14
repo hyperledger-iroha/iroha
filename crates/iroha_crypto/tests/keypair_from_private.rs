@@ -3,7 +3,8 @@
 use iroha_crypto::{Algorithm, KeyPair};
 
 fn assert_roundtrip(algorithm: Algorithm) {
-    let original = KeyPair::random_with_algorithm(algorithm);
+    let original = KeyPair::try_random_with_algorithm(algorithm)
+        .expect("generate checked keypair-from-private roundtrip keypair");
     let private = original.private_key().clone();
 
     let reconstructed =

@@ -18,6 +18,24 @@ use nonzero_ext::nonzero;
 
 const SCCP_AUDITED_SOLANA_PROOF_MAX_BYTES: u32 = 8 * 1024 * 1024;
 
+fn checked_seeded_keypair(
+    seed: &[u8],
+    algorithm: iroha_crypto::Algorithm,
+    context: &str,
+) -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_from_seed(seed.to_vec(), algorithm)
+        .unwrap_or_else(|err| panic!("{context} seed should derive a keypair: {err}"))
+}
+
+fn checked_signature(
+    private_key: &iroha_crypto::PrivateKey,
+    payload: &[u8],
+    context: &str,
+) -> iroha_crypto::Signature {
+    iroha_crypto::Signature::try_new(private_key, payload)
+        .unwrap_or_else(|err| panic!("{context} should sign successfully: {err}"))
+}
+
 fn bridge_proof_id(proof: &BridgeProof) -> ProofId {
     let encoded = norito::to_bytes(proof).expect("encode bridge proof");
     let backend = proof.backend_label();
@@ -30,21 +48,25 @@ fn bridge_proof_id(proof: &BridgeProof) -> ProofId {
 
 fn solana_vote_keypairs() -> [iroha_crypto::KeyPair; 4] {
     [
-        iroha_crypto::KeyPair::from_seed(
-            b"iroha:core-test:sccp:sol-vote:0".to_vec(),
+        checked_seeded_keypair(
+            b"iroha:core-test:sccp:sol-vote:0",
             iroha_crypto::Algorithm::Ed25519,
+            "Solana vote signer 0",
         ),
-        iroha_crypto::KeyPair::from_seed(
-            b"iroha:core-test:sccp:sol-vote:1".to_vec(),
+        checked_seeded_keypair(
+            b"iroha:core-test:sccp:sol-vote:1",
             iroha_crypto::Algorithm::Ed25519,
+            "Solana vote signer 1",
         ),
-        iroha_crypto::KeyPair::from_seed(
-            b"iroha:core-test:sccp:sol-vote:2".to_vec(),
+        checked_seeded_keypair(
+            b"iroha:core-test:sccp:sol-vote:2",
             iroha_crypto::Algorithm::Ed25519,
+            "Solana vote signer 2",
         ),
-        iroha_crypto::KeyPair::from_seed(
-            b"iroha:core-test:sccp:sol-vote:3".to_vec(),
+        checked_seeded_keypair(
+            b"iroha:core-test:sccp:sol-vote:3",
             iroha_crypto::Algorithm::Ed25519,
+            "Solana vote signer 3",
         ),
     ]
 }
@@ -625,9 +647,13 @@ fn solana_vote_proof(
     let signatures = signers[..3]
         .iter()
         .map(|signer| {
-            iroha_crypto::Signature::new(signer.private_key(), &vote_message_hash)
-                .payload()
-                .to_vec()
+            checked_signature(
+                signer.private_key(),
+                &vote_message_hash,
+                "Solana finalized vote signature",
+            )
+            .payload()
+            .to_vec()
         })
         .collect();
     iroha_sccp::SccpSolanaFinalizedVoteProofV1 {
@@ -684,21 +710,25 @@ fn solana_emitter_program_id() -> Vec<u8> {
 
 fn bsc_validator_keypairs() -> [iroha_crypto::KeyPair; 4] {
     [
-        iroha_crypto::KeyPair::from_seed(
-            b"iroha:core-test:sccp:bsc-validator:0".to_vec(),
+        checked_seeded_keypair(
+            b"iroha:core-test:sccp:bsc-validator:0",
             iroha_crypto::Algorithm::Secp256k1,
+            "BSC validator signer 0",
         ),
-        iroha_crypto::KeyPair::from_seed(
-            b"iroha:core-test:sccp:bsc-validator:1".to_vec(),
+        checked_seeded_keypair(
+            b"iroha:core-test:sccp:bsc-validator:1",
             iroha_crypto::Algorithm::Secp256k1,
+            "BSC validator signer 1",
         ),
-        iroha_crypto::KeyPair::from_seed(
-            b"iroha:core-test:sccp:bsc-validator:2".to_vec(),
+        checked_seeded_keypair(
+            b"iroha:core-test:sccp:bsc-validator:2",
             iroha_crypto::Algorithm::Secp256k1,
+            "BSC validator signer 2",
         ),
-        iroha_crypto::KeyPair::from_seed(
-            b"iroha:core-test:sccp:bsc-validator:3".to_vec(),
+        checked_seeded_keypair(
+            b"iroha:core-test:sccp:bsc-validator:3",
             iroha_crypto::Algorithm::Secp256k1,
+            "BSC validator signer 3",
         ),
     ]
 }

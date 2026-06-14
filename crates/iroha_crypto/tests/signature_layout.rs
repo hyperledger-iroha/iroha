@@ -131,7 +131,8 @@ fn signature_of_delegates_to_signature_layout() {
     let key_pair = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
     let msg = ();
     let wrapped: iroha_crypto::SignatureOf<()> =
-        iroha_crypto::SignatureOf::new(key_pair.private_key(), &msg);
+        iroha_crypto::SignatureOf::try_new(key_pair.private_key(), &msg)
+            .expect("fixture Ed25519 typed signature");
     let base = Signature::from_bytes(wrapped.payload());
     assert_eq!(
         base.encode(),
@@ -165,7 +166,8 @@ fn signature_large_payload_layout_debug() {
 #[ignore = "diagnostic output"]
 fn signature_of_norito_payload_diagnostics() {
     let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let sig_of = SignatureOf::new(key_pair.private_key(), &());
+    let sig_of = SignatureOf::try_new(key_pair.private_key(), &())
+        .expect("diagnostic fixture Ed25519 typed signature");
     let bytes = norito::to_bytes(&sig_of).expect("encode SignatureOf");
 
     dump_header("SignatureOf", &bytes);

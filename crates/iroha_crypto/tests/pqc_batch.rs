@@ -7,7 +7,8 @@ use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _, SecretKey as
 #[test]
 fn pqc_batch_verify_ok_and_fail() {
     // Prepare a few distinct messages and signatures
-    let kp = KeyPair::from_seed(b"iroha:ml-dsa:pqc-batch".to_vec(), Algorithm::MlDsa);
+    let kp = KeyPair::try_from_seed(b"iroha:ml-dsa:pqc-batch".to_vec(), Algorithm::MlDsa)
+        .expect("fixture seed derives ML-DSA batch keypair");
     let (algorithm, public_bytes) = kp
         .public_key()
         .try_to_bytes()
@@ -49,10 +50,11 @@ fn pqc_batch_verify_rejects_empty_input() {
 
 #[test]
 fn pqc_batch_verify_rejects_all_zero_material_before_backend() {
-    let kp = KeyPair::from_seed(
+    let kp = KeyPair::try_from_seed(
         b"iroha:ml-dsa:pqc-batch-all-zero".to_vec(),
         Algorithm::MlDsa,
-    );
+    )
+    .expect("fixture seed derives ML-DSA all-zero-admission keypair");
     let (_, public_bytes) = kp
         .public_key()
         .try_to_bytes()

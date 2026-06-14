@@ -21,7 +21,7 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World},
 };
-use iroha_crypto::{KeyPair, SignatureOf};
+use iroha_crypto::{KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::{
     ChainId,
     account::{Account, AccountId},
@@ -33,7 +33,7 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, json_entry, json_object};
-use norito::json;
+use norito::{codec::Encode, json};
 use sorafs_manifest::repair::{
     REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
     RepairCauseV1, RepairEvidenceV1, RepairReportV1, RepairTaskEventV1, RepairTaskRecordV1,
@@ -87,7 +87,11 @@ fn sign_worker_action(
         idempotency_key: idempotency_key.to_string(),
         action,
     };
-    SignatureOf::new(worker_key.private_key(), &payload)
+    checked_signature_of(worker_key.private_key(), &payload)
+}
+
+fn checked_signature_of<T: Encode>(private_key: &PrivateKey, payload: &T) -> SignatureOf<T> {
+    SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
 
 fn seed_worker_permission(state: &Arc<State>, worker_id: &AccountId, provider_id: [u8; 32]) {

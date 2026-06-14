@@ -12412,6 +12412,21 @@ RbcProgressMutationAlwaysMatchesLocalClassification ==
 RbcCorruptedInitRepairAlwaysResetsEvidence ==
   [] [RbcCorruptedInitRepairResetsEvidenceStep]_vars
 
+RbcCorruptionRepairAlwaysMatchesFaultEnvelope ==
+  /\ ByzantineFaultGateNeverBypassesCorruptibleRbc
+  /\ ByzantineFaultStepAlwaysCorruptsOnlyRbcDigest
+  /\ RbcDigestInvalidationOnlyByFault
+  /\ RbcCorruptionEntryOnlyByFault
+  /\ RbcCorruptedDigestNeverValid
+  /\ RbcCorruptedAlwaysRetainsHeaderEvidence
+  /\ RbcCorruptedNeverCarriesFinalityArtifacts
+  /\ RbcCorruptedNeverBypassesInitRepairProgress
+  /\ RbcCorruptionExitOnlyByInit
+  /\ RbcCorruptedInitRepairAlwaysResetsEvidence
+  /\ RbcInitGateNeverBypassesRepairableState
+  /\ RbcInitStepAlwaysInstallsHeaderDigestEvidence
+  /\ RbcInitStepAlwaysStartsChunkOnlyHandoff
+
 RbcChunkGateNeverBypassesHeaderDigestEvidence ==
   [] RbcChunkGateMatchesHeaderDigestEvidence
 
@@ -12513,5 +12528,11 @@ LiveChunkEvidenceNeverBypassRbcHandoff ==
 
 LiveReadyVotesNeverBypassRbcHandoff ==
   [] LiveReadyVotesStayInRbcHandoff
+
+RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope ==
+  /\ RbcProgressMutationAlwaysMatchesLocalClassification
+  /\ LiveHeaderDigestEvidenceNeverBypassRbcHandoff
+  /\ LiveChunkEvidenceNeverBypassRbcHandoff
+  /\ LiveReadyVotesNeverBypassRbcHandoff
 
 ====

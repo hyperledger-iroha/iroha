@@ -814,8 +814,13 @@ mod tests {
         SorafsRolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
     }
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     fn test_config_with_chain_discriminant(chain_discriminant: u16) -> Config {
-        let key_pair = KeyPair::from_seed(vec![42u8; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(42);
         let account = AccountId::new(key_pair.public_key().clone());
         Config {
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
@@ -837,6 +842,15 @@ mod tests {
             sorafs_anonymity_policy: default_anonymity_policy(),
             sorafs_rollout_phase: default_rollout_phase(),
         }
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(42).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     #[test]

@@ -21,10 +21,24 @@ fn sample_hash(seed: u8) -> Hash {
     Hash::prehashed([seed; 32])
 }
 
+fn fixture_key_pair(seed: u8) -> KeyPair {
+    KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+        .expect("fixture seed must derive a valid keypair")
+}
+
 fn seeded_account(domain: &str, seed: u8) -> AccountId {
     let _domain_id = DomainId::try_new(domain, "universal").expect("domain id");
-    let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+    let key_pair = fixture_key_pair(seed);
     AccountId::new(key_pair.public_key().clone())
+}
+
+#[test]
+fn fixture_key_pair_uses_checked_seed_derivation() {
+    assert_eq!(fixture_key_pair(0x01).algorithm(), Algorithm::Ed25519);
+    assert!(
+        KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+        "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+    );
 }
 
 fn sample_route(seed: u8) -> StreamingPrivacyRoute {

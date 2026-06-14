@@ -459,8 +459,13 @@ mod tests {
         cert_with_height(2, view)
     }
 
+    fn checked_random_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("generate checked commit roster journal BLS fixture keypair")
+    }
+
     fn cert_with_height(height: u64, view: u64) -> (Qc, ValidatorSetCheckpoint) {
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp = checked_random_bls_keypair();
         let peer = PeerId::new(kp.public_key().clone());
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero"),

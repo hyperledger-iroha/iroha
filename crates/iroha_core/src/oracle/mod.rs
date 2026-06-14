@@ -365,7 +365,8 @@ mod tests {
 
     fn oracle(name: &str, domain: &str) -> iroha_data_model::oracle::OracleId {
         let seed = format!("{name}:{domain}");
-        let keypair = KeyPair::from_seed(seed.into_bytes(), Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(seed.into_bytes(), Algorithm::Ed25519)
+            .expect("test oracle seed derivation should succeed");
         AccountId::new(keypair.public_key().clone())
     }
 

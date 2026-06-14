@@ -16541,6 +16541,14 @@ mod tests {
         state::{State, World, WorldReadOnly},
     };
 
+    fn checked_signature(
+        private_key: &iroha_crypto::PrivateKey,
+        payload: &[u8],
+    ) -> iroha_crypto::Signature {
+        iroha_crypto::Signature::try_new(private_key, payload)
+            .expect("test fixture signing should succeed")
+    }
+
     fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
         state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
     }
@@ -16967,7 +16975,7 @@ mod tests {
         .expect("bundle payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -16979,7 +16987,7 @@ mod tests {
             .expect("rollback payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -17000,7 +17008,7 @@ mod tests {
         .expect("rollout payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -17013,7 +17021,7 @@ mod tests {
                 .expect("service config delete payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -17073,7 +17081,7 @@ mod tests {
         .expect("state mutation payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -33666,7 +33674,7 @@ mod tests {
         .expect("fhe job payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -33876,10 +33884,7 @@ mod tests {
         .expect("artifact-bearing fhe job payload");
         let signed_with_artifacts = ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(
-                ALICE_KEYPAIR.private_key(),
-                &payload_with_artifacts,
-            ),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload_with_artifacts),
         };
         let err = verify_fhe_job_run_provenance(
             &ALICE_ID,
@@ -33991,7 +33996,7 @@ mod tests {
                 .expect("decryption request payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -34061,7 +34066,7 @@ mod tests {
             .expect("uploaded model bundle payload");
         ManifestProvenance {
             signer: key_pair.public_key().clone(),
-            signature: iroha_crypto::Signature::new(key_pair.private_key(), &payload),
+            signature: checked_signature(key_pair.private_key(), &payload),
         }
     }
 
@@ -34125,7 +34130,7 @@ mod tests {
         .expect("uploaded model finalize payload");
         ManifestProvenance {
             signer: key_pair.public_key().clone(),
-            signature: iroha_crypto::Signature::new(key_pair.private_key(), &payload),
+            signature: checked_signature(key_pair.private_key(), &payload),
         }
     }
 
@@ -34297,7 +34302,7 @@ mod tests {
         .expect("agent deploy payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -34329,7 +34334,7 @@ mod tests {
         .expect("training start payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -34350,7 +34355,7 @@ mod tests {
         .expect("training checkpoint payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -34364,7 +34369,7 @@ mod tests {
                 .expect("training retry payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -34392,7 +34397,7 @@ mod tests {
         .expect("model artifact payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -34424,7 +34429,7 @@ mod tests {
         .expect("model weight register payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -34445,7 +34450,7 @@ mod tests {
         .expect("model weight promote payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -34464,7 +34469,7 @@ mod tests {
         .expect("model weight rollback payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -34521,7 +34526,7 @@ mod tests {
         .expect("hf shared lease join payload");
         ManifestProvenance {
             signer: key_pair.public_key().clone(),
-            signature: iroha_crypto::Signature::new(key_pair.private_key(), &payload),
+            signature: checked_signature(key_pair.private_key(), &payload),
         }
     }
 
@@ -34551,7 +34556,7 @@ mod tests {
         .expect("hf shared lease renew payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -34574,7 +34579,7 @@ mod tests {
         .expect("hf shared lease leave payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -34651,7 +34656,7 @@ mod tests {
             .expect("model host advertise payload");
         ManifestProvenance {
             signer: key_pair.public_key().clone(),
-            signature: iroha_crypto::Signature::new(key_pair.private_key(), &payload),
+            signature: checked_signature(key_pair.private_key(), &payload),
         }
     }
 
@@ -34666,7 +34671,7 @@ mod tests {
         .expect("model host heartbeat payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -34675,7 +34680,7 @@ mod tests {
             .expect("model host withdraw payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
     }
 
@@ -37079,7 +37084,7 @@ mod tests {
                     .expect("bundle payload");
                 ManifestProvenance {
                     signer: ALICE_KEYPAIR.public_key().clone(),
-                    signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+                    signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
                 }
             },
         }
@@ -37138,10 +37143,7 @@ mod tests {
             initial_service_secrets: BTreeMap::new(),
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
-                signature: iroha_crypto::Signature::new(
-                    ALICE_KEYPAIR.private_key(),
-                    &deploy_payload,
-                ),
+                signature: checked_signature(ALICE_KEYPAIR.private_key(), &deploy_payload),
             },
         }
         .execute(&ALICE_ID, &mut stx)?;
@@ -41558,10 +41560,7 @@ mod tests {
             lease_ticks: 60,
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
-                signature: iroha_crypto::Signature::new(
-                    ALICE_KEYPAIR.private_key(),
-                    &renew_payload,
-                ),
+                signature: checked_signature(ALICE_KEYPAIR.private_key(), &renew_payload),
             },
         })
         .execute(&ALICE_ID, &mut stx)?;
@@ -41574,10 +41573,7 @@ mod tests {
             reason: "manual-restart".to_string(),
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
-                signature: iroha_crypto::Signature::new(
-                    ALICE_KEYPAIR.private_key(),
-                    &restart_payload,
-                ),
+                signature: checked_signature(ALICE_KEYPAIR.private_key(), &restart_payload),
             },
         })
         .execute(&ALICE_ID, &mut stx)?;
@@ -41594,10 +41590,7 @@ mod tests {
             reason: Some("manual-review".to_string()),
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
-                signature: iroha_crypto::Signature::new(
-                    ALICE_KEYPAIR.private_key(),
-                    &revoke_payload,
-                ),
+                signature: checked_signature(ALICE_KEYPAIR.private_key(), &revoke_payload),
             },
         })
         .execute(&ALICE_ID, &mut stx)?;
@@ -41692,10 +41685,7 @@ mod tests {
             amount_nanos: 1_000_000,
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
-                signature: iroha_crypto::Signature::new(
-                    ALICE_KEYPAIR.private_key(),
-                    &wallet_spend_payload,
-                ),
+                signature: checked_signature(ALICE_KEYPAIR.private_key(), &wallet_spend_payload),
             },
         })
         .execute(&ALICE_ID, &mut stx)?;
@@ -41708,10 +41698,7 @@ mod tests {
             request_id: "ops_agent:wallet:3".to_string(),
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
-                signature: iroha_crypto::Signature::new(
-                    ALICE_KEYPAIR.private_key(),
-                    &wallet_approve_payload,
-                ),
+                signature: checked_signature(ALICE_KEYPAIR.private_key(), &wallet_approve_payload),
             },
         })
         .execute(&ALICE_ID, &mut stx)?;
@@ -41730,10 +41717,7 @@ mod tests {
             payload: "rotate-key-42".to_string(),
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
-                signature: iroha_crypto::Signature::new(
-                    ALICE_KEYPAIR.private_key(),
-                    &message_send_payload,
-                ),
+                signature: checked_signature(ALICE_KEYPAIR.private_key(), &message_send_payload),
             },
         })
         .execute(&ALICE_ID, &mut stx)?;
@@ -41748,10 +41732,7 @@ mod tests {
             message_id: "worker_agent:mail:5".to_string(),
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
-                signature: iroha_crypto::Signature::new(
-                    ALICE_KEYPAIR.private_key(),
-                    &message_ack_payload,
-                ),
+                signature: checked_signature(ALICE_KEYPAIR.private_key(), &message_ack_payload),
             },
         })
         .execute(&ALICE_ID, &mut stx)?;
@@ -41768,10 +41749,7 @@ mod tests {
             provenance_hash: Some("hash:prov#1".to_string()),
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
-                signature: iroha_crypto::Signature::new(
-                    ALICE_KEYPAIR.private_key(),
-                    &artifact_allow_payload,
-                ),
+                signature: checked_signature(ALICE_KEYPAIR.private_key(), &artifact_allow_payload),
             },
         })
         .execute(&ALICE_ID, &mut stx)?;
@@ -41799,10 +41777,7 @@ mod tests {
             ),
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
-                signature: iroha_crypto::Signature::new(
-                    ALICE_KEYPAIR.private_key(),
-                    &autonomy_run_payload,
-                ),
+                signature: checked_signature(ALICE_KEYPAIR.private_key(), &autonomy_run_payload),
             },
         })
         .execute(&ALICE_ID, &mut stx)?;
@@ -41898,10 +41873,7 @@ mod tests {
             provenance_hash: Some("hash:prov#1".to_string()),
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
-                signature: iroha_crypto::Signature::new(
-                    ALICE_KEYPAIR.private_key(),
-                    &artifact_allow_payload,
-                ),
+                signature: checked_signature(ALICE_KEYPAIR.private_key(), &artifact_allow_payload),
             },
         })
         .execute(&ALICE_ID, &mut stx)?;
@@ -41925,10 +41897,7 @@ mod tests {
             workflow_input_json: Some(workflow_input_json.to_string()),
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
-                signature: iroha_crypto::Signature::new(
-                    ALICE_KEYPAIR.private_key(),
-                    &autonomy_run_payload,
-                ),
+                signature: checked_signature(ALICE_KEYPAIR.private_key(), &autonomy_run_payload),
             },
         })
         .execute(&ALICE_ID, &mut stx)?;

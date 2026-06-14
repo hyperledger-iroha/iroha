@@ -580,7 +580,8 @@ mod tests {
     use crate::peer::PeerId;
 
     fn public_key(seed: u8) -> PublicKey {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked register/unregister fixture keypair");
         key_pair.public_key().clone()
     }
 

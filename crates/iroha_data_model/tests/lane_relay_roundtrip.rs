@@ -30,11 +30,17 @@ fn sample_block_header(da_hash: Option<HashOf<commitment::DaCommitmentBundle>>) 
     header
 }
 
+fn checked_random_peer_id() -> PeerId {
+    PeerId::from(
+        KeyPair::try_random()
+            .expect("generate checked lane-relay peer keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
 fn sample_qc(block_hash: HashOf<BlockHeader>) -> Qc {
-    let validator_set = vec![
-        PeerId::from(KeyPair::random().public_key().clone()),
-        PeerId::from(KeyPair::random().public_key().clone()),
-    ];
+    let validator_set = vec![checked_random_peer_id(), checked_random_peer_id()];
     Qc {
         phase: CertPhase::Commit,
         subject_block_hash: block_hash,

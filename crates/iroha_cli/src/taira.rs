@@ -1142,6 +1142,11 @@ mod tests {
         body: String,
     }
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     struct TextContext {
         cfg: Config,
         i18n: Localizer,
@@ -1630,7 +1635,7 @@ mod tests {
 
     #[test]
     fn resolve_canary_signer_derives_account_and_raw_public_key_hex() {
-        let key_pair = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(3);
         let mut config = crate::fallback_config();
         config.key_pair = key_pair.clone();
         let signer = resolve_canary_signer(&config, true).expect("config signer");
@@ -1663,7 +1668,7 @@ mod tests {
 
     #[test]
     fn write_canary_receipt_identity_is_redacted() {
-        let key_pair = KeyPair::from_seed(vec![5; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(5);
         let signer = CanarySigner {
             account_id: AccountId::new(key_pair.public_key().clone()),
             public_key_raw_hex: "11".repeat(32),
@@ -1698,7 +1703,7 @@ mod tests {
 
     #[test]
     fn build_alias_is_stable_and_sanitized() {
-        let key_pair = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(7);
         let alias = build_alias(
             "Taira Rollout Canary!",
             key_pair.public_key(),
@@ -1715,7 +1720,7 @@ mod tests {
 
     #[test]
     fn render_runtime_config_redacts_nothing_only_when_explicitly_called() {
-        let key_pair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(9);
         let mut config = crate::fallback_config();
         config.key_pair = key_pair;
         config.account = AccountId::new(config.key_pair.public_key().clone());
@@ -1726,5 +1731,14 @@ mod tests {
         assert!(rendered.contains("private_key = "));
         assert!(rendered.contains("chain_discriminant = 369"));
         assert!(rendered.contains("nonce = false"));
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(11).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 }

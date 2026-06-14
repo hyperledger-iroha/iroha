@@ -1906,7 +1906,8 @@ mod tests {
     }
 
     fn account(seed: u8) -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked Soracloud ISI fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
 
@@ -1915,7 +1916,8 @@ mod tests {
     }
 
     fn provenance(seed: u8) -> ManifestProvenance {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked Soracloud ISI provenance fixture keypair");
         let signature = Signature::try_new(key_pair.private_key(), b"soracloud-isi-slice")
             .expect("checked Soracloud ISI provenance fixture signature");
         ManifestProvenance {

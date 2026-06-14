@@ -626,6 +626,9 @@ _SUBMISSION_SURFACE_KNOWN_REQUIRED_PHASES: frozenset[str] | None = None
 _ALL_LANES_NESTED_FIELD_SETS: dict[str, frozenset[str]] | None = None
 _NATIVE_EVM_REQUIRED_IMPLEMENTATIONS: dict[str, str] | None = None
 _NATIVE_EVM_REQUIRED_AUDIT_HASHES: frozenset[str] | None = None
+_NATIVE_EVM_PROVER_BUNDLE_SCHEMA: str | None = None
+_NATIVE_EVM_PROVER_BUNDLE_ID: str | None = None
+_ACTIVE_LAUNCH_CHAIN: str | None = None
 _ACTIVE_LAUNCH_DOMAIN: int | None = None
 _SCCP_DOMAIN_ETH: int | None = None
 _ALL_LANES_EVM_DESTINATION_DOMAINS: frozenset[int] | None = None
@@ -725,6 +728,32 @@ def _native_evm_required_audit_hashes() -> frozenset[str]:
             verifier.NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES
         )
     return _NATIVE_EVM_REQUIRED_AUDIT_HASHES
+
+
+def _native_evm_prover_bundle_schema() -> str:
+    global _NATIVE_EVM_PROVER_BUNDLE_SCHEMA
+    if _NATIVE_EVM_PROVER_BUNDLE_SCHEMA is None:
+        verifier = _verify_module()
+        _NATIVE_EVM_PROVER_BUNDLE_SCHEMA = str(
+            verifier.NATIVE_EVM_PROVER_BUNDLE_SCHEMA
+        )
+    return _NATIVE_EVM_PROVER_BUNDLE_SCHEMA
+
+
+def _native_evm_prover_bundle_id() -> str:
+    global _NATIVE_EVM_PROVER_BUNDLE_ID
+    if _NATIVE_EVM_PROVER_BUNDLE_ID is None:
+        verifier = _verify_module()
+        _NATIVE_EVM_PROVER_BUNDLE_ID = str(verifier.NATIVE_EVM_PROVER_BUNDLE_ID)
+    return _NATIVE_EVM_PROVER_BUNDLE_ID
+
+
+def _active_launch_chain() -> str:
+    global _ACTIVE_LAUNCH_CHAIN
+    if _ACTIVE_LAUNCH_CHAIN is None:
+        verifier = _verify_module()
+        _ACTIVE_LAUNCH_CHAIN = str(verifier.ACTIVE_LAUNCH_CHAIN)
+    return _ACTIVE_LAUNCH_CHAIN
 
 
 def _active_launch_domain() -> int:
@@ -2903,6 +2932,15 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
         value = payload.get(field)
         if validation_status == "passed" or value not in ("", None):
             errors.extend(_non_empty_string_field_errors(label, payload, field))
+    exact_string_fields = (
+        ("schema", _native_evm_prover_bundle_schema()),
+        ("bundle_id", _native_evm_prover_bundle_id()),
+        ("lanes", _active_launch_chain()),
+        ("proof_backend", "evm-groth16-bn254-v1"),
+    )
+    for field, expected in exact_string_fields:
+        if field in payload and payload.get(field) != expected:
+            errors.append(f"{label} {field} must be {expected}")
     for field in (
         "proof_artifact_hash",
         "proving_key_hash",

@@ -75,7 +75,8 @@ fn cache_admission_envelope_roundtrip_and_verify() {
         Duration::from_secs(30),
     )
     .expect("record");
-    let key_pair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
+    let key_pair = KeyPair::try_from_seed(vec![0xAA; 32], Algorithm::Ed25519)
+        .expect("fixture Taikai cache admission key");
     let envelope = CacheAdmissionEnvelope::sign(record.clone(), &key_pair).expect("sign");
     envelope.verify(issued_ms).expect("verify now");
     let bytes = to_bytes(&envelope).expect("encode");
@@ -106,7 +107,8 @@ fn cache_admission_detects_tampering_and_expiry() {
         Duration::from_secs(5),
     )
     .expect("record");
-    let key_pair = KeyPair::from_seed(vec![0xBB; 32], Algorithm::Ed25519);
+    let key_pair = KeyPair::try_from_seed(vec![0xBB; 32], Algorithm::Ed25519)
+        .expect("fixture Taikai cache admission key");
     let envelope = CacheAdmissionEnvelope::sign(record.clone(), &key_pair).expect("sign");
 
     let err = envelope
@@ -131,7 +133,8 @@ fn cache_admission_gossip_signs_and_verifies() {
     let issued_ms = 1_726_000_200_000;
     let ttl = Duration::from_secs(15);
     let mut rng = StdRng::seed_from_u64(7);
-    let key_pair = KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519);
+    let key_pair = KeyPair::try_from_seed(vec![0xCC; 32], Algorithm::Ed25519)
+        .expect("fixture Taikai cache admission key");
     let record = CacheAdmissionRecord::from_segment(
         shard,
         issuer,
@@ -151,7 +154,8 @@ fn cache_admission_gossip_signs_and_verifies() {
 
     let (body, signer, _) = gossip.clone().into_parts();
     let forged_signature =
-        iroha_crypto::Signature::new(key_pair.private_key(), b"tamper-cache-admission");
+        iroha_crypto::Signature::try_new(key_pair.private_key(), b"tamper-cache-admission")
+            .expect("fixture forged cache-admission signature");
     let forged = CacheAdmissionGossip::from_parts(body, signer, forged_signature);
     let err = forged
         .verify(issued_ms + 5_000)
@@ -172,7 +176,8 @@ fn cache_admission_replay_filter_blocks_replays_and_expires() {
     let issued_ms = 1_726_000_300_000;
     let ttl = Duration::from_millis(750);
     let mut rng = StdRng::seed_from_u64(11);
-    let key_pair = KeyPair::from_seed(vec![0xDD; 32], Algorithm::Ed25519);
+    let key_pair = KeyPair::try_from_seed(vec![0xDD; 32], Algorithm::Ed25519)
+        .expect("fixture Taikai cache admission key");
     let record = CacheAdmissionRecord::from_segment(
         shard,
         issuer,
@@ -250,7 +255,8 @@ fn cache_admission_tracker_populates_queue_shards() {
     let cached = sample_segment(77, QosClass::Priority);
     let issued_ms = 1_726_000_400_000;
     let ttl = Duration::from_secs(30);
-    let key_pair = KeyPair::from_seed(vec![0xEE; 32], Algorithm::Ed25519);
+    let key_pair = KeyPair::try_from_seed(vec![0xEE; 32], Algorithm::Ed25519)
+        .expect("fixture Taikai cache admission key");
     let record = CacheAdmissionRecord::from_segment(
         shard,
         issuer,

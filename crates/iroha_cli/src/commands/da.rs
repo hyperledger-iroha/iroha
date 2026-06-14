@@ -1965,6 +1965,11 @@ mod tests {
     use tempfile::{NamedTempFile, tempdir};
     use url::Url;
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     struct TestContext {
         cfg: Config,
         printed: Vec<String>,
@@ -2615,6 +2620,15 @@ mod tests {
     }
 
     #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+    }
+
+    #[test]
     fn rent_ledger_plan_records_transfers() {
         let projection = DaRentLedgerProjection {
             rent_due: XorAmount::from_micro(1_000_000),
@@ -2624,17 +2638,17 @@ mod tests {
             potr_bonus_pool: XorAmount::from_micro(25_000),
             egress_credit_per_gib: XorAmount::from_micro(1_500),
         };
-        let payer_key = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
+        let payer_key = fixture_key_pair(1);
         let payer = AccountId::new(payer_key.public_key().clone());
-        let treasury_key = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
+        let treasury_key = fixture_key_pair(2);
         let treasury = AccountId::new(treasury_key.public_key().clone());
-        let reserve_key = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
+        let reserve_key = fixture_key_pair(3);
         let reserve = AccountId::new(reserve_key.public_key().clone());
-        let provider_key = KeyPair::from_seed(vec![4; 32], Algorithm::Ed25519);
+        let provider_key = fixture_key_pair(4);
         let provider = AccountId::new(provider_key.public_key().clone());
-        let pdp_key = KeyPair::from_seed(vec![5; 32], Algorithm::Ed25519);
+        let pdp_key = fixture_key_pair(5);
         let pdp = AccountId::new(pdp_key.public_key().clone());
-        let potr_key = KeyPair::from_seed(vec![6; 32], Algorithm::Ed25519);
+        let potr_key = fixture_key_pair(6);
         let potr = AccountId::new(potr_key.public_key().clone());
         let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),

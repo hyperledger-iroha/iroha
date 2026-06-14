@@ -1718,6 +1718,18 @@ pub mod asset {
             prelude::{Context, Visit},
         };
 
+        fn fixture_key_pair(seed: u8) -> KeyPair {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("fixture seed must derive a valid keypair")
+        }
+
+        fn fixture_key_pair_from_height(height: u64) -> KeyPair {
+            let mut seed = vec![0; 32];
+            seed[..core::mem::size_of::<u64>()].copy_from_slice(&height.to_le_bytes());
+            KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+                .expect("fixture block height must derive a valid keypair")
+        }
+
         struct StubExecutor {
             host: Iroha,
             context: Context,
@@ -1728,8 +1740,7 @@ pub mod asset {
             fn new(height: u64) -> (Self, AssetId) {
                 let domain: DomainId =
                     DomainId::try_new("test_domain", "universal").expect("valid domain");
-                let seed_byte = height.to_le_bytes()[0];
-                let keypair = KeyPair::from_seed(vec![seed_byte; 32], Algorithm::Ed25519);
+                let keypair = fixture_key_pair_from_height(height);
                 let account = AccountId::new(keypair.public_key().clone());
                 let asset_definition = AssetDefinitionId::new(
                     domain.clone(),
@@ -1784,6 +1795,19 @@ pub mod asset {
         impl Visit for StubExecutor {}
 
         #[test]
+        fn fixture_key_pair_uses_checked_seed_derivation() {
+            assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
+            assert_eq!(
+                fixture_key_pair_from_height(1).algorithm(),
+                Algorithm::Ed25519
+            );
+            assert!(
+                KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+                "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+            );
+        }
+
+        #[test]
         fn set_asset_key_value_genesis_returns_ok() {
             let (mut executor, asset) = StubExecutor::new(1);
             let instruction = SetAssetKeyValue::new(
@@ -1817,7 +1841,7 @@ pub mod asset {
         #[test]
         fn set_asset_key_value_non_owner_denied() {
             let (mut executor, asset) = StubExecutor::new(2);
-            let intruder_key = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
+            let intruder_key = fixture_key_pair(7);
             let intruder = AccountId::new(intruder_key.public_key().clone());
             executor.context_mut().authority = intruder;
             let instruction = SetAssetKeyValue::new(
@@ -1841,7 +1865,7 @@ pub mod asset {
         #[test]
         fn visit_instruction_dispatches_register_peer_with_pop() {
             let (mut executor, _) = StubExecutor::new(1);
-            let peer_keypair = KeyPair::from_seed(vec![42; 32], Algorithm::Ed25519);
+            let peer_keypair = fixture_key_pair(42);
             let peer_id = PeerId::from(peer_keypair.public_key().clone());
             let instruction = RegisterPeerWithPop::new(peer_id, vec![1, 2, 3]);
             let instruction_box: InstructionBox = instruction.into();
@@ -1905,7 +1929,7 @@ pub mod asset {
             let (mut executor, _) = StubExecutor::new(1);
             let domain: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("valid domain");
-            let counterparty_keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+            let counterparty_keypair = fixture_key_pair(9);
             let counterparty = AccountId::new(counterparty_keypair.public_key().clone());
             let cash_def =
                 AssetDefinitionId::new(domain.clone(), "cash".parse::<Name>().expect("valid name"));
@@ -1953,7 +1977,7 @@ pub mod asset {
         #[test]
         fn remove_asset_key_value_non_owner_denied() {
             let (mut executor, asset) = StubExecutor::new(2);
-            let intruder_key = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+            let intruder_key = fixture_key_pair(9);
             let intruder = AccountId::new(intruder_key.public_key().clone());
             executor.context_mut().authority = intruder;
             let instruction =
@@ -2664,9 +2688,23 @@ pub mod trigger {
             domain::DomainId,
         };
 
+        fn fixture_key_pair(seed: u8) -> KeyPair {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("fixture seed must derive a valid keypair")
+        }
+
         fn sample_account_id(seed: u8, _domain_id: &DomainId) -> AccountId {
-            let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+            let keypair = fixture_key_pair(seed);
             AccountId::new(keypair.public_key().clone())
+        }
+
+        #[test]
+        fn fixture_key_pair_uses_checked_seed_derivation() {
+            assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
+            assert!(
+                KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+                "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+            );
         }
 
         fn sora_permissions() -> Vec<AnyPermission> {

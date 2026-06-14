@@ -88,8 +88,9 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
     };
     let listen_addr = server.local_addr().map_err(|err| eyre!(err))?;
 
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let viewer_keys = KeyPair::random();
+    let publisher_keys = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked streaming publisher Ed25519 keypair");
+    let viewer_keys = KeyPair::try_random().expect("generate checked streaming viewer keypair");
     let publisher_peer = make_peer(&publisher_keys, 24_101);
     let viewer_peer = make_peer(&viewer_keys, 24_102);
 

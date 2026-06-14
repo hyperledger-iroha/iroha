@@ -144,7 +144,8 @@ fn signed_vote(
         bls_sig: Vec::new(),
     };
     let preimage = vote_preimage(chain_id, mode_tag, &vote);
-    let signature = Signature::new(keypair.private_key(), &preimage);
+    let signature = Signature::try_new(keypair.private_key(), &preimage)
+        .expect("Sumeragi evidence vote signature");
     vote.bls_sig = signature.payload().to_vec();
     vote
 }

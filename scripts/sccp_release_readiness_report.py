@@ -478,6 +478,48 @@ def _sccp_release_manifest_readiness_flags_gate_inventory_errors(
         ]
 
 
+def _sccp_route_allowlist_canary_summary_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for route-allowlist canary summaries."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_route_allowlist_canary_summary_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP route allowlist canary summary source inventory "
+            "cannot run release-bundle verifier helper"
+        ]
+
+
+def _sccp_transparent_openverify_summary_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for transparent OpenVerify summaries."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_transparent_openverify_summary_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP transparent OpenVerify summary source inventory "
+            "cannot run release-bundle verifier helper"
+        ]
+
+
 def _sccp_release_manifest_artifact_set_order_gate_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -5259,6 +5301,12 @@ def _build_report(
     release_public_submission_surface_binding_gate_blockers = (
         _sccp_release_public_submission_surface_binding_gate_inventory_errors()
     )
+    route_allowlist_canary_summary_gate_blockers = (
+        _sccp_route_allowlist_canary_summary_gate_inventory_errors()
+    )
+    transparent_openverify_summary_gate_blockers = (
+        _sccp_transparent_openverify_summary_gate_inventory_errors()
+    )
     release_manifest_readiness_flags_gate_blockers = (
         _sccp_release_manifest_readiness_flags_gate_inventory_errors()
     )
@@ -5910,6 +5958,22 @@ def _build_report(
                 release_public_submission_surface_binding_gate_blockers
             ),
         },
+        "route_allowlist_canary_summary_gate": {
+            "validation_status": (
+                "passed"
+                if not route_allowlist_canary_summary_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": route_allowlist_canary_summary_gate_blockers,
+        },
+        "transparent_openverify_summary_gate": {
+            "validation_status": (
+                "passed"
+                if not transparent_openverify_summary_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": transparent_openverify_summary_gate_blockers,
+        },
         "release_manifest_readiness_flags_gate": {
             "validation_status": (
                 "passed"
@@ -6065,6 +6129,8 @@ def _build_report(
         and not release_public_markdown_text_schema_gate_blockers
         and not release_public_crypto_evidence_binding_gate_blockers
         and not release_public_submission_surface_binding_gate_blockers
+        and not route_allowlist_canary_summary_gate_blockers
+        and not transparent_openverify_summary_gate_blockers
         and not release_manifest_readiness_flags_gate_blockers
         and not release_manifest_artifact_set_order_gate_blockers
         and not release_public_blocker_list_schema_gate_blockers
@@ -6142,6 +6208,8 @@ def _build_report(
     blockers.extend(release_public_markdown_text_schema_gate_blockers)
     blockers.extend(release_public_crypto_evidence_binding_gate_blockers)
     blockers.extend(release_public_submission_surface_binding_gate_blockers)
+    blockers.extend(route_allowlist_canary_summary_gate_blockers)
+    blockers.extend(transparent_openverify_summary_gate_blockers)
     blockers.extend(release_manifest_readiness_flags_gate_blockers)
     blockers.extend(release_manifest_artifact_set_order_gate_blockers)
     blockers.extend(release_public_blocker_list_schema_gate_blockers)
@@ -6724,12 +6792,14 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
             "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
             "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed lane metadata, and verifier recomputation before production readiness can pass.",
+            "- SCCP route allowlist canary summary source inventory must pin optional canary-summary exactness, route-hash binding, and hash role-separation regressions before route profiles can be published as production evidence.",
             "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
             "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, malformed public artifact field-name classification, and canonical attachment order before published bundle readiness can pass.",
             "- SCCP release public blocker-list schema source inventory must pin canonical non-empty blocker strings, no surrounding whitespace, duplicate rejection, ready-surface empty-blocker checks, and invalid-marker rendering before published bundle readiness can pass.",
             "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text, fixed release-checklist item-id classification, public object-key classification for release-checklist titles, corridor phase keys, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, all-lanes unknown object/audit keys, destination-binding keys, route-canary status/source fields, and redacted destination/Solana JSON-RPC/ProgramData/TON BoC/TRON route-canary scalar diagnostics before published bundle readiness can pass.",
-            "- SCCP release-notes attachment invariants source inventory must pin canonical title/status rendering, manifest handoff, artifact table hashes, blocker visibility, and canonical attachment drift rejection before public bundle readiness can pass.",
-            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, checklist and source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
+            "- SCCP release-notes attachment invariants source inventory must pin canonical single top-level title/status block, no unexpected section headings, exact manifest handoff/root-exclusion block, canonical single artifact table scaffold/shape and position, self-row exclusion, contiguous exact ordered row-set binding, canonical blocker-section visibility, no noncanonical trailing content, and canonical attachment drift rejection before public bundle readiness can pass.",
+            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, evidence-input path/bytes/hash visibility, production-corridor phase/status visibility, production-corridor artifact/hash visibility, checklist gate/status visibility, checklist blocker-cell visibility, cryptographic row live-EVM visibility, cryptographic row core-hash visibility, cryptographic row route-canary visibility, lane-readiness status visibility, lane-readiness blocker-cell visibility, source-inventory gate/status visibility, source-inventory blocker-cell visibility, user-prover validation-status visibility, user-prover blocker-cell visibility, user-prover helper/phase row visibility, native-prover validation-status visibility, native-prover blocker-cell visibility, native-prover artifact/hash row visibility, native-prover support-artifact row visibility, source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
+            "- SCCP transparent OpenVerify summary source inventory must pin schema/verifier-key manifest binding, canonical six-column public-input decoding, and malformed-column adversarial coverage before proof metadata can be published.",
             "- SCCP Ethereum outbound pre-callback source inventory must pin public SDK regressions that reject foreign-lane outbound requests, forged destination bindings, missing or partial proof-artifact hashes, zero proof-artifact hashes, and callback-visible proof material before outbound prover callbacks can run.",
             "- SCCP Ethereum outbound provider-validation source inventory must pin public SDK and facade guards that validate app-supplied Ethereum mainnet execution providers before outbound submitter callbacks can run.",
             "- SCCP Ethereum local-admission source inventory must pin public SDK regressions that reject mutated proof bytes, all-zero proof/public-input/bundle/envelope bytes, empty envelopes, zero statement/source-material/source-adapter hashes, and stale proof-family metadata before local admission payloads can be submitted.",
@@ -6757,11 +6827,12 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP Ethereum core range/finality binding source inventory must pin finality-height range binding in Core and negative outer-range replay tests.",
             "- SCCP Ethereum core message replay source inventory must pin durable pinned-record replay protection and negative replay/history tests.",
             "- SCCP Ethereum Torii pinned message proof source inventory must pin pinned message-proof extraction and negative unpinned-record serving tests.",
-            "- SCCP Ethereum EVM live source/destination source inventory must pin canonical live RPC chain ids, finalized block tags, deployment receipt binding, runtime bytecode hashes, redacted JSON-RPC and runtime bytecode parser diagnostics, route canary calldata, and proof tuple drift tests.",
+            "- Ethereum mainnet live EVM source production source inventory must pin canonical live source RPC chain ids, finalized block tags, deployment receipt binding, redacted JSON-RPC diagnostics, route canary calldata, and proof tuple drift tests.",
+            "- Ethereum mainnet live EVM destination production source inventory must pin canonical live destination RPC chain ids, finalized block tags, runtime bytecode hashes, redacted runtime bytecode parser diagnostics, and destination production TOML evidence before production readiness can pass.",
             "- SCCP Ethereum route-canary finalized receipt-block source inventory must pin finalized receipt-block binding, TOML evidence fields, all-lanes comments, runtime hashing, and negative drift tests.",
             "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
             "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, adversarial manifest coverage, and redacted native payload artifact-path diagnostics.",
-            "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, and bundled-manifest drift rejection before published bundle readiness can pass.",
+            "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, copied-summary scalar exactness, and bundled-manifest drift rejection before published bundle readiness can pass.",
             "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte and non-SORA source-proof rejection gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, and Java Android.",
             "- SCCP phase-evidence source inventory must pin duplicate assignment and directory override rejection across readiness-report and release-bundle CLIs before corridor phase evidence can satisfy production readiness.",
             "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, phase-local ordered non-negated/non-diagnostic shell-xtrace-free completion/success output after required commands in per-phase and full-corridor logs, phase-specific traced command shapes with exact pytest positional inputs, option-bound selectors, exact Gradle test command parsing, broad Kotlin package-suite selectors, exact Swift filter commands, exact Android harness class membership, exact Node test/check command files, exact .NET project/filter/nologo commands, exact no-suffix cargo/bash/java commands, and without bare-fragment shortcuts or shell-comment-hidden fragments, restricted cd wrappers, dry-run rejection, failure-marker scans, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
@@ -6775,6 +6846,7 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
             "- SCCP unready transparent-proof source inventory must pin the diagnostic `allow_unready` toggle as config-owned, reject environment override paths, and reject production-ready BSC/TRON route configs that force the unready toggle back on.",
+            "- SCCP TRON deploy operator boolean source inventory must pin malformed operator-boolean rejection before TRON deploy helper evidence can satisfy production readiness.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
     )

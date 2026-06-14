@@ -402,16 +402,30 @@ mod tests {
     use super::*;
     use crate::data_model::{domain::DomainId, prelude::AccountId};
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     fn account(seed: u8, _domain: &DomainId) -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     #[test]
     fn signatories_from_multiple_domains_are_allowed() {
         let domain_a: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain_b: DomainId = DomainId::try_new("looking_glass", "universal").unwrap();
-        let account_a = account(0, &domain_a);
+        let account_a = account(2, &domain_a);
         let account_b = account(1, &domain_b);
 
         let mut signatories = BTreeMap::new();
