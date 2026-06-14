@@ -11,6 +11,7 @@ import org.hyperledger.iroha.sdk.core.model.instructions.optionalBytes
 class NativeSignerBridge private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 8
         private const val HASH_BYTES = 32
         private val nativeAvailable: Boolean = loadLibrary()
 
@@ -236,7 +237,7 @@ class NativeSignerBridge private constructor() {
         private fun loadLibrary(): Boolean =
             try {
                 System.loadLibrary(LIBRARY_NAME)
-                true
+                nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION
             } catch (_: UnsatisfiedLinkError) {
                 false
             } catch (_: SecurityException) {
@@ -289,6 +290,9 @@ class NativeSignerBridge private constructor() {
             require(privateKey != null && privateKey.isNotEmpty()) { "privateKey must not be empty" }
             return privateKey.copyOf()
         }
+
+        @JvmStatic
+        private external fun nativeBridgeAbiVersion(): Int
 
         @JvmStatic
         private external fun nativePublicKeyFromPrivate(

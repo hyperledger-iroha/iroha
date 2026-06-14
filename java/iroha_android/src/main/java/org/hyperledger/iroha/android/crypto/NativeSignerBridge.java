@@ -9,6 +9,7 @@ import org.hyperledger.iroha.android.model.instructions.UnshieldInstruction;
 /** Thin JVM/JNI wrapper around {@code connect_norito_bridge} signing helpers. */
 public final class NativeSignerBridge {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 8;
   private static final int HASH_BYTES = 32;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
@@ -308,7 +309,7 @@ public final class NativeSignerBridge {
   private static boolean loadLibrary() {
     try {
       System.loadLibrary(LIBRARY_NAME);
-      return true;
+      return nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION;
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
     }
@@ -395,6 +396,8 @@ public final class NativeSignerBridge {
   private static byte[] optionalBytes(final byte[] value) {
     return value == null ? new byte[0] : value.clone();
   }
+
+  private static native int nativeBridgeAbiVersion();
 
   private static native byte[] nativePublicKeyFromPrivate(int algorithmCode, byte[] privateKey);
 

@@ -77,7 +77,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 7;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 8;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 const ERR_NULL_PTR: c_int = -1;
@@ -10844,7 +10844,7 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_kagemusha_compact_prover() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 7);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 8);
     }
 
     #[test]
@@ -21467,7 +21467,10 @@ fn java_gas_metadata(
         let name =
             Name::from_str("gas_asset_id").map_err(|_| "invalid gas_asset_id key".to_owned())?;
         metadata.insert(name, Json::new(asset_id));
-        iroha_data_model::transaction::insert_transaction_gas_limit(&mut metadata, gas_limit as u64);
+        iroha_data_model::transaction::insert_transaction_gas_limit(
+            &mut metadata,
+            gas_limit as u64,
+        );
     }
     Ok(metadata)
 }
@@ -22866,6 +22869,21 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeKeypairFromSeed(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -23092,6 +23110,21 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     java_native_public_key_from_private(&mut env, algorithm_code, private_key)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
 
 #[cfg(any(

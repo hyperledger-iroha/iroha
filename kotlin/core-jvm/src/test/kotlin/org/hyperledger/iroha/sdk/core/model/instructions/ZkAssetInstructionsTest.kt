@@ -5,9 +5,13 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.crypto.NativeSignedTransaction
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
+import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
+import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 
 class ZkAssetInstructionsTest {
     @Test
@@ -355,6 +359,43 @@ class ZkAssetInstructionsTest {
         assertFailsWith<IllegalArgumentException> {
             NativeSignedTransaction(byteArrayOf(1), fill(1, 31))
         }
+    }
+
+    @Test
+    fun nativeSignerZkRegisterIncludesGasMetadataWhenBridgeAvailable() {
+        assertEquals(8, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
+        if (!NativeSignerBridge.isNativeAvailable()) return
+
+        val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
+            SigningAlgorithm.ED25519,
+            ByteArray(32) { index -> (index + 1).toByte() },
+        )
+        val authority = AccountAddress.fromAccount(publicKey, "ed25519").toI105Default()
+        val gasAssetId = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+        val gasLimit = 1_000L
+        val instruction = RegisterZkAssetInstruction.builder()
+            .setAsset(gasAssetId)
+            .setMode(ZkAssetMode.HYBRID)
+            .setAllowShield(true)
+            .setAllowUnshield(true)
+            .build()
+
+        val native = NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
+            algorithm = SigningAlgorithm.ED25519,
+            chainId = "00000042",
+            authority = authority,
+            creationTimeMs = 1_736_000_000_000,
+            ttlMs = null,
+            instruction = instruction,
+            privateKey = privateKey,
+            gasAssetId = gasAssetId,
+            gasLimit = gasLimit,
+        )
+        val signed = SignedTransactionEncoder.decodeVersioned(native.versionedSignedTransaction)
+        val payload = NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload())
+
+        assertEquals(JsonValue.string(gasAssetId), payload.metadata["gas_asset_id"])
+        assertEquals(JsonValue.number(gasLimit), payload.metadata["gas_limit"])
     }
 
     @Test
