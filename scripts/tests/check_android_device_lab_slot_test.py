@@ -11,6 +11,7 @@ import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tarfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -69,6 +70,17 @@ RAW_PULL_SPEC = importlib.util.spec_from_file_location(
 assert RAW_PULL_SPEC and RAW_PULL_SPEC.loader  # pragma: no cover
 raw_puller = importlib.util.module_from_spec(RAW_PULL_SPEC)
 RAW_PULL_SPEC.loader.exec_module(raw_puller)  # type: ignore[misc]
+
+CAPTURE_MODULE_PATH = (
+    Path(__file__).resolve().parents[1] / "kagemusha_android_device_lab_capture.py"
+)
+CAPTURE_SPEC = importlib.util.spec_from_file_location(
+    "kagemusha_android_device_lab_capture",
+    CAPTURE_MODULE_PATH,
+)
+assert CAPTURE_SPEC and CAPTURE_SPEC.loader  # pragma: no cover
+capture_runner = importlib.util.module_from_spec(CAPTURE_SPEC)
+CAPTURE_SPEC.loader.exec_module(capture_runner)  # type: ignore[misc]
 
 KAGEMUSHA_ANDROID_RAW_TEST_COMMANDS = (
     device_lab.KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS
@@ -201,7 +213,6 @@ def raw_slot_artifacts(slot_id: str = "pixel6") -> dict[str, bytes]:
     policy = hashlib.sha256(b"kagemusha-offline-wallet-policy-v1").hexdigest()
     apk_digest = hashlib.sha256(f"{slot_id}:offline-wallet-apk".encode("utf-8")).hexdigest()
     queue_after = hashlib.sha256(f"{slot_id}:queue-after".encode("utf-8")).hexdigest()
-    payload_digest = hashlib.sha256(f"{slot_id}:payload".encode("utf-8")).hexdigest()
     rollback_digest = hashlib.sha256(f"{slot_id}:rollback".encode("utf-8")).hexdigest()
     result = {
         "slot": slot_id,
@@ -221,7 +232,68 @@ def raw_slot_artifacts(slot_id: str = "pixel6") -> dict[str, bytes]:
         "strongbox_attestation": True,
         "physical_device_attestation": True,
     }
-    return {
+
+    def d2d_artifact(transport: str) -> bytes:
+        salt = f"{slot_id}:{transport}"
+        payload_digest = hashlib.sha256(f"{salt}:payload".encode("utf-8")).hexdigest()
+        return (
+            json.dumps(
+                {
+                    "schema": "iroha.android.device_lab.kagemusha.d2d_payment.v1",
+                    "slot_id": slot_id,
+                    "device_family": "Google Pixel 6 / 6a",
+                    "device_fingerprint": result["device_fingerprint"],
+                    "os_build_id": result["os_build_id"],
+                    "app_package_name": result["app_package_name"],
+                    "app_signing_certificate_sha256": app_signing,
+                    "attestation_challenge_sha256": result[
+                        "attestation_challenge_sha256"
+                    ],
+                    "offline_wallet_policy_sha256": policy,
+                    "offline_wallet_apk_sha256": apk_digest,
+                    "transport": transport,
+                    "transport_offline": True,
+                    "payer_wallet_offline": True,
+                    "payee_wallet_offline": True,
+                    "payload_schema": "kagemusha.recursive_spend.reserved_lineage.d2d.v1",
+                    "payload_bytes": 3847,
+                    "transport_session_id_sha256": hashlib.sha256(
+                        f"{salt}:session".encode("utf-8")
+                    ).hexdigest(),
+                    "payload_sha256": payload_digest,
+                    "received_payload_sha256": payload_digest,
+                    "receiver_ack_sha256": hashlib.sha256(
+                        f"{salt}:ack".encode("utf-8")
+                    ).hexdigest(),
+                    "one_use_key_id_sha256": hashlib.sha256(
+                        f"{salt}:one-use-key".encode("utf-8")
+                    ).hexdigest(),
+                    "payer_wallet_state_before_sha256": hashlib.sha256(
+                        f"{salt}:payer-before".encode("utf-8")
+                    ).hexdigest(),
+                    "payer_wallet_state_after_sha256": hashlib.sha256(
+                        f"{salt}:payer-after".encode("utf-8")
+                    ).hexdigest(),
+                    "payee_wallet_state_before_sha256": hashlib.sha256(
+                        f"{salt}:payee-before".encode("utf-8")
+                    ).hexdigest(),
+                    "payee_wallet_state_after_sha256": hashlib.sha256(
+                        f"{salt}:payee-after".encode("utf-8")
+                    ).hexdigest(),
+                    "queue_before_sha256": hashlib.sha256(
+                        f"{salt}:queue-before".encode("utf-8")
+                    ).hexdigest(),
+                    "queue_after_sha256": queue_after,
+                    "one_use_key_consumed": True,
+                    "receiver_redeem_accepted": True,
+                    "double_spend_rejected": True,
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+            + b"\n"
+        )
+
+    artifacts = {
         "attestation/challenge.hex": challenge.hex().encode("utf-8") + b"\n",
         "attestation/harness-result.json": json.dumps(
             {
@@ -237,58 +309,6 @@ def raw_slot_artifacts(slot_id: str = "pixel6") -> dict[str, bytes]:
         + b"\n",
         "attestation/keymint-certificate-chain.pem": chain,
         "attestation/result.json": json.dumps(result, sort_keys=True).encode("utf-8")
-        + b"\n",
-        "handoff/d2d-payment.json": json.dumps(
-            {
-                "schema": "iroha.android.device_lab.kagemusha.d2d_payment.v1",
-                "slot_id": slot_id,
-                "device_family": "Google Pixel 6 / 6a",
-                "device_fingerprint": result["device_fingerprint"],
-                "os_build_id": result["os_build_id"],
-                "app_package_name": result["app_package_name"],
-                "app_signing_certificate_sha256": app_signing,
-                "attestation_challenge_sha256": result["attestation_challenge_sha256"],
-                "offline_wallet_policy_sha256": policy,
-                "offline_wallet_apk_sha256": apk_digest,
-                "transport": "nearby_offline",
-                "transport_offline": True,
-                "payer_wallet_offline": True,
-                "payee_wallet_offline": True,
-                "payload_schema": "kagemusha.recursive_spend.reserved_lineage.d2d.v1",
-                "payload_bytes": 3847,
-                "transport_session_id_sha256": hashlib.sha256(
-                    f"{slot_id}:session".encode("utf-8")
-                ).hexdigest(),
-                "payload_sha256": payload_digest,
-                "received_payload_sha256": payload_digest,
-                "receiver_ack_sha256": hashlib.sha256(
-                    f"{slot_id}:ack".encode("utf-8")
-                ).hexdigest(),
-                "one_use_key_id_sha256": hashlib.sha256(
-                    f"{slot_id}:one-use-key".encode("utf-8")
-                ).hexdigest(),
-                "payer_wallet_state_before_sha256": hashlib.sha256(
-                    f"{slot_id}:payer-before".encode("utf-8")
-                ).hexdigest(),
-                "payer_wallet_state_after_sha256": hashlib.sha256(
-                    f"{slot_id}:payer-after".encode("utf-8")
-                ).hexdigest(),
-                "payee_wallet_state_before_sha256": hashlib.sha256(
-                    f"{slot_id}:payee-before".encode("utf-8")
-                ).hexdigest(),
-                "payee_wallet_state_after_sha256": hashlib.sha256(
-                    f"{slot_id}:payee-after".encode("utf-8")
-                ).hexdigest(),
-                "queue_before_sha256": hashlib.sha256(
-                    f"{slot_id}:queue-before".encode("utf-8")
-                ).hexdigest(),
-                "queue_after_sha256": queue_after,
-                "one_use_key_consumed": True,
-                "receiver_redeem_accepted": True,
-                "double_spend_rejected": True,
-            },
-            sort_keys=True,
-        ).encode("utf-8")
         + b"\n",
         "wallet/integrity.json": json.dumps(
             {
@@ -354,6 +374,9 @@ def raw_slot_artifacts(slot_id: str = "pixel6") -> dict[str, bytes]:
         + b"\n",
         "logs/runtime.log": b"kagemusha device-lab run complete\n",
     }
+    for relative, transport in raw_puller.RAW_D2D_PAYMENT_TRANSCRIPT_TRANSPORTS.items():
+        artifacts[relative] = d2d_artifact(transport)
+    return artifacts
 
 
 def write_raw_stage_slot(root: Path, slot_id: str = "pixel6") -> Path:
@@ -750,6 +773,7 @@ def write_d2d_payment_transcript(
     name: str,
     family: str,
     *,
+    transcript_path: str = "handoff/d2d-payment.json",
     transport: str = "nfc_hce",
     device_fingerprint: str,
     os_build_id: str,
@@ -759,7 +783,6 @@ def write_d2d_payment_transcript(
     offline_wallet_policy_sha256: str,
     offline_wallet_apk_sha256: str,
 ) -> tuple[str, str]:
-    transcript_path = "handoff/d2d-payment.json"
     queue_after_sha256 = hashlib.sha256(
         (slot / "queue" / "pending_queue.json").read_bytes()
     ).hexdigest()
@@ -898,6 +921,7 @@ def summary_release_report(
     *,
     device_fingerprint_sha256=None,
     attestation_challenge_sha256=None,
+    d2d_payment_transport="nfc_hce",
     signed_at_utc="2026-06-06T00:00:00Z",
 ):
     family = family or device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
@@ -929,6 +953,7 @@ def summary_release_report(
             "offline_wallet_apk_sha256": "6" * 64,
             "d2d_payment_transcript_path": "handoff/d2d-payment.json",
             "d2d_payment_transcript_sha256": "7" * 64,
+            "d2d_payment_transport": d2d_payment_transport,
             "wallet_integrity_transcript_path": "wallet/integrity.json",
             "wallet_integrity_transcript_sha256": "8" * 64,
         },
@@ -941,6 +966,7 @@ def create_slot(
     family: str | None = None,
     signer: dict[str, Path | str] | None = None,
     d2d_payment_transport: str = "nfc_hce",
+    d2d_payment_transports: tuple[str, ...] | None = None,
 ) -> Path:
     slot = root / name
     slot_family = family or device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
@@ -1065,6 +1091,33 @@ def create_slot(
             offline_wallet_apk_sha256=offline_wallet_apk_sha256,
         )
     )
+    d2d_payment_transcripts = {
+        d2d_payment_transport: {
+            "path": d2d_payment_transcript_path,
+            "sha256": d2d_payment_transcript_sha256,
+        }
+    }
+    for transport in d2d_payment_transports or ():
+        if transport == d2d_payment_transport:
+            continue
+        extra_path, extra_sha256 = write_d2d_payment_transcript(
+            slot,
+            name,
+            slot_family,
+            transcript_path=f"handoff/d2d-payment-{transport}.json",
+            transport=transport,
+            device_fingerprint=device_fingerprint,
+            os_build_id=os_build_id,
+            app_package_name=app_package_name,
+            app_signing_certificate_sha256=app_signing_certificate_sha256,
+            attestation_challenge_sha256=attestation_challenge_sha256,
+            offline_wallet_policy_sha256=offline_wallet_policy_sha256,
+            offline_wallet_apk_sha256=offline_wallet_apk_sha256,
+        )
+        d2d_payment_transcripts[transport] = {
+            "path": extra_path,
+            "sha256": extra_sha256,
+        }
     wallet_integrity_transcript_path, wallet_integrity_transcript_sha256 = (
         write_wallet_integrity_transcript(
             slot,
@@ -1102,6 +1155,11 @@ def create_slot(
                     "attestation_certificate_chain_path": attestation_certificate_chain_path,
                     "offline_wallet_apk_path": offline_wallet_apk_path,
                     "d2d_payment_transcript_path": d2d_payment_transcript_path,
+                    **(
+                        {"d2d_payment_transcripts": d2d_payment_transcripts}
+                        if d2d_payment_transports is not None
+                        else {}
+                    ),
                     "wallet_integrity_transcript_path": wallet_integrity_transcript_path,
                     "app_signing_certificate_sha256": app_signing_certificate_sha256,
                     "attestation_challenge_sha256": attestation_challenge_sha256,
@@ -1145,6 +1203,11 @@ def create_slot(
                 "attestation_certificate_chain_path": attestation_certificate_chain_path,
                 "offline_wallet_apk_path": offline_wallet_apk_path,
                 "d2d_payment_transcript_path": d2d_payment_transcript_path,
+                **(
+                    {"d2d_payment_transcripts": d2d_payment_transcripts}
+                    if d2d_payment_transports is not None
+                    else {}
+                ),
                 "wallet_integrity_transcript_path": wallet_integrity_transcript_path,
                 "app_signing_certificate_sha256": app_signing_certificate_sha256,
                 "attestation_challenge_sha256": attestation_challenge_sha256,
@@ -1374,6 +1437,21 @@ def slot_assembler_args(
         "--runtime-log",
         str(source_slot / "logs" / "runtime.log"),
     ]
+    source_metadata_path = source_slot / "slot.json"
+    if source_metadata_path.is_file():
+        source_metadata = json.loads(source_metadata_path.read_text(encoding="utf-8"))
+        primary_path = source_metadata.get("d2d_payment_transcript_path")
+        for transport, entry in sorted(
+            source_metadata.get("d2d_payment_transcripts", {}).items()
+        ):
+            if entry.get("path") == primary_path:
+                continue
+            args.extend(
+                [
+                    "--d2d-payment-transcript-extra",
+                    f"{transport}={source_slot / entry['path']}",
+                ]
+            )
     if signer is not None:
         args.extend(
             [
@@ -1550,6 +1628,8 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 "pixel6",
                 device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
                 source_signer,
+                d2d_payment_transport="nearby_offline",
+                d2d_payment_transports=tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS)),
             )
             slot_root = Path(temp) / "device-lab"
 
@@ -1576,11 +1656,27 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     encoding="utf-8"
                 )
             )["artifact_digests"]
+            metadata = json.loads(
+                (slot_root / "pixel6" / "slot.json").read_text(encoding="utf-8")
+            )
+            evidence = json.loads(
+                (slot_root / "pixel6" / "evidence" / "signed-evidence.json").read_text(
+                    encoding="utf-8"
+                )
+            )
 
         self.assertEqual(status, 0)
         self.assertIn("wrote", stdout.getvalue())
         self.assertEqual(report["status"], "ok", report["errors"])
         self.assertTrue(harness_exists)
+        self.assertEqual(
+            set(metadata["d2d_payment_transcripts"]),
+            device_lab.D2D_PAYMENT_TRANSPORTS,
+        )
+        self.assertEqual(
+            evidence["d2d_payment_transcripts"],
+            metadata["d2d_payment_transcripts"],
+        )
         self.assertIn(
             "attestation/harness-result.json",
             signed_artifact_digests,
@@ -4112,6 +4208,88 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertEqual(victim_survived, "do not remove\n")
         self.assertEqual(original_survived, "original\n")
+
+    def test_kagemusha_attestation_report_writer_rejects_symlink_swap_after_replace(
+        self,
+    ) -> None:
+        original_replace = attestation_report.os.replace
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                temp_path = Path(temp)
+                out_path = temp_path / "report.json"
+                target = temp_path / "target.json"
+                target.write_text("do not overwrite\n", encoding="utf-8")
+
+                def replace_with_link(src, dst):  # type: ignore[no-untyped-def]
+                    Path(src).unlink()
+                    try:
+                        Path(dst).symlink_to(target)
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"symlinks are not available in this test environment: {exc}"
+                        )
+
+                attestation_report.os.replace = replace_with_link
+
+                errors = attestation_report.write_report(out_path, {"schema": "test"})
+                target_text = target.read_text(encoding="utf-8")
+        finally:
+            attestation_report.os.replace = original_replace
+
+        self.assertEqual(errors, ["attestation report output must not be a symlink"])
+        self.assertEqual(target_text, "do not overwrite\n")
+
+    def test_kagemusha_attestation_report_writer_rejects_hardlink_swap_after_replace(
+        self,
+    ) -> None:
+        original_replace = attestation_report.os.replace
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                temp_path = Path(temp)
+                out_path = temp_path / "report.json"
+                target = temp_path / "target.json"
+                target.write_text("do not overwrite\n", encoding="utf-8")
+
+                def replace_with_link(src, dst):  # type: ignore[no-untyped-def]
+                    Path(src).unlink()
+                    try:
+                        os.link(target, dst)
+                    except (AttributeError, NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"hardlinks are not available in this test environment: {exc}"
+                        )
+
+                attestation_report.os.replace = replace_with_link
+
+                errors = attestation_report.write_report(out_path, {"schema": "test"})
+                target_text = target.read_text(encoding="utf-8")
+        finally:
+            attestation_report.os.replace = original_replace
+
+        self.assertEqual(errors, ["attestation report output must not be hardlinked"])
+        self.assertEqual(target_text, "do not overwrite\n")
+
+    def test_kagemusha_attestation_report_writer_rejects_readback_mismatch_after_replace(
+        self,
+    ) -> None:
+        original_replace = attestation_report.os.replace
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                temp_path = Path(temp)
+                out_path = temp_path / "report.json"
+
+                def replace_with_tamper(src, dst):  # type: ignore[no-untyped-def]
+                    Path(src).unlink()
+                    Path(dst).write_text('{\n  "schema": "tampered"\n}\n', encoding="utf-8")
+                    Path(dst).chmod(0o600)
+
+                attestation_report.os.replace = replace_with_tamper
+
+                errors = attestation_report.write_report(out_path, {"schema": "test"})
+        finally:
+            attestation_report.os.replace = original_replace
+
+        self.assertEqual(errors, ["attestation report output write verification failed"])
 
     def test_kagemusha_attestation_report_writer_requires_physical_device_assertion(
         self,
@@ -7634,6 +7812,53 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "handoff/d2d-payment.json transport_offline must be true",
             errors,
         )
+
+    def test_kagemusha_android_raw_puller_rejects_missing_extra_d2d_transcript(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"handoff/d2d-payment-qr.json"},
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn("raw slot artifact handoff/d2d-payment-qr.json is missing", errors)
+
+    def test_kagemusha_android_raw_puller_rejects_extra_d2d_transport_mismatch(
+        self,
+    ) -> None:
+        d2d = json.loads(raw_slot_artifacts("pixel6")["handoff/d2d-payment-nfc_hce.json"])
+        d2d["transport"] = "qr"
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            tar_bytes = raw_slot_tar_bytes(
+                "pixel6",
+                omit_files={"handoff/d2d-payment-nfc_hce.json"},
+                extra_files={
+                    "pixel6/handoff/d2d-payment-nfc_hce.json": json.dumps(
+                        d2d,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n",
+                },
+            )
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(out_root),
+                runner=fake_raw_pull_runner(tar_bytes, "pixel6"),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn("handoff/d2d-payment-nfc_hce.json transport must be nfc_hce", errors)
 
     def test_kagemusha_android_raw_puller_rejects_wallet_rollback_failure(
         self,
@@ -13408,6 +13633,106 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_production_metadata_accepts_multi_transport_d2d_transcripts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+                d2d_payment_transport=transports[0],
+                d2d_payment_transports=transports,
+            )
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["kagemusha"]["d2d_payment_transports"], list(transports))
+        self.assertEqual(
+            sorted(report["kagemusha"]["d2d_payment_transcripts"]),
+            list(transports),
+        )
+
+    def test_production_metadata_rejects_multi_transport_d2d_transcript_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+                d2d_payment_transport=transports[0],
+                d2d_payment_transports=transports,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            qr_entry = metadata["d2d_payment_transcripts"]["qr"]
+            nfc_entry = metadata["d2d_payment_transcripts"]["nfc_hce"]
+            qr_entry["path"] = nfc_entry["path"]
+            qr_entry["sha256"] = nfc_entry["sha256"]
+            write_json(metadata_path, metadata)
+            evidence_path = slot / "evidence" / "signed-evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["d2d_payment_transcripts"] = metadata["d2d_payment_transcripts"]
+            evidence["artifact_digests"] = required_artifact_digests(slot)
+            write_json(evidence_path, sign_evidence(evidence, signer))
+            refresh_signed_evidence_hash(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json d2d_payment_transcripts[qr] transport must match transcript transport",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_signed_multi_transport_d2d_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+                d2d_payment_transport=transports[0],
+                d2d_payment_transports=transports,
+            )
+            evidence_path = slot / "evidence" / "signed-evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["d2d_payment_transcripts"]["qr"]["sha256"] = "f" * 64
+            write_json(evidence_path, sign_evidence(evidence, signer))
+            refresh_signed_evidence_hash(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "signed evidence artifact d2d_payment_transcripts must match "
+            "slot.json d2d_payment_transcripts",
+            report["errors"],
+        )
+
     def test_d2d_payment_transcript_rejects_zero_sha256_placeholders(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -17023,6 +17348,63 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             hashlib.sha256(
                 json.dumps(evidence, indent=2, sort_keys=True).encode("utf-8") + b"\n"
             ).hexdigest(),
+        )
+
+    def test_signer_helper_preserves_multi_transport_d2d_transcripts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(
+                root,
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+                d2d_payment_transport="nearby_offline",
+                d2d_payment_transports=tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS)),
+            )
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                sign_status = evidence_signer.main(
+                    [
+                        "--slot",
+                        str(slot),
+                        "--private-key",
+                        str(signer["private_key"]),
+                        "--public-key",
+                        str(signer["public_key"]),
+                        "--signer-key-id",
+                        "android-lab-release-signer-v1",
+                        "--signed-at-utc",
+                        "2026-06-06T00:00:00Z",
+                    ]
+                )
+                validate_status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--slot",
+                        "pixel6",
+                        "--require-slot",
+                        "--require-kagemusha-production-evidence",
+                        "--trusted-signer-public-key",
+                        str(signer["public_key"]),
+                    ]
+                )
+
+            evidence = json.loads(
+                (slot / "evidence" / "signed-evidence.json").read_text(encoding="utf-8")
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(sign_status, 0)
+        self.assertEqual(validate_status, 0)
+        self.assertEqual(
+            set(evidence["d2d_payment_transcripts"]),
+            device_lab.D2D_PAYMENT_TRANSPORTS,
+        )
+        self.assertEqual(
+            evidence["d2d_payment_transcripts"],
+            metadata["d2d_payment_transcripts"],
         )
 
     def test_signer_helper_rejects_nonfinite_canonical_payload_before_signing(
@@ -22824,8 +23206,15 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             signer = create_test_signer(Path(temp) / "keys")
+            transports = sorted(device_lab.D2D_PAYMENT_TRANSPORTS)
             for index, family in enumerate(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES):
-                create_slot(root, f"slot-{index}", family, signer)
+                create_slot(
+                    root,
+                    f"slot-{index}",
+                    family,
+                    signer,
+                    d2d_payment_transport=transports[index % len(transports)],
+                )
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = device_lab.main(
                     [
@@ -22839,6 +23228,48 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 )
 
         self.assertEqual(status, 0)
+
+    def test_standard_matrix_rejects_missing_d2d_payment_transport_matrix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            summary_path = Path(temp) / "summary.json"
+            signer = create_test_signer(Path(temp) / "keys")
+            for index, family in enumerate(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES):
+                create_slot(root, f"slot-{index}", family, signer)
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--require-slot",
+                        "--require-kagemusha-standard-matrix",
+                        "--trusted-signer-public-key",
+                        str(signer["public_key"]),
+                        "--json-out",
+                        str(summary_path),
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "missing Kagemusha production evidence for D2D payment transports: "
+            "nearby_offline, qr",
+            rendered,
+        )
+        self.assertEqual(
+            summary["kagemusha"]["required_d2d_payment_transports"],
+            sorted(device_lab.D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertEqual(summary["kagemusha"]["covered_d2d_payment_transports"], ["nfc_hce"])
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transports"],
+            ["nearby_offline", "qr"],
+        )
 
     def test_standard_matrix_rejects_duplicate_device_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -23526,6 +23957,56 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
         )
 
+    def test_build_summary_reports_release_d2d_transport_matrix_coverage(self) -> None:
+        transports = sorted(device_lab.D2D_PAYMENT_TRANSPORTS)
+        reports = [
+            summary_release_report(
+                f"slot-{index}",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[index],
+                d2d_payment_transport=transport,
+            )
+            for index, transport in enumerate(transports)
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+            )
+
+        self.assertEqual(
+            summary["kagemusha"]["required_d2d_payment_transports"],
+            transports,
+        )
+        self.assertEqual(
+            summary["kagemusha"]["covered_d2d_payment_transports"],
+            transports,
+        )
+        self.assertEqual(summary["kagemusha"]["missing_d2d_payment_transports"], [])
+
+    def test_build_summary_ignores_malformed_release_d2d_transport_values(self) -> None:
+        reports = [
+            summary_release_report("slot-0", d2d_payment_transport="nfc_hce "),
+            summary_release_report("slot-1", d2d_payment_transport="bluetooth"),
+            summary_release_report("slot-2", d2d_payment_transport=["qr"]),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+            )
+
+        self.assertEqual(summary["kagemusha"]["covered_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transports"],
+            sorted(device_lab.D2D_PAYMENT_TRANSPORTS),
+        )
+
     def test_build_summary_rejects_malformed_complete_signed_evidence_rollup_fields(
         self,
     ) -> None:
@@ -23640,8 +24121,15 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             root = Path(temp) / "slots"
             summary_path = Path(temp) / "summary.json"
             signer = create_test_signer(Path(temp) / "keys")
+            transports = sorted(device_lab.D2D_PAYMENT_TRANSPORTS)
             for index, family in enumerate(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES):
-                create_slot(root, f"slot-{index}", family, signer)
+                create_slot(
+                    root,
+                    f"slot-{index}",
+                    family,
+                    signer,
+                    d2d_payment_transport=transports[index % len(transports)],
+                )
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = device_lab.main(
                     [
@@ -23674,6 +24162,15 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertEqual(summary["kagemusha"]["missing_device_families"], [])
         self.assertEqual(
+            summary["kagemusha"]["required_d2d_payment_transports"],
+            transports,
+        )
+        self.assertEqual(
+            summary["kagemusha"]["covered_d2d_payment_transports"],
+            transports,
+        )
+        self.assertEqual(summary["kagemusha"]["missing_d2d_payment_transports"], [])
+        self.assertEqual(
             summary["kagemusha"]["trusted_signer_public_key_sha256"],
             [signer["public_key_sha256"]],
         )
@@ -23687,6 +24184,79 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             first_slot["native_bridge_abi_version"],
             device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION,
         )
+
+    def test_json_summary_reports_d2d_gaps_without_standard_matrix_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            summary_path = Path(temp) / "summary.json"
+            signer = create_test_signer(Path(temp) / "keys")
+            create_slot(
+                root,
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+                d2d_payment_transport="nearby_offline",
+            )
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--require-slot",
+                        "--require-kagemusha-production-evidence",
+                        "--trusted-signer-public-key",
+                        str(signer["public_key"]),
+                        "--json-out",
+                        str(summary_path),
+                    ]
+                )
+
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertFalse(summary["kagemusha"]["standard_matrix_required"])
+        self.assertEqual(
+            summary["kagemusha"]["covered_d2d_payment_transports"],
+            ["nearby_offline"],
+        )
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transports"],
+            ["nfc_hce", "qr"],
+        )
+
+    def test_json_summary_counts_multi_transport_d2d_transcripts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            summary_path = Path(temp) / "summary.json"
+            signer = create_test_signer(Path(temp) / "keys")
+            transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+            create_slot(
+                root,
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+                d2d_payment_transport=transports[0],
+                d2d_payment_transports=transports,
+            )
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--require-slot",
+                        "--require-kagemusha-production-evidence",
+                        "--trusted-signer-public-key",
+                        str(signer["public_key"]),
+                        "--json-out",
+                        str(summary_path),
+                    ]
+                )
+
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(summary["kagemusha"]["covered_d2d_payment_transports"], list(transports))
+        self.assertEqual(summary["kagemusha"]["missing_d2d_payment_transports"], [])
 
     def test_json_summary_does_not_leak_trusted_signer_key_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -24658,6 +25228,684 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             self.assertIn("--json-out must not be hardlinked", rendered)
             self.assertNotIn(str(alias_target), rendered)
             self.assertNotIn("[device-lab] wrote summary", rendered)
+
+
+class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
+    def capture_args(self, temp: Path, extra: list[str] | None = None) -> argparse.Namespace:
+        args = [
+            "--repo-root",
+            str(temp / "repo"),
+            "--kotlin-dir",
+            "kotlin",
+            "--python",
+            "python3",
+            "--adb",
+            "adb",
+            "--gradlew",
+            "./gradlew",
+            "--serial",
+            "SERIAL123",
+            "--java-home",
+            "/jdk21",
+            "--android-home",
+            "/android-sdk",
+            "--android-sdk-root",
+            "/android-sdk",
+            "--raw-root",
+            str(temp / "raw"),
+            "--slot-root",
+            str(temp / "slots"),
+            "--private-key",
+            str(temp / "keys" / "lab-signing.pem"),
+            "--public-key",
+            str(temp / "keys" / "lab-verifying.pem"),
+            "--signer-key-id",
+            "android-lab-release-signer-v1",
+            "--physical-device-attestation",
+        ]
+        if extra:
+            args.extend(extra)
+        return capture_runner.parse_args(args)
+
+    def write_raw_capture_slot(
+        self,
+        raw_root: Path,
+        raw_summary: Path,
+        *,
+        slot_id: str = "pixel6",
+        challenge: bytes = b"\x01\x02\x03\x04",
+        challenge_text: str | None = None,
+        attestation_overrides: dict[str, object] | None = None,
+    ) -> Path:
+        slot_path = raw_root / slot_id
+        (slot_path / "attestation").mkdir(parents=True, exist_ok=True)
+        (slot_path / "handoff").mkdir(parents=True, exist_ok=True)
+        challenge_hex = challenge.hex()
+        (slot_path / "attestation" / "challenge.hex").write_text(
+            challenge_text if challenge_text is not None else f"{challenge_hex}\n",
+            encoding="utf-8",
+        )
+        certificate_chain = b"test keymint certificate chain\n"
+        (slot_path / "attestation" / "keymint-certificate-chain.pem").write_bytes(
+            certificate_chain
+        )
+        result = {
+            "slot": slot_id,
+            "slot_id": slot_id,
+            "status": "ok",
+            "device_fingerprint": "google/oriole/oriole:16/BUILD/release-keys",
+            "os_build_id": "BUILD",
+            "app_package_name": capture_runner.DEFAULT_APP_PACKAGE_NAME,
+            "app_signing_certificate_sha256": "a" * 64,
+            "attestation_challenge_sha256": hashlib.sha256(challenge).hexdigest(),
+            "attestation_certificate_chain_path": "attestation/keymint-certificate-chain.pem",
+            "attestation_certificate_chain_sha256": hashlib.sha256(
+                certificate_chain
+            ).hexdigest(),
+            "offline_wallet_policy_sha256": "c" * 64,
+            "attestation_security_level": "STRONGBOX",
+            "keymaster_security_level": "STRONGBOX",
+            "keymint_security_level": "STRONGBOX",
+            "strongbox_attestation": True,
+            "physical_device_attestation": True,
+        }
+        if attestation_overrides is not None:
+            result.update(attestation_overrides)
+        write_json(slot_path / "attestation" / "result.json", result)
+        raw_summary.parent.mkdir(parents=True, exist_ok=True)
+        write_json(
+            raw_summary,
+            {
+                "schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA,
+                "slot_id": slot_id,
+                "slot_path": str(slot_path),
+            },
+        )
+        return slot_path
+
+    def test_android_capture_runs_full_command_sequence_and_binds_challenge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                [
+                    "--capture-summary-out",
+                    str(temp / "capture.json"),
+                    "--require-standard-matrix",
+                ],
+            )
+            raw_summary = capture_runner._default_raw_summary_path(args.raw_root)
+            validation_summary = capture_runner._default_validation_summary_path(
+                args.slot_root
+            )
+            commands: list[list[str]] = []
+            envs: list[dict[str, str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                envs.append(kwargs["env"])
+                script = Path(command[1]).name if len(command) > 1 else ""
+                if script == "kagemusha_pull_android_device_lab_raw_slot.py":
+                    self.write_raw_capture_slot(args.raw_root, raw_summary)
+                elif script == "kagemusha_android_attestation_report.py":
+                    out_path = Path(command[command.index("--out") + 1])
+                    write_json(out_path, {"schema": "test-report"})
+                elif script == "check_android_device_lab_slot.py":
+                    write_json(validation_summary, {"ok": 1, "failed": 0})
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+            capture_summary_exists = (temp / "capture.json").exists()
+
+        def command_kind(command: list[str]) -> str:
+            if command[0] == "./gradlew":
+                return "gradle"
+            if command[:5] == ["adb", "-s", "SERIAL123", "shell", "am"]:
+                return "instrument"
+            return Path(command[1]).name
+
+        self.assertEqual(errors, [])
+        self.assertEqual(status, 0)
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertEqual(summary["slot_id"], "pixel6")
+        self.assertEqual(summary["adb_serial"], "SERIAL123")
+        self.assertTrue(summary["standard_matrix_required"])
+        self.assertEqual(
+            [command_kind(command) for command in commands],
+            [
+                "gradle",
+                "instrument",
+                "kagemusha_pull_android_device_lab_raw_slot.py",
+                "kagemusha_android_attestation_report.py",
+                "kagemusha_android_device_lab_slot.py",
+                "check_android_device_lab_slot.py",
+            ],
+        )
+        self.assertEqual(commands[0][0], "./gradlew")
+        self.assertEqual(commands[1][:5], ["adb", "-s", "SERIAL123", "shell", "am"])
+        self.assertEqual(envs[0]["ANDROID_SERIAL"], "SERIAL123")
+        self.assertEqual(envs[0]["JAVA_HOME"], "/jdk21")
+
+        report_command = commands[3]
+        self.assertIn("--physical-device-attestation", report_command)
+        self.assertEqual(
+            report_command[report_command.index("--expected-challenge-hex") + 1],
+            "01020304",
+        )
+        self.assertEqual(
+            report_command[report_command.index("--attestation-challenge-sha256") + 1],
+            hashlib.sha256(b"\x01\x02\x03\x04").hexdigest(),
+        )
+        assemble_command = commands[4]
+        self.assertIn(
+            f"nfc_hce={args.raw_root / 'pixel6' / 'handoff' / 'd2d-payment-nfc_hce.json'}",
+            assemble_command,
+        )
+        self.assertIn(
+            f"qr={args.raw_root / 'pixel6' / 'handoff' / 'd2d-payment-qr.json'}",
+            assemble_command,
+        )
+        validation_command = commands[5]
+        self.assertIn("--require-kagemusha-standard-matrix", validation_command)
+        self.assertTrue(capture_summary_exists)
+
+    def test_android_capture_requires_physical_device_assertion_before_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp)
+            args.physical_device_attestation = False
+            calls: list[list[str]] = []
+
+            def unexpected_run(command, **kwargs):
+                calls.append(list(command))
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=unexpected_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(calls, [])
+        self.assertIn(
+            "--physical-device-attestation is required for production capture",
+            errors,
+        )
+
+    def test_android_capture_rejects_secret_serial_before_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp)
+            args.serial = "token=supersecret-device"
+            calls: list[list[str]] = []
+
+            def unexpected_run(command, **kwargs):
+                calls.append(list(command))
+                return subprocess.CompletedProcess(command, 0)
+
+            status, _summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=unexpected_run,
+            )
+            rendered = "\n".join(errors)
+
+        self.assertEqual(status, 1)
+        self.assertEqual(calls, [])
+        self.assertIn("ADB serial must not contain secret-looking material", rendered)
+        self.assertNotIn("supersecret", rendered)
+
+    def test_android_capture_stops_after_instrumentation_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp)
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                if len(command) > 1 and command[1] == "-s":
+                    return subprocess.CompletedProcess(command, 7)
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(len(commands), 2)
+        self.assertIn(
+            "Kagemusha device-lab instrumentation export failed with exit code 7",
+            errors[0],
+        )
+        self.assertFalse((temp / "raw").exists())
+
+    def test_android_capture_rejects_noncanonical_raw_challenge_before_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                ["--skip-build-install", "--skip-instrumentation"],
+            )
+            raw_summary = capture_runner._default_raw_summary_path(args.raw_root)
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
+                    self.write_raw_capture_slot(
+                        args.raw_root,
+                        raw_summary,
+                        challenge_text="01020304",
+                    )
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(
+            errors,
+            [
+                "attestation/challenge.hex must be canonical lowercase hexadecimal plus trailing newline"
+            ],
+        )
+
+    def test_android_capture_rejects_symlinked_raw_summary_before_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                ["--skip-build-install", "--skip-instrumentation"],
+            )
+            raw_summary = capture_runner._default_raw_summary_path(args.raw_root)
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
+                    target_summary = raw_summary.parent / "target-summary.json"
+                    self.write_raw_capture_slot(args.raw_root, target_summary)
+                    try:
+                        raw_summary.symlink_to(target_summary)
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"symlinks are not available in this test environment: {exc}"
+                        )
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(errors, ["raw pull summary must not be a symlink"])
+
+    def test_android_capture_rejects_symlinked_raw_challenge_before_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                ["--skip-build-install", "--skip-instrumentation"],
+            )
+            raw_summary = capture_runner._default_raw_summary_path(args.raw_root)
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
+                    slot_path = self.write_raw_capture_slot(args.raw_root, raw_summary)
+                    challenge_path = slot_path / "attestation" / "challenge.hex"
+                    target_challenge = slot_path / "attestation" / "target-challenge.hex"
+                    target_challenge.write_text("01020304\n", encoding="utf-8")
+                    challenge_path.unlink()
+                    try:
+                        challenge_path.symlink_to(target_challenge)
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"symlinks are not available in this test environment: {exc}"
+                        )
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(errors, ["attestation/challenge.hex must not be a symlink"])
+
+    def test_android_capture_rejects_forged_challenge_digest_before_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                ["--skip-build-install", "--skip-instrumentation"],
+            )
+            raw_summary = capture_runner._default_raw_summary_path(args.raw_root)
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
+                    self.write_raw_capture_slot(
+                        args.raw_root,
+                        raw_summary,
+                        attestation_overrides={
+                            "attestation_challenge_sha256": "9" * 64,
+                        },
+                    )
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(
+            errors,
+            [
+                "attestation result attestation_challenge_sha256 must match "
+                "attestation/challenge.hex"
+            ],
+        )
+
+    def test_android_capture_rejects_nonphysical_attestation_result_before_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                ["--skip-build-install", "--skip-instrumentation"],
+            )
+            raw_summary = capture_runner._default_raw_summary_path(args.raw_root)
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
+                    self.write_raw_capture_slot(
+                        args.raw_root,
+                        raw_summary,
+                        attestation_overrides={
+                            "physical_device_attestation": False,
+                        },
+                    )
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(
+            errors,
+            ["attestation result physical_device_attestation must be true"],
+        )
+
+    def test_android_capture_rejects_forged_chain_digest_before_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                ["--skip-build-install", "--skip-instrumentation"],
+            )
+            raw_summary = capture_runner._default_raw_summary_path(args.raw_root)
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
+                    self.write_raw_capture_slot(
+                        args.raw_root,
+                        raw_summary,
+                        attestation_overrides={
+                            "attestation_certificate_chain_sha256": "9" * 64,
+                        },
+                    )
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(
+            errors,
+            [
+                "attestation result attestation_certificate_chain_sha256 must match "
+                "attestation/keymint-certificate-chain.pem"
+            ],
+        )
+
+    def test_android_capture_rejects_symlinked_chain_before_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                ["--skip-build-install", "--skip-instrumentation"],
+            )
+            raw_summary = capture_runner._default_raw_summary_path(args.raw_root)
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
+                    slot_path = self.write_raw_capture_slot(args.raw_root, raw_summary)
+                    chain_path = (
+                        slot_path / "attestation" / "keymint-certificate-chain.pem"
+                    )
+                    target_chain = slot_path / "attestation" / "target-chain.pem"
+                    target_chain.write_bytes(chain_path.read_bytes())
+                    chain_path.unlink()
+                    try:
+                        chain_path.symlink_to(target_chain)
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"symlinks are not available in this test environment: {exc}"
+                        )
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(
+            errors,
+            ["attestation/keymint-certificate-chain.pem must not be a symlink"],
+        )
+
+    def test_android_capture_summary_rejects_symlink_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            summary_path = temp / "capture.json"
+            target = temp / "target.json"
+            target.write_text("do not overwrite\n", encoding="utf-8")
+            try:
+                summary_path.symlink_to(target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+
+            errors = capture_runner.write_capture_summary(
+                summary_path,
+                {"schema": capture_runner.CAPTURE_SUMMARY_SCHEMA},
+            )
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, ["capture summary output must not be a symlink"])
+        self.assertEqual(target_text, "do not overwrite\n")
+
+    def test_android_capture_summary_rejects_hardlinked_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            summary_path = temp / "capture.json"
+            target = temp / "target.json"
+            target.write_text("do not overwrite\n", encoding="utf-8")
+            summary_path.write_text("placeholder\n", encoding="utf-8")
+            replace_with_hardlink(self, summary_path, target)
+
+            errors = capture_runner.write_capture_summary(
+                summary_path,
+                {"schema": capture_runner.CAPTURE_SUMMARY_SCHEMA},
+            )
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, ["capture summary output must not be hardlinked"])
+        self.assertEqual(target_text, "do not overwrite\n")
+
+    def test_android_capture_summary_writes_0600_and_exact_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            summary_path = temp / "nested" / "capture.json"
+            payload = {"schema": capture_runner.CAPTURE_SUMMARY_SCHEMA, "slot_id": "pixel6"}
+
+            errors = capture_runner.write_capture_summary(summary_path, payload)
+            mode = stat.S_IMODE(summary_path.lstat().st_mode)
+            written = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(errors, [])
+        self.assertEqual(mode, 0o600)
+        self.assertEqual(written, payload)
+
+    def test_android_capture_summary_rejects_symlink_swap_after_replace(self) -> None:
+        original_replace = capture_runner.os.replace
+        try:
+            with tempfile.TemporaryDirectory() as temp_text:
+                temp = Path(temp_text)
+                summary_path = temp / "capture.json"
+                target = temp / "target.json"
+                target.write_text("do not overwrite\n", encoding="utf-8")
+
+                def replace_with_link(src, dst):  # type: ignore[no-untyped-def]
+                    Path(src).unlink()
+                    try:
+                        Path(dst).symlink_to(target)
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"symlinks are not available in this test environment: {exc}"
+                        )
+
+                capture_runner.os.replace = replace_with_link
+
+                errors = capture_runner.write_capture_summary(
+                    summary_path,
+                    {"schema": capture_runner.CAPTURE_SUMMARY_SCHEMA},
+                )
+                target_text = target.read_text(encoding="utf-8")
+        finally:
+            capture_runner.os.replace = original_replace
+
+        self.assertEqual(
+            errors,
+            ["capture summary output must not be a symlink after writing"],
+        )
+        self.assertEqual(target_text, "do not overwrite\n")
+
+    def test_android_capture_summary_rejects_hardlink_swap_after_replace(self) -> None:
+        original_replace = capture_runner.os.replace
+        try:
+            with tempfile.TemporaryDirectory() as temp_text:
+                temp = Path(temp_text)
+                summary_path = temp / "capture.json"
+                target = temp / "target.json"
+                target.write_text("do not overwrite\n", encoding="utf-8")
+
+                def replace_with_link(src, dst):  # type: ignore[no-untyped-def]
+                    Path(src).unlink()
+                    try:
+                        os.link(target, dst)
+                    except (AttributeError, NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"hardlinks are not available in this test environment: {exc}"
+                        )
+
+                capture_runner.os.replace = replace_with_link
+
+                errors = capture_runner.write_capture_summary(
+                    summary_path,
+                    {"schema": capture_runner.CAPTURE_SUMMARY_SCHEMA},
+                )
+                target_text = target.read_text(encoding="utf-8")
+        finally:
+            capture_runner.os.replace = original_replace
+
+        self.assertEqual(
+            errors,
+            ["capture summary output must not be hardlinked after writing"],
+        )
+        self.assertEqual(target_text, "do not overwrite\n")
+
+    def test_android_capture_summary_rejects_readback_mismatch_after_replace(self) -> None:
+        original_replace = capture_runner.os.replace
+        try:
+            with tempfile.TemporaryDirectory() as temp_text:
+                temp = Path(temp_text)
+                summary_path = temp / "capture.json"
+
+                def replace_with_tamper(src, dst):  # type: ignore[no-untyped-def]
+                    Path(src).unlink()
+                    Path(dst).write_text("tampered\n", encoding="utf-8")
+                    Path(dst).chmod(0o600)
+
+                capture_runner.os.replace = replace_with_tamper
+
+                errors = capture_runner.write_capture_summary(
+                    summary_path,
+                    {"schema": capture_runner.CAPTURE_SUMMARY_SCHEMA},
+                )
+        finally:
+            capture_runner.os.replace = original_replace
+
+        self.assertEqual(errors, ["capture summary output readback mismatch"])
+
+    def test_android_capture_sync_directory_rejects_identity_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            directory = temp / "sync-target"
+            directory.mkdir()
+
+            errors = capture_runner._sync_directory(  # type: ignore[attr-defined]
+                directory,
+                "sync failed",
+                expected_identity=(0, 0),
+            )
+
+        self.assertEqual(errors, ["sync failed"])
 
 
 if __name__ == "__main__":  # pragma: no cover

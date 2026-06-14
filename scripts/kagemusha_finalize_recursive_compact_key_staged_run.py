@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import math
 import os
@@ -110,6 +111,12 @@ def validate_directory_path(path: Path, label: str, *, must_exist: bool) -> list
     try:
         mode = path.lstat().st_mode
     except FileNotFoundError:
+        ancestor_errors = device_lab.validate_no_symlink_ancestors(
+            path,
+            f"{label} ancestor directory",
+        )
+        if ancestor_errors:
+            return ancestor_errors
         if must_exist:
             return [f"{label} is missing"]
         return []
@@ -196,6 +203,78 @@ def _set_private_directory_permissions(
     return []
 
 
+def _ensure_private_directory(path: Path, label: str) -> list[str]:
+    """Create a private directory without following symlinked path components."""
+
+    errors = validate_directory_path(path, label, must_exist=False)
+    if errors:
+        return errors
+    flags = _directory_open_flags()
+    if path.is_absolute():
+        start_path = Path(path.anchor)
+        parts = list(path.parts[1:])
+        if parts:
+            first_path = start_path / parts[0]
+            try:
+                if stat.S_ISLNK(first_path.lstat().st_mode):
+                    start_path = first_path.resolve(strict=True)
+                    parts = parts[1:]
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return [f"{label} metadata could not be read"]
+    else:
+        start_path = Path.cwd()
+        parts = list(path.parts)
+    try:
+        current_fd = os.open(start_path, flags)
+    except OSError:
+        return [f"{label} metadata could not be read"]
+    try:
+        filtered_parts = [part for part in parts if part not in ("", ".")]
+        if not filtered_parts:
+            return [f"{label} must be a directory"]
+        for index, part in enumerate(filtered_parts):
+            is_final = index == len(filtered_parts) - 1
+            created = False
+            try:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=current_fd)
+                    created = True
+                except FileExistsError:
+                    pass
+                except OSError:
+                    return [f"{label} could not be created"]
+                try:
+                    next_fd = os.open(part, flags, dir_fd=current_fd)
+                except OSError:
+                    return [f"{label} changed before permissions were tightened"]
+            except OSError:
+                post_errors = validate_directory_path(path, label, must_exist=True)
+                return post_errors or [f"{label} metadata could not be read"]
+            try:
+                next_stat = os.fstat(next_fd)
+                if not stat.S_ISDIR(next_stat.st_mode):
+                    os.close(next_fd)
+                    return [f"{label} must be a directory"]
+                if created or is_final:
+                    os.fchmod(next_fd, 0o700)
+                    next_stat = os.fstat(next_fd)
+                    if stat.S_IMODE(next_stat.st_mode) != 0o700:
+                        os.close(next_fd)
+                        return [f"{label} permissions must be 0700"]
+            except OSError:
+                os.close(next_fd)
+                return [f"{label} permissions could not be tightened"]
+            os.close(current_fd)
+            current_fd = next_fd
+    finally:
+        os.close(current_fd)
+    return validate_directory_path(path, label, must_exist=True)
+
+
 def _sync_artifact_dir(
     artifact_dir: Path,
     *,
@@ -263,6 +342,60 @@ def _regular_file_identity(path: Path) -> tuple[int, int] | None:
     return _file_identity(path_stat)
 
 
+def _regular_file_identity_at(parent_fd: int, name: str) -> tuple[int, int] | None:
+    try:
+        path_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        return None
+    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode):
+        return None
+    return _file_identity(path_stat)
+
+
+def _sha256_file_with_size_at(
+    parent_fd: int,
+    name: str,
+    label: str,
+) -> tuple[str | None, int | None, list[str]]:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        file_fd = os.open(name, flags, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return None, None, [f"{label} is missing"]
+    except OSError:
+        return None, None, [f"{label} could not be read"]
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        file_stat = os.fstat(file_fd)
+        if not stat.S_ISREG(file_stat.st_mode):
+            return None, None, [f"{label} must be a regular file"]
+        if file_stat.st_nlink > 1:
+            return None, None, [f"{label} must not be hardlinked"]
+        while True:
+            chunk = os.read(file_fd, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+    except OSError:
+        return None, None, [f"{label} could not be read"]
+    finally:
+        os.close(file_fd)
+    return digest.hexdigest(), size, []
+
+
+def _write_all(file_fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        written = os.write(file_fd, view)
+        if written <= 0:
+            raise OSError("short write")
+        view = view[written:]
+
+
 def _unlink_file_if_identity(
     path: Path,
     expected_identity: tuple[int, int],
@@ -299,6 +432,28 @@ def _unlink_file_if_identity(
     return []
 
 
+def _unlink_file_if_identity_at(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    *,
+    label: str,
+) -> list[str]:
+    try:
+        path_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} rollback cleanup metadata could not be read"]
+    if stat.S_ISREG(path_stat.st_mode) and _file_identity(path_stat) == expected_identity:
+        try:
+            os.unlink(name, dir_fd=parent_fd)
+            return []
+        except OSError:
+            return [f"{label} rollback cleanup could not remove file"]
+    return []
+
+
 def _cleanup_published_files(installed: list[tuple[Path, tuple[int, int]]]) -> list[str]:
     errors: list[str] = []
     for path, identity in installed:
@@ -307,6 +462,23 @@ def _cleanup_published_files(installed: list[tuple[Path, tuple[int, int]]]) -> l
                 path,
                 identity,
                 label=f"published {path.name}",
+            )
+        )
+    return errors
+
+
+def _cleanup_published_files_at(
+    parent_fd: int,
+    installed: list[tuple[str, tuple[int, int]]],
+) -> list[str]:
+    errors: list[str] = []
+    for name, identity in installed:
+        errors.extend(
+            _unlink_file_if_identity_at(
+                parent_fd,
+                name,
+                identity,
+                label=f"published {name}",
             )
         )
     return errors
@@ -680,6 +852,70 @@ def _copy_validated_file(
     return [], destination_identity
 
 
+def _copy_validated_file_to_dir(
+    source: Path,
+    parent_fd: int,
+    destination_name: str,
+    label: str,
+) -> tuple[list[str], tuple[int, int] | None]:
+    digest, size, _prefix, errors = compact_evidence._sha256_file_with_size(
+        source,
+        label,
+    )
+    if errors:
+        return errors, None
+    assert digest is not None and size is not None
+    expected_stat = source.lstat()
+    expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    destination_identity: tuple[int, int] | None = None
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        destination_fd = os.open(destination_name, flags, 0o600, dir_fd=parent_fd)
+    except FileExistsError:
+        return [f"published {destination_name} already exists"], destination_identity
+    except OSError:
+        return [f"{label} could not be copied"], destination_identity
+    try:
+        os.fchmod(destination_fd, 0o600)
+        destination_identity = _file_identity(os.fstat(destination_fd))
+        with source.open("rb") as src:
+            open_stat = os.fstat(src.fileno())
+            path_stat = source.lstat()
+            if (open_stat.st_dev, open_stat.st_ino) != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return [f"{label} changed while being copied"], destination_identity
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                _write_all(destination_fd, chunk)
+            os.fsync(destination_fd)
+            final_stat = source.lstat()
+            if (final_stat.st_dev, final_stat.st_ino) != expected_identity:
+                return [f"{label} changed while being copied"], destination_identity
+        copied_stat = os.fstat(destination_fd)
+        if stat.S_IMODE(copied_stat.st_mode) != 0o600:
+            return [f"{label} copied file permissions must be 0600"], destination_identity
+    except OSError:
+        return [f"{label} could not be copied"], destination_identity
+    finally:
+        os.close(destination_fd)
+    copied_digest, copied_size, copied_errors = _sha256_file_with_size_at(
+        parent_fd,
+        destination_name,
+        f"published {destination_name}",
+    )
+    if copied_errors:
+        return copied_errors, destination_identity
+    if copied_digest != digest or copied_size != size:
+        return [f"published {destination_name} does not match staged bytes"], destination_identity
+    return [], destination_identity
+
+
 def _verify_published_file(source: Path, destination: Path, label: str) -> list[str]:
     source_digest, source_size, _source_prefix, source_errors = (
         compact_evidence._sha256_file_with_size(source, f"validated staged {destination.name}")
@@ -693,6 +929,29 @@ def _verify_published_file(source: Path, destination: Path, label: str) -> list[
         return published_errors
     if published_digest != source_digest or published_size != source_size:
         return [f"published {destination.name} does not match staged bytes"]
+    return []
+
+
+def _verify_published_file_at(
+    source: Path,
+    parent_fd: int,
+    destination_name: str,
+    label: str,
+) -> list[str]:
+    source_digest, source_size, _source_prefix, source_errors = (
+        compact_evidence._sha256_file_with_size(source, f"validated staged {destination_name}")
+    )
+    if source_errors:
+        return source_errors
+    published_digest, published_size, published_errors = _sha256_file_with_size_at(
+        parent_fd,
+        destination_name,
+        label,
+    )
+    if published_errors:
+        return published_errors
+    if published_digest != source_digest or published_size != source_size:
+        return [f"published {destination_name} does not match staged bytes"]
     return []
 
 
@@ -757,8 +1016,7 @@ def publish_stage(
     """Publish staged files to the final artifact directory."""
 
     errors: list[str] = []
-    artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    errors.extend(validate_directory_path(artifact_dir, "artifact directory", must_exist=True))
+    errors.extend(_ensure_private_directory(artifact_dir, "artifact directory"))
     if errors:
         return errors
     try:
@@ -785,74 +1043,117 @@ def publish_stage(
         )
     if errors:
         return errors
-    installed: list[tuple[Path, tuple[int, int]]] = []
-    for name in _required_publish_filenames():
-        source = stage_dir / name
-        destination = artifact_dir / name
-        tmp_destination = artifact_dir / f".{name}.staged-finalizer.tmp"
-        tmp_identity: tuple[int, int] | None = None
-        try:
-            if tmp_destination.exists() or tmp_destination.is_symlink():
-                return [f"temporary output for {name} already exists"]
-            copy_errors, tmp_identity = _copy_validated_file(
-                source,
-                tmp_destination,
-                f"validated staged {name}",
-            )
-            if tmp_identity is None:
-                tmp_identity = _regular_file_identity(tmp_destination)
-            if copy_errors:
-                cleanup_errors: list[str] = []
+    try:
+        artifact_dir_fd = os.open(artifact_dir, _directory_open_flags())
+    except OSError:
+        return ["artifact directory could not be opened"]
+    installed: list[tuple[str, tuple[int, int]]] = []
+    try:
+        opened_artifact_dir_stat = os.fstat(artifact_dir_fd)
+        if (
+            not stat.S_ISDIR(opened_artifact_dir_stat.st_mode)
+            or _file_identity(opened_artifact_dir_stat) != artifact_dir_identity
+        ):
+            return ["artifact directory changed before publish"]
+        for name in _required_publish_filenames():
+            source = stage_dir / name
+            tmp_name = f".{name}.staged-finalizer.tmp"
+            tmp_identity: tuple[int, int] | None = None
+            try:
+                if _regular_file_identity_at(artifact_dir_fd, tmp_name) is not None:
+                    return [f"temporary output for {name} already exists"]
+                copy_errors, tmp_identity = _copy_validated_file_to_dir(
+                    source,
+                    artifact_dir_fd,
+                    tmp_name,
+                    f"validated staged {name}",
+                )
+                if tmp_identity is None:
+                    tmp_identity = _regular_file_identity_at(artifact_dir_fd, tmp_name)
+                if copy_errors:
+                    cleanup_errors: list[str] = []
+                    if tmp_identity is not None:
+                        cleanup_errors.extend(
+                            _unlink_file_if_identity_at(
+                                artifact_dir_fd,
+                                tmp_name,
+                                tmp_identity,
+                                label=f"temporary output for {name}",
+                            )
+                        )
+                    cleanup_errors.extend(_cleanup_published_files_at(artifact_dir_fd, installed))
+                    return [*copy_errors, *cleanup_errors]
+                if replace:
+                    os.replace(
+                        tmp_name,
+                        name,
+                        src_dir_fd=artifact_dir_fd,
+                        dst_dir_fd=artifact_dir_fd,
+                    )
+                else:
+                    os.link(
+                        tmp_name,
+                        name,
+                        src_dir_fd=artifact_dir_fd,
+                        dst_dir_fd=artifact_dir_fd,
+                        follow_symlinks=False,
+                    )
+                    os.unlink(tmp_name, dir_fd=artifact_dir_fd)
+                destination_identity = _regular_file_identity_at(artifact_dir_fd, name)
+                if destination_identity is None:
+                    cleanup_errors = _cleanup_published_files_at(artifact_dir_fd, installed)
+                    return [f"published {name} could not be installed", *cleanup_errors]
+                verify_errors = _verify_published_file_at(
+                    source,
+                    artifact_dir_fd,
+                    name,
+                    f"published {name}",
+                )
+                if verify_errors:
+                    cleanup_errors = _unlink_file_if_identity_at(
+                        artifact_dir_fd,
+                        name,
+                        destination_identity,
+                        label=f"published {name}",
+                    )
+                    cleanup_errors.extend(_cleanup_published_files_at(artifact_dir_fd, installed))
+                    return [*verify_errors, *cleanup_errors]
+                installed.append((name, destination_identity))
+            except OSError:
+                cleanup_errors = []
+                if tmp_identity is None:
+                    tmp_identity = _regular_file_identity_at(artifact_dir_fd, tmp_name)
                 if tmp_identity is not None:
+                    destination_identity = _regular_file_identity_at(artifact_dir_fd, name)
+                    if destination_identity == tmp_identity:
+                        cleanup_errors.extend(
+                            _unlink_file_if_identity_at(
+                                artifact_dir_fd,
+                                name,
+                                destination_identity,
+                                label=f"published {name}",
+                            )
+                        )
                     cleanup_errors.extend(
-                        _unlink_file_if_identity(
-                            tmp_destination,
+                        _unlink_file_if_identity_at(
+                            artifact_dir_fd,
+                            tmp_name,
                             tmp_identity,
                             label=f"temporary output for {name}",
                         )
                     )
-                cleanup_errors.extend(_cleanup_published_files(installed))
-                return [*copy_errors, *cleanup_errors]
-            if replace:
-                os.replace(tmp_destination, destination)
-            else:
-                tmp_destination.rename(destination)
-            destination_identity = _regular_file_identity(destination)
-            if destination_identity is None:
-                cleanup_errors = _cleanup_published_files(installed)
+                cleanup_errors.extend(_cleanup_published_files_at(artifact_dir_fd, installed))
                 return [f"published {name} could not be installed", *cleanup_errors]
-            verify_errors = _verify_published_file(
-                source,
-                destination,
-                f"published {name}",
-            )
-            if verify_errors:
-                cleanup_errors = _unlink_file_if_identity(
-                    destination,
-                    destination_identity,
-                    label=f"published {name}",
-                )
-                cleanup_errors.extend(_cleanup_published_files(installed))
-                return [*verify_errors, *cleanup_errors]
-            installed.append((destination, destination_identity))
-        except OSError:
-            cleanup_errors = []
-            if tmp_identity is None:
-                tmp_identity = _regular_file_identity(tmp_destination)
-            if tmp_identity is not None:
-                cleanup_errors.extend(
-                    _unlink_file_if_identity(
-                        tmp_destination,
-                        tmp_identity,
-                        label=f"temporary output for {name}",
-                    )
-                )
-            cleanup_errors.extend(_cleanup_published_files(installed))
-            return [f"published {name} could not be installed", *cleanup_errors]
-    return _sync_artifact_dir(
-        artifact_dir,
-        expected_identity=artifact_dir_identity,
-    )
+        sync_errors = _sync_artifact_dir(
+            artifact_dir,
+            expected_identity=artifact_dir_identity,
+        )
+        if sync_errors:
+            cleanup_errors = _cleanup_published_files_at(artifact_dir_fd, installed)
+            return [*sync_errors, *cleanup_errors]
+        return []
+    finally:
+        os.close(artifact_dir_fd)
 
 
 def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, list[str]]:
@@ -900,11 +1201,7 @@ def finalize_staged_run(args: argparse.Namespace) -> tuple[int, Path | None, lis
     if errors:
         return 1, None, errors
 
-    try:
-        args.artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    except OSError:
-        return 1, None, ["--artifact-dir could not be created"]
-    errors = validate_directory_path(args.artifact_dir, "--artifact-dir", must_exist=True)
+    errors = _ensure_private_directory(args.artifact_dir, "--artifact-dir")
     if errors:
         return 1, None, errors
     errors = _set_private_directory_permissions(args.artifact_dir, "--artifact-dir")

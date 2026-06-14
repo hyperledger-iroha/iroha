@@ -544,6 +544,15 @@ const PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS = Object.freeze([
   "restart_replay_rejection_hash",
   "state_recovery_passed",
   "state_recovery_hash",
+  "lifecycle_passed",
+  "lifecycle_shield_tx_hash",
+  "lifecycle_hop_proof_hash",
+  "lifecycle_recursive_init_hash",
+  "lifecycle_recursive_init_verify_hash",
+  "lifecycle_recursive_append_hash",
+  "lifecycle_recursive_append_verify_hash",
+  "lifecycle_unshield_proof_hash",
+  "lifecycle_redeem_tx_hash",
 ]);
 const PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = Object.freeze([
   "rust_core",
@@ -610,6 +619,15 @@ const PRIVACY_PRODUCTION_EVIDENCE_KEY_MAP = Object.freeze({
   restartReplayRejectionHash: "restart_replay_rejection_hash",
   stateRecoveryPassed: "state_recovery_passed",
   stateRecoveryHash: "state_recovery_hash",
+  lifecyclePassed: "lifecycle_passed",
+  lifecycleShieldTxHash: "lifecycle_shield_tx_hash",
+  lifecycleHopProofHash: "lifecycle_hop_proof_hash",
+  lifecycleRecursiveInitHash: "lifecycle_recursive_init_hash",
+  lifecycleRecursiveInitVerifyHash: "lifecycle_recursive_init_verify_hash",
+  lifecycleRecursiveAppendHash: "lifecycle_recursive_append_hash",
+  lifecycleRecursiveAppendVerifyHash: "lifecycle_recursive_append_verify_hash",
+  lifecycleUnshieldProofHash: "lifecycle_unshield_proof_hash",
+  lifecycleRedeemTxHash: "lifecycle_redeem_tx_hash",
 });
 const BACKEND_FAMILY_BY_ALGORITHM_ID = Object.freeze({
   "transparent-transfer": "none",
@@ -2298,7 +2316,12 @@ function evidenceHashUri(value) {
   } else {
     return "";
   }
-  if (digest.length !== 64 || /[^0-9a-f]/.test(digest)) {
+  if (
+    digest.length !== 64 ||
+    /[^0-9a-f]/.test(digest) ||
+    digest === "0".repeat(64) ||
+    new Set(digest).size === 1
+  ) {
     return "";
   }
   return text;
@@ -2312,6 +2335,30 @@ function localnetPeerIdValue(value) {
     text.includes("..") ||
     /[^A-Za-z0-9_.:@-]/.test(text)
   ) {
+    return "";
+  }
+  return text;
+}
+
+function reviewerIdentityValue(value) {
+  const text = evidenceTextValue(value, 160);
+  const compact = text.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (
+    !text ||
+    entrypointIsDevFixture(text) ||
+    compact.includes("placeholder") ||
+    text.includes("..") ||
+    /[^A-Za-z0-9_.:@-]/.test(text)
+  ) {
+    return "";
+  }
+  return text;
+}
+
+function artifactLabelValue(value) {
+  const text = evidenceTextValue(value, 160);
+  const compact = text.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!text || entrypointIsDevFixture(text) || compact.includes("placeholder") || text.includes("..")) {
     return "";
   }
   return text;
@@ -2351,7 +2398,7 @@ function evidenceArtifact(value) {
   ) {
     return null;
   }
-  const label = evidenceTextValue(value.label, 160);
+  const label = artifactLabelValue(value.label);
   const uri = evidenceHashUri(value.uri);
   if (!label || !uri) {
     return null;
@@ -2366,10 +2413,17 @@ function evidenceReviewArtifact(value) {
   ) {
     return null;
   }
-  const label = evidenceTextValue(value.label, 160);
+  const label = artifactLabelValue(value.label);
   const uri = evidenceHashUri(value.uri);
   const signature = evidenceTextValue(value.signature, 160);
-  if (!label || !uri || !REVIEW_ARTIFACT_SIGNATURE_RE.test(signature)) {
+  const signatureBody = signature.slice("ed25519:".length);
+  if (
+    !label ||
+    !uri ||
+    !REVIEW_ARTIFACT_SIGNATURE_RE.test(signature) ||
+    signatureBody === "0".repeat(128) ||
+    new Set(signatureBody).size === 1
+  ) {
     return null;
   }
   return { label, uri, signature };
@@ -2530,11 +2584,37 @@ function evidenceLocalnetAcceptance(value, localnetRunId, chainId) {
     value.restart_replay_rejection_hash,
   );
   const stateRecoveryHash = evidenceHashUri(value.state_recovery_hash);
+  const lifecycleShieldTxHash = evidenceHashUri(value.lifecycle_shield_tx_hash);
+  const lifecycleHopProofHash = evidenceHashUri(value.lifecycle_hop_proof_hash);
+  const lifecycleRecursiveInitHash = evidenceHashUri(
+    value.lifecycle_recursive_init_hash,
+  );
+  const lifecycleRecursiveInitVerifyHash = evidenceHashUri(
+    value.lifecycle_recursive_init_verify_hash,
+  );
+  const lifecycleRecursiveAppendHash = evidenceHashUri(
+    value.lifecycle_recursive_append_hash,
+  );
+  const lifecycleRecursiveAppendVerifyHash = evidenceHashUri(
+    value.lifecycle_recursive_append_verify_hash,
+  );
+  const lifecycleUnshieldProofHash = evidenceHashUri(
+    value.lifecycle_unshield_proof_hash,
+  );
+  const lifecycleRedeemTxHash = evidenceHashUri(value.lifecycle_redeem_tx_hash);
   const localnetArtifactHashes = [
     smokeTxHash,
     replayRejectionHash,
     restartReplayRejectionHash,
     stateRecoveryHash,
+    lifecycleShieldTxHash,
+    lifecycleHopProofHash,
+    lifecycleRecursiveInitHash,
+    lifecycleRecursiveInitVerifyHash,
+    lifecycleRecursiveAppendHash,
+    lifecycleRecursiveAppendVerifyHash,
+    lifecycleUnshieldProofHash,
+    lifecycleRedeemTxHash,
   ];
   if (
     runId !== localnetRunId ||
@@ -2556,6 +2636,7 @@ function evidenceLocalnetAcceptance(value, localnetRunId, chainId) {
     "restart_persistence_checked",
     "restart_replay_rejected",
     "state_recovery_passed",
+    "lifecycle_passed",
   ];
   if (requiredBooleans.some((key) => value[key] !== true)) {
     return null;
@@ -2570,6 +2651,14 @@ function evidenceLocalnetAcceptance(value, localnetRunId, chainId) {
     ["replay_rejection_hash", replayRejectionHash],
     ["restart_replay_rejection_hash", restartReplayRejectionHash],
     ["state_recovery_hash", stateRecoveryHash],
+    ["lifecycle_shield_tx_hash", lifecycleShieldTxHash],
+    ["lifecycle_hop_proof_hash", lifecycleHopProofHash],
+    ["lifecycle_recursive_init_hash", lifecycleRecursiveInitHash],
+    ["lifecycle_recursive_init_verify_hash", lifecycleRecursiveInitVerifyHash],
+    ["lifecycle_recursive_append_hash", lifecycleRecursiveAppendHash],
+    ["lifecycle_recursive_append_verify_hash", lifecycleRecursiveAppendVerifyHash],
+    ["lifecycle_unshield_proof_hash", lifecycleUnshieldProofHash],
+    ["lifecycle_redeem_tx_hash", lifecycleRedeemTxHash],
     ...requiredBooleans.map((key) => [key, true]),
   ]);
 }
@@ -2651,6 +2740,9 @@ function productionEvidenceRows(value) {
     } else if (!setEquals(keys, rowKeys)) {
       continue;
     }
+    if (Object.hasOwn(rows, rowId)) {
+      return {};
+    }
     rows[rowId] = row;
   }
   return rows;
@@ -2687,7 +2779,7 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
   ) {
     return null;
   }
-  const reviewerIdentity = evidenceTextValue(source.reviewer_identity, 160);
+  const reviewerIdentity = reviewerIdentityValue(source.reviewer_identity);
   const localnetRunId = localnetRunIdValue(source.localnet_run_id);
   const reviewArtifact = evidenceReviewArtifact(source.review_artifact);
   if (!reviewerIdentity || !localnetRunId || reviewArtifact === null) {

@@ -176,6 +176,8 @@ WALLET_INTEGRITY_TRANSCRIPT_SCHEMA = (
     "iroha.android.device_lab.kagemusha.wallet_integrity.v1"
 )
 D2D_PAYMENT_TRANSPORTS = {"nearby_offline", "nfc_hce", "qr"}
+D2D_PAYMENT_TRANSCRIPTS_FIELD = "d2d_payment_transcripts"
+D2D_PAYMENT_TRANSCRIPT_ENTRY_FIELDS = frozenset({"path", "sha256"})
 MAX_D2D_PAYMENT_PAYLOAD_BYTES = 16 * 1024
 ATTESTATION_CERTIFICATE_CHAIN_SUFFIXES = (".der", ".pem")
 MAX_ATTESTATION_CERTIFICATE_CHAIN_BYTES = 64 * 1024
@@ -255,6 +257,7 @@ SLOT_METADATA_FIELDS: frozenset[str] = frozenset(
         *SIGNED_EVIDENCE_SLOT_INT_FIELDS,
         *SIGNED_EVIDENCE_SLOT_TRUE_FIELDS,
         "raw_test_commands",
+        D2D_PAYMENT_TRANSCRIPTS_FIELD,
         "signed_evidence_artifact_path",
         "signed_evidence_artifact_sha256",
     }
@@ -290,6 +293,7 @@ SIGNED_EVIDENCE_FIELDS: frozenset[str] = frozenset(
         "abi6_recursive_spend_jni_probe",
         "abi7_recursive_compact_jni_probe",
         "abi7_recursive_compact_prover_state",
+        D2D_PAYMENT_TRANSCRIPTS_FIELD,
         "raw_test_commands",
         "signed_at_utc",
         "signer_key_id",
@@ -1115,6 +1119,49 @@ def _summary_release_device_family(
         return None
     family = kagemusha.get("device_family")
     return family if isinstance(family, str) else None
+
+
+def _summary_release_d2d_payment_transport(
+    report: dict,
+    trusted_signer_public_key_sha256: frozenset[str] | None = None,
+) -> str | None:
+    """Return the D2D payment transport only for a complete release Kagemusha report."""
+
+    kagemusha = _summary_release_kagemusha(
+        report,
+        trusted_signer_public_key_sha256,
+    )
+    if kagemusha is None:
+        return None
+    transport = kagemusha.get("d2d_payment_transport")
+    if isinstance(transport, str) and transport in D2D_PAYMENT_TRANSPORTS:
+        return transport
+    return None
+
+
+def _summary_release_d2d_payment_transports(
+    report: dict,
+    trusted_signer_public_key_sha256: frozenset[str] | None = None,
+) -> list[str]:
+    """Return all D2D payment transports for a complete release Kagemusha report."""
+
+    kagemusha = _summary_release_kagemusha(
+        report,
+        trusted_signer_public_key_sha256,
+    )
+    if kagemusha is None:
+        return []
+    transports = kagemusha.get("d2d_payment_transports")
+    if isinstance(transports, list) and all(
+        isinstance(transport, str) and transport in D2D_PAYMENT_TRANSPORTS
+        for transport in transports
+    ):
+        return sorted(set(transports))
+    transport = _summary_release_d2d_payment_transport(
+        report,
+        trusted_signer_public_key_sha256,
+    )
+    return [transport] if transport is not None else []
 
 
 def infer_kagemusha_device_family(
@@ -2992,6 +3039,153 @@ def validate_d2d_payment_transcript_binding(
     return relative, matched_digest, transport
 
 
+def _require_d2d_transcript_entry_string(
+    entry: dict[str, Any],
+    key: str,
+    label: str,
+    errors: list[str],
+) -> str | None:
+    value = entry.get(key)
+    if not isinstance(value, str) or not value:
+        errors.append(f"{label} {key} must be a non-empty string")
+        return None
+    if value != value.strip():
+        errors.append(f"{label} {key} must not contain surrounding whitespace")
+        return None
+    if _contains_control_character(value):
+        errors.append(f"{label} {key} must not contain control characters")
+        return None
+    if SECRET_RE.search(value):
+        errors.append(f"{label} {key} must not contain secret-looking material")
+        return None
+    return value
+
+
+def _validate_d2d_payment_transcript_entry(
+    slot_path: Path,
+    metadata: dict[str, Any],
+    transport_key: str,
+    entry: Any,
+    errors: list[str],
+) -> tuple[str | None, dict[str, str] | None]:
+    label = f"slot.json {D2D_PAYMENT_TRANSCRIPTS_FIELD}[{transport_key}]"
+    if not isinstance(entry, dict):
+        errors.append(f"{label} must be an object")
+        return None, None
+    for field in sorted(set(entry) - D2D_PAYMENT_TRANSCRIPT_ENTRY_FIELDS):
+        errors.append(f"{label} contains unexpected field {_display_path(field)}")
+    for field in sorted(D2D_PAYMENT_TRANSCRIPT_ENTRY_FIELDS - set(entry)):
+        errors.append(f"{label} is missing {field}")
+    relative = _require_d2d_transcript_entry_string(entry, "path", label, errors)
+    digest = _require_d2d_transcript_entry_string(entry, "sha256", label, errors)
+    if digest is not None:
+        if SHA256_HEX_RE.fullmatch(digest) is None:
+            errors.append(f"{label} sha256 must be lowercase sha256 hex")
+            digest = None
+        elif digest == "0" * 64:
+            errors.append(f"{label} sha256 must be non-zero lowercase sha256 hex")
+            digest = None
+    if relative is not None:
+        relative = _normalise_safe_relative_path(
+            relative,
+            errors,
+            f"{label} path",
+        )
+    if relative is None:
+        return None, None
+    if relative.split("/", 1)[0] != "handoff":
+        errors.append(f"{label} path must stay under handoff/")
+        return None, None
+    _, actual_digest, digest_errors = _metadata_artifact_bytes_and_sha256(
+        slot_path,
+        relative,
+        f"{label} path",
+        f"{label} path must point to an existing file",
+    )
+    if digest_errors:
+        errors.extend(digest_errors)
+        return None, None
+    if digest is None or actual_digest is None:
+        return None, None
+    if actual_digest != digest:
+        errors.append(f"{label} sha256 does not match path")
+        return None, None
+    transcript_transport = validate_d2d_payment_transcript(
+        slot_path,
+        slot_path / relative,
+        metadata,
+        errors,
+    )
+    if transcript_transport != transport_key:
+        errors.append(f"{label} transport must match transcript transport")
+        return None, None
+    return transport_key, {"path": relative, "sha256": digest}
+
+
+def validate_d2d_payment_transcripts_binding(
+    slot_path: Path,
+    metadata: dict[str, Any],
+    errors: list[str],
+    *,
+    primary_relative: str | None,
+    primary_digest: str | None,
+    primary_transport: str | None,
+) -> dict[str, dict[str, str]]:
+    """Validate optional per-transport D2D transcript bindings."""
+
+    transcripts: dict[str, dict[str, str]] = {}
+    if (
+        primary_relative is not None
+        and primary_digest is not None
+        and primary_transport is not None
+    ):
+        transcripts[primary_transport] = {
+            "path": primary_relative,
+            "sha256": primary_digest,
+        }
+    value = metadata.get(D2D_PAYMENT_TRANSCRIPTS_FIELD)
+    if value is None:
+        return transcripts
+    if not isinstance(value, dict) or not value:
+        errors.append(f"slot.json {D2D_PAYMENT_TRANSCRIPTS_FIELD} must be a non-empty object")
+        return transcripts
+    seen_paths: dict[str, str] = {}
+    for raw_transport, entry in sorted(value.items()):
+        if not isinstance(raw_transport, str) or raw_transport not in D2D_PAYMENT_TRANSPORTS:
+            errors.append(
+                f"slot.json {D2D_PAYMENT_TRANSCRIPTS_FIELD} keys must be one of "
+                f"{sorted(D2D_PAYMENT_TRANSPORTS)}"
+            )
+            continue
+        transport, validated = _validate_d2d_payment_transcript_entry(
+            slot_path,
+            metadata,
+            raw_transport,
+            entry,
+            errors,
+        )
+        if transport is None or validated is None:
+            continue
+        previous_transport = seen_paths.get(validated["path"])
+        if previous_transport is not None and previous_transport != transport:
+            errors.append(
+                f"slot.json {D2D_PAYMENT_TRANSCRIPTS_FIELD} must not reuse "
+                f"{validated['path']} for multiple transports"
+            )
+            continue
+        seen_paths[validated["path"]] = transport
+        transcripts[transport] = validated
+    if (
+        primary_transport is not None
+        and primary_transport not in transcripts
+    ):
+        errors.append(
+            f"slot.json {D2D_PAYMENT_TRANSCRIPTS_FIELD} must include the primary "
+            "d2d_payment_transcript_path transport"
+        )
+    return transcripts
+
+
 def validate_wallet_integrity_transcript(
     transcript_path: Path,
     metadata: dict[str, Any],
@@ -3547,6 +3741,20 @@ def _required_signed_evidence_digest_paths(
                 )
                 if relative is not None:
                     paths.add(relative)
+        transcript_map = metadata.get(D2D_PAYMENT_TRANSCRIPTS_FIELD)
+        if isinstance(transcript_map, dict):
+            for raw_entry in transcript_map.values():
+                if not isinstance(raw_entry, dict):
+                    continue
+                value = raw_entry.get("path")
+                if isinstance(value, str):
+                    relative = _normalise_safe_relative_path(
+                        value,
+                        path_errors,
+                        f"slot.json {D2D_PAYMENT_TRANSCRIPTS_FIELD} path",
+                    )
+                    if relative is not None:
+                        paths.add(relative)
     return sorted(paths)
 
 
@@ -3886,6 +4094,16 @@ def validate_signed_evidence_artifact(
         _require_evidence_true(evidence, key, errors)
         if metadata.get(key) is not None and evidence.get(key) != metadata.get(key):
             errors.append(f"signed evidence artifact {key} must match slot.json {key}")
+    if (
+        D2D_PAYMENT_TRANSCRIPTS_FIELD in metadata
+        or D2D_PAYMENT_TRANSCRIPTS_FIELD in evidence
+    ) and evidence.get(D2D_PAYMENT_TRANSCRIPTS_FIELD) != metadata.get(
+        D2D_PAYMENT_TRANSCRIPTS_FIELD
+    ):
+        errors.append(
+            "signed evidence artifact d2d_payment_transcripts must match "
+            "slot.json d2d_payment_transcripts"
+        )
 
     evidence_commands = evidence.get("raw_test_commands")
     metadata_commands = metadata.get("raw_test_commands")
@@ -4210,6 +4428,20 @@ def validate_kagemusha_production_metadata(
         details["d2d_payment_transcript_sha256"] = d2d_digest
         if d2d_transport is not None:
             details["d2d_payment_transport"] = d2d_transport
+    d2d_transcripts = validate_d2d_payment_transcripts_binding(
+        slot_path,
+        metadata,
+        errors,
+        primary_relative=d2d_relative,
+        primary_digest=d2d_digest,
+        primary_transport=d2d_transport,
+    )
+    if (
+        d2d_transcripts
+        and metadata.get(D2D_PAYMENT_TRANSCRIPTS_FIELD) is not None
+    ):
+        details["d2d_payment_transcripts"] = d2d_transcripts
+        details["d2d_payment_transports"] = sorted(d2d_transcripts)
 
     wallet_relative, wallet_digest = validate_wallet_integrity_transcript_binding(
         slot_path,
@@ -4700,12 +4932,30 @@ def build_summary(
             for family in KAGEMUSHA_STANDARD_DEVICE_FAMILIES
             if family not in covered
         ]
+        covered_d2d_payment_transports = sorted(
+            {
+                transport
+                for report in summary_reports
+                for transport in _summary_release_d2d_payment_transports(
+                    report,
+                    trusted_signer_public_key_sha256,
+                )
+            }
+        )
+        missing_d2d_payment_transports = [
+            transport
+            for transport in sorted(D2D_PAYMENT_TRANSPORTS)
+            if transport not in covered_d2d_payment_transports
+        ]
         summary["kagemusha"] = {
             "production_evidence_required": require_kagemusha_production_evidence,
             "standard_matrix_required": require_kagemusha_standard_matrix,
             "required_device_families": list(KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
             "covered_device_families": covered,
             "missing_device_families": missing,
+            "required_d2d_payment_transports": sorted(D2D_PAYMENT_TRANSPORTS),
+            "covered_d2d_payment_transports": covered_d2d_payment_transports,
+            "missing_d2d_payment_transports": missing_d2d_payment_transports,
             "duplicate_bindings": kagemusha_duplicate_matrix_bindings(
                 summary_reports,
                 require_complete_signed_evidence=require_complete_kagemusha,
@@ -5105,7 +5355,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--require-kagemusha-standard-matrix",
         action="store_true",
-        help="Require production evidence for every standard Kagemusha device family.",
+        help=(
+            "Require production evidence for every standard Kagemusha device family "
+            "and offline D2D payment transport."
+        ),
     )
     parser.add_argument(
         "--trusted-signer-public-key",
@@ -5214,11 +5467,32 @@ def main(argv: list[str] | None = None) -> int:
             for family in KAGEMUSHA_STANDARD_DEVICE_FAMILIES
             if family not in covered
         ]
+        covered_d2d_payment_transports = {
+            transport
+            for report in reports
+            for transport in _summary_release_d2d_payment_transports(
+                report,
+                trusted_signer_public_key_sha256,
+            )
+        }
+        missing_d2d_payment_transports = [
+            transport
+            for transport in sorted(D2D_PAYMENT_TRANSPORTS)
+            if transport not in covered_d2d_payment_transports
+        ]
         if missing:
             failures += 1
             print(
                 "[device-lab] missing Kagemusha production evidence for device families: "
                 + ", ".join(missing),
+                file=sys.stderr,
+            )
+        if missing_d2d_payment_transports:
+            failures += 1
+            print(
+                "[device-lab] missing Kagemusha production evidence for D2D "
+                "payment transports: "
+                + ", ".join(missing_d2d_payment_transports),
                 file=sys.stderr,
             )
     if require_kagemusha:

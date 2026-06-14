@@ -3164,6 +3164,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-slot-assembler-private-permissions",
     "--negative-control-android-device-lab-slot-assembler-source-identity-fallback",
     "--negative-control-android-device-lab-d2d-transport-matrix",
+    "--negative-control-android-release-bundle-d2d-declaration-binding",
     "--negative-control-release-bundle-evidence-inventory-schema",
     "--negative-control-release-bundle-evidence-inventory-keysets",
     "--negative-control-release-bundle-section-schema",
@@ -3245,8 +3246,33 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-android-device-lab-d2d-transport-matrix",
-      /if missing_transports:[\s\S]*?if False and missing_transports:/u,
+      new RegExp(
+        [
+          "if missing_transports:",
+          "[\\s\\S]*?if False and missing_transports:",
+          "[\\s\\S]*?if missing_d2d_payment_transports:",
+          "[\\s\\S]*?if False and missing_d2d_payment_transports:",
+          "[\\s\\S]*?if set\\(artifacts\\) != set\\(expected_artifacts\\):",
+          "[\\s\\S]*?if False and set\\(artifacts\\) != set\\(expected_artifacts\\):",
+        ].join(""),
+        "u",
+      ),
       "Android device-lab D2D transport matrix gate",
+    ],
+    [
+      "--negative-control-android-release-bundle-d2d-declaration-binding",
+      new RegExp(
+        [
+          "and d2d_transport not in d2d_transports",
+          "[\\s\\S]*?and False",
+          "[\\s\\S]*?and set\\(d2d_transcripts\\) != declared_d2d_transports",
+          "[\\s\\S]*?and False",
+          "[\\s\\S]*?elif d2d_transports_valid and d2d_transcripts is None:",
+          "[\\s\\S]*?elif False and d2d_transcripts is None:",
+        ].join(""),
+        "u",
+      ),
+      "Android release-bundle D2D declaration binding gate",
     ],
     [
       "--negative-control-compact-key-scalar-types",
@@ -4969,8 +4995,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-python-sdk-venv-activation-script",
     "--negative-control-python-sdk-bytecode-script",
     "--negative-control-python-sdk-test-filter-script",
+    "--negative-control-python-connect-runner-coverage",
+    "--negative-control-python-connect-test-exactness",
     "--negative-control-python-sdk-canonical-request-test-filter-script",
     "--negative-control-python-sdk-identifier-receipt-test-filter-script",
+    "--negative-control-python-sdk-multisig-response-test-filter-script",
     "--negative-control-identifier-receipt-proof-base64-guard",
     "--negative-control-identifier-receipt-kind-exactness-guard",
     "--negative-control-identifier-receipt-proof-base64-exactness-guard",
@@ -5012,6 +5041,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-recursive-compact-shape-classifier",
     "--negative-control-mobile-recursive-spend-native-output-headers",
     "--negative-control-mobile-privacy-production-gate-exactness",
+    "--negative-control-mobile-privacy-localnet-lifecycle-audit",
+    "--negative-control-public-privacy-localnet-lifecycle-catalog",
+    "--negative-control-public-privacy-zero-hash-evidence",
+    "--negative-control-public-privacy-repeated-hash-evidence",
+    "--negative-control-public-privacy-zero-signature-evidence",
+    "--negative-control-public-privacy-repeated-signature-evidence",
+    "--negative-control-public-privacy-reviewer-identity-evidence",
+    "--negative-control-public-privacy-artifact-label-evidence",
+    "--negative-control-public-privacy-duplicate-row-evidence",
+    "--negative-control-public-privacy-deterministic-test-artifact",
     "--negative-control-mobile-zk-merkle-provider-adversarial-coverage",
     "--negative-control-mobile-zk-torii-parser-shape-coverage",
     "--negative-control-mobile-confidential-note-coverage",
@@ -5038,6 +5077,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-swift-sdk-runner-workflow",
     "--negative-control-swift-sdk-parse-workflow",
     "--negative-control-swift-sdk-parse-surface-script",
+    "--negative-control-swift-connect-parse-surface-script",
     "--negative-control-swift-sdk-privacy-parse-script",
     "--negative-control-swift-sdk-torii-verifier-parse-script",
     "--negative-control-swift-sdk-workflow-inventory",
@@ -5493,7 +5533,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /normalizeMultisigContractCallResponse[\s\S]*?multisig resolved account exactness[\s\S]*?JavaScript multisig resolved account exactness tests[\s\S]*?Swift multisig resolved account exactness[\s\S]*?Android Java multisig resolved account exactness[\s\S]*?Kotlin multisig resolved account exactness/u,
+    /normalizeMultisigContractCallResponse[\s\S]*?multisig resolved account exactness[\s\S]*?JavaScript multisig resolved account exactness tests[\s\S]*?Swift multisig resolved account exactness[\s\S]*?Python multisig resolved account exactness[\s\S]*?Android Java multisig resolved account exactness[\s\S]*?Kotlin multisig resolved account exactness/u,
     "multisig resolved account exactness guard must pin source and regression markers across non-C# SDKs",
   );
   const multisigResolvedAccountBranch = guard.slice(
@@ -5514,6 +5554,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     multisigResolvedAccountBranch,
     /decodeExactToriiAccountId[\s\S]*?decodeNormalizedToriiAccountId[\s\S]*?guard !raw\.contains\("@"\)[\s\S]*?guard raw\.contains\("@"\) \|\| true/u,
     "multisig resolved account negative control must mutate Swift exact helper markers",
+  );
+  assert.match(
+    multisigResolvedAccountBranch,
+    /_require_exact_i105_account_id[\s\S]*?_normalize_canonical_account_id[\s\S]*?test_propose_multisig_rejects_malformed_response_fields[\s\S]*?test_propose_multisig_allows_normalized_response_fields/u,
+    "multisig resolved account negative control must mutate Python exact helper markers",
   );
   assert.match(
     multisigResolvedAccountBranch,
@@ -5606,6 +5651,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
     "javascript/iroha_js/src/crypto.js",
     "javascript/iroha_js/dist/crypto.js",
+    "javascript/iroha_js/test/privacyCatalogParity.test.js",
     "javascript/iroha_js/test/privacyNative.test.js",
     "python/iroha_python/src/iroha_python/crypto.py",
     "python/iroha_python/src/iroha_python/privacy_catalog.py",
@@ -6791,7 +6837,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const mobilePrivacyProductionGateBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-privacy-production-gate-exactness":'),
-    guard.indexOf('if mode == "--negative-control-mobile-zk-merkle-provider-adversarial-coverage":'),
+    guard.indexOf('if mode == "--negative-control-mobile-privacy-localnet-lifecycle-audit":'),
   );
   assert.match(
     mobilePrivacyProductionGateBranch,
@@ -6817,6 +6863,296 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     mobilePrivacyProductionGateBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "mobile privacy production-gate negative control must not unconditionally pass after run_checks",
+  );
+  const mobilePrivacyLocalnetLifecycleBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-privacy-localnet-lifecycle-audit":'),
+    guard.indexOf('if mode == "--negative-control-public-privacy-localnet-lifecycle-catalog":'),
+  );
+  assert.match(
+    mobilePrivacyLocalnetLifecycleBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile privacy localnet lifecycle negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobilePrivacyLocalnetLifecycleBranch,
+    /localnet_lifecycle_redeem_tx_hash:[\s\S]*?localnet_lifecycle_generic_redeem_tx_hash:/u,
+    "mobile privacy localnet lifecycle negative control must mutate a required localnet audit field",
+  );
+  assert.match(
+    mobilePrivacyLocalnetLifecycleBranch,
+    /Swift privacy production-gate exactness[\s\S]*?Swift privacy production-gate exactness tests[\s\S]*?Kotlin privacy production-gate exactness[\s\S]*?Kotlin privacy production-gate exactness tests[\s\S]*?Android Java privacy production-gate exactness[\s\S]*?Android Java privacy production-gate exactness tests/u,
+    "mobile privacy localnet lifecycle negative control must require every non-C# source and test label",
+  );
+  assert.match(
+    mobilePrivacyLocalnetLifecycleBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile privacy localnet lifecycle audit drift was not detected"\)/u,
+    "mobile privacy localnet lifecycle negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobilePrivacyLocalnetLifecycleBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile privacy localnet lifecycle negative control must not unconditionally pass after run_checks",
+  );
+  const publicPrivacyLocalnetLifecycleBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-public-privacy-localnet-lifecycle-catalog":'),
+    guard.indexOf('if mode == "--negative-control-public-privacy-zero-hash-evidence":'),
+  );
+  assert.match(
+    publicPrivacyLocalnetLifecycleBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "public privacy localnet lifecycle negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    publicPrivacyLocalnetLifecycleBranch,
+    /const lifecycleRedeemTxHash = evidenceHashUri\(value\.lifecycle_redeem_tx_hash\)[\s\S]*?const lifecycleRedeemTxHash = evidenceHashUri\(value\.lifecycle_generic_redeem_tx_hash\)[\s\S]*?reused-localnet-lifecycle-hash[\s\S]*?reused-localnet-generic-lifecycle-hash/u,
+    "public privacy localnet lifecycle negative control must mutate required JS/Python lifecycle markers",
+  );
+  assert.match(
+    publicPrivacyLocalnetLifecycleBranch,
+    /javascript\/iroha_js\/src\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?javascript\/iroha_js\/dist\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?JavaScript privacy localnet lifecycle catalog tests[\s\S]*?Python privacy catalog must require full localnet lifecycle evidence[\s\S]*?Python privacy catalog tests must reject malformed localnet lifecycle evidence/u,
+    "public privacy localnet lifecycle negative control must require source, dist, and test labels",
+  );
+  assert.match(
+    publicPrivacyLocalnetLifecycleBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: public privacy localnet lifecycle catalog drift was not detected"\)/u,
+    "public privacy localnet lifecycle negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    publicPrivacyLocalnetLifecycleBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "public privacy localnet lifecycle negative control must not unconditionally pass after run_checks",
+  );
+  const publicPrivacyZeroHashBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-public-privacy-zero-hash-evidence":'),
+    guard.indexOf('if mode == "--negative-control-public-privacy-repeated-hash-evidence":'),
+  );
+  assert.match(
+    publicPrivacyZeroHashBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "public privacy zero-hash negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    publicPrivacyZeroHashBranch,
+    /digest === "0"\.repeat\(64\)[\s\S]*?placeholder localnet lifecycle hash[\s\S]*?digest == "0" \* 64[\s\S]*?placeholder-localnet-lifecycle-hash/u,
+    "public privacy zero-hash negative control must mutate JS/Python zero-hash guards and tests",
+  );
+  assert.match(
+    publicPrivacyZeroHashBranch,
+    /javascript\/iroha_js\/src\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?javascript\/iroha_js\/dist\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?JavaScript privacy localnet lifecycle catalog tests[\s\S]*?Python privacy catalog must require full localnet lifecycle evidence[\s\S]*?Python privacy catalog tests must reject malformed localnet lifecycle evidence/u,
+    "public privacy zero-hash negative control must require source, dist, and test labels",
+  );
+  assert.match(
+    publicPrivacyZeroHashBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: public privacy zero-hash evidence drift was not detected"\)/u,
+    "public privacy zero-hash negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    publicPrivacyZeroHashBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "public privacy zero-hash negative control must not unconditionally pass after run_checks",
+  );
+  const publicPrivacyRepeatedHashBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-public-privacy-repeated-hash-evidence":'),
+    guard.indexOf('if mode == "--negative-control-public-privacy-zero-signature-evidence":'),
+  );
+  assert.match(
+    publicPrivacyRepeatedHashBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "public privacy repeated-hash negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    publicPrivacyRepeatedHashBranch,
+    /new Set\(digest\)\.size === 1[\s\S]*?uniform-review-artifact-digest-marker[\s\S]*?len\(set\(digest\)\) == 1[\s\S]*?uniform-review-artifact-digest-marker/u,
+    "public privacy repeated-hash negative control must mutate JS/Python repeated-hash guards and tests",
+  );
+  assert.match(
+    publicPrivacyRepeatedHashBranch,
+    /javascript\/iroha_js\/src\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?javascript\/iroha_js\/dist\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?JavaScript privacy localnet lifecycle catalog tests[\s\S]*?Python privacy catalog must require full localnet lifecycle evidence[\s\S]*?Python privacy catalog tests must reject malformed localnet lifecycle evidence/u,
+    "public privacy repeated-hash negative control must require source, dist, and test labels",
+  );
+  assert.match(
+    publicPrivacyRepeatedHashBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: public privacy repeated-hash evidence drift was not detected"\)/u,
+    "public privacy repeated-hash negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    publicPrivacyRepeatedHashBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "public privacy repeated-hash negative control must not unconditionally pass after run_checks",
+  );
+  const publicPrivacyZeroSignatureBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-public-privacy-zero-signature-evidence":'),
+    guard.indexOf('if mode == "--negative-control-public-privacy-repeated-signature-evidence":'),
+  );
+  assert.match(
+    publicPrivacyZeroSignatureBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "public privacy zero-signature negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    publicPrivacyZeroSignatureBranch,
+    /signatureBody === "0"\.repeat\(128\)[\s\S]*?placeholder review artifact signature[\s\S]*?signature_body == "0" \* 128[\s\S]*?placeholder-review-artifact-signature/u,
+    "public privacy zero-signature negative control must mutate JS/Python zero-signature guards and tests",
+  );
+  assert.match(
+    publicPrivacyZeroSignatureBranch,
+    /javascript\/iroha_js\/src\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?javascript\/iroha_js\/dist\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?JavaScript privacy localnet lifecycle catalog tests[\s\S]*?Python privacy catalog must require full localnet lifecycle evidence[\s\S]*?Python privacy catalog tests must reject malformed localnet lifecycle evidence/u,
+    "public privacy zero-signature negative control must require source, dist, and test labels",
+  );
+  assert.match(
+    publicPrivacyZeroSignatureBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: public privacy zero-signature evidence drift was not detected"\)/u,
+    "public privacy zero-signature negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    publicPrivacyZeroSignatureBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "public privacy zero-signature negative control must not unconditionally pass after run_checks",
+  );
+  const publicPrivacyRepeatedSignatureBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-public-privacy-repeated-signature-evidence":'),
+    guard.indexOf('if mode == "--negative-control-public-privacy-reviewer-identity-evidence":'),
+  );
+  assert.match(
+    publicPrivacyRepeatedSignatureBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "public privacy repeated-signature negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    publicPrivacyRepeatedSignatureBranch,
+    /new Set\(signatureBody\)\.size === 1[\s\S]*?placeholder review artifact sig marker[\s\S]*?len\(set\(signature_body\)\) == 1[\s\S]*?placeholder-review-artifact-sig-marker/u,
+    "public privacy repeated-signature negative control must mutate JS/Python repeated-signature guards and tests",
+  );
+  assert.match(
+    publicPrivacyRepeatedSignatureBranch,
+    /javascript\/iroha_js\/src\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?javascript\/iroha_js\/dist\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?JavaScript privacy localnet lifecycle catalog tests[\s\S]*?Python privacy catalog must require full localnet lifecycle evidence[\s\S]*?Python privacy catalog tests must reject malformed localnet lifecycle evidence/u,
+    "public privacy repeated-signature negative control must require source, dist, and test labels",
+  );
+  assert.match(
+    publicPrivacyRepeatedSignatureBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: public privacy repeated-signature evidence drift was not detected"\)/u,
+    "public privacy repeated-signature negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    publicPrivacyRepeatedSignatureBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "public privacy repeated-signature negative control must not unconditionally pass after run_checks",
+  );
+  const publicPrivacyReviewerIdentityBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-public-privacy-reviewer-identity-evidence":'),
+    guard.indexOf('if mode == "--negative-control-public-privacy-artifact-label-evidence":'),
+  );
+  assert.match(
+    publicPrivacyReviewerIdentityBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "public privacy reviewer-identity negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    publicPrivacyReviewerIdentityBranch,
+    /reviewerIdentityValue\(source\.reviewer_identity\)[\s\S]*?evidenceTextValue\(source\.reviewer_identity, 160\)[\s\S]*?placeholder reviewer marker[\s\S]*?_privacy_evidence_reviewer_identity[\s\S]*?_privacy_evidence_text_value[\s\S]*?placeholder-reviewer-marker/u,
+    "public privacy reviewer-identity negative control must mutate JS/Python reviewer identity guards and tests",
+  );
+  assert.match(
+    publicPrivacyReviewerIdentityBranch,
+    /javascript\/iroha_js\/src\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?javascript\/iroha_js\/dist\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?JavaScript privacy localnet lifecycle catalog tests[\s\S]*?Python privacy catalog must require full localnet lifecycle evidence[\s\S]*?Python privacy catalog tests must reject malformed localnet lifecycle evidence/u,
+    "public privacy reviewer-identity negative control must require source, dist, and test labels",
+  );
+  assert.match(
+    publicPrivacyReviewerIdentityBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: public privacy reviewer-identity evidence drift was not detected"\)/u,
+    "public privacy reviewer-identity negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    publicPrivacyReviewerIdentityBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "public privacy reviewer-identity negative control must not unconditionally pass after run_checks",
+  );
+  const publicPrivacyArtifactLabelBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-public-privacy-artifact-label-evidence":'),
+    guard.indexOf('if mode == "--negative-control-public-privacy-duplicate-row-evidence":'),
+  );
+  assert.match(
+    publicPrivacyArtifactLabelBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "public privacy artifact-label negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    publicPrivacyArtifactLabelBranch,
+    /artifactLabelValue\(value\.label\)[\s\S]*?evidenceTextValue\(value\.label, 160\)[\s\S]*?placeholder production gate artifact marker[\s\S]*?_privacy_evidence_artifact_label[\s\S]*?_privacy_evidence_text_value[\s\S]*?placeholder-production-gate-artifact-marker/u,
+    "public privacy artifact-label negative control must mutate JS/Python artifact label guards and tests",
+  );
+  assert.match(
+    publicPrivacyArtifactLabelBranch,
+    /javascript\/iroha_js\/src\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?javascript\/iroha_js\/dist\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?JavaScript privacy localnet lifecycle catalog tests[\s\S]*?Python privacy catalog must require full localnet lifecycle evidence[\s\S]*?Python privacy catalog tests must reject malformed localnet lifecycle evidence/u,
+    "public privacy artifact-label negative control must require source, dist, and test labels",
+  );
+  assert.match(
+    publicPrivacyArtifactLabelBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: public privacy artifact-label evidence drift was not detected"\)/u,
+    "public privacy artifact-label negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    publicPrivacyArtifactLabelBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "public privacy artifact-label negative control must not unconditionally pass after run_checks",
+  );
+  const publicPrivacyDuplicateRowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-public-privacy-duplicate-row-evidence":'),
+    guard.indexOf('if mode == "--negative-control-public-privacy-deterministic-test-artifact":'),
+  );
+  assert.match(
+    publicPrivacyDuplicateRowBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "public privacy duplicate-row negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    publicPrivacyDuplicateRowBranch,
+    /Object\.hasOwn\(rows, rowId\)[\s\S]*?accept duplicate internal review evidence rows[\s\S]*?if row_id in rows:[\s\S]*?test_privacy_catalog_accepts_duplicate_internal_review_evidence_rows/u,
+    "public privacy duplicate-row negative control must mutate JS/Python duplicate-row guards and tests",
+  );
+  assert.match(
+    publicPrivacyDuplicateRowBranch,
+    /javascript\/iroha_js\/src\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?javascript\/iroha_js\/dist\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?JavaScript privacy localnet lifecycle catalog tests[\s\S]*?Python privacy catalog must require full localnet lifecycle evidence[\s\S]*?Python privacy catalog tests must reject malformed localnet lifecycle evidence/u,
+    "public privacy duplicate-row negative control must require source, dist, and test labels",
+  );
+  assert.match(
+    publicPrivacyDuplicateRowBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: public privacy duplicate-row evidence drift was not detected"\)/u,
+    "public privacy duplicate-row negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    publicPrivacyDuplicateRowBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "public privacy duplicate-row negative control must not unconditionally pass after run_checks",
+  );
+  const publicPrivacyDeterministicTestArtifactBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-public-privacy-deterministic-test-artifact":'),
+    guard.indexOf('if mode == "--negative-control-mobile-zk-merkle-provider-adversarial-coverage":'),
+  );
+  assert.match(
+    publicPrivacyDeterministicTestArtifactBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "public privacy deterministic test artifact negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    publicPrivacyDeterministicTestArtifactBranch,
+    /createHash\("sha256"\)\.update\(label\)\.digest\("hex"\)[\s\S]*?truncated label hex[\s\S]*?hashlib\.sha256\(label\.encode\("utf-8"\)\)\.hexdigest\(\)[\s\S]*?helper_uses_hash/u,
+    "public privacy deterministic test artifact negative control must mutate JS/Python helper digests and tests",
+  );
+  assert.match(
+    publicPrivacyDeterministicTestArtifactBranch,
+    /JavaScript privacy localnet lifecycle catalog tests[\s\S]*?Python privacy catalog tests must reject malformed localnet lifecycle evidence/u,
+    "public privacy deterministic test artifact negative control must require JS and Python test labels",
+  );
+  assert.match(
+    publicPrivacyDeterministicTestArtifactBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: public privacy deterministic test artifact drift was not detected"\)/u,
+    "public privacy deterministic test artifact negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    publicPrivacyDeterministicTestArtifactBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "public privacy deterministic test artifact negative control must not unconditionally pass after run_checks",
   );
   const mobileZkMerkleProviderBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-zk-merkle-provider-adversarial-coverage":'),
@@ -7770,6 +8106,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   for (const swiftOfflinePath of [
     "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
     "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectAsyncSequence.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectClient.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectCodec.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectCrypto.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectEnvelope.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectEnvelopeCodec.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectError.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectEvents.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectFlowControl.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectFrames.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectKeyStore.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectQueueDiagnostics.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectQueueJournal.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectReplayRecorder.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectRetryPolicy.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectSession.swift",
     "IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiCanonicalRequest.swift",
@@ -7779,6 +8131,26 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "IrohaSwift/Sources/IrohaSwift/OfflineTransferDiagnostics.swift",
     "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectClientTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectCryptoTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectEnvelopeCodecTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectEnvelopeTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectErrorTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectEventsTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectFixtureLoader.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectFixtureLoaderTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectFlowControlTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectFramesTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectKeyStoreTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectQueueDiagnosticsTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectQueueJournalTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectReplayRecorderTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectRetryPolicyTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionBalanceTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionEventStreamTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectTestUtilities.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift",
@@ -7795,6 +8167,20 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       `Kagemusha Swift SDK runner must parse ${swiftOfflinePath}`,
     );
   }
+  const swiftConnectBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-connect-parse-surface-script":'),
+    guard.indexOf('if mode == "--negative-control-swift-sdk-privacy-parse-script":'),
+  );
+  assert.match(
+    swiftConnectBranch,
+    /IrohaSwift\/Sources\/IrohaSwift\/ConnectClient\.swift[\s\S]*?IrohaSwift\/Tests\/IrohaSwiftTests\/ConnectClientTests\.swift/u,
+    "Swift Connect parse negative control must mutate Swift Connect source and test coverage",
+  );
+  assert.match(
+    swiftConnectBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift Connect parse surface drift was not detected"\)/u,
+    "Swift Connect parse negative control must only pass after detecting injected drift",
+  );
   assert.match(
     csharpRunner,
     /DOTNET_BIN="\$\{KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN:-dotnet\}"/,
@@ -7884,8 +8270,43 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRunner,
-    /export VIRTUAL_ENV="\$\{VENV_DIR\}"[\s\S]*export PATH="\$\{VENV_DIR\}\/bin:\$\{PATH\}"[\s\S]*"\$\{VENV_DIR\}\/bin\/python" -m maturin develop --release[\s\S]*tests\/test_nexus_app\.py[\s\S]*tests\/offline_cash_test\.py[\s\S]*tests\/test_address_format\.py/,
-    "Kagemusha Python SDK runner must activate the selected venv before maturin and run Nexus wallet signature and offline cash issuer-key exactness tests",
+    /export VIRTUAL_ENV="\$\{VENV_DIR\}"[\s\S]*export PATH="\$\{VENV_DIR\}\/bin:\$\{PATH\}"[\s\S]*"\$\{VENV_DIR\}\/bin\/python" -m maturin develop --release[\s\S]*tests\/test_nexus_app\.py[\s\S]*tests\/offline_cash_test\.py[\s\S]*tests\/testconnect_codec\.py[\s\S]*tests\/test_address_format\.py/,
+    "Kagemusha Python SDK runner must activate the selected venv before maturin and run Nexus wallet signature, Connect codec, and offline cash issuer-key exactness tests",
+  );
+  const pythonConnectTests = source("python/iroha_python/tests/testconnect_codec.py");
+  for (const requiredPythonConnectTest of [
+    "test_connect_codec_fails_closed_when_native_unavailable",
+    "test_generate_connect_sid_matches_deterministic_vector",
+    "test_generate_connect_sid_rejects_malformed_inputs",
+    "test_create_connect_session_preview_builds_canonical_uris",
+    "test_bootstrap_connect_preview_session_registers_and_extracts_tokens",
+    "test_bootstrap_connect_preview_session_can_skip_registration",
+    "test_bootstrap_connect_preview_session_rejects_bad_options_before_registration",
+    "test_bootstrap_connect_preview_session_rejects_missing_tokens",
+    "test_connect_sign_result_ok_rejects_confusable_algorithms",
+    "test_connect_sign_result_ok_from_dict_rejects_padded_algorithm",
+    "test_connect_control_approve_rejects_confusable_algorithms",
+    "test_connect_control_approve_from_dict_rejects_padded_algorithm",
+    "test_native_loader_rejects_wrong_python_framework",
+  ]) {
+    assert.ok(
+      pythonConnectTests.includes(requiredPythonConnectTest),
+      `Kagemusha Python Connect tests must keep ${requiredPythonConnectTest}`,
+    );
+  }
+  const pythonConnectExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-connect-test-exactness":'),
+    guard.indexOf('if mode == "--negative-control-python-sdk-canonical-request-test-filter-script":'),
+  );
+  assert.match(
+    pythonConnectExactnessBranch,
+    /test_generate_connect_sid_matches_deterministic_vector[\s\S]*?test_generate_connect_sid_accepts_random_vector[\s\S]*?test_bootstrap_connect_preview_session_rejects_bad_options_before_registration[\s\S]*?test_bootstrap_connect_preview_session_accepts_bad_options_before_registration[\s\S]*?test_connect_sign_result_ok_rejects_confusable_algorithms[\s\S]*?test_connect_sign_result_ok_accepts_confusable_algorithms/u,
+    "Python Connect exactness negative control must mutate SID, bootstrap, and signature exactness tests",
+  );
+  assert.match(
+    pythonConnectExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Python Connect exactness test drift was not detected"\)/u,
+    "Python Connect exactness negative control must only pass after detecting injected drift",
   );
   assert.match(
     pythonRunner,
@@ -7896,6 +8317,20 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     pythonRunner,
     /python\/iroha_torii_client\/tests\/test_client\.py::test_identifier_resolution_receipt_matches_shared_vectors/,
     "Kagemusha Python SDK runner must exercise identifier receipt exactness tests",
+  );
+  assert.match(
+    pythonRunner,
+    /python\/iroha_torii_client\/tests\/test_client\.py::test_propose_multisig_rejects_malformed_response_fields/,
+    "Kagemusha Python SDK runner must exercise multisig resolved account exactness tests",
+  );
+  const pythonMultisigResponseFilterBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-sdk-multisig-response-test-filter-script":'),
+    guard.indexOf('if mode == "--negative-control-identifier-receipt-proof-base64-guard":'),
+  );
+  assert.match(
+    pythonMultisigResponseFilterBranch,
+    /test_propose_multisig_rejects_malformed_response_fields[\s\S]*?negative control rejected Python SDK multisig response test filter drift[\s\S]*?Python SDK multisig response test filter drift was not detected/u,
+    "Python multisig response runner-filter negative control must mutate and detect the focused test filter",
   );
   assert.match(
     pythonRunner,
@@ -7946,7 +8381,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRunner,
-    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives\|fromAccount rejects control and Unicode-confusable curve algorithm aliases\|offline cash configuration snapshot requires cached issuer key and ABI\|canonical request signing: rejects padded auth fields\|streamEvents rejects unsupported production backend event filters before fetch\|streamEvents rejects malformed verifying key event names before fetch\|streamEvents rejects malformed proof event hashes before fetch\|ZK-ACE verifier-key references reject padded selector metadata\|privacy proof envelopes preserve pending production backend tags\|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations\|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags\|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend\|verifyIdentifierResolutionReceipt matches shared receipt vectors\|NexusAppClient rejects non-Ed25519 wallet signatures\|NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags\|ToriiClient attaches canonical signing headers for app endpoints\|ToriiClient canonical auth uses raw Node transport for UTF-8 account headers\|ToriiClient canonical auth rejects UTF-8 account headers when no supported transport is available\|ToriiClient canonical auth rejects non-byte private key arrays\|subscription plan and create endpoints send normalized payloads\|subscription action endpoints send normalized payloads\|getSubscription returns null on 404\|buildConnectWebSocketUrl rejects token query parameters\|buildConnectWebSocketUrl rejects endpoint host overrides\|buildConnectWebSocketUrl rejects endpoint protocol mismatches\|openConnectWebSocket injects Sec-WebSocket-Protocol when headers are unavailable\|openConnectWebSocket emits telemetry when allowInsecure is used\|resolveAliasByIndex enforces non-negative indices before issuing requests\|resolveAlias attaches canonical auth when provided\|lookupAliasesByAccount validates options before issuing requests[\s\S]*test\/address\.test\.js[\s\S]*test\/canonicalRequest\.test\.js[\s\S]*test\/connectWebSocket\.test\.js[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/instructionBuilders\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/nexusAppClient\.test\.js[\s\S]*test\/offlineCashLifecycle\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/toriiCanonicalAuth\.test\.js[\s\S]*test\/toriiClient\.identifier\.test\.js[\s\S]*test\/toriiClient\.isoAlias\.test\.js[\s\S]*test\/toriiClient\.test\.js[\s\S]*test\/toriiSubscriptions\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
-    "Kagemusha JavaScript SDK runner must exercise recursive spend, address exactness, Nexus wallet signature exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, Torii canonical auth/subscription/Connect WebSocket/ISO alias exactness, verifier-key exactness, identifier receipt exactness, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
+    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives\|privacy algorithm JS catalogs reject malformed internal review evidence\|fromAccount rejects control and Unicode-confusable curve algorithm aliases\|offline cash configuration snapshot requires cached issuer key and ABI\|canonical request signing: rejects padded auth fields\|streamEvents rejects unsupported production backend event filters before fetch\|streamEvents rejects malformed verifying key event names before fetch\|streamEvents rejects malformed proof event hashes before fetch\|ZK-ACE verifier-key references reject padded selector metadata\|privacy proof envelopes preserve pending production backend tags\|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations\|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags\|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend\|verifyIdentifierResolutionReceipt matches shared receipt vectors\|NexusAppClient rejects non-Ed25519 wallet signatures\|NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags\|ToriiClient attaches canonical signing headers for app endpoints\|ToriiClient canonical auth uses raw Node transport for UTF-8 account headers\|ToriiClient canonical auth rejects UTF-8 account headers when no supported transport is available\|ToriiClient canonical auth rejects non-byte private key arrays\|subscription plan and create endpoints send normalized payloads\|subscription action endpoints send normalized payloads\|getSubscription returns null on 404\|buildConnectWebSocketUrl rejects token query parameters\|buildConnectWebSocketUrl rejects endpoint host overrides\|buildConnectWebSocketUrl rejects endpoint protocol mismatches\|openConnectWebSocket injects Sec-WebSocket-Protocol when headers are unavailable\|openConnectWebSocket emits telemetry when allowInsecure is used\|resolveAliasByIndex enforces non-negative indices before issuing requests\|resolveAlias attaches canonical auth when provided\|lookupAliasesByAccount validates options before issuing requests[\s\S]*test\/address\.test\.js[\s\S]*test\/canonicalRequest\.test\.js[\s\S]*test\/connectWebSocket\.test\.js[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/instructionBuilders\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/nexusAppClient\.test\.js[\s\S]*test\/offlineCashLifecycle\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyCatalogParity\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/toriiCanonicalAuth\.test\.js[\s\S]*test\/toriiClient\.identifier\.test\.js[\s\S]*test\/toriiClient\.isoAlias\.test\.js[\s\S]*test\/toriiClient\.test\.js[\s\S]*test\/toriiSubscriptions\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
+    "Kagemusha JavaScript SDK runner must exercise recursive spend, address exactness, Nexus wallet signature exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, Torii canonical auth/subscription/Connect WebSocket/ISO alias exactness, verifier-key exactness, identifier receipt exactness, privacy catalog, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
   );
 });

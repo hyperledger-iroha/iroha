@@ -101,6 +101,8 @@ ANDROID_SLOT_RELEASE_KAGEMUSHA_FIELDS = frozenset(
         "device_fingerprint_sha256",
         "attestation_challenge_sha256",
         "d2d_payment_transport",
+        "d2d_payment_transports",
+        "d2d_payment_transcripts",
         *(source_key for source_key, _ in ANDROID_SIGNED_EVIDENCE_SUMMARY_FIELDS),
     )
 )
@@ -3251,6 +3253,20 @@ def _android_report_d2d_payment_transport(report: dict[str, Any]) -> str | None:
     return None
 
 
+def _android_report_d2d_payment_transports(report: dict[str, Any]) -> list[str]:
+    """Return all canonical offline D2D payment transports from a sanitized report."""
+
+    kagemusha = _android_report_kagemusha(report)
+    transports = kagemusha.get("d2d_payment_transports")
+    if isinstance(transports, list) and all(
+        isinstance(transport, str) and transport in device_lab.D2D_PAYMENT_TRANSPORTS
+        for transport in transports
+    ):
+        return sorted(set(transports))
+    transport = _android_report_d2d_payment_transport(report)
+    return [transport] if transport is not None else []
+
+
 def _check_android_signed_evidence_freshness(
     reports: list[dict[str, Any]],
     min_signed_at: dt.datetime | None,
@@ -3838,10 +3854,9 @@ def check_android_device_lab(
         {
             transport
             for report in reports
-            for transport in [_android_report_d2d_payment_transport(report)]
+            for transport in _android_report_d2d_payment_transports(report)
             if report.get("status") == "ok"
             and _android_report_has_complete_signed_evidence(report, signed_evidence)
-            and transport is not None
         }
     )
     missing_transports = [

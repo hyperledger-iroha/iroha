@@ -31,6 +31,7 @@ DEFAULT_ATTESTATION_CHAIN_PATH = "attestation/keymint-certificate-chain.pem"
 DEFAULT_OFFLINE_WALLET_APK_PATH = "evidence/offline-wallet-release.apk"
 DEFAULT_D2D_TRANSCRIPT_PATH = "handoff/d2d-payment-transcript.json"
 DEFAULT_WALLET_TRANSCRIPT_PATH = "wallet/wallet-integrity-transcript.json"
+PRIMARY_D2D_PAYMENT_TRANSPORT = "nearby_offline"
 ATTESTATION_REPORT_DEVICE_FINGERPRINT_MISMATCH = (
     "attestation/report.json device_fingerprint must match device identity"
 )
@@ -626,6 +627,37 @@ def _require_metadata_sha256(value: Any, label: str) -> str:
     return value
 
 
+def _d2d_payment_transcript_relative_path(transport: str) -> str:
+    if transport == PRIMARY_D2D_PAYMENT_TRANSPORT:
+        return DEFAULT_D2D_TRANSCRIPT_PATH
+    return f"handoff/d2d-payment-{transport}-transcript.json"
+
+
+def _normalise_d2d_payment_transcripts_metadata(
+    d2d_payment_transcripts: dict[str, dict[str, str]] | None,
+) -> dict[str, dict[str, str]] | None:
+    if d2d_payment_transcripts is None:
+        return None
+    normalised: dict[str, dict[str, str]] = {}
+    for transport, entry in sorted(d2d_payment_transcripts.items()):
+        if transport not in device_lab.D2D_PAYMENT_TRANSPORTS:
+            raise ValueError(
+                "d2d_payment_transcripts transport must be one of "
+                f"{sorted(device_lab.D2D_PAYMENT_TRANSPORTS)}"
+            )
+        path = entry.get("path")
+        if not isinstance(path, str) or not path:
+            raise ValueError("d2d_payment_transcripts path must be a non-empty string")
+        normalised[transport] = {
+            "path": path,
+            "sha256": _require_metadata_sha256(
+                entry.get("sha256"),
+                f"d2d_payment_transcripts[{transport}].sha256",
+            ),
+        }
+    return normalised
+
+
 def _require_source_true(
     payload: dict[str, Any],
     key: str,
@@ -995,6 +1027,7 @@ def build_slot_metadata(
     wallet_integrity_transcript: dict[str, Any],
     wallet_integrity_transcript_sha256: str,
     raw_test_commands: list[str],
+    d2d_payment_transcripts: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     app_package_name = attestation_result.get("app_package_name") or DEFAULT_APP_PACKAGE_NAME
     source_digests: dict[str, str] = {}
@@ -1025,7 +1058,10 @@ def build_slot_metadata(
             "wallet_integrity_transcript_sha256",
         ),
     }
-    return {
+    transcript_bindings = _normalise_d2d_payment_transcripts_metadata(
+        d2d_payment_transcripts
+    )
+    metadata = {
         "schema": "iroha.android.device_lab.kagemusha.v1",
         "slot_id": slot_id,
         "device_family": family,
@@ -1075,6 +1111,39 @@ def build_slot_metadata(
         "signed_evidence_artifact_sha256": "0" * 64,
         "raw_test_commands": raw_test_commands,
     }
+    if transcript_bindings is not None:
+        metadata[device_lab.D2D_PAYMENT_TRANSCRIPTS_FIELD] = transcript_bindings
+    return metadata
+
+
+def validate_d2d_payment_transcript_source_claims(
+    d2d_payment_transcript: dict[str, Any],
+    label: str,
+    errors: list[str],
+) -> str | None:
+    for field in sorted(
+        set(d2d_payment_transcript) - device_lab.D2D_PAYMENT_TRANSCRIPT_FIELDS
+    ):
+        errors.append(
+            f"{label} contains unexpected field {device_lab._display_path(field)}"
+        )
+    d2d_schema = d2d_payment_transcript.get("schema")
+    if d2d_schema != device_lab.D2D_PAYMENT_TRANSCRIPT_SCHEMA:
+        errors.append(
+            f"{label} schema must be {device_lab.D2D_PAYMENT_TRANSCRIPT_SCHEMA}"
+        )
+    transport = _require_source_string(
+        d2d_payment_transcript,
+        "transport",
+        label,
+        errors,
+    )
+    if transport is not None and transport not in device_lab.D2D_PAYMENT_TRANSPORTS:
+        errors.append(
+            f"{label} transport must be one of {sorted(device_lab.D2D_PAYMENT_TRANSPORTS)}"
+        )
+        return None
+    return transport
 
 
 def validate_slot_source_claims(
@@ -1082,9 +1151,10 @@ def validate_slot_source_claims(
     attestation_result: dict[str, Any],
     attestation_report: dict[str, Any],
     d2d_payment_transcript: dict[str, Any],
+    extra_d2d_payment_transcripts: dict[str, dict[str, Any]] | None = None,
     wallet_integrity_transcript: dict[str, Any],
     errors: list[str],
-) -> None:
+) -> str | None:
     for field in sorted(set(attestation_result) - device_lab.ATTESTATION_RESULT_FIELDS):
         errors.append(
             "attestation/result.json contains unexpected field "
@@ -1102,25 +1172,27 @@ def validate_slot_source_claims(
         )
     _require_source_string(attestation_report, "verifier", "attestation/report.json", errors)
     for field in sorted(
-        set(d2d_payment_transcript) - device_lab.D2D_PAYMENT_TRANSCRIPT_FIELDS
-    ):
-        errors.append(
-            "d2d payment transcript contains unexpected field "
-            f"{device_lab._display_path(field)}"
-        )
-    for field in sorted(
         set(wallet_integrity_transcript) - device_lab.WALLET_INTEGRITY_TRANSCRIPT_FIELDS
     ):
         errors.append(
             "wallet integrity transcript contains unexpected field "
             f"{device_lab._display_path(field)}"
         )
-    d2d_schema = d2d_payment_transcript.get("schema")
-    if d2d_schema != device_lab.D2D_PAYMENT_TRANSCRIPT_SCHEMA:
-        errors.append(
-            "d2d payment transcript schema must be "
-            f"{device_lab.D2D_PAYMENT_TRANSCRIPT_SCHEMA}"
+    primary_transport = validate_d2d_payment_transcript_source_claims(
+        d2d_payment_transcript,
+        "d2d payment transcript",
+        errors,
+    )
+    for transport, transcript in sorted((extra_d2d_payment_transcripts or {}).items()):
+        transcript_transport = validate_d2d_payment_transcript_source_claims(
+            transcript,
+            f"d2d payment transcript {transport}",
+            errors,
         )
+        if transcript_transport is not None and transcript_transport != transport:
+            errors.append(
+                f"d2d payment transcript {transport} transport must match {transport}"
+            )
     wallet_schema = wallet_integrity_transcript.get("schema")
     if wallet_schema != device_lab.WALLET_INTEGRITY_TRANSCRIPT_SCHEMA:
         errors.append(
@@ -1276,6 +1348,43 @@ def validate_slot_source_claims(
     )
     if wallet_integrity_transcript.get("rollback_rejection_passed") is not True:
         errors.append(WALLET_ROLLBACK_REQUIRED)
+    return primary_transport
+
+
+def parse_d2d_payment_transcript_extra_specs(
+    specs: list[str] | tuple[str, ...] | None,
+    errors: list[str],
+) -> dict[str, Path]:
+    """Parse operator-supplied D2D transcript extras keyed by transport."""
+
+    parsed: dict[str, Path] = {}
+    for spec in specs or ():
+        if not isinstance(spec, str) or not spec:
+            errors.append("D2D payment transcript extra must be transport=path")
+            continue
+        if "=" not in spec:
+            errors.append("D2D payment transcript extra must be transport=path")
+            continue
+        transport, raw_path = spec.split("=", 1)
+        if transport not in device_lab.D2D_PAYMENT_TRANSPORTS:
+            errors.append(
+                "D2D payment transcript extra transport must be one of "
+                f"{sorted(device_lab.D2D_PAYMENT_TRANSPORTS)}"
+            )
+            continue
+        if transport == PRIMARY_D2D_PAYMENT_TRANSPORT:
+            errors.append(
+                f"D2D payment transcript extra must not override {PRIMARY_D2D_PAYMENT_TRANSPORT}"
+            )
+            continue
+        if transport in parsed:
+            errors.append(f"D2D payment transcript extra {transport} is duplicated")
+            continue
+        if not raw_path:
+            errors.append("D2D payment transcript extra path must be non-empty")
+            continue
+        parsed[transport] = Path(raw_path)
+    return parsed
 
 
 def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]]:
@@ -1367,6 +1476,19 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         return 1, None, errors
 
     d2d = _load_source_json(args.d2d_payment_transcript, "D2D payment transcript", errors)
+    extra_d2d_specs = parse_d2d_payment_transcript_extra_specs(
+        args.d2d_payment_transcript_extra,
+        errors,
+    )
+    extra_d2d: dict[str, dict[str, Any]] = {}
+    for transport, source_path in sorted(extra_d2d_specs.items()):
+        loaded = _load_source_json(
+            source_path,
+            f"D2D payment transcript {transport}",
+            errors,
+        )
+        if loaded is not None:
+            extra_d2d[transport] = loaded
     wallet = _load_source_json(
         args.wallet_integrity_transcript,
         "wallet integrity transcript",
@@ -1375,10 +1497,11 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
     if d2d is None or wallet is None:
         return 1, None, errors
 
-    validate_slot_source_claims(
+    primary_d2d_transport = validate_slot_source_claims(
         attestation_result=result,
         attestation_report=report,
         d2d_payment_transcript=d2d,
+        extra_d2d_payment_transcripts=extra_d2d,
         wallet_integrity_transcript=wallet,
         errors=errors,
     )
@@ -1448,6 +1571,25 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
             label="D2D payment transcript source",
             errors=errors,
         )
+        d2d_transcript_bindings: dict[str, dict[str, str]] = {}
+        if primary_d2d_transport is not None and d2d_digest is not None:
+            d2d_transcript_bindings[primary_d2d_transport] = {
+                "path": DEFAULT_D2D_TRANSCRIPT_PATH,
+                "sha256": d2d_digest,
+            }
+        for transport, source_path in sorted(extra_d2d_specs.items()):
+            relative = _d2d_payment_transcript_relative_path(transport)
+            extra_digest = _copy_source_file(
+                source=source_path,
+                destination=stage_slot / relative,
+                label=f"D2D payment transcript {transport} source",
+                errors=errors,
+            )
+            if extra_digest is not None:
+                d2d_transcript_bindings[transport] = {
+                    "path": relative,
+                    "sha256": extra_digest,
+                }
         wallet_digest = _copy_source_file(
             source=args.wallet_integrity_transcript,
             destination=stage_slot / DEFAULT_WALLET_TRANSCRIPT_PATH,
@@ -1569,12 +1711,15 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
             wallet_integrity_transcript=wallet,
             wallet_integrity_transcript_sha256=wallet_digest,
             raw_test_commands=list(device_lab.KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS),
+            d2d_payment_transcripts=d2d_transcript_bindings,
         )
-        device_lab.validate_d2d_payment_transcript(
+        device_lab.validate_d2d_payment_transcripts_binding(
             stage_slot,
-            stage_slot / DEFAULT_D2D_TRANSCRIPT_PATH,
             metadata,
             errors,
+            primary_relative=DEFAULT_D2D_TRANSCRIPT_PATH,
+            primary_digest=d2d_digest,
+            primary_transport=primary_d2d_transport,
         )
         device_lab.validate_wallet_integrity_transcript(
             stage_slot / DEFAULT_WALLET_TRANSCRIPT_PATH,
@@ -1675,6 +1820,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--attestation-certificate-chain", type=Path, required=True)
     parser.add_argument("--offline-wallet-apk", type=Path, required=True)
     parser.add_argument("--d2d-payment-transcript", type=Path, required=True)
+    parser.add_argument(
+        "--d2d-payment-transcript-extra",
+        action="append",
+        default=[],
+        help=(
+            "Additional D2D transcript as transport=path. Use nfc_hce=... and "
+            "qr=... for the production offline-offline matrix."
+        ),
+    )
     parser.add_argument("--wallet-integrity-transcript", type=Path, required=True)
     parser.add_argument("--telemetry-json", type=Path, required=True)
     parser.add_argument("--status-ndjson", type=Path, required=True)

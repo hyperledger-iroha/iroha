@@ -83,6 +83,15 @@ PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS = frozenset(
         "restart_replay_rejection_hash",
         "state_recovery_passed",
         "state_recovery_hash",
+        "lifecycle_passed",
+        "lifecycle_shield_tx_hash",
+        "lifecycle_hop_proof_hash",
+        "lifecycle_recursive_init_hash",
+        "lifecycle_recursive_init_verify_hash",
+        "lifecycle_recursive_append_hash",
+        "lifecycle_recursive_append_verify_hash",
+        "lifecycle_unshield_proof_hash",
+        "lifecycle_redeem_tx_hash",
     )
 )
 PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = (
@@ -3016,7 +3025,12 @@ def _privacy_evidence_hash_uri(value: Any) -> str:
         digest = text.removeprefix("hash://sha256/")
     else:
         return ""
-    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+    if (
+        len(digest) != 64
+        or any(char not in "0123456789abcdef" for char in digest)
+        or digest == "0" * 64
+        or len(set(digest)) == 1
+    ):
         return ""
     return text
 
@@ -3024,7 +3038,7 @@ def _privacy_evidence_hash_uri(value: Any) -> str:
 def _privacy_evidence_artifact(value: Any) -> dict[str, str] | None:
     if not isinstance(value, Mapping) or set(value) != PRIVACY_PRODUCTION_GATE_ARTIFACT_KEYS:
         return None
-    label = _privacy_evidence_text_value(value.get("label"), limit=160)
+    label = _privacy_evidence_artifact_label(value.get("label"))
     uri = _privacy_evidence_hash_uri(value.get("uri"))
     if not label or not uri:
         return None
@@ -3034,7 +3048,7 @@ def _privacy_evidence_artifact(value: Any) -> dict[str, str] | None:
 def _privacy_evidence_review_artifact(value: Any) -> dict[str, str] | None:
     if not isinstance(value, Mapping) or set(value) != PRIVACY_PRODUCTION_REVIEW_ARTIFACT_KEYS:
         return None
-    label = _privacy_evidence_text_value(value.get("label"), limit=160)
+    label = _privacy_evidence_artifact_label(value.get("label"))
     uri = _privacy_evidence_hash_uri(value.get("uri"))
     signature = _privacy_evidence_text_value(value.get("signature"), limit=160)
     signature_body = signature.removeprefix(
@@ -3046,6 +3060,8 @@ def _privacy_evidence_review_artifact(value: Any) -> dict[str, str] | None:
         not signature.startswith(PRIVACY_PRODUCTION_REVIEW_ARTIFACT_SIGNATURE_PREFIX)
         or len(signature_body) != 128
         or any(char not in "0123456789abcdef" for char in signature_body)
+        or signature_body == "0" * 128
+        or len(set(signature_body)) == 1
     ):
         return None
     return {"label": label, "uri": uri, "signature": signature}
@@ -3276,6 +3292,45 @@ def _privacy_evidence_localnet_peer_id(value: Any) -> str:
     return text
 
 
+def _privacy_evidence_reviewer_identity(value: Any) -> str:
+    text = _privacy_evidence_text_value(value, limit=160)
+    compact = "".join(
+        char for char in text.lower()
+        if char in "abcdefghijklmnopqrstuvwxyz0123456789"
+    )
+    if (
+        not text
+        or _entrypoint_is_dev_fixture(text)
+        or "placeholder" in compact
+        or ".." in text
+        or any(
+            not (
+                char.isascii()
+                and (char.isalnum() or char in {"_", ".", ":", "-", "@"})
+            )
+            for char in text
+        )
+    ):
+        return ""
+    return text
+
+
+def _privacy_evidence_artifact_label(value: Any) -> str:
+    text = _privacy_evidence_text_value(value, limit=160)
+    compact = "".join(
+        char for char in text.lower()
+        if char in "abcdefghijklmnopqrstuvwxyz0123456789"
+    )
+    if (
+        not text
+        or _entrypoint_is_dev_fixture(text)
+        or "placeholder" in compact
+        or ".." in text
+    ):
+        return ""
+    return text
+
+
 def _privacy_evidence_localnet_run_id(value: Any) -> str:
     text = _privacy_evidence_text_value(value, limit=160)
     compact = text.replace("_", "-").lower()
@@ -3336,11 +3391,43 @@ def _privacy_evidence_localnet_acceptance(
         value.get("restart_replay_rejection_hash")
     )
     state_recovery_hash = _privacy_evidence_hash_uri(value.get("state_recovery_hash"))
+    lifecycle_shield_tx_hash = _privacy_evidence_hash_uri(
+        value.get("lifecycle_shield_tx_hash")
+    )
+    lifecycle_hop_proof_hash = _privacy_evidence_hash_uri(
+        value.get("lifecycle_hop_proof_hash")
+    )
+    lifecycle_recursive_init_hash = _privacy_evidence_hash_uri(
+        value.get("lifecycle_recursive_init_hash")
+    )
+    lifecycle_recursive_init_verify_hash = _privacy_evidence_hash_uri(
+        value.get("lifecycle_recursive_init_verify_hash")
+    )
+    lifecycle_recursive_append_hash = _privacy_evidence_hash_uri(
+        value.get("lifecycle_recursive_append_hash")
+    )
+    lifecycle_recursive_append_verify_hash = _privacy_evidence_hash_uri(
+        value.get("lifecycle_recursive_append_verify_hash")
+    )
+    lifecycle_unshield_proof_hash = _privacy_evidence_hash_uri(
+        value.get("lifecycle_unshield_proof_hash")
+    )
+    lifecycle_redeem_tx_hash = _privacy_evidence_hash_uri(
+        value.get("lifecycle_redeem_tx_hash")
+    )
     localnet_artifact_hashes = (
         smoke_tx_hash,
         replay_rejection_hash,
         restart_replay_rejection_hash,
         state_recovery_hash,
+        lifecycle_shield_tx_hash,
+        lifecycle_hop_proof_hash,
+        lifecycle_recursive_init_hash,
+        lifecycle_recursive_init_verify_hash,
+        lifecycle_recursive_append_hash,
+        lifecycle_recursive_append_verify_hash,
+        lifecycle_unshield_proof_hash,
+        lifecycle_redeem_tx_hash,
     )
     if (
         run_id != localnet_run_id
@@ -3361,6 +3448,7 @@ def _privacy_evidence_localnet_acceptance(
         "restart_persistence_checked",
         "restart_replay_rejected",
         "state_recovery_passed",
+        "lifecycle_passed",
     )
     if any(value.get(key) is not True for key in required_booleans):
         return None
@@ -3374,6 +3462,14 @@ def _privacy_evidence_localnet_acceptance(
         "replay_rejection_hash": replay_rejection_hash,
         "restart_replay_rejection_hash": restart_replay_rejection_hash,
         "state_recovery_hash": state_recovery_hash,
+        "lifecycle_shield_tx_hash": lifecycle_shield_tx_hash,
+        "lifecycle_hop_proof_hash": lifecycle_hop_proof_hash,
+        "lifecycle_recursive_init_hash": lifecycle_recursive_init_hash,
+        "lifecycle_recursive_init_verify_hash": lifecycle_recursive_init_verify_hash,
+        "lifecycle_recursive_append_hash": lifecycle_recursive_append_hash,
+        "lifecycle_recursive_append_verify_hash": lifecycle_recursive_append_verify_hash,
+        "lifecycle_unshield_proof_hash": lifecycle_unshield_proof_hash,
+        "lifecycle_redeem_tx_hash": lifecycle_redeem_tx_hash,
         **{key: True for key in required_booleans},
     }
 
@@ -3433,6 +3529,8 @@ def _privacy_production_evidence_rows(value: Any) -> dict[str, dict[str, Any]]:
             row.pop("id", None)
         elif keys != PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS:
             continue
+        if row_id in rows:
+            return {}
         rows[row_id] = row
     return rows
 
@@ -3468,9 +3566,8 @@ def _privacy_trusted_production_evidence(
         )
     ):
         return None
-    reviewer_identity = _privacy_evidence_text_value(
+    reviewer_identity = _privacy_evidence_reviewer_identity(
         source.get("reviewer_identity"),
-        limit=160,
     )
     localnet_run_id = _privacy_evidence_localnet_run_id(
         source.get("localnet_run_id"),

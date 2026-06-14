@@ -49,6 +49,22 @@ on:
       - "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift"
       - "IrohaSwift/Sources/IrohaSwift/Crypto.swift"
       - "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectAsyncSequence.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectClient.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectCodec.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectCrypto.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectEnvelope.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectEnvelopeCodec.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectError.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectEvents.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectFlowControl.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectFrames.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectKeyStore.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectQueueDiagnostics.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectQueueJournal.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectReplayRecorder.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectRetryPolicy.swift"
+      - "IrohaSwift/Sources/IrohaSwift/ConnectSession.swift"
       - "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
       - "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift"
       - "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift"
@@ -96,6 +112,26 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectClientTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectCryptoTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectEnvelopeCodecTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectEnvelopeTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectErrorTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectEventsTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectFixtureLoader.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectFixtureLoaderTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectFlowControlTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectFramesTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectKeyStoreTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectQueueDiagnosticsTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectQueueJournalTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectReplayRecorderTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectRetryPolicyTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionBalanceTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionEventStreamTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ConnectTestUtilities.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift"
@@ -596,6 +632,7 @@ on:
       - "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"
       - "javascript/iroha_js/test/offlineCashLifecycle.test.js"
       - "javascript/iroha_js/test/package_dist.test.js"
+      - "javascript/iroha_js/test/privacyCatalogParity.test.js"
       - "javascript/iroha_js/test/privacyNative.test.js"
       - "javascript/iroha_js/test/toriiCanonicalAuth.test.js"
       - "javascript/iroha_js/test/toriiClient.identifier.test.js"
@@ -604,9 +641,11 @@ on:
       - "javascript/iroha_js/test/toriiClient.test.js"
       - "javascript/iroha_js/test/toriiSubscriptions.test.js"
       - "python/iroha_python/src/iroha_python/__init__.py"
+      - "python/iroha_python/src/iroha_python/_native.py"
       - "python/iroha_python/src/iroha_python/_privacy_backends.py"
       - "python/iroha_python/src/iroha_python/address.py"
       - "python/iroha_python/src/iroha_python/client.py"
+      - "python/iroha_python/src/iroha_python/connect.py"
       - "python/iroha_python/src/iroha_python/crypto.py"
       - "python/iroha_python/src/iroha_python/event_filter.py"
       - "python/iroha_python/src/iroha_python/kagemusha.py"
@@ -620,6 +659,7 @@ on:
       - "python/iroha_python/tests/privacy_catalog_test.py"
       - "python/iroha_python/tests/crypto_algorithms_test.py"
       - "python/iroha_python/tests/offline_cash_test.py"
+      - "python/iroha_python/tests/testconnect_codec.py"
       - "python/iroha_python/tests/test_address_format.py"
       - "python/iroha_torii_client/__init__.py"
       - "python/iroha_torii_client/client.py"
@@ -871,8 +911,11 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-venv-activation-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-bytecode-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-test-filter-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-connect-runner-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-connect-test-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-canonical-request-test-filter-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-identifier-receipt-test-filter-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-multisig-response-test-filter-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-proof-base64-guard
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-kind-exactness-guard
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-identifier-receipt-proof-base64-exactness-guard
@@ -914,6 +957,16 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-recursive-compact-shape-classifier
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-recursive-spend-native-output-headers
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-localnet-lifecycle-audit
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-localnet-lifecycle-catalog
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-zero-hash-evidence
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-repeated-hash-evidence
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-zero-signature-evidence
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-repeated-signature-evidence
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-reviewer-identity-evidence
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-artifact-label-evidence
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-duplicate-row-evidence
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-deterministic-test-artifact
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-merkle-provider-adversarial-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-torii-parser-shape-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-confidential-note-coverage
@@ -940,6 +993,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-runner-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-parse-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-parse-surface-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-connect-parse-surface-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-privacy-parse-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-torii-verifier-parse-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-workflow-inventory
@@ -1060,6 +1114,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-slot-id
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-incomplete-slot-coverage
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-transport-matrix
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-release-bundle-d2d-declaration-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-slot-summary-incomplete-kagemusha
           ci/check_kagemusha_production_readiness.sh --negative-control-android-duplicate-bindings-incomplete-slot-summary
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-abi6-probe-status-exactness

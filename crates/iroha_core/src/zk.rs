@@ -1968,7 +1968,16 @@ fn build_kagemusha_recursive_aggregation_semantic_vk_box_with_circuit_id(
 ) -> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K);
     let circuit = pasta_tiny::KagemushaRecursiveAggregationSemantic::default();
+    let started_at = std::time::Instant::now();
+    eprintln!(
+        "kagemusha recursive semantic vk keygen start circuit_id={circuit_id} k={}",
+        KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K
+    );
     let vk = halo2_backend::keygen_vk(&params, &circuit)?;
+    eprintln!(
+        "kagemusha recursive semantic vk keygen done circuit_id={circuit_id} elapsed_ms={}",
+        started_at.elapsed().as_millis()
+    );
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K);
     zk1::wrap_append_circuit_id(&mut bytes, circuit_id);
@@ -2660,7 +2669,18 @@ fn build_kagemusha_recursive_one_hop_verifier_slice_vk_box<const LEN: usize>(
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
     >::default();
+    let started_at = std::time::Instant::now();
+    eprintln!(
+        "kagemusha recursive one-hop vk keygen start circuit_id={circuit_id} len={LEN} k={} windows={} window_bits={}",
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
+    );
     let vk = halo2_backend::keygen_vk(&params, &circuit)?;
+    eprintln!(
+        "kagemusha recursive one-hop vk keygen done circuit_id={circuit_id} len={LEN} elapsed_ms={}",
+        started_at.elapsed().as_millis()
+    );
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
     zk1::wrap_append_circuit_id(&mut bytes, circuit_id);
@@ -2733,7 +2753,18 @@ fn build_kagemusha_recursive_append_verifier_slice_vk_box<const LEN: usize>(
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
     >::default();
+    let started_at = std::time::Instant::now();
+    eprintln!(
+        "kagemusha recursive append vk keygen start circuit_id={circuit_id} len={LEN} k={} windows={} window_bits={}",
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+        KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
+    );
     let vk = halo2_backend::keygen_vk(&params, &circuit)?;
+    eprintln!(
+        "kagemusha recursive append vk keygen done circuit_id={circuit_id} len={LEN} elapsed_ms={}",
+        started_at.elapsed().as_millis()
+    );
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
     zk1::wrap_append_circuit_id(&mut bytes, circuit_id);
@@ -53575,69 +53606,46 @@ mod pasta_tiny {
         config: NonNativeVestaIpaVerifierNativeScalarConfig,
         mut layouter: impl Layouter<Scalar>,
     ) -> Result<(), PlonkError> {
-        let rounds = ipa_power_of_two_rounds(LEN).ok_or(PlonkError::Synthesis)?;
-        let transcript_round_values = vec![Scalar::from(0); rounds];
-        let transcript_round_states = vec![Scalar::from(0); rounds + 1];
-        let scalar_witness = NativePastaFpScalar::default();
+        ipa_power_of_two_rounds(LEN).ok_or(PlonkError::Synthesis)?;
         layouter.assign_region(
             || "non_native_vesta_ipa_verifier_native_scalar",
             |mut region| {
                 config.link.enable(&mut region, 0)?;
 
-                assign_native_pasta_fp_ipa_transcript_binding_region(
+                enable_native_pasta_fp_ipa_transcript_binding_keygen_region(
                     &mut region,
                     &config.transcript_binding,
-                    Scalar::from(0),
-                    &transcript_round_values,
-                    &transcript_round_values,
-                    &transcript_round_values,
-                    Scalar::from(0),
-                    Scalar::from(0),
-                    &transcript_round_states,
                 )?;
 
                 let final_b_layer = config.b_reduction.vectors.len().saturating_sub(1);
                 for (layer_index, config_layer) in config.b_reduction.vectors.iter().enumerate() {
                     let expose_public = layer_index == 0 || layer_index == final_b_layer;
                     for scalar_config in config_layer {
-                        assign_native_pasta_fp_scalar_region(
+                        enable_native_pasta_fp_scalar_keygen_region(
                             &mut region,
                             scalar_config,
-                            &scalar_witness,
                             expose_public,
                         )?;
                     }
                 }
                 for scalar_config in &config.b_reduction.challenges {
-                    assign_native_pasta_fp_scalar_region(
-                        &mut region,
-                        scalar_config,
-                        &scalar_witness,
-                        true,
-                    )?;
+                    enable_native_pasta_fp_scalar_keygen_region(&mut region, scalar_config, true)?;
                 }
                 for scalar_config in &config.b_reduction.challenge_inverses {
-                    assign_native_pasta_fp_scalar_region(
-                        &mut region,
-                        scalar_config,
-                        &scalar_witness,
-                        true,
-                    )?;
+                    enable_native_pasta_fp_scalar_keygen_region(&mut region, scalar_config, true)?;
                 }
                 config.b_reduction.link.enable(&mut region, 0)?;
 
                 for round_config in &config.round_accumulators {
                     round_config.link.enable(&mut region, 0)?;
-                    assign_native_pasta_fp_scalar_region(
+                    enable_native_pasta_fp_scalar_keygen_region(
                         &mut region,
                         &round_config.challenge,
-                        &scalar_witness,
                         false,
                     )?;
-                    assign_native_pasta_fp_scalar_region(
+                    enable_native_pasta_fp_scalar_keygen_region(
                         &mut region,
                         &round_config.challenge_inverse,
-                        &scalar_witness,
                         false,
                     )?;
                     assign_non_native_vesta_affine_windowed_msm_native_scalar_keygen_shape::<
@@ -53650,16 +53658,14 @@ mod pasta_tiny {
                 for config_round in &config.generator_folds {
                     for generator_config in config_round {
                         generator_config.link.enable(&mut region, 0)?;
-                        assign_native_pasta_fp_scalar_region(
+                        enable_native_pasta_fp_scalar_keygen_region(
                             &mut region,
                             &generator_config.challenge,
-                            &scalar_witness,
                             false,
                         )?;
-                        assign_native_pasta_fp_scalar_region(
+                        enable_native_pasta_fp_scalar_keygen_region(
                             &mut region,
                             &generator_config.challenge_inverse,
-                            &scalar_witness,
                             false,
                         )?;
                         assign_non_native_vesta_affine_windowed_msm_native_scalar_keygen_shape::<
@@ -53693,7 +53699,6 @@ mod pasta_tiny {
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaAffineWindowedMsmNativeScalarConfig,
     ) -> Result<(), PlonkError> {
-        let sum_witness = NonNativeVestaAffineCompleteAdd::default();
         config.link.enable(region, 0)?;
         for term_config in &config.term_muls {
             assign_non_native_vesta_affine_windowed_scalar_mul_native_scalar_keygen_shape::<
@@ -53702,7 +53707,7 @@ mod pasta_tiny {
             >(region, term_config)?;
         }
         for sum_config in &config.sum_adds {
-            assign_non_native_vesta_affine_complete_add_region(region, sum_config, &sum_witness)?;
+            enable_non_native_vesta_affine_complete_add_keygen_region(region, sum_config)?;
         }
         Ok(())
     }
@@ -53714,47 +53719,30 @@ mod pasta_tiny {
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaAffineWindowedScalarMulNativeScalarConfig,
     ) -> Result<(), PlonkError> {
-        let scalar_witness =
-            NativePastaFpFixedWindowDecomposition::<WINDOWS, WINDOW_BITS>::default();
-        let table_witness = NonNativeVestaAffineFixedWindowTable::<WINDOW_BITS>::default();
-        let selection_witness = NonNativeVestaAffineFixedWindowSelect::<WINDOW_BITS>::default();
-        let complete_add_witness = NonNativeVestaAffineCompleteAdd::default();
-
         config.link.enable(region, 0)?;
-        assign_native_pasta_fp_fixed_window_decomposition_region(
+        enable_native_pasta_fp_fixed_window_decomposition_keygen_region::<WINDOWS, WINDOW_BITS>(
             region,
             &config.scalar,
-            &scalar_witness,
         )?;
         for table_config in &config.tables {
-            assign_non_native_vesta_affine_fixed_window_table_region(
+            enable_non_native_vesta_affine_fixed_window_table_keygen_region::<WINDOW_BITS>(
                 region,
                 table_config,
-                &table_witness,
             )?;
         }
         for selection_config in &config.selections {
-            assign_non_native_vesta_affine_fixed_window_select_region(
+            enable_non_native_vesta_affine_fixed_window_select_keygen_region::<WINDOW_BITS>(
                 region,
                 selection_config,
-                &selection_witness,
             )?;
         }
         for transition_configs in &config.window_base_doubles {
             for double_config in transition_configs {
-                assign_non_native_vesta_affine_complete_add_region(
-                    region,
-                    double_config,
-                    &complete_add_witness,
-                )?;
+                enable_non_native_vesta_affine_complete_add_keygen_region(region, double_config)?;
             }
         }
         for sum_config in &config.sum_adds {
-            assign_non_native_vesta_affine_complete_add_region(
-                region,
-                sum_config,
-                &complete_add_witness,
-            )?;
+            enable_non_native_vesta_affine_complete_add_keygen_region(region, sum_config)?;
         }
         Ok(())
     }
@@ -53767,52 +53755,39 @@ mod pasta_tiny {
         config: NonNativeVestaIpaVerifierSharedTableNativeScalarConfig,
         mut layouter: impl Layouter<Scalar>,
     ) -> Result<(), PlonkError> {
-        let rounds = ipa_power_of_two_rounds(LEN).ok_or(PlonkError::Synthesis)?;
-        let transcript_round_values = vec![Scalar::from(0); rounds];
-        let transcript_round_states = vec![Scalar::from(0); rounds + 1];
-        let scalar_witness = NativePastaFpScalar::default();
+        ipa_power_of_two_rounds(LEN).ok_or(PlonkError::Synthesis)?;
         layouter.assign_region(
             || "non_native_vesta_ipa_verifier_shared_table_native_scalar",
             |mut region| {
                 config.link.enable(&mut region, 0)?;
 
-                assign_native_pasta_fp_ipa_transcript_binding_region(
+                enable_native_pasta_fp_ipa_transcript_binding_keygen_region(
                     &mut region,
                     &config.transcript_binding,
-                    Scalar::from(0),
-                    &transcript_round_values,
-                    &transcript_round_values,
-                    &transcript_round_values,
-                    Scalar::from(0),
-                    Scalar::from(0),
-                    &transcript_round_states,
                 )?;
 
                 let final_b_layer = config.b_reduction.vectors.len().saturating_sub(1);
                 for (layer_index, config_layer) in config.b_reduction.vectors.iter().enumerate() {
                     let expose_public = layer_index == 0 || layer_index == final_b_layer;
                     for scalar_config in config_layer {
-                        assign_native_pasta_fp_scalar_region(
+                        enable_native_pasta_fp_scalar_keygen_region(
                             &mut region,
                             scalar_config,
-                            &scalar_witness,
                             expose_public,
                         )?;
                     }
                 }
                 for scalar_config in &config.b_reduction.challenges {
-                    assign_native_pasta_fp_scalar_region(
+                    enable_native_pasta_fp_scalar_keygen_region(
                         &mut region,
                         scalar_config,
-                        &scalar_witness,
                         true,
                     )?;
                 }
                 for scalar_config in &config.b_reduction.challenge_inverses {
-                    assign_native_pasta_fp_scalar_region(
+                    enable_native_pasta_fp_scalar_keygen_region(
                         &mut region,
                         scalar_config,
-                        &scalar_witness,
                         true,
                     )?;
                 }
@@ -53820,16 +53795,14 @@ mod pasta_tiny {
 
                 for round_config in &config.round_accumulators {
                     round_config.link.enable(&mut region, 0)?;
-                    assign_native_pasta_fp_scalar_region(
+                    enable_native_pasta_fp_scalar_keygen_region(
                         &mut region,
                         &round_config.challenge,
-                        &scalar_witness,
                         false,
                     )?;
-                    assign_native_pasta_fp_scalar_region(
+                    enable_native_pasta_fp_scalar_keygen_region(
                         &mut region,
                         &round_config.challenge_inverse,
-                        &scalar_witness,
                         false,
                     )?;
                     assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_keygen_shape::<
@@ -53841,16 +53814,14 @@ mod pasta_tiny {
                 for config_round in &config.generator_folds {
                     for generator_config in config_round {
                         generator_config.link.enable(&mut region, 0)?;
-                        assign_native_pasta_fp_scalar_region(
+                        enable_native_pasta_fp_scalar_keygen_region(
                             &mut region,
                             &generator_config.challenge,
-                            &scalar_witness,
                             false,
                         )?;
-                        assign_native_pasta_fp_scalar_region(
+                        enable_native_pasta_fp_scalar_keygen_region(
                             &mut region,
                             &generator_config.challenge_inverse,
-                            &scalar_witness,
                             false,
                         )?;
                         assign_non_native_vesta_affine_windowed_msm_shared_table_native_scalar_keygen_shape::<
@@ -53880,7 +53851,6 @@ mod pasta_tiny {
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaAffineWindowedMsmSharedTableNativeScalarConfig,
     ) -> Result<(), PlonkError> {
-        let sum_witness = NonNativeVestaAffineCompleteAdd::default();
         config.link.enable(region, 0)?;
         for term_config in &config.term_muls {
             assign_non_native_vesta_affine_windowed_scalar_mul_shared_table_native_scalar_keygen_shape::<
@@ -53889,7 +53859,7 @@ mod pasta_tiny {
             >(region, term_config)?;
         }
         for sum_config in &config.sum_adds {
-            assign_non_native_vesta_affine_complete_add_region(region, sum_config, &sum_witness)?;
+            enable_non_native_vesta_affine_complete_add_keygen_region(region, sum_config)?;
         }
         Ok(())
     }
@@ -53901,48 +53871,29 @@ mod pasta_tiny {
         region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
         config: &NonNativeVestaAffineWindowedScalarMulSharedTableNativeScalarConfig,
     ) -> Result<(), PlonkError> {
-        let scalar_witness =
-            NativePastaFpFixedWindowDecomposition::<WINDOWS, WINDOW_BITS>::default();
-        let table_witness = NonNativeVestaAffineFixedWindowTable::<WINDOW_BITS>::default();
-        let selection_witness =
-            NonNativeVestaAffineFixedWindowSelectFromTable::<WINDOW_BITS>::default();
-        let complete_add_witness = NonNativeVestaAffineCompleteAdd::default();
-
         config.link.enable(region, 0)?;
-        assign_native_pasta_fp_fixed_window_decomposition_region(
+        enable_native_pasta_fp_fixed_window_decomposition_keygen_region::<WINDOWS, WINDOW_BITS>(
             region,
             &config.scalar,
-            &scalar_witness,
         )?;
         for table_config in &config.tables {
-            assign_non_native_vesta_affine_fixed_window_table_region(
+            enable_non_native_vesta_affine_fixed_window_table_keygen_region::<WINDOW_BITS>(
                 region,
                 table_config,
-                &table_witness,
             )?;
         }
         for selection_config in &config.selections {
-            assign_non_native_vesta_affine_fixed_window_select_from_table_region(
-                region,
-                selection_config,
-                &selection_witness,
-            )?;
+            enable_non_native_vesta_affine_fixed_window_select_from_table_keygen_region::<
+                WINDOW_BITS,
+            >(region, selection_config)?;
         }
         for transition_configs in &config.window_base_doubles {
             for double_config in transition_configs {
-                assign_non_native_vesta_affine_complete_add_region(
-                    region,
-                    double_config,
-                    &complete_add_witness,
-                )?;
+                enable_non_native_vesta_affine_complete_add_keygen_region(region, double_config)?;
             }
         }
         for sum_config in &config.sum_adds {
-            assign_non_native_vesta_affine_complete_add_region(
-                region,
-                sum_config,
-                &complete_add_witness,
-            )?;
+            enable_non_native_vesta_affine_complete_add_keygen_region(region, sum_config)?;
         }
         Ok(())
     }
@@ -63422,6 +63373,364 @@ mod pasta_tiny {
             crate::zk::assign_advice_compat(region, || label, column, 0, || Value::known(value))?;
         }
         Ok(())
+    }
+
+    fn enable_non_native_u64_limb_range_keygen_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeU64LimbRangeConfig,
+    ) -> Result<(), PlonkError> {
+        config.start.enable(region, 0)?;
+        config.finish.enable(region, NON_NATIVE_U64_LIMB_BITS)?;
+        for row in 0..NON_NATIVE_U64_LIMB_BITS {
+            config.step.enable(region, row)?;
+        }
+        Ok(())
+    }
+
+    fn enable_native_pasta_fp_scalar_keygen_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NativePastaFpScalarConfig,
+        expose_public: bool,
+    ) -> Result<(), PlonkError> {
+        if expose_public {
+            let public = config.public.as_ref().expect("public native scalar config");
+            public.expose.enable(region, 0)?;
+        }
+        config.bind.enable(region, 0)?;
+        config.subtract.enable(region, 0)?;
+        for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+            enable_non_native_u64_limb_range_keygen_region(region, &config.limbs[index])?;
+            enable_non_native_u64_limb_range_keygen_region(region, &config.slack_limbs[index])?;
+        }
+        Ok(())
+    }
+
+    fn enable_native_pasta_fp_fixed_window_decomposition_keygen_region<
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NativePastaFpFixedWindowDecompositionConfig,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        enable_native_pasta_fp_scalar_keygen_region(region, &config.scalar, false)
+    }
+
+    fn enable_native_pasta_fp_ipa_transcript_binding_keygen_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NativePastaFpIpaTranscriptBindingConfig,
+    ) -> Result<(), PlonkError> {
+        let rounds = config.round_projection_public.len();
+        for round_index in 0..rounds {
+            let base_row = round_index * 3;
+            config.compress.enable(region, base_row)?;
+            config.chain.enable(region, base_row)?;
+            config.round_projection_public[round_index].enable(region, base_row)?;
+            if round_index == 0 {
+                config.header_public.enable(region, base_row)?;
+            }
+
+            config.compress.enable(region, base_row + 1)?;
+            config.chain.enable(region, base_row + 1)?;
+            config.inverse.enable(region, base_row + 1)?;
+            config.challenge_public[round_index].enable(region, base_row + 1)?;
+
+            config.compress.enable(region, base_row + 2)?;
+            config.chain.enable(region, base_row + 2)?;
+            config.challenge_inverse_public[round_index].enable(region, base_row + 2)?;
+        }
+
+        let final_row = rounds * 3;
+        config.compress.enable(region, final_row)?;
+        config.final_projection_public.enable(region, final_row)?;
+        config.binding_digest_public.enable(region, final_row)?;
+        Ok(())
+    }
+
+    fn enable_non_native_vesta_fq_canonical_range_keygen_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaFqCanonicalRangeConfig,
+        expose_public: bool,
+    ) -> Result<(), PlonkError> {
+        if expose_public {
+            let public = config
+                .public
+                .as_ref()
+                .expect("public non-native range config");
+            public.expose.enable(region, 0)?;
+        }
+        config.subtract.enable(region, 0)?;
+        for index in 0..NON_NATIVE_PASTA_FIELD_LIMBS {
+            enable_non_native_u64_limb_range_keygen_region(region, &config.limbs[index])?;
+            enable_non_native_u64_limb_range_keygen_region(region, &config.slack_limbs[index])?;
+        }
+        Ok(())
+    }
+
+    fn enable_non_native_u128_range_keygen_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeU128RangeConfig,
+    ) -> Result<(), PlonkError> {
+        config.bind.enable(region, 0)?;
+        for limb_config in &config.limbs {
+            enable_non_native_u64_limb_range_keygen_region(region, limb_config)?;
+        }
+        Ok(())
+    }
+
+    fn enable_non_native_vesta_fq_add_keygen_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaFqAddConfig,
+        exposure: NonNativeVestaFqBinaryExposure,
+    ) -> Result<(), PlonkError> {
+        config.add.enable(region, 0)?;
+        enable_non_native_vesta_fq_canonical_range_keygen_region(
+            region,
+            &config.lhs,
+            exposure.lhs,
+        )?;
+        enable_non_native_vesta_fq_canonical_range_keygen_region(
+            region,
+            &config.rhs,
+            exposure.rhs,
+        )?;
+        enable_non_native_vesta_fq_canonical_range_keygen_region(
+            region,
+            &config.out,
+            exposure.out,
+        )?;
+        for sum_limb_config in &config.sum_limbs {
+            enable_non_native_u64_limb_range_keygen_region(region, sum_limb_config)?;
+        }
+        Ok(())
+    }
+
+    fn enable_non_native_vesta_fq_mul_keygen_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaFqMulConfig,
+        exposure: NonNativeVestaFqBinaryExposure,
+    ) -> Result<(), PlonkError> {
+        config.mul.enable(region, 0)?;
+        enable_non_native_vesta_fq_canonical_range_keygen_region(
+            region,
+            &config.lhs,
+            exposure.lhs,
+        )?;
+        enable_non_native_vesta_fq_canonical_range_keygen_region(
+            region,
+            &config.rhs,
+            exposure.rhs,
+        )?;
+        enable_non_native_vesta_fq_canonical_range_keygen_region(
+            region,
+            &config.out,
+            exposure.out,
+        )?;
+        enable_non_native_vesta_fq_canonical_range_keygen_region(region, &config.quotient, false)?;
+        for product_limb_config in &config.product_limbs {
+            enable_non_native_u64_limb_range_keygen_region(region, product_limb_config)?;
+        }
+        for carry_config in &config.product_carries {
+            enable_non_native_u128_range_keygen_region(region, carry_config)?;
+        }
+        for carry_config in &config.reduction_carries {
+            enable_non_native_u128_range_keygen_region(region, carry_config)?;
+        }
+        Ok(())
+    }
+
+    fn enable_non_native_vesta_affine_maybe_identity_keygen_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineMaybeIdentityConfig,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        let lhs_private_rhs_out = NonNativeVestaFqBinaryExposure {
+            lhs: config.public_coordinates,
+            rhs: false,
+            out: false,
+        };
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.x_squared,
+            lhs_private_rhs_out,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.y_squared,
+            lhs_private_rhs_out,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.x_cubed,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.rhs,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )
+    }
+
+    fn enable_non_native_vesta_affine_fixed_window_select_keygen_region<
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowSelectConfig,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        for point_config in &config.table {
+            enable_non_native_vesta_affine_maybe_identity_keygen_region(region, point_config)?;
+        }
+        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.selected)
+    }
+
+    fn enable_non_native_vesta_affine_fixed_window_select_from_table_keygen_region<
+        const WINDOW_BITS: usize,
+    >(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowSelectFromTableConfig,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.selected)
+    }
+
+    fn enable_non_native_vesta_affine_fixed_window_table_keygen_region<const WINDOW_BITS: usize>(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineFixedWindowTableConfig,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        for point_config in &config.table {
+            enable_non_native_vesta_affine_maybe_identity_keygen_region(region, point_config)?;
+        }
+        for add_config in &config.adds {
+            enable_non_native_vesta_affine_complete_add_keygen_region(region, add_config)?;
+        }
+        Ok(())
+    }
+
+    fn enable_non_native_vesta_affine_complete_add_keygen_region(
+        region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+        config: &NonNativeVestaAffineCompleteAddConfig,
+    ) -> Result<(), PlonkError> {
+        config.link.enable(region, 0)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.p)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.q)?;
+        enable_non_native_vesta_affine_maybe_identity_keygen_region(region, &config.r)?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.inverse_y_sum,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.distinct_x_delta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.distinct_y_delta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.distinct_lambda_times_x_delta,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.distinct_x_delta_inverse,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.distinct_lambda_squared,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.distinct_x3_plus_x1,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.distinct_x_sum_plus_x2,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.distinct_x3_plus_x_diff,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.distinct_lambda_times_x_diff,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.distinct_y3_plus_y1,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_y_denominator,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.double_x_squared,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_two_x_squared,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_three_x_squared,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.double_lambda_times_denominator,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.double_denominator_inverse,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.double_lambda_squared,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_x3_plus_x1,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_x_sum_plus_x1,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_x3_plus_x_diff,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_mul_keygen_region(
+            region,
+            &config.double_lambda_times_x_diff,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )?;
+        enable_non_native_vesta_fq_add_keygen_region(
+            region,
+            &config.double_y3_plus_y1,
+            NON_NATIVE_VESTA_FQ_BINARY_PRIVATE,
+        )
     }
 
     /// Config for conditional affine Vesta addition over point-or-identity encodings.

@@ -96,8 +96,10 @@ export PYTHONPATH="${ROOT_DIR}/python/iroha_python/src:${ROOT_DIR}/python/norito
   tests/crypto_algorithms_test.py \
   tests/test_nexus_app.py \
   tests/offline_cash_test.py \
+  tests/testconnect_codec.py \
   tests/test_address_format.py \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_canonical_request_auth_rejects_padded_fields_before_send" \
-  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_identifier_resolution_receipt_matches_shared_vectors"
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_identifier_resolution_receipt_matches_shared_vectors" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_propose_multisig_rejects_malformed_response_fields"
 "${VENV_DIR}/bin/python" -m pytest -q tests/client_ledger_helpers_test.py \
   -k "zk_event_filters_reject_unsupported_backends_before_request or zk_verifying_key_event_filters_reject_malformed_names_before_request or zk_proof_event_filters_reject_malformed_hashes_before_request or zk_raw_event_filters_reject_malformed_privacy_matchers_before_request or zk_raw_event_filters_canonicalize_privacy_matchers_before_request"

@@ -118,14 +118,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def create_complete_matrix(root: Path, signer: dict[str, Path | str]) -> None:
-    transports = sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS)
+    transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
     for index, family in enumerate(slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES):
+        slot_transports = transports if index == 0 else None
         slot_helpers.create_slot(
             root,
             f"slot-{index}",
             family,
             signer,
             d2d_payment_transport=transports[index % len(transports)],
+            d2d_payment_transports=slot_transports,
         )
 
 
@@ -873,6 +875,21 @@ def build_release_bundle_from_fixture(
     )
 
 
+def first_dynamic_d2d_release_bundle_artifact(
+    manifest: dict[str, Any],
+) -> tuple[str, str]:
+    for slot, artifacts in manifest["evidence"]["android_slot_artifacts"].items():
+        for artifact_kind in artifacts:
+            if (
+                release_bundle._android_d2d_transcript_artifact_transport(
+                    artifact_kind
+                )
+                is not None
+            ):
+                return slot, artifact_kind
+    raise AssertionError("fixture did not include dynamic D2D transcript artifacts")
+
+
 class KagemushaProductionReadinessTest(unittest.TestCase):
     def setUp(self) -> None:
         restore_path_type_method_shadows()
@@ -1186,7 +1203,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             fixture = create_ready_release_bundle_fixture(Path(temp))
             bundle_root = fixture["bundle_root"]
+            device_lab_root = fixture["device_lab_root"]
             assert isinstance(bundle_root, Path)
+            assert isinstance(device_lab_root, Path)
             out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
 
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
@@ -1242,6 +1261,38 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 compact_generator_log.read_bytes()
             ).hexdigest()
             expected_compact_generator_log_size = compact_generator_log.stat().st_size
+            expected_dynamic_d2d_artifacts_by_slot: dict[str, set[str]] = {}
+            expected_dynamic_d2d_bindings: dict[tuple[str, str], dict[str, object]] = {}
+            for slot_dir in sorted(device_lab_root.iterdir()):
+                if not slot_dir.is_dir():
+                    continue
+                metadata = json.loads(
+                    (slot_dir / "slot.json").read_text(encoding="utf-8")
+                )
+                d2d_transcripts = metadata.get("d2d_payment_transcripts", {})
+                if not isinstance(d2d_transcripts, dict):
+                    continue
+                primary_path = metadata["d2d_payment_transcript_path"]
+                for transport, binding in d2d_transcripts.items():
+                    if binding["path"] == primary_path:
+                        continue
+                    artifact_kind = release_bundle._android_d2d_transcript_artifact_kind(
+                        transport
+                    )
+                    expected_dynamic_d2d_artifacts_by_slot.setdefault(
+                        slot_dir.name,
+                        set(),
+                    ).add(artifact_kind)
+                    expected_dynamic_d2d_bindings[(slot_dir.name, artifact_kind)] = {
+                        "path": (
+                            f"artifacts/android/device_lab/{slot_dir.name}/"
+                            f"{binding['path']}"
+                        ),
+                        "sha256": binding["sha256"],
+                        "size_bytes": (
+                            device_lab_root / slot_dir.name / binding["path"]
+                        ).stat().st_size,
+                    }
 
         self.assertEqual(status, 0)
         self.assertTrue(manifest["ready"])
@@ -1356,16 +1407,21 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             set(manifest["evidence"]["android_slot_artifacts"]),
             set(manifest["android_device_lab"]["signed_evidence"]),
         )
+        observed_dynamic_d2d_artifacts = set()
         for slot, artifacts in manifest["evidence"]["android_slot_artifacts"].items():
             summary = manifest["android_device_lab"]["signed_evidence"][slot]
+            expected_artifacts = {
+                "offline_wallet_apk",
+                "d2d_payment_transcript",
+                "wallet_integrity_transcript",
+                "attestation_certificate_chain",
+            } | expected_dynamic_d2d_artifacts_by_slot.get(slot, set())
+            observed_dynamic_d2d_artifacts.update(
+                expected_dynamic_d2d_artifacts_by_slot.get(slot, set())
+            )
             self.assertEqual(
                 set(artifacts),
-                {
-                    "offline_wallet_apk",
-                    "d2d_payment_transcript",
-                    "wallet_integrity_transcript",
-                    "attestation_certificate_chain",
-                },
+                expected_artifacts,
             )
             self.assertEqual(
                 artifacts["offline_wallet_apk"]["path"],
@@ -1391,6 +1447,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 artifacts["d2d_payment_transcript"]["size_bytes"],
                 0,
             )
+            for artifact_kind in expected_dynamic_d2d_artifacts_by_slot.get(slot, set()):
+                self.assertEqual(
+                    artifacts[artifact_kind],
+                    expected_dynamic_d2d_bindings[(slot, artifact_kind)],
+                )
             self.assertEqual(
                 artifacts["wallet_integrity_transcript"]["path"],
                 (
@@ -1421,6 +1482,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 artifacts["attestation_certificate_chain"]["size_bytes"],
                 0,
             )
+        self.assertEqual(
+            observed_dynamic_d2d_artifacts,
+            {
+                release_bundle._android_d2d_transcript_artifact_kind("nfc_hce"),
+                release_bundle._android_d2d_transcript_artifact_kind("qr"),
+            },
+        )
 
     def test_kagemusha_release_bundle_rejects_malformed_android_ready_summary_lists(
         self,
@@ -1446,6 +1514,140 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("kagemusha_release_summary_android_list_shape", rendered)
         self.assertIn("kagemusha_release_summary_android_signer_sha256", rendered)
         self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_rejects_declared_d2d_transport_without_transcript(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(
+                entry
+                for entry in summary["android_device_lab"]["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            kagemusha = slot["kagemusha"]
+            missing_transport = kagemusha["d2d_payment_transports"][-1]
+            del kagemusha["d2d_payment_transcripts"][missing_transport]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transcripts",
+            rendered,
+        )
+        self.assertIn("exactly match declared transports", rendered)
+
+    def test_kagemusha_release_bundle_rejects_d2d_transport_list_without_transcript_map(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(
+                entry
+                for entry in summary["android_device_lab"]["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            del slot["kagemusha"]["d2d_payment_transcripts"]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transcripts",
+            rendered,
+        )
+        self.assertIn("transport list is declared", rendered)
+
+    def test_kagemusha_release_bundle_rejects_d2d_transport_list_missing_primary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(
+                entry
+                for entry in summary["android_device_lab"]["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            kagemusha = slot["kagemusha"]
+            primary_transport = kagemusha["d2d_payment_transport"]
+            kagemusha["d2d_payment_transports"] = [
+                transport
+                for transport in kagemusha["d2d_payment_transports"]
+                if transport != primary_transport
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transport",
+            rendered,
+        )
+        self.assertIn("include the primary transport", rendered)
+
+    def test_kagemusha_release_bundle_rejects_undeclared_d2d_transcript_transport(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(
+                entry
+                for entry in summary["android_device_lab"]["slots"]
+                if "d2d_payment_transports" not in entry["kagemusha"]
+            )
+            kagemusha = slot["kagemusha"]
+            primary_transport = kagemusha["d2d_payment_transport"]
+            extra_transport = next(
+                transport
+                for transport in readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS
+                if transport != primary_transport
+            )
+            primary_binding = {
+                "path": kagemusha["d2d_payment_transcript_path"],
+                "sha256": kagemusha["d2d_payment_transcript_sha256"],
+            }
+            kagemusha["d2d_payment_transcripts"] = {
+                primary_transport: dict(primary_binding),
+                extra_transport: dict(primary_binding),
+            }
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transcripts",
+            rendered,
+        )
+        self.assertIn("match the primary transport", rendered)
 
     def test_kagemusha_release_bundle_rejects_forged_android_summary_root(
         self,
@@ -2219,6 +2421,76 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 blocker.get("artifact") == "offline_wallet_apk"
                 for blocker in blockers
             )
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_missing_dynamic_d2d_transcript_artifact(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot, artifact_kind = first_dynamic_d2d_release_bundle_artifact(manifest)
+            del manifest["evidence"]["android_slot_artifacts"][slot][artifact_kind]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
+            rendered,
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_dynamic_d2d_transcript_digest_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot, artifact_kind = first_dynamic_d2d_release_bundle_artifact(manifest)
+            manifest["evidence"]["android_slot_artifacts"][slot][artifact_kind][
+                "sha256"
+            ] = "f" * 64
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
+            rendered,
         )
 
     def test_kagemusha_release_bundle_verify_existing_rejects_unsafe_android_slot_artifact_kind_without_leak(
@@ -10642,6 +10914,45 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             0,
         )
 
+    def test_multi_transport_d2d_slot_satisfies_transport_rollup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = slot_helpers.create_test_signer(Path(temp) / "keys")
+            lineage_evidence = create_lineage_proof_evidence(Path(temp) / "lineage")
+            transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
+            slot_helpers.create_slot(
+                root,
+                "slot-0",
+                slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+                d2d_payment_transport=transports[0],
+                d2d_payment_transports=transports,
+            )
+            trusted, errors = slot_helpers.device_lab.load_trusted_signer_public_keys(
+                [signer["public_key"]]
+            )
+            self.assertEqual(errors, [])
+
+            summary = readiness.build_summary(
+                repo_root=REPO_ROOT,
+                device_lab_root=root.resolve(),
+                lineage_proof_evidence_path=lineage_evidence.resolve(),
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(
+            summary["android_device_lab"]["covered_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertEqual(
+            summary["android_device_lab"]["missing_d2d_payment_transports"],
+            [],
+        )
+        self.assertNotIn(
+            "android_device_lab_d2d_transport_matrix_missing",
+            {item["code"] for item in summary["blockers"]},
+        )
+
     def test_duplicate_device_fingerprint_blocks_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
@@ -14833,6 +15144,135 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertTrue(result["ok"], result["blockers"])
         self.assertEqual(result["state"], "compact_key_artifacts_validated")
 
+    def test_compact_key_staged_finalizer_rejects_missing_publish_dir_under_symlinked_parent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            real_parent = root / "real-parent"
+            real_parent.mkdir()
+            linked_parent = root / "linked-parent"
+            slot_helpers.create_dir_symlink(self, linked_parent, real_parent)
+            artifact_dir = linked_parent / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--artifact-dir ancestor directory must not be a symlink",
+            stderr.getvalue(),
+        )
+        self.assertFalse((real_parent / "published").exists())
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
+    def test_compact_key_staged_finalizer_safe_mkdir_rejects_parent_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            parent = root / "parent"
+            parent.mkdir()
+            renamed_parent = root / "parent-original"
+            external = root / "external"
+            external.mkdir()
+            artifact_dir = parent / "published"
+            real_mkdir = compact_key_finalizer.os.mkdir
+            swapped = False
+
+            def swapping_mkdir(
+                path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> None:
+                nonlocal swapped
+                if path == "published" and dir_fd is not None and not swapped:
+                    parent.rename(renamed_parent)
+                    slot_helpers.create_dir_symlink(self, parent, external)
+                    swapped = True
+                real_mkdir(path, mode, dir_fd=dir_fd)
+
+            with mock.patch.object(compact_key_finalizer.os, "mkdir", swapping_mkdir):
+                errors = compact_key_finalizer._ensure_private_directory(
+                    artifact_dir,
+                    "--artifact-dir",
+                )
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["--artifact-dir ancestor directory must not be a symlink"],
+        )
+        self.assertFalse((external / "published").exists())
+        self.assertFalse(artifact_dir.exists())
+
+    def test_compact_key_staged_finalizer_main_rejects_parent_swap_during_publish_dir_create(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            parent = root / "parent"
+            parent.mkdir()
+            renamed_parent = root / "parent-original"
+            external = root / "external"
+            external.mkdir()
+            artifact_dir = parent / "published"
+            real_mkdir = compact_key_finalizer.os.mkdir
+            swapped = False
+
+            def swapping_mkdir(
+                path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> None:
+                nonlocal swapped
+                if path == "published" and dir_fd is not None and not swapped:
+                    parent.rename(renamed_parent)
+                    slot_helpers.create_dir_symlink(self, parent, external)
+                    swapped = True
+                real_mkdir(path, mode, dir_fd=dir_fd)
+
+            stderr = io.StringIO()
+            with mock.patch.object(compact_key_finalizer.os, "mkdir", swapping_mkdir):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = compact_key_finalizer.main(
+                        compact_key_finalizer_args(
+                            staged_artifact_dir=staged_artifact_dir,
+                            exit_file=exit_file,
+                            artifact_dir=artifact_dir,
+                        )
+                    )
+
+        self.assertTrue(swapped)
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--artifact-dir ancestor directory must not be a symlink",
+            stderr.getvalue(),
+        )
+        self.assertFalse((external / "published").exists())
+        self.assertFalse(
+            (artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists()
+        )
+
     def test_compact_key_staged_finalizer_rejects_missing_execution_report(
         self,
     ) -> None:
@@ -15751,22 +16191,33 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
             def fake_copy(
                 _source: Path,
-                destination: Path,
+                parent_fd: int,
+                destination_name: str,
                 _label: str,
             ) -> tuple[list[str], tuple[int, int] | None]:
                 nonlocal calls
                 calls += 1
-                destination.write_bytes(b"partial")
-                destination_identity = compact_key_finalizer._file_identity(
-                    destination.lstat()
+                destination_fd = compact_key_finalizer.os.open(
+                    destination_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=parent_fd,
                 )
+                try:
+                    compact_key_finalizer.os.write(destination_fd, b"partial")
+                    compact_key_finalizer.os.fsync(destination_fd)
+                    destination_identity = compact_key_finalizer._file_identity(
+                        compact_key_finalizer.os.fstat(destination_fd)
+                    )
+                finally:
+                    compact_key_finalizer.os.close(destination_fd)
                 if calls == 2:
                     return ["copy drift"], destination_identity
                 return [], destination_identity
 
             with mock.patch.object(
                 compact_key_finalizer,
-                "_copy_validated_file",
+                "_copy_validated_file_to_dir",
                 side_effect=fake_copy,
             ):
                 errors = compact_key_finalizer.publish_stage(
@@ -15796,15 +16247,26 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
             def fake_copy(
                 _source: Path,
-                destination: Path,
+                parent_fd: int,
+                destination_name: str,
                 _label: str,
             ) -> tuple[list[str], tuple[int, int] | None]:
                 nonlocal calls
                 calls += 1
-                destination.write_bytes(b"partial")
-                destination_identity = compact_key_finalizer._file_identity(
-                    destination.lstat()
+                destination_fd = compact_key_finalizer.os.open(
+                    destination_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=parent_fd,
                 )
+                try:
+                    compact_key_finalizer.os.write(destination_fd, b"partial")
+                    compact_key_finalizer.os.fsync(destination_fd)
+                    destination_identity = compact_key_finalizer._file_identity(
+                        compact_key_finalizer.os.fstat(destination_fd)
+                    )
+                finally:
+                    compact_key_finalizer.os.close(destination_fd)
                 if calls == 2:
                     return ["copy drift"], destination_identity
                 return [], destination_identity
@@ -15819,7 +16281,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             with (
                 mock.patch.object(
                     compact_key_finalizer,
-                    "_copy_validated_file",
+                    "_copy_validated_file_to_dir",
                     side_effect=fake_copy,
                 ),
                 mock.patch.object(
@@ -15893,10 +16355,24 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             tampered_name = readiness.COMPACT_KEY_REQUIRED_ARTIFACTS[0]
             original_replace = compact_key_finalizer.os.replace
 
-            def tampering_replace(source: Path, target: Path) -> None:
-                original_replace(source, target)
-                if target.name == tampered_name:
-                    target.write_bytes(b"tampered compact key bytes")
+            def tampering_replace(source: str, target: str, **kwargs: object) -> None:
+                original_replace(source, target, **kwargs)
+                if target == tampered_name:
+                    dst_dir_fd = kwargs["dst_dir_fd"]
+                    assert isinstance(dst_dir_fd, int)
+                    target_fd = compact_key_finalizer.os.open(
+                        target,
+                        os.O_WRONLY | os.O_TRUNC,
+                        dir_fd=dst_dir_fd,
+                    )
+                    try:
+                        compact_key_finalizer.os.write(
+                            target_fd,
+                            b"tampered compact key bytes",
+                        )
+                        compact_key_finalizer.os.fsync(target_fd)
+                    finally:
+                        compact_key_finalizer.os.close(target_fd)
 
             with mock.patch.object(
                 compact_key_finalizer.os,
@@ -15984,16 +16460,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             )
             self.assertEqual(write_errors, [])
             swapped = False
-            artifact_open_count = 0
 
-            def swapping_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal artifact_open_count, swapped
-                if Path(path) == artifact_dir:
-                    artifact_open_count += 1
+            def swapping_open(path: Path | str, flags: int, *args, **kwargs):
+                nonlocal swapped
                 if (
-                    Path(path) == artifact_dir
-                    and artifact_open_count
-                    == len(compact_key_finalizer._required_publish_filenames()) + 2
+                    isinstance(path, str)
+                    and path.endswith(".staged-finalizer.tmp")
+                    and kwargs.get("dir_fd") is not None
                     and not swapped
                 ):
                     artifact_dir.rename(swapped_dir)
@@ -16010,14 +16483,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             published_evidence_exists = (
                 swapped_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME
             ).is_file()
+            swapped_remaining = list(swapped_dir.iterdir())
 
         self.assertTrue(swapped)
-        self.assertGreaterEqual(
-            artifact_open_count,
-            len(compact_key_finalizer._required_publish_filenames()) + 2,
-        )
         self.assertEqual(errors, ["artifact directory changed before sync"])
-        self.assertTrue(published_evidence_exists)
+        self.assertFalse(published_evidence_exists)
+        self.assertEqual(swapped_remaining, [])
 
     def test_compact_key_staged_finalizer_cleanup_preserves_swapped_temp_parent(
         self,
@@ -17223,6 +17694,145 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn(str(evidence_path), stdout.getvalue())
         self.assertTrue(result["ok"], result["blockers"])
         self.assertEqual(result["state"], "production_width_proof_passed")
+
+    def test_lineage_proof_staged_finalizer_rejects_missing_publish_dir_under_symlinked_parent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            real_parent = root / "real-parent"
+            real_parent.mkdir()
+            linked_parent = root / "linked-parent"
+            slot_helpers.create_dir_symlink(self, linked_parent, real_parent)
+            artifact_dir = linked_parent / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--artifact-dir ancestor directory must not be a symlink",
+            stderr.getvalue(),
+        )
+        self.assertFalse((real_parent / "published").exists())
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_lineage_proof_staged_finalizer_safe_mkdir_rejects_parent_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            parent = root / "parent"
+            parent.mkdir()
+            renamed_parent = root / "parent-original"
+            external = root / "external"
+            external.mkdir()
+            artifact_dir = parent / "published"
+            real_mkdir = lineage_finalizer.os.mkdir
+            swapped = False
+
+            def swapping_mkdir(
+                path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> None:
+                nonlocal swapped
+                if path == "published" and dir_fd is not None and not swapped:
+                    parent.rename(renamed_parent)
+                    slot_helpers.create_dir_symlink(self, parent, external)
+                    swapped = True
+                real_mkdir(path, mode, dir_fd=dir_fd)
+
+            with mock.patch.object(lineage_finalizer.os, "mkdir", swapping_mkdir):
+                errors = lineage_finalizer._ensure_private_directory(
+                    artifact_dir,
+                    "--artifact-dir",
+                )
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["--artifact-dir ancestor directory must not be a symlink"],
+        )
+        self.assertFalse((external / "published").exists())
+        self.assertFalse(artifact_dir.exists())
+
+    def test_lineage_proof_staged_finalizer_main_rejects_parent_swap_during_publish_dir_create(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(staged_artifact_dir)
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            parent = root / "parent"
+            parent.mkdir()
+            renamed_parent = root / "parent-original"
+            external = root / "external"
+            external.mkdir()
+            artifact_dir = parent / "published"
+            real_mkdir = lineage_finalizer.os.mkdir
+            swapped = False
+
+            def swapping_mkdir(
+                path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> None:
+                nonlocal swapped
+                if path == "published" and dir_fd is not None and not swapped:
+                    parent.rename(renamed_parent)
+                    slot_helpers.create_dir_symlink(self, parent, external)
+                    swapped = True
+                real_mkdir(path, mode, dir_fd=dir_fd)
+
+            stderr = io.StringIO()
+            with mock.patch.object(lineage_finalizer.os, "mkdir", swapping_mkdir):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = lineage_finalizer.main(
+                        lineage_finalizer_args(
+                            staged_artifact_dir=staged_artifact_dir,
+                            exit_file=exit_file,
+                            artifact_dir=artifact_dir,
+                        )
+                    )
+
+        self.assertTrue(swapped)
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "--artifact-dir ancestor directory must not be a symlink",
+            stderr.getvalue(),
+        )
+        self.assertFalse((external / "published").exists())
+        self.assertFalse(
+            (artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists()
+        )
 
     def test_lineage_proof_staged_finalizer_rejects_missing_execution_report(
         self,
@@ -18504,10 +19114,24 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             tampered_name = readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS[0]
             original_replace = lineage_finalizer.os.replace
 
-            def tampering_replace(source: Path, target: Path) -> None:
-                original_replace(source, target)
-                if target.name == tampered_name:
-                    target.write_bytes(b"tampered lineage bytes")
+            def tampering_replace(source: str, target: str, **kwargs: object) -> None:
+                original_replace(source, target, **kwargs)
+                if target == tampered_name:
+                    dst_dir_fd = kwargs["dst_dir_fd"]
+                    assert isinstance(dst_dir_fd, int)
+                    target_fd = lineage_finalizer.os.open(
+                        target,
+                        os.O_WRONLY | os.O_TRUNC,
+                        dir_fd=dst_dir_fd,
+                    )
+                    try:
+                        lineage_finalizer.os.write(
+                            target_fd,
+                            b"tampered lineage bytes",
+                        )
+                        lineage_finalizer.os.fsync(target_fd)
+                    finally:
+                        lineage_finalizer.os.close(target_fd)
 
             with mock.patch.object(
                 lineage_finalizer.os,
@@ -18613,16 +19237,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             )
             self.assertEqual(write_errors, [])
             swapped = False
-            artifact_open_count = 0
 
-            def swapping_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal artifact_open_count, swapped
-                if Path(path) == artifact_dir:
-                    artifact_open_count += 1
+            def swapping_open(path: Path | str, flags: int, *args, **kwargs):
+                nonlocal swapped
                 if (
-                    Path(path) == artifact_dir
-                    and artifact_open_count
-                    == len(lineage_finalizer._required_publish_filenames()) + 2
+                    isinstance(path, str)
+                    and path.endswith(".staged-finalizer.tmp")
+                    and kwargs.get("dir_fd") is not None
                     and not swapped
                 ):
                     artifact_dir.rename(swapped_dir)
@@ -18639,14 +19260,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             published_evidence_exists = (
                 swapped_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
             ).is_file()
+            swapped_remaining = list(swapped_dir.iterdir())
 
         self.assertTrue(swapped)
-        self.assertGreaterEqual(
-            artifact_open_count,
-            len(lineage_finalizer._required_publish_filenames()) + 2,
-        )
         self.assertEqual(errors, ["artifact directory changed before sync"])
-        self.assertTrue(published_evidence_exists)
+        self.assertFalse(published_evidence_exists)
+        self.assertEqual(swapped_remaining, [])
 
     def test_lineage_proof_staged_finalizer_cleanup_preserves_swapped_temp_parent(
         self,
@@ -18781,22 +19400,33 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
             def fake_copy(
                 _source: Path,
-                destination: Path,
+                parent_fd: int,
+                destination_name: str,
                 _label: str,
             ) -> tuple[list[str], tuple[int, int] | None]:
                 nonlocal calls
                 calls += 1
-                destination.write_bytes(b"partial")
-                destination_identity = lineage_finalizer._file_identity(
-                    destination.lstat()
+                destination_fd = lineage_finalizer.os.open(
+                    destination_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=parent_fd,
                 )
+                try:
+                    lineage_finalizer.os.write(destination_fd, b"partial")
+                    lineage_finalizer.os.fsync(destination_fd)
+                    destination_identity = lineage_finalizer._file_identity(
+                        lineage_finalizer.os.fstat(destination_fd)
+                    )
+                finally:
+                    lineage_finalizer.os.close(destination_fd)
                 if calls == 2:
                     return ["copy drift"], destination_identity
                 return [], destination_identity
 
             with mock.patch.object(
                 lineage_finalizer,
-                "_copy_validated_file",
+                "_copy_validated_file_to_dir",
                 side_effect=fake_copy,
             ):
                 errors = lineage_finalizer.publish_stage(
@@ -18826,15 +19456,26 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
             def fake_copy(
                 _source: Path,
-                destination: Path,
+                parent_fd: int,
+                destination_name: str,
                 _label: str,
             ) -> tuple[list[str], tuple[int, int] | None]:
                 nonlocal calls
                 calls += 1
-                destination.write_bytes(b"partial")
-                destination_identity = lineage_finalizer._file_identity(
-                    destination.lstat()
+                destination_fd = lineage_finalizer.os.open(
+                    destination_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=parent_fd,
                 )
+                try:
+                    lineage_finalizer.os.write(destination_fd, b"partial")
+                    lineage_finalizer.os.fsync(destination_fd)
+                    destination_identity = lineage_finalizer._file_identity(
+                        lineage_finalizer.os.fstat(destination_fd)
+                    )
+                finally:
+                    lineage_finalizer.os.close(destination_fd)
                 if calls == 2:
                     return ["copy drift"], destination_identity
                 return [], destination_identity
@@ -18849,7 +19490,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             with (
                 mock.patch.object(
                     lineage_finalizer,
-                    "_copy_validated_file",
+                    "_copy_validated_file_to_dir",
                     side_effect=fake_copy,
                 ),
                 mock.patch.object(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -142,11 +143,27 @@ def _expected_production_gate_missing(gate: dict[str, object]) -> list[str]:
 
 
 def _privacy_production_test_artifact(label: str) -> dict[str, str]:
-    digest = f"{hash(label) & ((1 << 256) - 1):064x}"
+    digest = hashlib.sha256(label.encode("utf-8")).hexdigest()
     return {"label": label, "uri": f"sha256:{digest}"}
 
 
-PRIVACY_PRODUCTION_TEST_REVIEW_SIGNATURE = f"ed25519:{'a' * 128}"
+def test_privacy_catalog_internal_review_evidence_test_artifact_helper_uses_sha256() -> None:
+    label = "kagemusha-test-artifact"
+    assert _privacy_production_test_artifact(label) == {
+        "label": label,
+        "uri": f"sha256:{hashlib.sha256(label.encode('utf-8')).hexdigest()}",
+    }
+    assert _privacy_production_test_artifact(
+        "localnet-lifecycle-recursive-init-transparent-transfer"
+    )["uri"] != _privacy_production_test_artifact(
+        "localnet-lifecycle-recursive-append-transparent-transfer"
+    )["uri"]
+
+
+PRIVACY_PRODUCTION_TEST_REVIEW_SIGNATURE = (
+    "ed25519:"
+    + hashlib.sha512(b"privacy-production-review-artifact-signature").hexdigest()
+)
 
 
 def _privacy_production_test_entrypoints(
@@ -259,6 +276,31 @@ def _privacy_production_test_row(
             "state_recovery_passed": True,
             "state_recovery_hash": _privacy_production_test_artifact(
                 f"localnet-state-recovery-{algorithm_id}"
+            )["uri"],
+            "lifecycle_passed": True,
+            "lifecycle_shield_tx_hash": _privacy_production_test_artifact(
+                f"localnet-lifecycle-shield-{algorithm_id}"
+            )["uri"],
+            "lifecycle_hop_proof_hash": _privacy_production_test_artifact(
+                f"localnet-lifecycle-hop-{algorithm_id}"
+            )["uri"],
+            "lifecycle_recursive_init_hash": _privacy_production_test_artifact(
+                f"localnet-lifecycle-recursive-init-{algorithm_id}"
+            )["uri"],
+            "lifecycle_recursive_init_verify_hash": _privacy_production_test_artifact(
+                f"localnet-lifecycle-recursive-init-verify-{algorithm_id}"
+            )["uri"],
+            "lifecycle_recursive_append_hash": _privacy_production_test_artifact(
+                f"localnet-lifecycle-recursive-append-{algorithm_id}"
+            )["uri"],
+            "lifecycle_recursive_append_verify_hash": _privacy_production_test_artifact(
+                f"localnet-lifecycle-recursive-append-verify-{algorithm_id}"
+            )["uri"],
+            "lifecycle_unshield_proof_hash": _privacy_production_test_artifact(
+                f"localnet-lifecycle-unshield-{algorithm_id}"
+            )["uri"],
+            "lifecycle_redeem_tx_hash": _privacy_production_test_artifact(
+                f"localnet-lifecycle-redeem-{algorithm_id}"
             )["uri"],
         },
         "gate_evidence": gate_evidence,
@@ -3231,6 +3273,18 @@ def test_privacy_catalog_accepts_internal_review_evidence_for_all_rows() -> None
             "sha256:"
         )
         assert gate["localnet_acceptance"]["restart_replay_rejected"] is True
+        assert gate["localnet_acceptance"]["lifecycle_passed"] is True
+        for lifecycle_key in (
+            "lifecycle_shield_tx_hash",
+            "lifecycle_hop_proof_hash",
+            "lifecycle_recursive_init_hash",
+            "lifecycle_recursive_init_verify_hash",
+            "lifecycle_recursive_append_hash",
+            "lifecycle_recursive_append_verify_hash",
+            "lifecycle_unshield_proof_hash",
+            "lifecycle_redeem_tx_hash",
+        ):
+            assert gate["localnet_acceptance"][lifecycle_key].startswith("sha256:")
         assert gate["audit_references"][0]["uri"].startswith("sha256:")
         assert gate["sdk_exports"] == descriptor["sdk_exports"]
         assert gate["review_scope"]["algorithm_id"] == algorithm_id
@@ -3274,6 +3328,42 @@ def test_privacy_catalog_accepts_internal_review_evidence_for_all_rows() -> None
         ),
         pytest.param(
             lambda row, _descriptor: row["review_artifact"].update(
+                {"signature": f"ed25519:{'0' * 128}"}
+            ),
+            id="zero-review-artifact-signature",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
+                {"signature": f"ed25519:{'a' * 128}"}
+            ),
+            id="repeated-review-artifact-signature",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row.update(
+                {"reviewer_identity": "reviewer-placeholder@internal.example"}
+            ),
+            id="placeholder-reviewer-identity",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row.update(
+                {"reviewer_identity": "mock-reviewer@internal.example"}
+            ),
+            id="mock-reviewer-identity",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
+                {"label": "review artifact placeholder"}
+            ),
+            id="placeholder-review-artifact-label",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
+                {"label": "Mock review artifact"}
+            ),
+            id="mock-review-artifact-label",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
                 {"uri": "https://audit.example/review.pdf"}
             ),
             id="non-hash-addressed-review-artifact",
@@ -3283,6 +3373,42 @@ def test_privacy_catalog_accepts_internal_review_evidence_for_all_rows() -> None
                 {"uri": f"sha256:{'A' * 64}"}
             ),
             id="uppercase-review-artifact-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
+                {"uri": f"sha256:{'0' * 64}"}
+            ),
+            id="zero-review-artifact-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
+                {"uri": f"urn:sha256:{'0' * 64}"}
+            ),
+            id="zero-urn-review-artifact-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
+                {"uri": f"hash://sha256/{'0' * 64}"}
+            ),
+            id="zero-hash-url-review-artifact-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
+                {"uri": f"sha256:{'a' * 64}"}
+            ),
+            id="repeated-review-artifact-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
+                {"uri": f"urn:sha256:{'b' * 64}"}
+            ),
+            id="repeated-urn-review-artifact-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
+                {"uri": f"hash://sha256/{'c' * 64}"}
+            ),
+            id="repeated-hash-url-review-artifact-hash",
         ),
         pytest.param(
             lambda row, _descriptor: row["sdk_entrypoints"].append(
@@ -3330,6 +3456,12 @@ def test_privacy_catalog_accepts_internal_review_evidence_for_all_rows() -> None
                 {"label": "Mock Swift types SDK parity artifact"}
             ),
             id="mock-sdk-parity-artifact",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["sdk_parity_artifacts"]["types"]["swift"].update(
+                {"label": "Swift types SDK parity artifact placeholder"}
+            ),
+            id="placeholder-sdk-parity-artifact",
         ),
         pytest.param(
             lambda row, _descriptor: row.update({"verifier_key_id": "wrong_verifier_key"}),
@@ -3437,10 +3569,80 @@ def test_privacy_catalog_accepts_internal_review_evidence_for_all_rows() -> None
             id="missing-state-recovery",
         ),
         pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].pop(
+                "lifecycle_redeem_tx_hash"
+            ),
+            id="missing-localnet-lifecycle-redeem",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"lifecycle_passed": False}
+            ),
+            id="missing-localnet-lifecycle",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"lifecycle_recursive_append_hash": "sha256:not-a-hex-digest"}
+            ),
+            id="bad-localnet-lifecycle-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"lifecycle_recursive_init_hash": f"sha256:{'0' * 64}"}
+            ),
+            id="zero-localnet-lifecycle-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"lifecycle_recursive_init_hash": f"urn:sha256:{'0' * 64}"}
+            ),
+            id="zero-urn-localnet-lifecycle-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"lifecycle_recursive_init_hash": f"hash://sha256/{'0' * 64}"}
+            ),
+            id="zero-hash-url-localnet-lifecycle-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"lifecycle_recursive_init_hash": f"sha256:{'a' * 64}"}
+            ),
+            id="repeated-localnet-lifecycle-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"lifecycle_recursive_init_hash": f"urn:sha256:{'b' * 64}"}
+            ),
+            id="repeated-urn-localnet-lifecycle-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {"lifecycle_recursive_init_hash": f"hash://sha256/{'c' * 64}"}
+            ),
+            id="repeated-hash-url-localnet-lifecycle-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {
+                    "lifecycle_redeem_tx_hash": row["localnet_acceptance"][
+                        "lifecycle_unshield_proof_hash"
+                    ]
+                }
+            ),
+            id="reused-localnet-lifecycle-hash",
+        ),
+        pytest.param(
             lambda row, descriptor: row["gate_evidence"].pop(
                 _expected_required_production_gate_keys(descriptor["id"])[0]
             ),
             id="missing-gate-evidence",
+        ),
+        pytest.param(
+            lambda row, descriptor: row["gate_evidence"][
+                _expected_required_production_gate_keys(descriptor["id"])[0]
+            ][0].update({"label": "production gate artifact placeholder"}),
+            id="placeholder-production-gate-artifact-label",
         ),
     ],
 )
@@ -3471,6 +3673,42 @@ def test_privacy_catalog_rejects_invalid_internal_review_evidence(mutator) -> No
             "Iroha production allowlist is not enabled for this audited row"
             in descriptor["production_gate"]["missing"]
         )
+
+
+def test_privacy_catalog_rejects_duplicate_internal_review_evidence_rows() -> None:
+    chain_id = "boi-localnet-4p"
+    target = get_privacy_algorithm_descriptor("zk-ace-pq-authorization-v0")
+    assert target is not None
+    row = _privacy_production_test_row(
+        target,
+        chain_id=chain_id,
+        localnet_run_id="boi-localnet-4peer-run-2026-06-09",
+    )
+    valid_manifest = {
+        "version": privacy_catalog.PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+        "rows": [row],
+    }
+    valid_descriptor = get_privacy_algorithm_descriptor(
+        str(target["id"]),
+        valid_manifest,
+        chain_id=chain_id,
+    )
+    assert valid_descriptor is not None
+    assert valid_descriptor["production_gate"]["audit_references"][0][
+        "uri"
+    ].startswith("sha256:")
+
+    duplicate_descriptor = get_privacy_algorithm_descriptor(
+        str(target["id"]),
+        {
+            "version": privacy_catalog.PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+            "rows": [row, dict(row)],
+        },
+        chain_id=chain_id,
+    )
+    assert duplicate_descriptor is not None
+    assert duplicate_descriptor["production_ready"] is False
+    assert duplicate_descriptor["production_gate"]["audit_references"] == []
 
 
 def test_privacy_catalog_rejects_chain_mismatched_internal_review_evidence() -> None:

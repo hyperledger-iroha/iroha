@@ -40,12 +40,19 @@ RAW_SLOT_REQUIRED_PATHS: tuple[str, ...] = (
     "attestation/keymint-certificate-chain.pem",
     "attestation/result.json",
     "handoff/d2d-payment.json",
+    "handoff/d2d-payment-nfc_hce.json",
+    "handoff/d2d-payment-qr.json",
     "wallet/integrity.json",
     "telemetry/telemetry.json",
     "telemetry/status.ndjson",
     "queue/pending_queue.json",
     "logs/runtime.log",
 )
+RAW_D2D_PAYMENT_TRANSCRIPT_TRANSPORTS: dict[str, str] = {
+    "handoff/d2d-payment.json": "nearby_offline",
+    "handoff/d2d-payment-nfc_hce.json": "nfc_hce",
+    "handoff/d2d-payment-qr.json": "qr",
+}
 RAW_SLOT_ALLOWED_PATHS: frozenset[str] = frozenset(RAW_SLOT_REQUIRED_PATHS)
 RAW_SLOT_ALLOWED_DIRECTORIES: frozenset[str] = frozenset(
     {
@@ -276,6 +283,43 @@ def _validate_raw_json_true(
         errors.append(f"{label} {field} must be true")
 
 
+def _validate_raw_d2d_payment_transcript(
+    slot_path: Path,
+    relative: str,
+    slot_id: str,
+    errors: list[str],
+) -> None:
+    d2d = device_lab._load_json(slot_path / relative, relative, errors)
+    if d2d is None:
+        return
+    _validate_raw_json_schema(
+        d2d,
+        relative,
+        device_lab.D2D_PAYMENT_TRANSCRIPT_SCHEMA,
+        errors,
+    )
+    _validate_raw_json_slot_id(d2d, relative, slot_id, errors)
+    if d2d.get("payload_schema") != device_lab.D2D_PAYMENT_PAYLOAD_SCHEMA:
+        errors.append(
+            f"{relative} payload_schema must be {device_lab.D2D_PAYMENT_PAYLOAD_SCHEMA}"
+        )
+    expected_transport = RAW_D2D_PAYMENT_TRANSCRIPT_TRANSPORTS[relative]
+    transport = d2d.get("transport")
+    if transport != expected_transport:
+        errors.append(f"{relative} transport must be {expected_transport}")
+    elif transport not in device_lab.D2D_PAYMENT_TRANSPORTS:
+        errors.append(f"{relative} transport must be an accepted offline transport")
+    for field in (
+        "transport_offline",
+        "payer_wallet_offline",
+        "payee_wallet_offline",
+        "one_use_key_consumed",
+        "receiver_redeem_accepted",
+        "double_spend_rejected",
+    ):
+        _validate_raw_json_true(d2d, relative, field, errors)
+
+
 def _validate_raw_json_artifacts(
     slot_path: Path,
     slot_id: str,
@@ -346,36 +390,8 @@ def _validate_raw_json_artifacts(
                 "attestation/result.json app_package_name"
             )
 
-    d2d = device_lab._load_json(
-        slot_path / "handoff" / "d2d-payment.json",
-        "handoff/d2d-payment.json",
-        errors,
-    )
-    if d2d is not None:
-        _validate_raw_json_schema(
-            d2d,
-            "handoff/d2d-payment.json",
-            device_lab.D2D_PAYMENT_TRANSCRIPT_SCHEMA,
-            errors,
-        )
-        _validate_raw_json_slot_id(d2d, "handoff/d2d-payment.json", slot_id, errors)
-        if d2d.get("payload_schema") != device_lab.D2D_PAYMENT_PAYLOAD_SCHEMA:
-            errors.append(
-                "handoff/d2d-payment.json payload_schema must be "
-                f"{device_lab.D2D_PAYMENT_PAYLOAD_SCHEMA}"
-            )
-        transport = d2d.get("transport")
-        if transport not in device_lab.D2D_PAYMENT_TRANSPORTS:
-            errors.append("handoff/d2d-payment.json transport must be an accepted offline transport")
-        for field in (
-            "transport_offline",
-            "payer_wallet_offline",
-            "payee_wallet_offline",
-            "one_use_key_consumed",
-            "receiver_redeem_accepted",
-            "double_spend_rejected",
-        ):
-            _validate_raw_json_true(d2d, "handoff/d2d-payment.json", field, errors)
+    for relative in sorted(RAW_D2D_PAYMENT_TRANSCRIPT_TRANSPORTS):
+        _validate_raw_d2d_payment_transcript(slot_path, relative, slot_id, errors)
 
     wallet = device_lab._load_json(
         slot_path / "wallet" / "integrity.json",

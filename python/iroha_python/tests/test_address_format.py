@@ -18,6 +18,8 @@ from iroha_python import (
 )
 from iroha_python.address import AccountAddress, AccountAddressError
 
+CANONICAL_ACCOUNT_ID = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+
 
 class StubResponse(requests.Response):
     def __init__(self, payload: Optional[Dict[str, Any]] = None) -> None:
@@ -221,7 +223,7 @@ def test_propose_multisig_inherited_helper_posts_native_instruction_payload() ->
     session._response = StubResponse(
         payload={
             "ok": True,
-            "resolved_multisig_account_id": "ops@universal",
+            "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
             "submitted": False,
         }
     )
@@ -269,7 +271,7 @@ def test_propose_multisig_inherited_helper_rejects_malformed_response() -> None:
     session._response = StubResponse(
         payload={
             "ok": True,
-            "resolved_multisig_account_id": "ops@universal",
+            "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
             "signing_message_b64": "not base64",
         }
     )
@@ -288,7 +290,7 @@ def test_propose_multisig_inherited_helper_rejects_false_ok_response() -> None:
     session._response = StubResponse(
         payload={
             "ok": False,
-            "resolved_multisig_account_id": "ops@universal",
+            "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
         }
     )
     client = ToriiClient("http://node.test", session=session)
@@ -306,7 +308,7 @@ def test_propose_multisig_inherited_helper_rejects_empty_signing_message() -> No
     session._response = StubResponse(
         payload={
             "ok": True,
-            "resolved_multisig_account_id": "ops@universal",
+            "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
             "signing_message_b64": "",
         }
     )
@@ -325,7 +327,7 @@ def test_propose_multisig_inherited_helper_rejects_negative_response_time() -> N
     session._response = StubResponse(
         payload={
             "ok": True,
-            "resolved_multisig_account_id": "ops@universal",
+            "resolved_multisig_account_id": CANONICAL_ACCOUNT_ID,
             "creation_time_ms": -1,
         }
     )

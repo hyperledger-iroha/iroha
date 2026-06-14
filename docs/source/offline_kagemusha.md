@@ -473,7 +473,23 @@ plus D2D and wallet transcript schema-id drift, before publishing source
 artifacts. It also runs the scanner D2D and wallet transcript semantic
 validators on staged copies before publish, so queue splices, wallet state
 non-rotation, and other scanner-only transcript failures cannot be staged into
-unsigned production slots. Required telemetry, status NDJSON, queue,
+unsigned production slots. Physical Android slots can now be captured through
+`python3 scripts/kagemusha_android_device_lab_capture.py`, which serial-scopes
+the Gradle install and instrumentation export, pulls the raw slot, derives the
+attestation challenge SHA-256 from `attestation/challenge.hex`, renders the
+verifier report, assembles signed evidence with `nearby_offline`, `nfc_hce`,
+and `qr` D2D transcript bindings, and validates the resulting slot. The wrapper
+requires an explicit `--physical-device-attestation` assertion and does not
+manage or stop other processes; its raw-summary, attestation-result, and
+challenge reads are bounded and opened-file identity-bound before report
+rendering. It also independently rejects forged raw attestation results before
+report rendering unless the result matches the raw slot id, reports exact
+`status = ok`, preserves the selected run-as app package, asserts physical
+StrongBox/KeyMint attestation, and binds `attestation_challenge_sha256` to the
+pulled challenge bytes plus `attestation_certificate_chain_sha256` to the
+pulled certificate-chain bytes. The strict matrix scanner remains the authority
+for deciding when every standard device family has production evidence.
+Required telemetry, status NDJSON, queue,
 attestation, and runtime-log artifact shape checks now also run on staged
 assembler output before publish, so failed status records, missing runtime
 completion markers, malformed telemetry, noncanonical telemetry identity
@@ -982,8 +998,9 @@ per-slot Android signed-evidence artifact paths and SHA-256 digests for every
 validated device-lab slot, keeps the Reserved-lineage and ABI-7 compact
 artifact digest and size maps from the recomputed readiness summary, records every packaged lineage artifact,
 compact key artifact, compact key generator log, production proof log, release
-APK, D2D handoff transcript, wallet-integrity transcript, and attestation
-certificate-chain file with
+APK, D2D handoff transcript, any extra per-transport D2D transcript declared in
+the signed slot `d2d_payment_transcripts` map, wallet-integrity transcript, and
+attestation certificate-chain file with
 bundle-relative path, SHA-256 digest, and byte size computed from bytes whose
 opened file identity matches the preflight `lstat()` identity and remains
 path-bound after the read, and revalidates each slot
@@ -1172,10 +1189,23 @@ The direct
 device-lab scanner summary and the production-readiness summary both require
 complete signed evidence before a status-ok direct report can count toward
 standard matrix coverage, offline D2D transport coverage, or release-facing
-`duplicate_bindings` metadata. The readiness rollup also requires accepted
-Android evidence to cover every declared offline D2D payment transport
-(`nearby_offline`, `nfc_hce`, and `qr`) before a production release bundle can
-be marked ready.
+`duplicate_bindings` metadata. The direct scanner's standard-matrix mode and
+the readiness rollup both require accepted Android evidence to cover every
+declared offline D2D payment transport (`nearby_offline`, `nfc_hce`, and `qr`)
+before a production release bundle can be marked ready.
+Slots may use the legacy primary `d2d_payment_transcript_path` and
+`d2d_payment_transcript_sha256` fields for one transport, or add a signed
+`d2d_payment_transcripts` object keyed by those transport names. Each map entry
+must contain a `handoff/` path and matching non-zero SHA-256 digest, must include
+the primary transcript binding, and is packaged as a distinct dynamic release
+bundle artifact so missing or digest-drifted NFC/QR/Nearby transcript files fail
+`--verify-existing` instead of being hidden by the primary transcript.
+The physical Android lab exporter writes the required raw transport transcripts
+as `handoff/d2d-payment.json`, `handoff/d2d-payment-nfc_hce.json`, and
+`handoff/d2d-payment-qr.json`; the raw puller requires all three, and the slot
+assembler binds the latter two with repeatable
+`--d2d-payment-transcript-extra transport=path` arguments before the signer
+copies the resulting `d2d_payment_transcripts` map into `signed-evidence.json`.
 Duplicate-binding blockers still catch copied evidence from incomplete direct
 reports, but release-facing duplicate summaries only reflect slots admitted
 through the complete signed-evidence gates. Direct
@@ -1348,7 +1378,13 @@ whose identity changed before removal.
 Staged lineage and compact-key runner/finalizer path validators reject
 control-character staging, exit-marker, elapsed-seconds, artifact, and output
 paths before ancestor validation, metadata reads, or staged output cleanup can
-start.
+start. Both staged finalizers also check missing `--artifact-dir` publish
+directories for symlinked ancestors before creating them, so a caller cannot
+publish lineage or compact-key evidence through an alias parent that does not
+yet contain the final directory name. Finalizer-created artifact directories
+are opened and created one component at a time through directory file
+descriptors with no-follow flags, so a parent-directory swap during creation
+cannot redirect evidence into a symlink target.
 Android signed-evidence canonical signature payloads also serialize with strict
 JSON before hashing, signing, or verification, so non-standard constants cannot
 become signed bytes.
@@ -2342,9 +2378,10 @@ normalization, backend, input-encryption, input-parameter, nested
 material reaches wallet code. Account-alias resolution parsers on those same
 non-C# SDKs also reject padded returned `alias`, `account_id`, alternate
 `account_ids`, and `source` fields before wallet code trusts alias bindings.
-Multisig response parsers also reject padded, alias-shaped, or otherwise
-non-canonical returned `resolved_multisig_account_id` values before proposal or
-spec state is trusted by wallet code.
+JavaScript/Node, Swift, Kotlin/JVM, Java Android, and Python multisig response
+parsers also reject padded, alias-shaped, or otherwise non-canonical returned
+`resolved_multisig_account_id` values before proposal or spec state is trusted
+by wallet code.
 Swift's native bridge caps Kagemusha native output lengths before
 copying native pointers into `Data`, so over-cap native outputs are rejected
 and freed at the bridge boundary. The Swift dynamic loader now requires bridge
