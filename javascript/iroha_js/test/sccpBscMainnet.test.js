@@ -258,6 +258,7 @@ const sampleBscTestnetNativeEvmProverBundle = (
     proving_key_hash: provingKeyHash,
     verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
     verifier_key_hash: hex32("cc"),
+    verifier_key_artifact_hash: hex32("93"),
     destination_binding_hash: destinationBindingHash,
     no_wasm: true,
     remote_prover_required: false,
@@ -507,7 +508,10 @@ const sampleVerifiedBscTestnetNativeEvmProverFixture = () => {
   );
   const proofArtifactHash = sha256Hex(proofArtifactBytes);
   const provingKeyHash = sha256Hex(provingKeyBytes);
-  const verifierKeyHash = sha256Hex(verifierKeyBytes);
+  const verifierKeyArtifactHash = sha256Hex(verifierKeyBytes);
+  const verifierKeyHash = fixtureHash(
+    "sccp bsc testnet verifier key semantic hash v1",
+  );
   const implementationHash = sha256Hex(implementationBytes);
   const destinationBinding = bscTestnetSccpDestinationBinding(
     sampleDestinationBindingInput({ verifierKeyHash }),
@@ -524,6 +528,7 @@ const sampleVerifiedBscTestnetNativeEvmProverFixture = () => {
       proof_artifact_hash: proofArtifactHash,
       proving_key_hash: provingKeyHash,
       verifier_key_hash: verifierKeyHash,
+      verifier_key_artifact_hash: verifierKeyArtifactHash,
       native_sdk_artifacts: Object.entries(
         SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
       ).map(([sdk, implementation], index) => ({
@@ -587,7 +592,10 @@ const sampleVerifiedBscMainnetNativeEvmProverFixture = () => {
   );
   const proofArtifactHash = sha256Hex(proofArtifactBytes);
   const provingKeyHash = sha256Hex(provingKeyBytes);
-  const verifierKeyHash = sha256Hex(verifierKeyBytes);
+  const verifierKeyArtifactHash = sha256Hex(verifierKeyBytes);
+  const verifierKeyHash = fixtureHash(
+    "sccp bsc mainnet verifier key semantic hash v1",
+  );
   const implementationHash = sha256Hex(implementationBytes);
   const destinationBinding = bscMainnetSccpDestinationBinding(
     sampleDestinationBindingInput({ verifierKeyHash }),
@@ -601,6 +609,7 @@ const sampleVerifiedBscMainnetNativeEvmProverFixture = () => {
     proving_key_hash: provingKeyHash,
     verifier_key: "artifacts/bsc-mainnet/verifier-key.bin",
     verifier_key_hash: verifierKeyHash,
+    verifier_key_artifact_hash: verifierKeyArtifactHash,
     cross_sdk_fixture_parity_artifact:
       "artifacts/bsc-mainnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
@@ -1264,6 +1273,34 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
   assert.equal(
     descriptor.destinationBindingHash,
     fixture.destinationBinding.bindingHash,
+  );
+  assert.notEqual(
+    descriptor.verifierKeyArtifactHash,
+    descriptor.verifierKeyHash,
+  );
+
+  const {
+    verifier_key_artifact_hash: _missingVerifierKeyArtifactHash,
+    ...missingVerifierKeyArtifactHashBundle
+  } = fixture.bundle;
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(
+        missingVerifierKeyArtifactHashBundle,
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /verifierKeyArtifactHash/u,
+  );
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(
+        {
+          ...fixture.bundle,
+          verifier_key_artifact_hash: fixture.bundle.verifier_key_hash,
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /nativeProverBundle hashes must be role-separated: verifierKeyArtifactHash matches verifierKeyHash/u,
   );
 
   const parityFixture = sampleBscTestnetNativeEvmProverParityFixture(
