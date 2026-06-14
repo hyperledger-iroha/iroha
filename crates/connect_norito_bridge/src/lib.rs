@@ -18545,7 +18545,7 @@ mod accel_tests {
     #[test]
     fn keypair_from_seed_private_output_derives_public_key() {
         let _guard = chain_guard();
-        let seed = vec![0x5C; 32];
+        let seed = [0x5C; 32];
         let mut out_private_ptr: *mut u8 = ptr::null_mut();
         let mut out_private_len: c_ulong = 0;
         let mut out_public_ptr: *mut u8 = ptr::null_mut();
@@ -27787,7 +27787,7 @@ mod tests {
         PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
             .iter()
             .map(|surface| PrivacyProductionSdkExportV1 {
-                surface: *surface,
+                surface,
                 entrypoints: entrypoints.to_vec(),
             })
             .collect()
@@ -27800,8 +27800,8 @@ mod tests {
                 PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
                     .iter()
                     .map(move |surface| PrivacyProductionSdkParityArtifactV1 {
-                        kind: *kind,
-                        surface: *surface,
+                        kind,
+                        surface,
                         artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
                     })
             })
@@ -28580,7 +28580,7 @@ mod tests {
             let row = privacy_test_evidence_row(entry);
 
             let no_chain_capabilities =
-                privacy_capabilities_with_production_evidence(&[row.clone()], None);
+                privacy_capabilities_with_production_evidence(std::slice::from_ref(&row), None);
             let no_chain_algorithm = no_chain_capabilities
                 .algorithms
                 .iter()
