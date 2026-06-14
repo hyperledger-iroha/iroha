@@ -83,8 +83,10 @@ fn sm2_signatures_are_deterministic() {
 
     let payload = Vec::from_hex(&fixture.message_hex).expect("fixture message hex");
 
-    let signature_a = crypto::Signature::new(key_pair.private_key(), &payload);
-    let signature_b = crypto::Signature::new(key_pair.private_key(), &payload);
+    let signature_a = crypto::Signature::try_new(key_pair.private_key(), &payload)
+        .expect("SM2 fixture signature must sign");
+    let signature_b = crypto::Signature::try_new(key_pair.private_key(), &payload)
+        .expect("SM2 fixture signature must sign");
     assert_eq!(signature_a.payload(), signature_b.payload());
 
     let raw_signature = private.sign(&payload);

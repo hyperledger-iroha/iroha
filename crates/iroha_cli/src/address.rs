@@ -640,9 +640,14 @@ mod tests {
     use iroha_data_model::{account::AccountId, domain::DomainId};
     use iroha_i18n::{Bundle, Language, Localizer};
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     fn account_id_for_domain(label: &str, seed: u8) -> AccountId {
         let _ = DomainId::try_new(label, "universal").expect("domain label canonicalises");
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
     }
 
@@ -663,6 +668,15 @@ mod tests {
         };
         let summary = AddressSummary::build(&parsed, DEFAULT_I105_PREFIX).expect("summary");
         assert_eq!(summary.domain.kind, "default");
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(0x11).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     #[test]
@@ -800,7 +814,7 @@ mod tests {
 
     #[test]
     fn parse_address_input_accepts_public_key_and_marks_detected_format() {
-        let key_pair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(9);
         let public_key = key_pair.public_key().to_string();
 
         let parsed =
@@ -818,7 +832,7 @@ mod tests {
 
     #[test]
     fn convert_public_key_input_emits_canonical_i105() {
-        let key_pair = KeyPair::from_seed(vec![10; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(10);
         let public_key = key_pair.public_key().to_string();
         let parsed =
             parse_address_input(&public_key, Some(DEFAULT_I105_PREFIX)).expect("public key parses");

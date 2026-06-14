@@ -10,7 +10,9 @@ use iroha_data_model::{
 };
 
 fn account(tag: u8) -> AccountId {
-    let (public_key, _) = KeyPair::from_seed(vec![tag; 32], Algorithm::Ed25519).into_parts();
+    let (public_key, _) = KeyPair::try_from_seed(vec![tag; 32], Algorithm::Ed25519)
+        .expect("seeded parliament body account keypair should be valid")
+        .into_parts();
     AccountId::new(public_key)
 }
 

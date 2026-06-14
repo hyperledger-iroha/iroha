@@ -287,6 +287,16 @@ mod tests {
         transaction::signed::TransactionBuilder,
     };
 
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm)
+            .expect("generate checked block-builder fixture keypair")
+    }
+
+    fn checked_seeded_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], algorithm)
+            .expect("derive checked block-builder fixture keypair")
+    }
+
     #[test]
     fn builder_roots_match_manual_construction() {
         // Minimal header
@@ -398,7 +408,7 @@ mod tests {
         let bundle = DaProofPolicyBundle::new(vec![policy]);
         let mut builder = BlockBuilder::new(header);
         builder.set_da_proof_policies(Some(bundle.clone()));
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
         let block = builder.build_with_signature(0, keypair.private_key());
         let signature = block.signatures().next().expect("block signature exists");
         assert!(
@@ -417,7 +427,7 @@ mod tests {
     #[test]
     fn try_build_with_signature_matches_compatibility_signature_and_verifies() {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let keypair = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
+        let keypair = checked_seeded_keypair(0x42, Algorithm::Ed25519);
         let builder = BlockBuilder::new(header);
 
         let fallible = builder

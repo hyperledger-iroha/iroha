@@ -4640,7 +4640,8 @@ mod tests {
     }
 
     fn sample_metering_key_pair() -> KeyPair {
-        KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519)
+        KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
+            .expect("derive VPN metering fixture key")
     }
 
     fn sample_vpn_tariff() -> VpnTariffV1 {
@@ -4925,7 +4926,8 @@ mod tests {
     #[test]
     fn vpn_voucher_debt_window_rejects_wrong_metering_public_key() {
         let helper_ticket = sample_helper_ticket([0xA5; 16]);
-        let wrong_key_pair = KeyPair::from_seed(vec![0x77; 32], Algorithm::Ed25519);
+        let wrong_key_pair = KeyPair::try_from_seed(vec![0x77; 32], Algorithm::Ed25519)
+            .expect("derive wrong VPN metering fixture key");
         let body = VpnUsageVoucherBodyV1 {
             session_id: helper_ticket.session_id,
             quote_id: helper_ticket.quote_id,
@@ -5433,8 +5435,25 @@ mod tests {
     }
 
     fn sample_account(seed: u8) -> AccountId {
-        let (public_key, _) = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
+        let (public_key, _) = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive relay runtime fixture account key")
+            .into_parts();
         AccountId::new(public_key)
+    }
+
+    #[test]
+    fn fixture_key_helpers_use_checked_seed_derivation() {
+        let expected_metering = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
+            .expect("derive VPN metering fixture key");
+        assert_eq!(
+            sample_metering_key_pair().public_key(),
+            expected_metering.public_key()
+        );
+
+        let (public_key, _) = KeyPair::try_from_seed(vec![0x21; 32], Algorithm::Ed25519)
+            .expect("derive relay runtime fixture account key")
+            .into_parts();
+        assert_eq!(sample_account(0x21), AccountId::new(public_key));
     }
 
     fn sample_bandwidth_proof(

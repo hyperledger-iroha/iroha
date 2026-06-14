@@ -2594,8 +2594,13 @@ pub mod isi {
         use iroha_primitives::numeric::NumericSpec;
         use nonzero_ext::nonzero;
 
+        fn fixture_key_pair(seed: u8) -> KeyPair {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("fixture seed must derive a valid keypair")
+        }
+
         fn sample_account(seed: u8) -> AccountId {
-            let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+            let keypair = fixture_key_pair(seed);
             AccountId::new(keypair.public_key().clone())
         }
 
@@ -2606,6 +2611,19 @@ pub mod isi {
                 *byte = seed.wrapping_add(offset);
             }
             Signature::from_bytes(&payload)
+        }
+
+        fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
+            Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+        }
+
+        #[test]
+        fn fixture_key_pair_uses_checked_seed_derivation() {
+            assert_eq!(fixture_key_pair(0x01).algorithm(), Algorithm::Ed25519);
+            assert!(
+                KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+                "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+            );
         }
 
         fn fixed_bytes(label: &[u8]) -> [u8; 32] {
@@ -2824,7 +2842,7 @@ pub mod isi {
         }
 
         fn sample_certificate() -> OfflineNoteKeyCertificate {
-            let keypair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
+            let keypair = fixture_key_pair(0xAA);
             let (_algorithm, public_key) = keypair
                 .public_key()
                 .try_to_bytes()
@@ -2851,7 +2869,7 @@ pub mod isi {
             note_seed: u8,
             key_id: &str,
         ) -> OfflineNoteKeyCertificate {
-            let note_key = KeyPair::from_seed(vec![note_seed; 32], Algorithm::Ed25519);
+            let note_key = fixture_key_pair(note_seed);
             let (_algorithm, public_key) = note_key
                 .public_key()
                 .try_to_bytes()
@@ -2868,12 +2886,12 @@ pub mod isi {
                 assertion_public_key: public_key.to_vec(),
                 assertion_usage_count_limit: Some(1),
                 one_use: true,
-                issuer_signature: Signature::new(issuer.private_key(), b"placeholder"),
+                issuer_signature: checked_signature(issuer.private_key(), b"placeholder"),
             };
             let payload = certificate
                 .signing_bytes()
                 .expect("certificate signing payload encodes");
-            certificate.issuer_signature = Signature::new(issuer.private_key(), &payload);
+            certificate.issuer_signature = checked_signature(issuer.private_key(), &payload);
             certificate
         }
 
@@ -4768,7 +4786,7 @@ pub mod isi {
             let (state, asset_id, account_id, _definition_id) =
                 self_escrow_test_state(Numeric::new(100, 0));
             let input_certificate = sample_certificate();
-            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let account_keypair = fixture_key_pair(0x01);
             let output_certificate =
                 signed_sample_certificate(&account_keypair, account_id, 0x78, "audit-output-key");
             let issue = iroha_data_model::offline::OfflineNoteIssue {
@@ -4802,7 +4820,7 @@ pub mod isi {
             let (state, asset_id, account_id, _definition_id) =
                 self_escrow_test_state(Numeric::new(100, 0));
             let input_certificate = sample_certificate();
-            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let account_keypair = fixture_key_pair(0x01);
             let output_certificate =
                 signed_sample_certificate(&account_keypair, account_id, 0x79, "audit-output-key");
             let issue = iroha_data_model::offline::OfflineNoteIssue {
@@ -4828,7 +4846,7 @@ pub mod isi {
             let (state, asset_id, account_id, _definition_id) =
                 self_escrow_test_state(Numeric::new(100, 0));
             let input_certificate = sample_certificate();
-            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let account_keypair = fixture_key_pair(0x01);
             let output_certificate =
                 signed_sample_certificate(&account_keypair, account_id, 0x7F, "audit-output-key");
             let issue = iroha_data_model::offline::OfflineNoteIssue {
@@ -4949,7 +4967,7 @@ pub mod isi {
         fn redeem_rejects_forged_source_commitment_even_when_claim_key_is_anchored() {
             let (state, asset_id, account_id, _definition_id) =
                 distinct_escrow_test_state(Numeric::new(100, 0), 0x7C);
-            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let account_keypair = fixture_key_pair(0x01);
             let input_certificate = signed_sample_certificate(
                 &account_keypair,
                 account_id.clone(),
@@ -5007,7 +5025,7 @@ pub mod isi {
         fn audit_rejects_mutated_input_claim_even_when_certificate_topup_is_anchored() {
             let (state, asset_id, account_id, _definition_id) =
                 distinct_escrow_test_state(Numeric::new(100, 0), 0x7D);
-            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let account_keypair = fixture_key_pair(0x01);
             let input_certificate = signed_sample_certificate(
                 &account_keypair,
                 account_id.clone(),
@@ -5056,7 +5074,7 @@ pub mod isi {
         fn issue_rejects_note_commitment_reused_from_audit_output() {
             let (state, asset_id, account_id, _definition_id) =
                 self_escrow_test_state(Numeric::new(100, 0));
-            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let account_keypair = fixture_key_pair(0x01);
             let key_certificate =
                 signed_sample_certificate(&account_keypair, account_id.clone(), 0x86, "topup-key");
             let issue = iroha_data_model::offline::OfflineNoteIssue {
@@ -5091,7 +5109,7 @@ pub mod isi {
         fn audit_rejects_output_commitment_reused_from_topup_before_proof() {
             let (state, asset_id, account_id, _definition_id) =
                 self_escrow_test_state(Numeric::new(100, 0));
-            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let account_keypair = fixture_key_pair(0x01);
             let input_certificate = signed_sample_certificate(
                 &account_keypair,
                 account_id.clone(),
@@ -5153,7 +5171,7 @@ pub mod isi {
         fn audit_rejects_reused_output_certificate_from_topup_before_proof() {
             let (state, asset_id, account_id, _definition_id) =
                 self_escrow_test_state(Numeric::new(100, 0));
-            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let account_keypair = fixture_key_pair(0x01);
             let input_certificate =
                 signed_sample_certificate(&account_keypair, account_id, 0x84, "topup-input-key");
             let issue = iroha_data_model::offline::OfflineNoteIssue {
@@ -5203,7 +5221,7 @@ pub mod isi {
         fn audit_rejects_output_certificate_signature_before_proof() {
             let (state, asset_id, account_id, _definition_id) =
                 self_escrow_test_state(Numeric::new(100, 0));
-            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let account_keypair = fixture_key_pair(0x01);
             let input_certificate = signed_sample_certificate(
                 &account_keypair,
                 account_id.clone(),
@@ -5239,7 +5257,7 @@ pub mod isi {
         fn audit_rejects_nullifier_output_overlap_before_proof() {
             let (state, asset_id, account_id, _definition_id) =
                 self_escrow_test_state(Numeric::new(100, 0));
-            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let account_keypair = fixture_key_pair(0x01);
             let input_certificate = signed_sample_certificate(
                 &account_keypair,
                 account_id.clone(),
@@ -5276,7 +5294,7 @@ pub mod isi {
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
         fn audit_accepts_independent_relayer_when_topup_claim_is_anchored() {
-            let issuer = KeyPair::from_seed(vec![0x73; 32], Algorithm::Ed25519);
+            let issuer = fixture_key_pair(0x73);
             let authority = AccountId::new(issuer.public_key().clone());
             let relayer = sample_account(0x74);
             let escrow_account_id = sample_account(0x77);

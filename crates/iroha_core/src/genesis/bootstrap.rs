@@ -85,6 +85,10 @@ mod tests {
 
     use super::*;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked genesis bootstrap fixture keypair")
+    }
+
     #[test]
     fn request_roundtrip() {
         let request = GenesisRequest {
@@ -93,7 +97,7 @@ mod tests {
             expected_hash: Some(HashOf::<BlockHeader>::from_untyped_unchecked(
                 Hash::prehashed([0u8; 32]),
             )),
-            expected_pubkey: Some(KeyPair::random().public_key().clone()),
+            expected_pubkey: Some(checked_random_keypair().public_key().clone()),
             kind: GenesisRequestKind::Preflight,
         };
         let encoded = NoritoEncode::encode(&request);

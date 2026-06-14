@@ -155,12 +155,18 @@ mod tests {
     };
 
     fn sample_entrypoint_hash() -> HashOf<TransactionEntrypoint> {
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "proof-chain".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(chain, authority).sign(keypair.private_key());
+        let tx = TransactionBuilder::new(chain, authority)
+            .try_sign(keypair.private_key())
+            .expect("checked block proof fixture transaction signature");
         tx.hash_as_entrypoint()
+    }
+
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked block proof fixture keypair")
     }
 
     #[test]

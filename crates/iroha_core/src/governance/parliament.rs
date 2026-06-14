@@ -196,9 +196,23 @@ mod tests {
     use super::*;
 
     fn mk_account(seed: u8) -> AccountId {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive parliament fixture account key");
         let (public_key, _) = keypair.into_parts();
         AccountId::new(public_key)
+    }
+
+    #[test]
+    fn mk_account_uses_checked_seed_derivation() {
+        let account = mk_account(1);
+        let expected = AccountId::new(
+            KeyPair::try_from_seed(vec![1; 32], Algorithm::Ed25519)
+                .expect("derive expected parliament fixture account key")
+                .public_key()
+                .clone(),
+        );
+
+        assert_eq!(account, expected);
     }
 
     fn make_candidate(

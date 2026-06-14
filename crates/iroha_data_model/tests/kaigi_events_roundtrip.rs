@@ -21,6 +21,15 @@ fn sample_call_id() -> KaigiId {
     )
 }
 
+fn checked_random_account_id() -> AccountId {
+    AccountId::new(
+        KeyPair::try_random()
+            .expect("generate checked Kaigi relay account keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
 #[test]
 fn roster_summary_roundtrips_via_norito() {
     let summary = DomainEvent::KaigiRosterSummary(KaigiRosterSummary::new(
@@ -77,7 +86,7 @@ fn participant_commitment_roundtrip_preserves_payload() {
 #[test]
 fn relay_registration_summary_roundtrips_via_norito() {
     let domain_id = sample_domain_id();
-    let relay_id = AccountId::new(KeyPair::random().public_key().clone());
+    let relay_id = checked_random_account_id();
     let summary = DomainEvent::KaigiRelayRegistered(KaigiRelayRegistrationSummary::new(
         domain_id,
         relay_id.clone(),
@@ -100,7 +109,7 @@ fn relay_registration_summary_roundtrips_via_norito() {
 #[test]
 fn relay_health_summary_roundtrips_via_norito() {
     let call = sample_call_id();
-    let relay = AccountId::new(KeyPair::random().public_key().clone());
+    let relay = checked_random_account_id();
     let summary = DomainEvent::KaigiRelayHealthUpdated(KaigiRelayHealthSummary::new(
         call.clone(),
         relay.clone(),

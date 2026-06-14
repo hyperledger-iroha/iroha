@@ -3491,6 +3491,15 @@ mod tests {
 
     use super::*;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked streaming fixture keypair")
+    }
+
+    fn checked_random_ed25519_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked streaming Ed25519 fixture keypair")
+    }
+
     #[test]
     fn snapshot_temp_path_appends_suffix() {
         let base = Path::new("/var/lib/iroha/streaming.snap.norito");
@@ -4102,8 +4111,8 @@ mod tests {
 
     #[test]
     fn publisher_viewer_gck_roundtrip() {
-        let publisher_keys = KeyPair::random();
-        let viewer_keys = KeyPair::random();
+        let publisher_keys = checked_random_keypair();
+        let viewer_keys = checked_random_keypair();
         let publisher_peer = make_peer(&publisher_keys, 12001);
         let viewer_peer = make_peer(&viewer_keys, 12002);
 
@@ -4206,7 +4215,7 @@ mod tests {
     #[test]
     fn content_key_update_requires_negotiation() {
         let handle = StreamingHandle::new();
-        let publisher_keys = KeyPair::random();
+        let publisher_keys = checked_random_keypair();
         let remote_peer = make_peer(&publisher_keys, 13000);
         let gck = vec![0x44; 32];
 
@@ -4224,7 +4233,7 @@ mod tests {
     #[test]
     fn build_key_update_with_material_requires_config() {
         let handle = StreamingHandle::new();
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 15000);
         let suite = EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x33));
         let session_id = hash_with(0x44);
@@ -4245,8 +4254,8 @@ mod tests {
 
     #[test]
     fn build_key_update_with_material_uses_identity() {
-        let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let viewer_keys = KeyPair::random();
+        let publisher_keys = checked_random_ed25519_keypair();
+        let viewer_keys = checked_random_keypair();
         let publisher_peer = make_peer(&publisher_keys, 15001);
         let viewer_peer = make_peer(&viewer_keys, 15002);
         let suite = EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x77));
@@ -4278,7 +4287,7 @@ mod tests {
 
     #[test]
     fn records_transport_capabilities_and_exposes_hash() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13500);
         let handle = StreamingHandle::new();
         let resolution = sample_resolution();
@@ -4317,7 +4326,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_transport_capabilities_without_overwriting_hash() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13550);
         let handle = StreamingHandle::new();
         let valid = sample_resolution();
@@ -4375,7 +4384,7 @@ mod tests {
             "StreamingHandle::new should seed capability mask from defaults",
         );
 
-        let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp = checked_random_ed25519_keypair();
         let material = StreamingKeyMaterial::new(kp).expect("material");
         let handle_with_material = StreamingHandle::with_key_material(material);
         assert_eq!(
@@ -4387,7 +4396,7 @@ mod tests {
 
     #[test]
     fn validate_manifest_detects_hash_mismatch() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13600);
         let handle = StreamingHandle::new();
         let resolution = sample_resolution();
@@ -4419,7 +4428,7 @@ mod tests {
 
     #[test]
     fn process_control_frame_rejects_invalid_manifest() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13700);
         let handle = StreamingHandle::new();
         let resolution = sample_resolution();
@@ -4448,7 +4457,7 @@ mod tests {
 
     #[test]
     fn process_control_frame_accepts_valid_manifest() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13800);
         let handle = StreamingHandle::new();
         let resolution = sample_resolution();
@@ -4475,7 +4484,7 @@ mod tests {
 
     #[test]
     fn feedback_frames_update_handle_parity() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13850);
         let handle = StreamingHandle::new();
         let resolution = sample_resolution();
@@ -4741,7 +4750,7 @@ mod tests {
 
     #[test]
     fn manifest_publisher_sends_manifest_and_hint() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13900);
         let handle = StreamingHandle::new();
         let resolution = sample_resolution();
@@ -4828,7 +4837,7 @@ mod tests {
 
     #[test]
     fn manifest_publisher_emits_manifest_without_feedback_when_missing_state() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13950);
         let handle = StreamingHandle::new();
         let resolution = sample_resolution();
@@ -4869,7 +4878,7 @@ mod tests {
 
     #[test]
     fn manifest_requires_privacy_route_ack_before_delivery() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13960);
         let handle = StreamingHandle::new();
         let tx = TestControlTx::default();
@@ -4982,7 +4991,7 @@ mod tests {
 
     #[test]
     fn manifest_publisher_triggers_privacy_route_provisioning() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13961);
         let mut handle = StreamingHandle::new();
         let recorder = RecordingSoranetTransport::default();
@@ -5030,7 +5039,7 @@ mod tests {
 
     #[test]
     fn manifest_publisher_skips_provisioning_when_disabled() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13962);
         let mut handle = StreamingHandle::new();
         let mut config = actual::StreamingSoranet::from_defaults();
@@ -5514,7 +5523,7 @@ mod tests {
 
     #[test]
     fn privacy_route_expiry_blocks_updates_and_manifest() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13961);
         let handle = StreamingHandle::new();
         let tx = TestControlTx::default();
@@ -5620,7 +5629,7 @@ mod tests {
 
     #[test]
     fn receiver_report_violation_returns_error() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13855);
         let handle = StreamingHandle::new().with_sync_policy(SyncPolicy {
             enabled: true,
@@ -5673,7 +5682,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn privacy_route_reprovision_required_for_extended_window() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13962);
         let handle = StreamingHandle::new();
 
@@ -5805,7 +5814,7 @@ mod tests {
 
     #[test]
     fn apply_manifest_capabilities_reflect_configured_features() {
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13990);
         let capabilities = CapabilityFlags::from_bits(0b101);
         let handle = StreamingHandle::new().with_capabilities(capabilities);
@@ -5845,7 +5854,7 @@ mod tests {
         handle.entropy_mode = EntropyMode::RansBundled;
         handle.bundle_accel = actual::BundleAcceleration::CpuSimd;
 
-        let viewer_keys = KeyPair::random();
+        let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13991);
         let resolution = sample_resolution();
         handle
@@ -5971,8 +5980,8 @@ mod tests {
             .expect("bind server");
         let listen_addr = server.local_addr().expect("listen addr");
 
-        let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let viewer_keys = KeyPair::random();
+        let publisher_keys = checked_random_ed25519_keypair();
+        let viewer_keys = checked_random_keypair();
         let publisher_peer = make_peer(&publisher_keys, 21001);
         let viewer_peer = make_peer(&viewer_keys, 21002);
 
@@ -6128,7 +6137,7 @@ mod tests {
         handle
             .apply_codec_config(&codec)
             .expect("bundle tables should load");
-        let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let publisher_keys = checked_random_ed25519_keypair();
         let publisher_peer = make_peer(&publisher_keys, 19001);
         let resolution = sample_resolution();
         handle
@@ -6167,7 +6176,7 @@ mod tests {
         handle
             .apply_codec_config(&codec)
             .expect("bundle tables should load");
-        let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let publisher_keys = checked_random_ed25519_keypair();
         let publisher_peer = make_peer(&publisher_keys, 19011);
         let resolution = sample_resolution();
         handle
@@ -6197,7 +6206,7 @@ mod tests {
 
     #[test]
     fn manifest_capabilities_track_codec_config_changes() {
-        let viewer_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let viewer_keys = checked_random_ed25519_keypair();
         let viewer_peer = make_peer(&viewer_keys, 19021);
         let resolution = sample_resolution();
 
@@ -6237,7 +6246,7 @@ mod tests {
 
     #[test]
     fn bundled_manifest_updates_acceleration_bits_on_config_change() {
-        let viewer_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let viewer_keys = checked_random_ed25519_keypair();
         let viewer_peer = make_peer(&viewer_keys, 19031);
         let resolution = sample_resolution();
 
@@ -6623,7 +6632,7 @@ mod tests {
 
     #[test]
     fn snapshot_decode_tolerates_misaligned_plaintext() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let peer = make_peer(&key_pair, 16001);
         let resolution = sample_resolution();
         let snapshot = StreamingSessionSnapshot {
@@ -6682,8 +6691,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("create temp dir");
         let snapshot_path = dir.path().join("sessions.norito");
 
-        let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let viewer_keys = KeyPair::random();
+        let publisher_keys = checked_random_ed25519_keypair();
+        let viewer_keys = checked_random_keypair();
         let publisher_peer = make_peer(&publisher_keys, 17001);
         let viewer_peer = make_peer(&viewer_keys, 17002);
         let session_id = hash_with(0x55);
@@ -6784,8 +6793,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("create temp dir");
         let snapshot_path = dir.path().join("sessions.norito");
 
-        let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let viewer_keys = KeyPair::random();
+        let publisher_keys = checked_random_ed25519_keypair();
+        let viewer_keys = checked_random_keypair();
         let publisher_peer = make_peer(&publisher_keys, 18001);
         let viewer_peer = make_peer(&viewer_keys, 18002);
         let session_id = hash_with(0x5A);
@@ -6879,13 +6888,13 @@ mod tests {
 
     #[test]
     fn snapshot_session_key_derivation_is_deterministic() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_pair = checked_random_ed25519_keypair();
         let material = StreamingKeyMaterial::new(key_pair.clone()).expect("material created");
         let first = snapshot_session_key(&material);
         let second = snapshot_session_key(&material);
         assert_eq!(first.payload(), second.payload());
 
-        let other_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let other_pair = checked_random_ed25519_keypair();
         let other_material = StreamingKeyMaterial::new(other_pair).expect("material created");
         let other = snapshot_session_key(&other_material);
         assert_ne!(first.payload(), other.payload());

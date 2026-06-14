@@ -2664,7 +2664,8 @@ mod tests {
             transaction::signed::TransactionBuilder,
         };
 
-        let keypair = KeyPair::from_seed(vec![0x53; 32], iroha_crypto::Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![0x53; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(ChainId::from("genesis-checked-signing"), authority)
             .with_instructions(core::iter::empty::<InstructionBox>())

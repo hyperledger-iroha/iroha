@@ -41,7 +41,8 @@ fn test_state(world: World) -> State {
 }
 
 fn seeded_account(seed_byte: u8) -> (AccountId, KeyPair) {
-    let key_pair = KeyPair::from_seed(vec![seed_byte; 32], Algorithm::Ed25519);
+    let key_pair = KeyPair::try_from_seed(vec![seed_byte; 32], Algorithm::Ed25519)
+        .expect("seeded implicit account receive keypair should be valid");
     let account_id = AccountId::new(key_pair.public_key().clone());
     (account_id, key_pair)
 }

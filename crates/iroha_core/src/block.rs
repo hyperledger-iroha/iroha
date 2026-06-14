@@ -3014,7 +3014,8 @@ mod new {
         pub(crate) fn update_header(self, header: &BlockHeader, private_key: &PrivateKey) -> Self {
             let signature = BlockSignature::new(
                 0,
-                iroha_crypto::SignatureOf::from_hash(private_key, header.hash()),
+                iroha_crypto::SignatureOf::try_from_hash(private_key, header.hash())
+                    .expect("test block signing should succeed"),
             );
 
             Self {
@@ -12035,6 +12036,19 @@ pub(crate) mod valid {
             tx::AcceptedTransaction,
         };
 
+        fn checked_block_signature(
+            private_key: &PrivateKey,
+            block_hash: HashOf<BlockHeader>,
+        ) -> SignatureOf<BlockHeader> {
+            SignatureOf::try_from_hash(private_key, block_hash)
+                .expect("test block signing should succeed")
+        }
+
+        fn checked_seeded_keypair(seed: &[u8], algorithm: Algorithm) -> KeyPair {
+            KeyPair::try_from_seed(seed.to_vec(), algorithm)
+                .expect("test block seeded keypair should be valid")
+        }
+
         fn insert_consensus_key(
             world: &mut World,
             name: &str,
@@ -12083,9 +12097,8 @@ pub(crate) mod valid {
         #[cfg(feature = "bls")]
         #[test]
         fn bls_normal_public_key_check_uses_checked_algorithm_access() {
-            let bls_key = KeyPair::from_seed(b"checked-bls-key".to_vec(), Algorithm::BlsNormal);
-            let ed25519_key =
-                KeyPair::from_seed(b"checked-ed25519-key".to_vec(), Algorithm::Ed25519);
+            let bls_key = checked_seeded_keypair(b"checked-bls-key", Algorithm::BlsNormal);
+            let ed25519_key = checked_seeded_keypair(b"checked-ed25519-key", Algorithm::Ed25519);
 
             assert!(ValidBlock::is_bls_normal_public_key(bls_key.public_key()));
             assert!(!ValidBlock::is_bls_normal_public_key(
@@ -12687,7 +12700,7 @@ pub(crate) mod valid {
                 .map(|(i, key_pair)| {
                     BlockSignature::new(
                         i as u64,
-                        SignatureOf::from_hash(key_pair.private_key(), block_hash),
+                        checked_block_signature(key_pair.private_key(), block_hash),
                     )
                 })
                 .try_for_each(|signature| block.add_signature(signature, &topology))
@@ -12853,17 +12866,17 @@ pub(crate) mod valid {
             let mut signatures = BTreeSet::new();
             signatures.insert(BlockSignature::new(
                 0,
-                SignatureOf::from_hash(key_pairs[0].private_key(), block_hash),
+                checked_block_signature(key_pairs[0].private_key(), block_hash),
             ));
             signatures.insert(BlockSignature::new(
                 1,
-                SignatureOf::from_hash(key_pairs[1].private_key(), block_hash),
+                checked_block_signature(key_pairs[1].private_key(), block_hash),
             ));
             // Duplicate index with a different signature payload.
             let spoofing_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             signatures.insert(BlockSignature::new(
                 1,
-                SignatureOf::from_hash(spoofing_key.private_key(), block_hash),
+                checked_block_signature(spoofing_key.private_key(), block_hash),
             ));
 
             let err = block
@@ -12895,13 +12908,13 @@ pub(crate) mod valid {
             let mut signatures = BTreeSet::new();
             signatures.insert(BlockSignature::new(
                 0,
-                SignatureOf::from_hash(key_pairs[0].private_key(), block_hash),
+                checked_block_signature(key_pairs[0].private_key(), block_hash),
             ));
             // Proxy tail index signed with the wrong key.
             let wrong = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             signatures.insert(BlockSignature::new(
                 1,
-                SignatureOf::from_hash(wrong.private_key(), block_hash),
+                checked_block_signature(wrong.private_key(), block_hash),
             ));
 
             let err = block
@@ -12927,15 +12940,15 @@ pub(crate) mod valid {
             // Leader slot signed with validator key instead of the leader's.
             signatures.insert(BlockSignature::new(
                 0,
-                SignatureOf::from_hash(key_pairs[1].private_key(), block_hash),
+                checked_block_signature(key_pairs[1].private_key(), block_hash),
             ));
             signatures.insert(BlockSignature::new(
                 1,
-                SignatureOf::from_hash(key_pairs[1].private_key(), block_hash),
+                checked_block_signature(key_pairs[1].private_key(), block_hash),
             ));
             signatures.insert(BlockSignature::new(
                 2,
-                SignatureOf::from_hash(key_pairs[2].private_key(), block_hash),
+                checked_block_signature(key_pairs[2].private_key(), block_hash),
             ));
 
             let err = block
@@ -12980,19 +12993,19 @@ pub(crate) mod valid {
             let mut signatures = BTreeSet::new();
             signatures.insert(BlockSignature::new(
                 0,
-                SignatureOf::from_hash(key_pairs[0].private_key(), block_hash),
+                checked_block_signature(key_pairs[0].private_key(), block_hash),
             ));
             signatures.insert(BlockSignature::new(
                 1,
-                SignatureOf::from_hash(key_pairs[1].private_key(), block_hash),
+                checked_block_signature(key_pairs[1].private_key(), block_hash),
             ));
             signatures.insert(BlockSignature::new(
                 2,
-                SignatureOf::from_hash(key_pairs[2].private_key(), block_hash),
+                checked_block_signature(key_pairs[2].private_key(), block_hash),
             ));
             signatures.insert(BlockSignature::new(
                 3,
-                SignatureOf::from_hash(bogus_set_b.private_key(), block_hash),
+                checked_block_signature(bogus_set_b.private_key(), block_hash),
             ));
 
             let err = block
@@ -13019,7 +13032,7 @@ pub(crate) mod valid {
                 .add_signature(
                     BlockSignature::new(
                         2,
-                        SignatureOf::from_hash(key_pairs[2].private_key(), block_hash),
+                        checked_block_signature(key_pairs[2].private_key(), block_hash),
                     ),
                     &topology,
                 )
@@ -13048,7 +13061,7 @@ pub(crate) mod valid {
                 .add_signature(
                     BlockSignature::new(
                         1,
-                        SignatureOf::from_hash(key_pairs[1].private_key(), block_hash),
+                        checked_block_signature(key_pairs[1].private_key(), block_hash),
                     ),
                     &topology,
                 )
@@ -13061,11 +13074,11 @@ pub(crate) mod valid {
             let mut replacement = BTreeSet::new();
             replacement.insert(BlockSignature::new(
                 0,
-                SignatureOf::from_hash(key_pairs[0].private_key(), block_hash),
+                checked_block_signature(key_pairs[0].private_key(), block_hash),
             ));
             replacement.insert(BlockSignature::new(
                 1,
-                SignatureOf::from_hash(key_pairs[1].private_key(), block_hash),
+                checked_block_signature(key_pairs[1].private_key(), block_hash),
             ));
 
             let err = block
@@ -14557,7 +14570,7 @@ pub(crate) mod valid {
             assert_ne!(expected, forged, "fixture forged hash must differ");
             let signature = BlockSignature::new(
                 0,
-                SignatureOf::from_hash(leader.private_key(), chained.0.header.hash()),
+                checked_block_signature(leader.private_key(), chained.0.header.hash()),
             );
             let signed = SignedBlock::presigned_with_payload(
                 signature,
@@ -15035,7 +15048,7 @@ pub(crate) mod valid {
             signed
                 .add_signature(BlockSignature::new(
                     proxy_idx as u64,
-                    SignatureOf::from_hash(proxy_tail.private_key(), block_hash),
+                    checked_block_signature(proxy_tail.private_key(), block_hash),
                 ))
                 .expect("proxy tail signature");
             assert_eq!(signed.external_transactions().count(), 1);
@@ -15126,7 +15139,7 @@ pub(crate) mod valid {
             signed
                 .add_signature(BlockSignature::new(
                     proxy_idx as u64,
-                    SignatureOf::from_hash(proxy_tail.private_key(), block_hash),
+                    checked_block_signature(proxy_tail.private_key(), block_hash),
                 ))
                 .expect("proxy tail signature");
             assert_eq!(signed.external_transactions().count(), 1);
@@ -15276,7 +15289,7 @@ pub(crate) mod valid {
                 .map(|(i, key_pair)| {
                     BlockSignature::new(
                         i as u64,
-                        SignatureOf::from_hash(key_pair.private_key(), block_hash),
+                        checked_block_signature(key_pair.private_key(), block_hash),
                     )
                 })
                 .try_for_each(|signature| block.add_signature(signature, &topology))
@@ -19195,6 +19208,10 @@ mod tests {
         (world, keypairs)
     }
 
+    fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
+        Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+    }
+
     fn signed_native_amx_attestation_qc(
         phase: NativeAmxPhase,
         source_id: [u8; iroha_crypto::Hash::LENGTH],
@@ -19224,7 +19241,7 @@ mod tests {
         let signatures = keypairs
             .iter()
             .map(|keypair| {
-                Signature::new(keypair.private_key(), &preimage)
+                checked_signature(keypair.private_key(), &preimage)
                     .payload()
                     .to_vec()
             })
@@ -24126,9 +24143,12 @@ mod tests {
         use crate::sumeragi::network_topology::Topology;
 
         // 3 BLS peers
-        let kp0 = KeyPair::from_seed(b"seed0".to_vec(), Algorithm::BlsNormal);
-        let kp1 = KeyPair::from_seed(b"seed1".to_vec(), Algorithm::BlsNormal);
-        let kp2 = KeyPair::from_seed(b"seed2".to_vec(), Algorithm::BlsNormal);
+        let kp0 = KeyPair::try_from_seed(b"seed0".to_vec(), Algorithm::BlsNormal)
+            .expect("test BLS validator keypair should be valid");
+        let kp1 = KeyPair::try_from_seed(b"seed1".to_vec(), Algorithm::BlsNormal)
+            .expect("test BLS validator keypair should be valid");
+        let kp2 = KeyPair::try_from_seed(b"seed2".to_vec(), Algorithm::BlsNormal)
+            .expect("test BLS validator keypair should be valid");
         let peers = vec![
             PeerId::new(kp0.public_key().clone()),
             PeerId::new(kp1.public_key().clone()),
@@ -24171,6 +24191,14 @@ mod commit_signature_tally_tests {
         sumeragi::{consensus::ValidatorIndex, network_topology::Topology},
     };
 
+    fn checked_block_signature(
+        private_key: &iroha_crypto::PrivateKey,
+        block_hash: HashOf<BlockHeader>,
+    ) -> SignatureOf<BlockHeader> {
+        SignatureOf::try_from_hash(private_key, block_hash)
+            .expect("test block signing should succeed")
+    }
+
     #[cfg(feature = "bls")]
     #[test]
     fn commit_signature_tally_dedups_and_counts_set_b() {
@@ -24188,10 +24216,10 @@ mod commit_signature_tally_tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let hash = header.hash();
         let signatures = BTreeSet::from([
-            BlockSignature::new(0, SignatureOf::from_hash(kp_leader.private_key(), hash)),
-            BlockSignature::new(1, SignatureOf::from_hash(kp_validator.private_key(), hash)),
-            BlockSignature::new(2, SignatureOf::from_hash(kp_proxy.private_key(), hash)),
-            BlockSignature::new(3, SignatureOf::from_hash(kp_set_b.private_key(), hash)),
+            BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
+            BlockSignature::new(1, checked_block_signature(kp_validator.private_key(), hash)),
+            BlockSignature::new(2, checked_block_signature(kp_proxy.private_key(), hash)),
+            BlockSignature::new(3, checked_block_signature(kp_set_b.private_key(), hash)),
         ]);
         let block = DataBlockBuilder::new(header).build(signatures);
 
@@ -24215,9 +24243,9 @@ mod commit_signature_tally_tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let hash = header.hash();
         let signatures = BTreeSet::from([
-            BlockSignature::new(0, SignatureOf::from_hash(kp_leader.private_key(), hash)),
-            BlockSignature::new(1, SignatureOf::from_hash(kp_proxy.private_key(), hash)),
-            BlockSignature::new(1, SignatureOf::from_hash(kp_dup.private_key(), hash)),
+            BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
+            BlockSignature::new(1, checked_block_signature(kp_proxy.private_key(), hash)),
+            BlockSignature::new(1, checked_block_signature(kp_dup.private_key(), hash)),
         ]);
         let block = DataBlockBuilder::new(header).build(signatures);
 
@@ -24242,8 +24270,8 @@ mod commit_signature_tally_tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let hash = header.hash();
         let signatures = BTreeSet::from([
-            BlockSignature::new(0, SignatureOf::from_hash(kp_leader.private_key(), hash)),
-            BlockSignature::new(1, SignatureOf::from_hash(kp_spoof.private_key(), hash)),
+            BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
+            BlockSignature::new(1, checked_block_signature(kp_spoof.private_key(), hash)),
         ]);
         let block = DataBlockBuilder::new(header).build(signatures);
 
@@ -24268,8 +24296,8 @@ mod commit_signature_tally_tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let hash = header.hash();
         let signatures = BTreeSet::from([
-            BlockSignature::new(0, SignatureOf::from_hash(kp_spoof.private_key(), hash)),
-            BlockSignature::new(1, SignatureOf::from_hash(kp_proxy.private_key(), hash)),
+            BlockSignature::new(0, checked_block_signature(kp_spoof.private_key(), hash)),
+            BlockSignature::new(1, checked_block_signature(kp_proxy.private_key(), hash)),
         ]);
         let block = DataBlockBuilder::new(header).build(signatures);
 
@@ -24295,10 +24323,10 @@ mod commit_signature_tally_tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let hash = header.hash();
         let signatures = BTreeSet::from([
-            BlockSignature::new(0, SignatureOf::from_hash(kp_leader.private_key(), hash)),
-            BlockSignature::new(1, SignatureOf::from_hash(kp_validator.private_key(), hash)),
-            BlockSignature::new(2, SignatureOf::from_hash(kp_proxy.private_key(), hash)),
-            BlockSignature::new(3, SignatureOf::from_hash(kp_spoof.private_key(), hash)),
+            BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
+            BlockSignature::new(1, checked_block_signature(kp_validator.private_key(), hash)),
+            BlockSignature::new(2, checked_block_signature(kp_proxy.private_key(), hash)),
+            BlockSignature::new(3, checked_block_signature(kp_spoof.private_key(), hash)),
         ]);
         let block = DataBlockBuilder::new(header).build(signatures);
 
@@ -24320,8 +24348,8 @@ mod commit_signature_tally_tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let hash = header.hash();
         let signatures = BTreeSet::from([
-            BlockSignature::new(0, SignatureOf::from_hash(kp_proxy.private_key(), hash)),
-            BlockSignature::new(1, SignatureOf::from_hash(kp_proxy.private_key(), hash)),
+            BlockSignature::new(0, checked_block_signature(kp_proxy.private_key(), hash)),
+            BlockSignature::new(1, checked_block_signature(kp_proxy.private_key(), hash)),
         ]);
         let block =
             ValidBlock::new_unverified_for_tests(DataBlockBuilder::new(header).build(signatures));
@@ -24386,15 +24414,15 @@ mod commit_signature_tally_tests {
         let mut signatures = BTreeSet::new();
         signatures.insert(BlockSignature::new(
             0,
-            SignatureOf::from_hash(kp_leader.private_key(), hash),
+            checked_block_signature(kp_leader.private_key(), hash),
         ));
         signatures.insert(BlockSignature::new(
             1,
-            SignatureOf::from_hash(kp_validator.private_key(), hash),
+            checked_block_signature(kp_validator.private_key(), hash),
         ));
         signatures.insert(BlockSignature::new(
             3,
-            SignatureOf::from_hash(kp_set_b.private_key(), hash),
+            checked_block_signature(kp_set_b.private_key(), hash),
         ));
         let block =
             ValidBlock::new_unverified_for_tests(DataBlockBuilder::new(header).build(signatures));
@@ -24434,19 +24462,19 @@ mod commit_signature_tally_tests {
         let mut signatures = BTreeSet::new();
         signatures.insert(BlockSignature::new(
             0,
-            SignatureOf::from_hash(kp_leader.private_key(), hash),
+            checked_block_signature(kp_leader.private_key(), hash),
         ));
         signatures.insert(BlockSignature::new(
             1,
-            SignatureOf::from_hash(kp_validator.private_key(), hash),
+            checked_block_signature(kp_validator.private_key(), hash),
         ));
         signatures.insert(BlockSignature::new(
             2,
-            SignatureOf::from_hash(kp_extra_validator.private_key(), hash),
+            checked_block_signature(kp_extra_validator.private_key(), hash),
         ));
         signatures.insert(BlockSignature::new(
             3,
-            SignatureOf::from_hash(kp_proxy.private_key(), hash),
+            checked_block_signature(kp_proxy.private_key(), hash),
         ));
         let block =
             ValidBlock::new_unverified_for_tests(DataBlockBuilder::new(header).build(signatures));
@@ -24482,7 +24510,7 @@ mod commit_signature_tally_tests {
         let mut invalid = BTreeSet::new();
         invalid.insert(BlockSignature::new(
             1,
-            SignatureOf::from_hash(kp_proxy.private_key(), hash),
+            checked_block_signature(kp_proxy.private_key(), hash),
         ));
 
         let result = vb.replace_signatures(invalid, &topology).unpack(|_| {});

@@ -51,7 +51,8 @@ fn seeded_account(seed: u8) -> AccountId {
 }
 
 fn seeded_account_in(seed: u8, domain_name: &str) -> AccountId {
-    let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+    let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+        .expect("seeded IVM host mapping account keypair should be valid");
     let _domain = DomainId::try_new(domain_name, "universal").unwrap();
     AccountId::new(keypair.public_key().clone())
 }

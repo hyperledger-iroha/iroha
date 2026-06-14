@@ -119,7 +119,8 @@ mod tests {
 
     #[test]
     fn roundtrip_i105_encoding() {
-        let key_pair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
+            .expect("derive account-address fixture key");
         let account = AccountId::new(key_pair.public_key().clone());
 
         let encoded = encode_account_id_to_i105_for_discriminant(&account, 42).expect("encode");
@@ -132,7 +133,8 @@ mod tests {
 
     #[test]
     fn i105_encoding_matches_data_model() {
-        let key_pair = KeyPair::from_seed(vec![0xCD; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![0xCD; 32], Algorithm::Ed25519)
+            .expect("derive account-address fixture key");
         let account = AccountId::new(key_pair.public_key().clone());
 
         let encoded = encode_account_id_to_i105(&account).expect("encode i105");

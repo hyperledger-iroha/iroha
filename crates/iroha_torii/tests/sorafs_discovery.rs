@@ -40,7 +40,7 @@ use iroha_core::{
     state::{State, StateReadOnly, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{KeyPair, PrivateKey};
+use iroha_crypto::{KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     ChainId, IntoKeyValue, Registrable,
     block::BlockHeader,
@@ -1242,7 +1242,7 @@ fn encode_alias_proof_bytes(
         PrivateKey::from_bytes(iroha_crypto::Algorithm::Ed25519, &[0x33; 32]).expect("seeded key"),
     )
     .expect("derive keypair");
-    let signature = iroha_crypto::Signature::new(keypair.private_key(), digest.as_ref());
+    let signature = checked_signature(keypair.private_key(), digest.as_ref());
     let (algorithm, signer_bytes) = keypair
         .public_key()
         .try_to_bytes()
@@ -1256,6 +1256,10 @@ fn encode_alias_proof_bytes(
         signature: signature.payload().to_vec(),
     });
     to_bytes(&bundle).expect("encode alias proof bundle")
+}
+
+fn checked_signature(private_key: &PrivateKey, payload: &[u8]) -> Signature {
+    Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
 
 fn manifest_request_fixture<F>(submitted_epoch: u64, tweak: F) -> ManifestRequestFixture

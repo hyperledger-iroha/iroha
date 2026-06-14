@@ -42,11 +42,26 @@ const STAKE_QUORUM_WAIT: Duration = Duration::from_secs(5);
 type CommitCertificate = Qc;
 
 fn validator_account_id_for_index(index: usize) -> AccountId {
-    let key_pair = KeyPair::from_seed(
+    let key_pair = KeyPair::try_from_seed(
         format!("integration_tests::sumeragi_commit_certificates::{index}").into_bytes(),
         Algorithm::Ed25519,
-    );
+    )
+    .expect("fixture Sumeragi commit-certificate validator key");
     AccountId::new(key_pair.public_key().clone())
+}
+
+#[test]
+fn validator_account_id_for_index_uses_checked_seed_derivation() {
+    let expected_key_pair = KeyPair::try_from_seed(
+        b"integration_tests::sumeragi_commit_certificates::0".to_vec(),
+        Algorithm::Ed25519,
+    )
+    .expect("fixture Sumeragi commit-certificate validator key");
+
+    assert_eq!(
+        validator_account_id_for_index(0),
+        AccountId::new(expected_key_pair.public_key().clone()),
+    );
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {

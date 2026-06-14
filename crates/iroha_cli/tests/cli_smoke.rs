@@ -111,11 +111,20 @@ fn sample_reward_config_json() -> Value {
     })
 }
 
+fn fixture_key_pair_from_seed(seed: Vec<u8>) -> KeyPair {
+    KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+        .expect("fixture seed must derive a valid keypair")
+}
+
+fn fixture_key_pair(seed: u8) -> KeyPair {
+    fixture_key_pair_from_seed(vec![seed; 32])
+}
+
 fn account_id(name: &str) -> AccountId {
     let digest = hash(name.as_bytes());
     let mut seed = digest.as_bytes().to_vec();
     seed.resize(32, 0);
-    let key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+    let key_pair = fixture_key_pair_from_seed(seed);
     AccountId::new(key_pair.public_key().clone())
 }
 
@@ -148,8 +157,17 @@ fn parse_account_literal(literal: &str) -> AccountId {
 }
 
 fn account_id_for_domain(_label: &str, seed: u8) -> AccountId {
-    let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+    let key_pair = fixture_key_pair(seed);
     AccountId::new(key_pair.public_key().clone())
+}
+
+#[test]
+fn fixture_key_pair_uses_checked_seed_derivation() {
+    assert_eq!(fixture_key_pair(0x11).algorithm(), Algorithm::Ed25519);
+    assert!(
+        KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+        "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+    );
 }
 
 fn workspace_root() -> PathBuf {
@@ -1928,10 +1946,7 @@ fn gov_council_gen_vrf_outputs_expected_candidate() {
     fn expected_normal_candidate(seed: &[u8; 64], chain_id: &str) -> (String, String, String) {
         let alias = format!("node{}@{}", 0, "wonderland");
         let account_seed = iroha_crypto::Hash::new(alias.as_bytes());
-        let account_keypair = KeyPair::from_seed(
-            account_seed.as_ref().to_vec(),
-            iroha_crypto::Algorithm::Ed25519,
-        );
+        let account_keypair = fixture_key_pair_from_seed(account_seed.as_ref().to_vec());
         let (account_public_key, _) = account_keypair.into_parts();
         let account_id = iroha::data_model::account::AccountId::new(account_public_key);
         let account_id_str = account_id.to_string();
@@ -5064,7 +5079,7 @@ fn zk_prover_reports_flow_against_torii_mock() {
 
 #[test]
 fn address_convert_outputs_i105_by_default() {
-    let key_pair = KeyPair::from_seed(vec![0xA1; 32], Algorithm::Ed25519);
+    let key_pair = fixture_key_pair(0xA1);
     let account = AccountId::new(key_pair.public_key().clone());
 
     let expected_i105 =
@@ -5098,7 +5113,7 @@ fn address_convert_outputs_i105_by_default() {
 
 #[test]
 fn address_convert_json_summary_contains_i105_and_canonical_hex() {
-    let key_pair = KeyPair::from_seed(vec![0xB2; 32], Algorithm::Ed25519);
+    let key_pair = fixture_key_pair(0xB2);
     let account = AccountId::new(key_pair.public_key().clone());
 
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105 string");
@@ -5167,7 +5182,7 @@ fn address_convert_json_summary_contains_i105_and_canonical_hex() {
 fn address_convert_rejects_domain_suffix() {
     let domain: iroha::data_model::domain::DomainId =
         iroha_data_model::domain::DomainId::try_new("sora", "universal").expect("domain");
-    let key_pair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
+    let key_pair = fixture_key_pair(0xAB);
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
     let literal = format!("{i105}@{domain}");
@@ -5201,7 +5216,7 @@ fn address_convert_rejects_domain_suffix() {
 
 #[test]
 fn address_convert_json_rejects_domain_suffix() {
-    let key_pair = KeyPair::from_seed(vec![0xC4; 32], Algorithm::Ed25519);
+    let key_pair = fixture_key_pair(0xC4);
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
     let literal = format!("{i105}@universal");
@@ -5238,7 +5253,7 @@ fn address_convert_json_rejects_domain_suffix() {
 
 #[test]
 fn address_convert_json_summary_is_domainless() {
-    let key_pair = KeyPair::from_seed(vec![0xC4; 32], Algorithm::Ed25519);
+    let key_pair = fixture_key_pair(0xC4);
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
 

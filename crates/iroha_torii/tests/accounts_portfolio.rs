@@ -367,6 +367,8 @@ fn account_id_from_signatory(_domain_id: DomainId, signatory_hex: &str) -> Accou
 
 fn account_id_from_seed(_domain_id: &DomainId, seed_byte: u8) -> AccountId {
     let seed = vec![seed_byte; 32];
-    let (public, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
+    let (public, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+        .expect("derive portfolio account key")
+        .into_parts();
     AccountId::new(public)
 }

@@ -1499,6 +1499,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       ),
       true,
     );
+    assert.equal(isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(openingLen), true);
   }
   for (const openingLen of [0, 1, 3, 65, 129, -2, 2.5, Number.NaN, "2", true]) {
     assert.equal(
@@ -2411,6 +2412,7 @@ test("package dist Kagemusha recursive spend availability rejects coerced ABI ve
       };
 
       assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false);
+      assert.equal(isKagemushaRecursiveCompactPaymentTokenNativeAvailable(), false);
       assert.equal(
         isKagemushaRecursiveCompactPaymentTokenNativeAvailable(),
         false,

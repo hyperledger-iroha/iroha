@@ -666,7 +666,18 @@ pub struct VrfEpochRecord {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+
     use super::*;
+
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked consensus DTO fixture keypair")
+    }
+
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm)
+            .expect("generate checked consensus DTO fixture keypair")
+    }
 
     #[test]
     fn vrf_epoch_record_roundtrip() {
@@ -741,8 +752,8 @@ mod tests {
 
     #[test]
     fn validator_set_checkpoint_roundtrip_and_hash() {
-        let kp_a = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let kp_b = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_a = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_b = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
         let validator_set = vec![
             crate::peer::PeerId::new(kp_a.public_key().clone()),
             crate::peer::PeerId::new(kp_b.public_key().clone()),
@@ -803,8 +814,8 @@ mod tests {
 
     #[test]
     fn commit_qc_roundtrip() {
-        let kp_a = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let kp_b = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_a = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_b = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
         let validator_set = vec![
             crate::peer::PeerId::new(kp_a.public_key().clone()),
             crate::peer::PeerId::new(kp_b.public_key().clone()),
@@ -848,7 +859,7 @@ mod tests {
     #[test]
     fn consensus_key_record_liveness_respects_activation_and_expiry() {
         let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "v1");
-        let pk = iroha_crypto::KeyPair::random().public_key().clone();
+        let pk = checked_random_keypair().public_key().clone();
         let record = ConsensusKeyRecord {
             id,
             public_key: pk,
@@ -871,7 +882,7 @@ mod tests {
     #[test]
     fn consensus_key_record_disabled_is_never_live() {
         let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "v1");
-        let pk = iroha_crypto::KeyPair::random().public_key().clone();
+        let pk = checked_random_keypair().public_key().clone();
         let record = ConsensusKeyRecord {
             id,
             public_key: pk,

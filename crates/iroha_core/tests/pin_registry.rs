@@ -1062,7 +1062,11 @@ fn alias_binding_for(
     };
 
     let digest = alias_proof_signature_digest(&bundle);
-    let signature = Signature::new(council_keys.private_key(), digest.as_ref());
+    let signature = checked_signature(
+        council_keys.private_key(),
+        digest.as_ref(),
+        "alias proof council signature",
+    );
     let public_bytes = checked_ed25519_public_key_bytes(council_keys, "alias council public key");
     let signer: [u8; 32] = public_bytes
         .try_into()
@@ -1097,9 +1101,18 @@ fn checked_ed25519_public_key_bytes<'a>(keypair: &'a KeyPair, context: &str) -> 
     public_bytes
 }
 
+fn checked_signature(private_key: &PrivateKey, payload: &[u8], context: &str) -> Signature {
+    Signature::try_new(private_key, payload)
+        .unwrap_or_else(|err| panic!("{context} should sign successfully: {err}"))
+}
+
 fn build_envelope(record: &PinManifestRecord, keypair: &KeyPair) -> Vec<u8> {
     let mut sig_entry = json::Map::new();
-    let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
+    let signature = checked_signature(
+        keypair.private_key(),
+        record.digest.as_bytes(),
+        "pin manifest envelope signature",
+    );
     let public_bytes_hex = hex::encode(checked_ed25519_public_key_bytes(
         keypair,
         "pin fixture signer public key",

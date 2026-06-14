@@ -841,7 +841,9 @@ mod tests {
         let _domain: crate::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let (public_key, _) =
-            iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
+            iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("fixture seed derives Ed25519 keypair")
+                .into_parts();
         crate::account::AccountId::new(public_key)
     }
 

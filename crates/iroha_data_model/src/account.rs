@@ -1338,9 +1338,18 @@ mod tests {
     use super::*;
     use crate::{name::Name, nexus::DataSpaceId};
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked account fixture keypair")
+    }
+
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm)
+            .expect("generate checked account fixture keypair")
+    }
+
     #[test]
     fn parse_account_id() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let literal = account_id.to_string();
         let parsed = AccountId::parse_encoded(&literal)
@@ -1359,7 +1368,7 @@ mod tests {
 
     #[test]
     fn account_signatory_exposed() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let public_key = key_pair.public_key().clone();
         let account_id = AccountId::new(public_key.clone());
         let account = Account::new(account_id.clone()).build(&account_id);
@@ -1368,7 +1377,7 @@ mod tests {
 
     #[test]
     fn display_renders_i105_for_secp256k1() {
-        let kp = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let kp = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
         let account_id = AccountId::new(kp.public_key().clone());
 
         let rendered = account_id.to_string();
@@ -1380,7 +1389,7 @@ mod tests {
 
     #[test]
     fn rekey_record_uses_account_alias() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let signatory = key_pair.public_key().clone();
         let account_id = AccountId::new(signatory.clone());
         let label = rekey::AccountAlias::new(
@@ -1409,7 +1418,7 @@ mod tests {
 
     #[test]
     fn rekey_record_absent_without_label() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let account = Account {
             id: account_id,
@@ -1425,8 +1434,8 @@ mod tests {
     #[test]
     fn multisig_account_exposes_no_primary_signatory() {
         let members = vec![
-            MultisigMember::new(KeyPair::random().public_key().clone(), 1).expect("member"),
-            MultisigMember::new(KeyPair::random().public_key().clone(), 1).expect("member"),
+            MultisigMember::new(checked_random_keypair().public_key().clone(), 1).expect("member"),
+            MultisigMember::new(checked_random_keypair().public_key().clone(), 1).expect("member"),
         ];
         let policy = MultisigPolicy::new(2, members).expect("policy");
         let account_id = AccountId::new_multisig(policy);
@@ -1456,8 +1465,8 @@ mod tests {
     #[test]
     fn multisig_account_id_roundtrip() {
         let members = vec![
-            MultisigMember::new(KeyPair::random().public_key().clone(), 1).expect("member"),
-            MultisigMember::new(KeyPair::random().public_key().clone(), 2).expect("member"),
+            MultisigMember::new(checked_random_keypair().public_key().clone(), 1).expect("member"),
+            MultisigMember::new(checked_random_keypair().public_key().clone(), 2).expect("member"),
         ];
         let policy = MultisigPolicy::new(2, members).expect("policy");
         let account_id = AccountId::new_multisig(policy.clone());
@@ -1476,7 +1485,7 @@ mod tests {
 
     #[test]
     fn account_subject_id_is_domainless() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let account = AccountId::new(key_pair.public_key().clone());
 
         assert_eq!(account.subject_id(), account);
@@ -1484,7 +1493,7 @@ mod tests {
 
     #[test]
     fn account_accessor_returns_self() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let account = AccountId::new(key_pair.public_key().clone());
 
         assert_eq!(account.account(), &account);
@@ -1503,7 +1512,7 @@ mod tests {
 
     #[test]
     fn account_builder_carries_uaid_into_details() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::builder"));
 
@@ -1524,7 +1533,7 @@ mod tests {
 
     #[test]
     fn domainless_account_builder_roundtrips_without_domain_state() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let account_id = AccountId::new(key_pair.public_key().clone());
 
         let account = Account::new(account_id.clone()).build(&account_id);
@@ -1559,10 +1568,14 @@ mod json_tests {
             .expect("derive checked account JSON fixture keypair")
     }
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked account JSON fixture keypair")
+    }
+
     #[test]
     fn account_json_roundtrip() {
         let _guard = guard_chain_discriminant();
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let id = AccountId::new(keypair.public_key().clone());
         let account = Account {
             id,
@@ -1581,7 +1594,7 @@ mod json_tests {
     #[test]
     fn account_id_json_uses_canonical_i105_literal() {
         let _guard = guard_chain_discriminant();
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let id = AccountId::new(keypair.public_key().clone());
 
         let json = norito::json::to_json(&id).expect("serialize account id");
@@ -1620,7 +1633,7 @@ mod json_tests {
     #[test]
     fn account_id_json_rejects_legacy_norito_literal() {
         let _guard = guard_chain_discriminant();
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let id = AccountId::new(keypair.public_key().clone());
         let payload_hex = hex::encode(id.encode());
         let legacy = format!("\"norito:{payload_hex}\"");
@@ -1637,7 +1650,7 @@ mod json_tests {
     #[test]
     fn new_account_json_roundtrip_defaults() {
         let _guard = guard_chain_discriminant();
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(id.clone());
 
@@ -1658,7 +1671,7 @@ mod json_tests {
     #[test]
     fn new_domainless_account_json_roundtrip_defaults() {
         let _guard = guard_chain_discriminant();
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(id.clone());
 
@@ -1674,7 +1687,7 @@ mod json_tests {
     #[test]
     fn new_account_json_roundtrip_with_alias_and_uaid() {
         let _guard = guard_chain_discriminant();
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let id = AccountId::new(keypair.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert("title".parse().expect("key"), "queen");
@@ -1707,7 +1720,7 @@ mod json_tests {
     #[test]
     fn new_account_json_allows_domainless_payload() {
         let _guard = guard_chain_discriminant();
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let id = AccountId::new(keypair.public_key().clone());
         let i105 = id.canonical_i105().expect("i105 encoding");
         let payload = format!("{{\"id\":\"{i105}\"}}");
@@ -1723,7 +1736,7 @@ mod json_tests {
     #[test]
     fn new_account_norito_roundtrip_preserves_packed_self_delimiting_fields() {
         let _guard = guard_chain_discriminant();
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let id = AccountId::new(keypair.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert("title".parse().expect("metadata key"), "queen");
@@ -1752,7 +1765,7 @@ mod json_tests {
     #[test]
     fn register_account_norito_roundtrip_matches_kagami_genesis_shape() {
         let _guard = guard_chain_discriminant();
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let id = AccountId::new(keypair.public_key().clone());
         let register = Register::account(NewAccount::new(id));
 
@@ -1765,7 +1778,7 @@ mod json_tests {
     #[test]
     fn new_account_json_rejects_unknown_fields() {
         let _guard = guard_chain_discriminant();
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let id = AccountId::new(keypair.public_key().clone());
         let i105 = id.canonical_i105().expect("i105 encoding");
         let payload = format!("{{\"id\":\"{i105}\",\"metadata\":{{}},\"extra\":true}}");

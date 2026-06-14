@@ -1889,6 +1889,30 @@ def test_release_readiness_active_launch_policy_is_ethereum_mainnet() -> None:
     )
 
 
+def test_release_readiness_source_inventory_emits_all_strict_required_gates(
+    tmp_path: Path,
+) -> None:
+    """Generated source inventory must match the strict verifier gate set."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    generated_gates = set(readiness["source_inventory"])
+    required_gates = set(verifier.SOURCE_INVENTORY_REQUIRED_GATES)
+    assert generated_gates == required_gates
+    assert len(readiness["source_inventory"]) == len(required_gates)
+
+
 def test_release_readiness_submission_surfaces_match_supported_launch_scope() -> None:
     """Public submission surfaces must match the supported SCCP launch lanes."""
 
@@ -2900,6 +2924,90 @@ def test_release_readiness_report_guards_release_manifest_readiness_flags_gate_i
 
             assert any(
                 "SCCP release manifest readiness-flags source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+
+def test_release_readiness_report_guards_route_allowlist_canary_summary_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin route-canary summary hardening."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._sccp_route_allowlist_canary_summary_gate_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_ROUTE_ALLOWLIST_CANARY_SUMMARY_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"route-canary-summary-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = (
+                report._sccp_route_allowlist_canary_summary_gate_inventory_errors(
+                    ((sparse_source, required_markers),)
+                )
+            )
+
+            assert any(
+                "SCCP route allowlist canary summary source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+
+def test_release_readiness_report_guards_transparent_openverify_summary_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin OpenVerify summary hardening."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._sccp_transparent_openverify_summary_gate_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_TRANSPARENT_OPENVERIFY_SUMMARY_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"openverify-summary-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = report._sccp_transparent_openverify_summary_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP transparent OpenVerify summary source inventory" in error
                 and str(sparse_source) in error
                 and f"missing marker: {removed_marker}" in error
                 for error in errors
@@ -7100,6 +7208,86 @@ def test_release_readiness_report_blocks_missing_release_manifest_readiness_flag
         "validation_blockers": [blocker],
     }
     assert readiness["source_inventory"]["release_artifact_path_text_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_transparent_openverify_summary_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when OpenVerify summary checks drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP transparent OpenVerify summary source inventory "
+        "crates/iroha_sccp/src/lib.rs missing marker: "
+        "public_inputs.len() != 6"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_transparent_openverify_summary_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["transparent_openverify_summary_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["release_manifest_readiness_flags_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_route_allowlist_canary_summary_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when route-canary summary checks drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP route allowlist canary summary source inventory "
+        "crates/iroha_sccp/src/lib.rs missing marker: "
+        "route_canary_route_allowlist_hash == route_allowlist_hash"
+    )
+    monkeypatch.setattr(
+        report,
+        "_sccp_route_allowlist_canary_summary_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["route_allowlist_canary_summary_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["transparent_openverify_summary_gate"] == {
         "validation_status": "passed",
         "validation_blockers": [],
     }

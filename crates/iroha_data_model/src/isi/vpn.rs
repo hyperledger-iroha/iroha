@@ -272,12 +272,14 @@ mod tests {
     };
 
     fn account(seed: u8) -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked VPN fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
 
     fn public_key(seed: u8) -> iroha_crypto::PublicKey {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked VPN fixture public keypair");
         key_pair.public_key().clone()
     }
 
@@ -317,7 +319,8 @@ mod tests {
     }
 
     fn usage_voucher() -> VpnUsageVoucherV1 {
-        let key_pair = KeyPair::from_seed(vec![0x43; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
+            .expect("derive checked VPN usage-voucher fixture keypair");
         let body = VpnUsageVoucherBodyV1 {
             session_id: [0x11; 16],
             quote_id: [0x22; 32],

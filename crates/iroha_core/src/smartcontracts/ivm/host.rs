@@ -8472,7 +8472,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
 mod pointer_abi_tests {
     use core::{num::NonZeroU16, str::FromStr};
 
-    use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair};
+    use iroha_crypto::Hash as IrohaHash;
     use iroha_data_model::smart_contract::manifest::ContractManifest;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
@@ -8482,7 +8482,10 @@ mod pointer_abi_tests {
     };
 
     use super::{
-        tests::{begin_axt_envelope, make_policy_snapshot, norito_blob, proof_blob_for, store_tlv},
+        tests::{
+            begin_axt_envelope, fixture_public_key_from_seed, make_policy_snapshot, norito_blob,
+            proof_blob_for, store_tlv,
+        },
         *,
     };
     use crate::{
@@ -8511,8 +8514,7 @@ mod pointer_abi_tests {
             "bob" => BOB_ID.clone(),
             "carol" | "charlie" => {
                 let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
-                let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
-                AccountId::new(public_key)
+                AccountId::new(fixture_public_key_from_seed(seed))
             }
             other => panic!("unsupported fixture account label: {other}"),
         }
@@ -11543,8 +11545,7 @@ mod tests {
             "bob" => BOB_ID.clone(),
             "carol" | "charlie" => {
                 let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
-                let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
-                AccountId::new(public_key)
+                AccountId::new(fixture_public_key_from_seed(seed))
             }
             other => panic!("unsupported fixture account label: {other}"),
         }
@@ -11558,8 +11559,28 @@ mod tests {
             .cycle()
             .take(32)
             .collect();
-        let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
-        AccountId::new(public_key)
+        AccountId::new(fixture_public_key_from_seed(seed))
+    }
+
+    pub(super) fn fixture_public_key_from_seed(seed: Vec<u8>) -> iroha_crypto::PublicKey {
+        let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+            .into_parts();
+        public_key
+    }
+
+    #[test]
+    fn fixture_public_key_from_seed_uses_checked_seed_derivation() {
+        assert_eq!(
+            fixture_public_key_from_seed(vec![0x61; 32])
+                .try_algorithm()
+                .expect("fixture public key algorithm"),
+            Algorithm::Ed25519
+        );
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     fn build_fixture_account(id: &AccountId, authority: &AccountId) -> Account {

@@ -206,7 +206,8 @@ fn build_da_request(retention_policy: RetentionPolicy) -> DaIngestRequest {
     let payload = b"da retention regression vector payload".to_vec();
     let client_blob_id = BlobDigest::from_hash(blake3::hash(&payload));
     let submitter = ALICE_KEYPAIR.public_key().clone();
-    let signature = Signature::new(ALICE_KEYPAIR.private_key(), &payload);
+    let signature =
+        Signature::try_new(ALICE_KEYPAIR.private_key(), &payload).expect("DA ingest signature");
 
     DaIngestRequest {
         client_blob_id,

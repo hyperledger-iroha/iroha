@@ -904,11 +904,25 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     fn sample_candidate_account_i105() -> String {
-        let key_pair = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(0x42);
         AccountId::new(key_pair.public_key().clone())
             .canonical_i105()
             .expect("canonical I105")
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(0x43).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     #[test]

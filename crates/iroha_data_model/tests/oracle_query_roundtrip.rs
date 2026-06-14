@@ -17,10 +17,19 @@ macro_rules! assert_roundtrip {
     }};
 }
 
+fn checked_random_account_id() -> AccountId {
+    AccountId::new(
+        KeyPair::try_random()
+            .expect("generate checked oracle query provider keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
 #[test]
 fn oracle_queries_roundtrip_through_norito() {
     let feed_id: FeedId = "price_xor_usd".parse().expect("feed id");
-    let provider_id = AccountId::new(KeyPair::random().public_key().clone());
+    let provider_id = checked_random_account_id();
     let provider_key = OracleProviderKey::new(feed_id.clone(), provider_id);
     let dispute_id = OracleDisputeId(42);
     let change_id = OracleChangeId(Hash::new(b"oracle-change-query"));

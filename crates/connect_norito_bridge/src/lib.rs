@@ -9500,13 +9500,27 @@ mod offline_note_prover_tests {
         Signature::from_bytes(&bytes)
     }
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+    }
+
     fn sample_account(seed: u8) -> AccountId {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let keypair = fixture_key_pair(seed);
         AccountId::new(keypair.public_key().clone())
     }
 
     fn sample_authority_and_private_key(seed: u8) -> (CString, Vec<u8>) {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let keypair = fixture_key_pair(seed);
         let (public_key, private_key) = keypair.into_parts();
         let account = AccountId::new(public_key);
         let (_algorithm, private_bytes) = private_key.to_bytes();
@@ -10091,7 +10105,7 @@ mod offline_note_prover_tests {
     }
 
     fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificate {
-        let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let note_keypair = fixture_key_pair(seed);
         let (_algorithm, public_key) = note_keypair
             .public_key()
             .try_to_bytes()
@@ -14786,7 +14800,7 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_asset_transaction_checked_signing_verifies() {
-        let keypair = KeyPair::from_seed(vec![0x5a; 32], Algorithm::Ed25519);
+        let keypair = fixture_key_pair(0x5A);
         let authority = AccountId::new(keypair.public_key().clone());
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
             ChainId::from("bridge-checked-signing"),
@@ -18192,8 +18206,26 @@ mod accel_tests {
 
     use super::*;
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        let mut material = [0u8; 32];
+        let domain = b"connect-accel-test-seed";
+        material[..domain.len()].copy_from_slice(domain);
+        material[31] = seed;
+        KeyPair::try_from_seed(material.to_vec(), Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(0).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+    }
+
     pub(super) fn sample_account(_domain: &str, seed: u8) -> (CString, Vec<u8>) {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let keypair = fixture_key_pair(seed);
         let (public_key, private_key) = keypair.into_parts();
         let account_id = AccountId::new(public_key);
         let account = CString::new(account_id.to_string()).expect("valid cstring");
@@ -18202,7 +18234,7 @@ mod accel_tests {
     }
 
     pub(super) fn sample_destination(_domain: &str, seed: u8) -> CString {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let keypair = fixture_key_pair(seed);
         let (public_key, _) = keypair.into_parts();
         let account_id = AccountId::new(public_key);
         CString::new(account_id.to_string()).expect("valid cstring")
@@ -18429,7 +18461,8 @@ mod accel_tests {
     fn keypair_from_seed_roundtrip() {
         let _guard = chain_guard();
         let seed = vec![0xA5; 32];
-        let expected = KeyPair::from_seed(seed.clone(), Algorithm::Ed25519);
+        let expected = KeyPair::try_from_seed(seed.clone(), Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
         let (expected_public, expected_private) = expected.into_parts();
         let (_alg, expected_private_bytes) = expected_private.to_bytes();
         let (_alg, expected_public_bytes) = expected_public
@@ -18564,7 +18597,8 @@ mod accel_tests {
     fn keypair_from_seed_mldsa_roundtrip() {
         let _guard = chain_guard();
         let seed = b"bridge-mldsa-seed-vector".to_vec();
-        let expected = KeyPair::from_seed(seed.clone(), Algorithm::MlDsa);
+        let expected = KeyPair::try_from_seed(seed.clone(), Algorithm::MlDsa)
+            .expect("fixture seed must derive a valid ML-DSA keypair");
         let (expected_public, expected_private) = expected.into_parts();
         let (_alg, expected_private_bytes) = expected_private.to_bytes();
         let (_alg, expected_public_bytes) = expected_public
@@ -18671,7 +18705,8 @@ mod accel_tests {
     fn fixture_private_key() -> Vec<u8> {
         let seed = hex::decode("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032")
             .expect("fixture seed hex");
-        let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
         let (_alg, private_bytes) = keypair.private_key().to_bytes();
         private_bytes
     }
@@ -18679,7 +18714,8 @@ mod accel_tests {
     fn fixture_authority(_domain: &str) -> CString {
         let seed = hex::decode("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032")
             .expect("fixture seed hex");
-        let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
         let (public_key, _) = keypair.into_parts();
         let account = AccountId::new(public_key);
         CString::new(account.to_string()).expect("valid cstring")
@@ -30326,7 +30362,9 @@ mod tests {
                 expires_at_ms: Some(107),
             },
             opening: iroha_data_model::ram_lfe::RamLfeOutputOpening {
-                signature: SignatureOf::new(opening_signer.private_key(), &opening_payload).into(),
+                signature: SignatureOf::try_new(opening_signer.private_key(), &opening_payload)
+                    .expect("fixture opening payload must sign")
+                    .into(),
                 payload: opening_payload,
             },
             opaque_id: iroha_data_model::account::OpaqueAccountId::from_hash(Hash::new(b"opaque")),
@@ -30825,7 +30863,8 @@ mod tests {
     #[test]
     fn zk_ballot_public_inputs_rejects_noncanonical_owner() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
-        let keypair = KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![0xCC; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
         let account = AccountId::new(keypair.public_key().clone());
         let address_hex = account.to_canonical_hex().expect("canonical hex");
         let noncanonical = format!("{address_hex}@{domain}");
@@ -30902,7 +30941,8 @@ mod tests {
 
     #[test]
     fn ffi_sign_verify_mldsa() {
-        let keypair = KeyPair::from_seed(b"ffi-mldsa-signing".to_vec(), Algorithm::MlDsa);
+        let keypair = KeyPair::try_from_seed(b"ffi-mldsa-signing".to_vec(), Algorithm::MlDsa)
+            .expect("fixture seed must derive a valid ML-DSA keypair");
         let (_public_key, private_key) = keypair.into_parts();
         let (_alg, private_bytes) = private_key.to_bytes();
         let message = b"ffi-mldsa-signing";
@@ -31214,7 +31254,8 @@ mod tests {
 
     #[test]
     fn account_address_parse_render_via_ffi() {
-        let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
         let account_id = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account_id).expect("address");
         let canonical = canonical_bytes(&address);
@@ -31503,6 +31544,20 @@ mod signed_transaction_fixture_tests {
     // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (i105 discriminant).
     const FIXTURE_CHAIN_DISCRIMINANT: u16 = 0x02F1;
 
+    fn fixture_key_pair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair().algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+    }
+
     struct ChainDiscriminantReset {
         previous: u16,
         _guard: std::sync::MutexGuard<'static, ()>,
@@ -31528,7 +31583,7 @@ mod signed_transaction_fixture_tests {
     #[test]
     fn signed_transaction_decoder_accepts_only_versioned_bytes() {
         let _guard = ChainDiscriminantReset::new(FIXTURE_CHAIN_DISCRIMINANT);
-        let keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "00000004".parse().expect("valid chain id");
         let mut builder = TransactionBuilder::new(chain_id, authority);
@@ -31545,7 +31600,7 @@ mod signed_transaction_fixture_tests {
     #[test]
     fn signed_transaction_versioned_reencode_match() {
         let _guard = ChainDiscriminantReset::new(FIXTURE_CHAIN_DISCRIMINANT);
-        let keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "00000004".parse().expect("valid chain id");
         let mut builder = TransactionBuilder::new(chain_id, authority);
@@ -31559,7 +31614,7 @@ mod signed_transaction_fixture_tests {
     #[test]
     fn generated_signed_transaction_versioned_bytes_prefix_bare_payload() {
         let _guard = ChainDiscriminantReset::new(FIXTURE_CHAIN_DISCRIMINANT);
-        let keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "00000004".parse().expect("valid chain id");
         let mut builder = TransactionBuilder::new(chain_id, authority);

@@ -3478,7 +3478,8 @@ mod test {
             StreamingTransportSummary::from(&base::StreamingSoranet::from_defaults());
         let soranet_vpn = SoranetVpnSummary::from(&base::SoranetVpn::default());
         let value = ConfigGetDTO {
-            public_key: KeyPair::from_seed(vec![1, 2, 3], <_>::default())
+            public_key: KeyPair::try_from_seed(vec![1, 2, 3], <_>::default())
+                .expect("derive config snapshot fixture public key")
                 .public_key()
                 .clone(),
             logger: Logger {

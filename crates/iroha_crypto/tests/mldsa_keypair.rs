@@ -69,10 +69,10 @@ mod mldsa_tests {
     }
 
     #[test]
-    fn keypair_from_seed_is_deterministic() {
-        let seed = b"deterministic-ml-dsa-seed".to_vec();
-        let kp_a = KeyPair::from_seed(seed.clone(), Algorithm::MlDsa);
-        let kp_b = KeyPair::from_seed(seed, Algorithm::MlDsa);
+    fn seeded_mldsa_keypair_is_deterministic() {
+        let seed = b"deterministic-ml-dsa-seed";
+        let kp_a = checked_mldsa_keypair_from_seed(seed);
+        let kp_b = checked_mldsa_keypair_from_seed(seed);
 
         assert_eq!(kp_a.public_key(), kp_b.public_key());
 
@@ -84,6 +84,7 @@ mod mldsa_tests {
     #[test]
     fn fallible_keypair_from_seed_matches_compat_constructor() {
         let seed = b"fallible-deterministic-ml-dsa-seed".to_vec();
+        // This test intentionally exercises the legacy infallible constructor.
         let infallible = KeyPair::from_seed(seed.clone(), Algorithm::MlDsa);
         let fallible =
             KeyPair::try_from_seed(seed, Algorithm::MlDsa).expect("fallible seeded keypair");
@@ -108,9 +109,9 @@ mod mldsa_tests {
     }
 
     #[test]
-    fn keypair_from_seed_changes_with_seed() {
-        let first = KeyPair::from_seed(b"ml-dsa-seed-a".to_vec(), Algorithm::MlDsa);
-        let second = KeyPair::from_seed(b"ml-dsa-seed-b".to_vec(), Algorithm::MlDsa);
+    fn seeded_mldsa_keypair_changes_with_seed() {
+        let first = checked_mldsa_keypair_from_seed(b"ml-dsa-seed-a");
+        let second = checked_mldsa_keypair_from_seed(b"ml-dsa-seed-b");
 
         assert_ne!(first.public_key(), second.public_key());
 
@@ -219,7 +220,7 @@ mod mldsa_tests {
 
     #[test]
     fn mldsa_prefixed_public_key_roundtrips() {
-        let kp = KeyPair::from_seed(b"ml-dsa-prefixed-public-key".to_vec(), Algorithm::MlDsa);
+        let kp = checked_mldsa_keypair_from_seed(b"ml-dsa-prefixed-public-key");
         let encoded = kp
             .public_key()
             .try_to_prefixed_string()
@@ -233,7 +234,7 @@ mod mldsa_tests {
 
     #[test]
     fn fallible_multihash_formatters_roundtrip() {
-        let kp = KeyPair::from_seed(b"ml-dsa-fallible-multihash".to_vec(), Algorithm::MlDsa);
+        let kp = checked_mldsa_keypair_from_seed(b"ml-dsa-fallible-multihash");
         let public_bare = kp
             .public_key()
             .try_to_multihash_string()
@@ -271,7 +272,7 @@ mod mldsa_tests {
 
     #[test]
     fn mldsa_public_key_bytes_roundtrip() {
-        let kp = KeyPair::from_seed(b"ml-dsa-public-key-bytes".to_vec(), Algorithm::MlDsa);
+        let kp = checked_mldsa_keypair_from_seed(b"ml-dsa-public-key-bytes");
         let (algorithm, payload) = kp
             .public_key()
             .try_to_bytes()
@@ -291,7 +292,7 @@ mod mldsa_tests {
 
     #[test]
     fn mldsa_private_key_bytes_roundtrip() {
-        let kp = KeyPair::from_seed(b"ml-dsa-private-key-roundtrip".to_vec(), Algorithm::MlDsa);
+        let kp = checked_mldsa_keypair_from_seed(b"ml-dsa-private-key-roundtrip");
         let (algorithm, secret_bytes) = kp.private_key().to_bytes();
 
         let decoded =
@@ -302,7 +303,7 @@ mod mldsa_tests {
 
     #[test]
     fn mldsa_public_and_private_key_hex_roundtrip() {
-        let kp = KeyPair::from_seed(b"ml-dsa-key-hex-roundtrip".to_vec(), Algorithm::MlDsa);
+        let kp = checked_mldsa_keypair_from_seed(b"ml-dsa-key-hex-roundtrip");
         let (public_algorithm, public_bytes) = kp
             .public_key()
             .try_to_bytes()

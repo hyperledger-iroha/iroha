@@ -31,8 +31,13 @@ const HONEST_COUNT: usize = 3;
 const REFERENDUM_END: u64 = 500;
 const MULTI_BEACON_SAMPLES: u64 = 32;
 
+fn seeded_keypair(seed: u8) -> KeyPair {
+    KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+        .expect("seeded governance keypair should be valid")
+}
+
 fn mk_account(seed: u8) -> AccountId {
-    let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+    let keypair = seeded_keypair(seed);
     let (public_key, _) = keypair.into_parts();
     AccountId::new(public_key)
 }
@@ -490,7 +495,7 @@ fn duplicate_approvals_do_not_count_twice_for_quorum() {
             manifest_provenance: Some(manifest_provenance(
                 &"11".repeat(32),
                 &hex::encode(canonical_abi_hash_bytes()),
-                &KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519),
+                &seeded_keypair(9),
             )),
         }),
         &attacker_a,
@@ -632,7 +637,7 @@ fn wealthy_non_members_cannot_open_referendum_without_sortition_capture() {
             manifest_provenance: Some(manifest_provenance(
                 &"33".repeat(32),
                 &hex::encode(canonical_abi_hash_bytes()),
-                &KeyPair::from_seed(vec![19; 32], Algorithm::Ed25519),
+                &seeded_keypair(19),
             )),
         }),
         &honest_a,

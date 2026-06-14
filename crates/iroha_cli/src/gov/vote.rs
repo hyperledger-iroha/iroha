@@ -424,6 +424,7 @@ impl Run for ProposalGetArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
 
     #[test]
@@ -663,11 +664,23 @@ mod tests {
         assert!(err.to_string().contains("must not include '@domain'"));
     }
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(0x56).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+    }
+
     #[test]
     fn public_inputs_allow_implicit_owner_without_selector_resolver() {
-        use iroha_crypto::{Algorithm, KeyPair};
-
-        let key_pair = KeyPair::from_seed(vec![0x55; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(0x55);
         let owner = AccountId::new(key_pair.public_key().clone()).to_string();
         let mut map = json::Map::new();
         map.insert("owner".to_string(), json::Value::String(owner));
@@ -679,11 +692,7 @@ mod tests {
 
     #[test]
     fn public_inputs_reject_compressed_owner() {
-        use iroha_crypto::{Algorithm, KeyPair};
-
-        let owner = KeyPair::from_seed(vec![5; 32], Algorithm::Ed25519)
-            .public_key()
-            .to_string();
+        let owner = fixture_key_pair(5).public_key().to_string();
         let mut map = json::Map::new();
         map.insert("owner".to_string(), json::Value::String(owner));
         let err = normalize_public_input_owner(&mut map).expect_err("compressed owner");

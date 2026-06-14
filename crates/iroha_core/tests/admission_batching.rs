@@ -13,7 +13,7 @@ use iroha_core::{
     state::State,
     tx::{AcceptTransactionFail, SignatureRejectionCode},
 };
-use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, HashOf, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::prelude::*;
 use nonzero_ext::nonzero;
 
@@ -41,6 +41,17 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
     if matches!(algo, Algorithm::Sm2) {}
     state.set_crypto(crypto_cfg);
     (state, account_id, ChainId::from("chain"), kp)
+}
+
+fn checked_signature_of<T: norito::codec::Encode>(
+    private_key: &PrivateKey,
+    payload: &T,
+) -> SignatureOf<T> {
+    SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
+}
+
+fn checked_signature_from_hash<T>(private_key: &PrivateKey, hash: HashOf<T>) -> SignatureOf<T> {
+    SignatureOf::try_from_hash(private_key, hash).expect("test fixture hash signing should succeed")
 }
 
 fn set_default_da_policy_hash(header: &mut BlockHeader) {
@@ -77,7 +88,7 @@ fn build_block_with_txs(
     let mut header = BlockHeader::new(nonzero!(1_u64), None, None, None, ct_ms + 1, 0);
     set_default_da_policy_hash(&mut header);
     let leader_sk = leader_kp.private_key();
-    let sig = BlockSignature::new(0, SignatureOf::from_hash(leader_sk, header.hash()));
+    let sig = BlockSignature::new(0, checked_signature_from_hash(leader_sk, header.hash()));
     SignedBlock::presigned(sig, header, txs)
 }
 
@@ -108,7 +119,7 @@ fn mk_tx_with_creation_time(
         .with_instructions([Log::new(Level::INFO, msg.to_string())])
         .with_metadata(bls_pop_metadata(pop_authority))
         .sign(pop_authority.private_key());
-    tx.set_signature(TransactionSignature(SignatureOf::new(
+    tx.set_signature(TransactionSignature(checked_signature_of(
         signer.private_key(),
         tx.payload(),
     )));
@@ -145,7 +156,7 @@ fn presigned_block_with_creation_after_txs(
     set_default_da_policy_hash(&mut header);
     let sig = BlockSignature::new(
         0,
-        SignatureOf::from_hash(leader.private_key(), header.hash()),
+        checked_signature_from_hash(leader.private_key(), header.hash()),
     );
     SignedBlock::presigned(sig, header, txs)
 }
@@ -245,7 +256,7 @@ fn bls_same_message_group_duplicate_rejected() {
     set_default_da_policy_hash(&mut header);
     let sig = BlockSignature::new(
         0,
-        SignatureOf::from_hash(leader.private_key(), header.hash()),
+        checked_signature_from_hash(leader.private_key(), header.hash()),
     );
     let block = SignedBlock::presigned(sig, header, vec![tx1, tx2]);
     let peer = PeerId::from(leader.public_key().clone());

@@ -730,8 +730,7 @@ mod tests {
     #[test]
     fn publishable_release_roundtrip_decodes_losslessly() {
         let package: MusubiPackageRef = "dex.universal/swap-core@1.2.3".parse().expect("package");
-        let keypair = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
-        let publisher = AccountId::new(keypair.public_key().clone());
+        let publisher = publisher();
         let release = MusubiRelease::new(
             package,
             iroha_data_model::musubi::MusubiArchiveRef::new(
@@ -849,8 +848,21 @@ mod tests {
     }
 
     fn publisher() -> AccountId {
-        let keypair = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
-        AccountId::new(keypair.public_key().clone())
+        AccountId::new(publisher_keypair().public_key().clone())
+    }
+
+    fn publisher_keypair() -> KeyPair {
+        KeyPair::try_from_seed(vec![3; 32], Algorithm::Ed25519)
+            .expect("publisher fixture seed must derive a valid keypair")
+    }
+
+    #[test]
+    fn publisher_keypair_uses_checked_seed_derivation() {
+        assert_eq!(publisher_keypair().algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     fn grant_short_alias_permission(

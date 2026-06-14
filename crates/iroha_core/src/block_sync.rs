@@ -7909,7 +7909,33 @@ pub mod message {
 
         fn deterministic_keypair(seed: impl AsRef<[u8]>, algorithm: Algorithm) -> KeyPair {
             let seed_hash = Hash::new(seed.as_ref());
-            KeyPair::from_seed(seed_hash.as_ref().to_vec(), algorithm)
+            KeyPair::try_from_seed(seed_hash.as_ref().to_vec(), algorithm)
+                .expect("fixture hash seed must derive a valid keypair")
+        }
+
+        #[test]
+        fn deterministic_keypair_uses_checked_seed_derivation() {
+            let first = deterministic_keypair(b"block-sync-filter-fixture", Algorithm::BlsNormal);
+            let repeat = deterministic_keypair(b"block-sync-filter-fixture", Algorithm::BlsNormal);
+            let different =
+                deterministic_keypair(b"block-sync-filter-fixture-other", Algorithm::BlsNormal);
+
+            assert!(
+                first.public_key() == repeat.public_key(),
+                "deterministic fixture labels must derive stable consensus keys"
+            );
+            assert!(
+                first.public_key() != different.public_key(),
+                "distinct fixture labels must derive distinct consensus keys"
+            );
+            assert!(
+                KeyPair::try_from_seed(vec![0; Hash::LENGTH], Algorithm::Ed25519).is_err(),
+                "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+            );
+            assert!(
+                KeyPair::try_from_seed(vec![0; Hash::LENGTH], Algorithm::BlsNormal).is_err(),
+                "checked BLS seed derivation must reject weak all-zero fixture seeds"
+            );
         }
 
         fn checked_signature(private_key: &PrivateKey, payload: &[u8]) -> Signature {

@@ -108,8 +108,8 @@ fn seed_rng(seed_bytes: &[u8; 32]) -> ChaCha20Rng {
     ChaCha20Rng::from_seed(*seed_bytes)
 }
 
-fn seeded_keypair(seed: &[u8; 32]) -> KeyPair {
-    KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519)
+fn seeded_keypair(seed: &[u8; 32]) -> Option<KeyPair> {
+    KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519).ok()
 }
 
 fn run_simulation(case: &FuzzInput) {
@@ -183,8 +183,12 @@ fn run_runtime_handshake(case: &FuzzInput) {
 
     let mut rng_client = seed_rng(&case.client_seed);
     let mut rng_relay = seed_rng(&case.relay_seed);
-    let client_keys = seeded_keypair(&case.key_seed);
-    let relay_keys = seeded_keypair(&case.relay_seed);
+    let Some(client_keys) = seeded_keypair(&case.key_seed) else {
+        return;
+    };
+    let Some(relay_keys) = seeded_keypair(&case.relay_seed) else {
+        return;
+    };
 
     let Ok((client_hello, client_state)) = build_client_hello(&runtime, &mut rng_client) else {
         return;
@@ -218,3 +222,23 @@ fuzz_target!(|case: FuzzInput| {
     run_simulation(&case);
     run_runtime_handshake(&case);
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seeded_keypair_rejects_checked_weak_seed() {
+        assert!(seeded_keypair(&[0; 32]).is_none());
+    }
+
+    #[test]
+    fn seeded_keypair_uses_checked_seed_derivation() {
+        let seed = [0x5A; 32];
+        let keypair = seeded_keypair(&seed).expect("derive fuzz fixture key");
+        let expected = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+            .expect("derive fuzz fixture key");
+
+        assert_eq!(keypair.public_key(), expected.public_key());
+    }
+}

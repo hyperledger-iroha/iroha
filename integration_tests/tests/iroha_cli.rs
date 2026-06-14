@@ -325,7 +325,7 @@ fn iroha_cli_test_build_profile_override_preserves_existing_profile() {
 }
 
 fn local_program_config() -> ProgramConfig {
-    let key = KeyPair::random();
+    let key = KeyPair::try_random().expect("generate checked local CLI config keypair");
     let domain_id: DomainId =
         DomainId::try_new("wonderland", "universal").expect("literal domain should parse");
     ProgramConfig {
@@ -335,6 +335,19 @@ fn local_program_config() -> ProgramConfig {
         status_timeout: DEFAULT_TRANSACTION_STATUS_TIMEOUT,
         ttl: DEFAULT_TRANSACTION_TIME_TO_LIVE,
     }
+}
+
+#[test]
+fn local_program_config_uses_checked_key_generation() {
+    let config = local_program_config();
+
+    assert_eq!(config.torii_url.as_str(), "http://127.0.0.1:8080/");
+    assert_eq!(
+        config.account_domain,
+        DomainId::try_new("wonderland", "universal").expect("literal domain should parse")
+    );
+    assert_eq!(config.status_timeout, DEFAULT_TRANSACTION_STATUS_TIMEOUT);
+    assert_eq!(config.ttl, DEFAULT_TRANSACTION_TIME_TO_LIVE);
 }
 
 fn program_config_for_account(

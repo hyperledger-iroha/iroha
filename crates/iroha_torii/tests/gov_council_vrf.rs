@@ -44,17 +44,20 @@ async fn vrf_derive_orders_desc_and_tie_breaks_by_account() {
 
     // Build three distinct candidates with valid VRF proofs (Normal variant).
     let account_alice = AccountId::new(
-        KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519)
+        KeyPair::try_from_seed(vec![1; 32], Algorithm::Ed25519)
+            .expect("derive alice council account key")
             .public_key()
             .clone(),
     );
     let account_bob = AccountId::new(
-        KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519)
+        KeyPair::try_from_seed(vec![2; 32], Algorithm::Ed25519)
+            .expect("derive bob council account key")
             .public_key()
             .clone(),
     );
     let account_carol = AccountId::new(
-        KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519)
+        KeyPair::try_from_seed(vec![3; 32], Algorithm::Ed25519)
+            .expect("derive carol council account key")
             .public_key()
             .clone(),
     );

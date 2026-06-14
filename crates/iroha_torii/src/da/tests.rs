@@ -85,6 +85,17 @@ fn checked_signature(private_key: &PrivateKey, payload: &[u8]) -> Signature {
     Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
 
+fn checked_taikai_segment_signature(
+    private_key: &PrivateKey,
+    body: &TaikaiSegmentSigningBodyV1,
+) -> SignatureOf<TaikaiSegmentSigningBodyV1> {
+    SignatureOf::try_new(private_key, body).expect("test Taikai segment signing should succeed")
+}
+
+fn checked_fixture_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
+    KeyPair::try_from_seed(seed, algorithm).expect("test fixture key derivation should succeed")
+}
+
 #[test]
 fn replay_cursor_temp_path_keeps_suffixes() {
     let base = Path::new("/var/lib/iroha/replay_cursors.norito.json");
@@ -992,7 +1003,7 @@ fn build_ssm_bytes(
         alias_binding,
         ExtraMetadata::default(),
     );
-    let signature = SignatureOf::new(publisher.private_key(), &body);
+    let signature = checked_taikai_segment_signature(publisher.private_key(), &body);
     let manifest = TaikaiSegmentSigningManifestV1::new(body, signature);
     to_bytes(&manifest).expect("encode signing manifest")
 }
@@ -1102,7 +1113,7 @@ fn sampling_manifest(stripes: u32) -> DaManifestV1 {
 
 fn sample_request() -> DaIngestRequest {
     // Golden fixture tests must not depend on OS randomness.
-    let keypair = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
+    let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
     let payload = b"example".to_vec();
 
     DaIngestRequest {
@@ -4553,7 +4564,7 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     receipt_conflict.manifest_hash = receipt.manifest_hash;
     let unsigned =
         persistence::unsigned_receipt_bytes(&receipt_conflict, 1).expect("unsigned bytes");
-    receipt_conflict.operator_signature = Signature::new(signer.private_key(), &unsigned);
+    receipt_conflict.operator_signature = checked_signature(signer.private_key(), &unsigned);
     assert!(matches!(
         log.append(lane_epoch, 1, receipt_conflict, test_fingerprint(0xD1))
             .unwrap(),

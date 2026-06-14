@@ -180,8 +180,19 @@ mod tests {
     const RELAY: RelayId = [7_u8; 32];
 
     fn sample_account(seed: u8) -> AccountId {
-        let (public_key, _) = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
+        let (public_key, _) = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive incentive fixture account key")
+            .into_parts();
         AccountId::new(public_key)
+    }
+
+    #[test]
+    fn sample_account_uses_checked_seed_derivation() {
+        let (public_key, _) = KeyPair::try_from_seed(vec![9; 32], Algorithm::Ed25519)
+            .expect("derive incentive fixture account key")
+            .into_parts();
+
+        assert_eq!(sample_account(9), AccountId::new(public_key));
     }
 
     fn proof(

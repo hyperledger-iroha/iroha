@@ -10,6 +10,10 @@ fn guard_chain_discriminant() -> address::ChainDiscriminantGuard {
     address::ChainDiscriminantGuard::enter(address::chain_discriminant())
 }
 
+fn checked_random_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked id-constructor keypair")
+}
+
 #[test]
 fn asset_definition_id_of_matches_parse() {
     let domain: DomainId = DomainId::try_new("soramitsu", "universal").unwrap();
@@ -26,7 +30,7 @@ fn asset_definition_id_of_matches_parse() {
 fn asset_id_of_matches_parse() {
     let _guard = guard_chain_discriminant();
     let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let kp = KeyPair::random();
+    let kp = checked_random_keypair();
     let account = AccountId::of(kp.public_key().clone());
     let def = AssetDefinitionId::of(domain, "rose".parse().unwrap());
     let via_of = AssetId::of(def.clone(), account);
@@ -52,7 +56,7 @@ fn nft_id_of_matches_parse() {
 #[test]
 fn account_id_of_matches_parse() {
     let _guard = guard_chain_discriminant();
-    let kp = KeyPair::random();
+    let kp = checked_random_keypair();
     let via_of = AccountId::of(kp.public_key().clone());
     let parsed = AccountId::parse_encoded(&via_of.to_string())
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)

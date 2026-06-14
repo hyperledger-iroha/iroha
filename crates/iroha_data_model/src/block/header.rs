@@ -771,9 +771,13 @@ mod tests {
         encode_sample(&set)
     }
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked block-header fixture keypair")
+    }
+
     #[test]
     fn block_signature_getters_and_roundtrip() {
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let signature = SignatureOf::try_from_hash(keypair.private_key(), header.hash())
             .expect("checked block-header fixture signature");
@@ -839,7 +843,7 @@ mod tests {
             }
             s
         }
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let signature = SignatureOf::try_from_hash(keypair.private_key(), header.hash())
             .expect("checked block-header diagnostic fixture signature");
@@ -871,7 +875,7 @@ mod tests {
 
     #[test]
     fn block_signature_btreeset_roundtrip() {
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let signature = SignatureOf::try_from_hash(keypair.private_key(), header.hash())
             .expect("checked block-header btreeset fixture signature");

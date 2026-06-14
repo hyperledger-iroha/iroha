@@ -442,8 +442,18 @@ mod tests {
         if seed.is_empty() {
             seed.extend_from_slice(b"lane-compliance-account");
         }
-        let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
         AccountId::new(keypair.public_key().clone())
+    }
+
+    #[test]
+    fn account_fixture_uses_checked_seed_derivation() {
+        assert_ne!(account("alice", "wonderland"), account("bob", "wonderland"));
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     fn sample_policy(

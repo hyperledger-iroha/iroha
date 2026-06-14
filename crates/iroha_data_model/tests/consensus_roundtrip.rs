@@ -450,7 +450,8 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
     let (_, leader_private) = leader_key.into_parts();
     let leader_signature = BlockSignature::new(
         0,
-        SignatureOf::from_hash(&leader_private, block_header.hash()),
+        SignatureOf::try_from_hash(&leader_private, block_header.hash())
+            .expect("fixture block header signature must sign"),
     );
     RbcInit {
         block_hash: block_header.hash(),
@@ -2091,7 +2092,8 @@ fn consensus_messages_norito_roundtrip() {
     let (_, leader_private) = leader_key.into_parts();
     let leader_signature = BlockSignature::new(
         0,
-        SignatureOf::from_hash(&leader_private, block_header.hash()),
+        SignatureOf::try_from_hash(&leader_private, block_header.hash())
+            .expect("fixture block header signature must sign"),
     );
     let rbc_init = RbcInit {
         block_hash: block_header.hash(),

@@ -3792,6 +3792,27 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         return Err("`--local-proxy-kaigi-spool` and `--local-proxy-kaigi-policy` require `local_proxy` in the orchestrator config".to_string());
     }
     let local_proxy_snapshot = orchestrator_config.local_proxy.clone();
+    if local_proxy_manifest_out.is_some() {
+        let Some(proxy_cfg) = local_proxy_snapshot.as_ref() else {
+            return Err(
+                "--local-proxy-manifest-out requires `local_proxy` in the orchestrator config"
+                    .to_string(),
+            );
+        };
+        if !proxy_cfg.emit_browser_manifest {
+            return Err(
+                "--local-proxy-manifest-out requires `local_proxy.emit_browser_manifest` to be true"
+                    .to_string(),
+            );
+        }
+        #[cfg(not(feature = "local-quic-proxy"))]
+        {
+            return Err(
+                "--local-proxy-manifest-out requires local QUIC proxy runtime support; rebuild `sorafs_cli` with the `local-quic-proxy` feature"
+                    .to_string(),
+            );
+        }
+    }
     let mut fetch_options = orchestrator_config.fetch.clone();
     let scoreboard = sorafs_car::scoreboard::build_scoreboard(
         &plan,
@@ -3951,8 +3972,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     }
     if let Some(path) = local_proxy_manifest_out {
         let manifest = session.local_proxy_manifest.as_ref().ok_or_else(|| {
-            "--local-proxy-manifest-out requires `local_proxy` in the orchestrator config"
-                .to_string()
+            "--local-proxy-manifest-out requires `local_proxy.emit_browser_manifest = true` and an active local proxy runtime".to_string()
         })?;
         ensure_parent_dir(&path)?;
         let manifest_value =
@@ -8876,6 +8896,23 @@ mod tests {
             .expect("manifest build")
     }
 
+    fn fixture_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive SoraFS CLI fixture key")
+    }
+
+    fn fixture_account(seed: u8) -> AccountId {
+        AccountId::new(fixture_keypair(seed).public_key().clone())
+    }
+
+    #[test]
+    fn fixture_account_uses_checked_seed_derivation() {
+        let account = fixture_account(0x5A);
+        let expected = AccountId::new(fixture_keypair(0x5A).public_key().clone());
+
+        assert_eq!(account, expected);
+    }
+
     #[test]
     fn render_por_trigger_response_formats_json_and_fallbacks() {
         let rendered = render_por_trigger_response(br#"{"status":"ok","accepted":true}"#)
@@ -8950,7 +8987,7 @@ mod tests {
             None,
             Some(ManifestDigest::new([0xDD; 32])),
         );
-        let keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let keypair = fixture_keypair(0xA5);
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx = sign_manifest_submit_fallback_transaction(
@@ -8967,11 +9004,7 @@ mod tests {
 
     #[test]
     fn parse_account_id_arg_with_prefix_accepts_matching_i105_discriminant() {
-        let account = AccountId::new(
-            KeyPair::from_seed(vec![0x5A; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let account = fixture_account(0x5A);
         let encoded = account
             .to_i105_for_discriminant(369)
             .expect("encode i105 with taira discriminant");
@@ -8989,11 +9022,7 @@ mod tests {
 
     #[test]
     fn parse_account_id_arg_accepts_taira_i105_without_explicit_prefix() {
-        let account = AccountId::new(
-            KeyPair::from_seed(vec![0x59; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let account = fixture_account(0x59);
         let encoded = account
             .to_i105_for_discriminant(369)
             .expect("encode i105 with taira discriminant");
@@ -9006,11 +9035,7 @@ mod tests {
 
     #[test]
     fn parse_account_id_arg_with_prefix_rejects_mismatched_i105_discriminant() {
-        let account = AccountId::new(
-            KeyPair::from_seed(vec![0x6B; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let account = fixture_account(0x6B);
         let encoded = account
             .to_i105_for_discriminant(369)
             .expect("encode i105 with taira discriminant");
@@ -9032,11 +9057,7 @@ mod tests {
     #[test]
     fn authority_payload_literal_preserves_explicit_i105_discriminant() {
         let _guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(753);
-        let account = AccountId::new(
-            KeyPair::from_seed(vec![0x7C; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let account = fixture_account(0x7C);
         let expected = account
             .to_i105_for_discriminant(369)
             .expect("encode taira authority");
@@ -9050,20 +9071,14 @@ mod tests {
     #[test]
     fn build_pin_register_payload_uses_supplied_authority_literal() {
         let manifest = sample_manifest();
-        let account = AccountId::new(
-            KeyPair::from_seed(vec![0x8D; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let account = fixture_account(0x8D);
         let authority_literal = account
             .to_i105_for_discriminant(369)
             .expect("encode taira authority");
 
         let payload = build_pin_register_payload(
             &authority_literal,
-            KeyPair::from_seed(vec![0x9E; 32], Algorithm::Ed25519)
-                .private_key()
-                .clone(),
+            fixture_keypair(0x9E).private_key().clone(),
             &manifest,
             [0xCD; 32],
             99,

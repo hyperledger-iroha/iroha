@@ -241,7 +241,8 @@ mod tests {
     use crate::asset::AssetTransferControlWindow;
 
     fn account(seed: u8) -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked asset-transfer-control fixture keypair");
         AccountId::new(key_pair.public_key().clone())
     }
 

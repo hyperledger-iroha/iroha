@@ -400,9 +400,9 @@ fn canonical_invalid_hex(encodings: &PositiveEncodings) -> String {
 pub fn compliance_vectors_json() -> Value {
     let single_default = build_single_case(
         "addr-single-default-ed25519",
-        0x00,
+        0x0C,
         "default",
-        "Implicit default-domain address using deterministic Ed25519 key derived from seed byte 0x00.",
+        "Implicit default-domain address using deterministic Ed25519 key derived from seed byte 0x0c.",
     );
     let single_treasury = build_single_case(
         "addr-single-treasury-ed25519",
@@ -537,10 +537,7 @@ mod tests {
         };
 
         assert!(!positive.is_empty());
-        let public_key = KeyPair::try_from_seed(vec![0x00; 32], Algorithm::Ed25519)
-            .expect("fixed compliance vector Ed25519 seed must derive")
-            .public_key()
-            .clone();
+        let public_key = ed25519_pk_with(0x0C);
         let Some(controller) = positive
             .iter()
             .find_map(|case| case.get("controller").and_then(Value::as_object))

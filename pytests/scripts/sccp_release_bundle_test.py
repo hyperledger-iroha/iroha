@@ -1747,6 +1747,86 @@ def test_release_bundle_verifier_guards_release_manifest_readiness_flags_invento
         assert checked_markers > 0
 
 
+def test_release_bundle_verifier_guards_route_allowlist_canary_summary_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin route-canary summary hardening."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_route_allowlist_canary_summary_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_ROUTE_ALLOWLIST_CANARY_SUMMARY_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"route-canary-summary-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_route_allowlist_canary_summary_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP route allowlist canary summary source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+
+def test_release_bundle_verifier_guards_transparent_openverify_summary_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin OpenVerify summary hardening."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_transparent_openverify_summary_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_TRANSPARENT_OPENVERIFY_SUMMARY_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"openverify-summary-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_transparent_openverify_summary_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP transparent OpenVerify summary source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+
 def test_release_bundle_verifier_guards_release_manifest_artifact_set_order_inventory(
     tmp_path: Path,
 ) -> None:
@@ -4687,6 +4767,121 @@ def test_release_bundle_rejects_release_notes_drift_before_write(
     assert not (output_dir / "sccp-release-notes-attachment.md").exists()
 
 
+def test_release_bundle_rejects_release_notes_title_status_block_drift_before_write(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Release bundle generation must reject title/status prose injection."""
+
+    bundle = load_bundle_module()
+    real_attachment = bundle._release_notes_attachment
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    def drifted_attachment(report, artifacts):
+        notes = real_attachment(report, artifacts)
+        return notes.replace(
+            "# SCCP Public Release Notes Attachment\n\nStatus: READY\n\n",
+            (
+                "# SCCP Public Release Notes Attachment\n"
+                "Release manager note: manual review completed.\n"
+                "Status: READY\n\n"
+            ),
+            1,
+        )
+
+    monkeypatch.setattr(bundle, "_release_notes_attachment", drifted_attachment)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("title/status drifted release notes were written")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "release notes attachment title/status block is not canonical" in (
+        captured.err
+    )
+    assert not (output_dir / "sccp-release-notes-attachment.md").exists()
+
+
+def test_release_bundle_rejects_release_notes_artifact_table_position_drift_before_write(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Release bundle generation must reject pre-table release note prose."""
+
+    bundle = load_bundle_module()
+    real_attachment = bundle._release_notes_attachment
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+    root_line = (
+        "`manifest.json` is the verifier root and is intentionally not listed "
+        "in its own artifact table."
+    )
+
+    def drifted_attachment(report, artifacts):
+        notes = real_attachment(report, artifacts)
+        return notes.replace(
+            f"{root_line}\n\n| Artifact | Bytes | SHA-256 |",
+            (
+                f"{root_line}\n\n"
+                "Release manager note: manual review completed out-of-band.\n\n"
+                "| Artifact | Bytes | SHA-256 |"
+            ),
+            1,
+        )
+
+    monkeypatch.setattr(bundle, "_release_notes_attachment", drifted_attachment)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("artifact-table drifted release notes were written")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "release notes attachment artifact table scaffold is not canonical"
+        in captured.err
+    )
+    assert not (output_dir / "sccp-release-notes-attachment.md").exists()
+
+
 def test_release_bundle_redacts_builder_recompute_and_renderer_errors(
     tmp_path: Path,
     monkeypatch,
@@ -6996,6 +7191,118 @@ def test_release_bundle_rejects_malformed_copied_native_evm_artifacts_before_ren
         f"{label} sdk_artifacts[2].implementation_artifact path must not reuse "
         "proving_key"
     ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_native_evm_summary_scalar_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied native prover summaries must keep canonical scalar identifiers."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    def artifact(path: str, seed: int) -> dict[str, object]:
+        return {
+            "path": path,
+            "bytes": 32,
+            "sha256": f"{seed:02x}" * 32,
+        }
+
+    native_summary: dict[str, object] = {
+        "required": True,
+        "schema": "sccp-native-evm-groth16-prover-bundle-v0",
+        "artifact": artifact("native/manifest.json", 0x10),
+        "bundle_id": "sccp:eth:native-evm-groth16-prover:debug:v1",
+        "lanes": "eth,bsc",
+        "proof_backend": "evm-groth16-bn254-debug",
+        "proof_artifact": artifact("native/proof.bin", 0x20),
+        "proof_artifact_hash": "0x" + "20" * 32,
+        "proving_key": artifact("native/proving-key.bin", 0x21),
+        "proving_key_hash": "0x" + "21" * 32,
+        "verifier_key": artifact("native/verifier-key.bin", 0x22),
+        "verifier_key_hash": "0x" + "22" * 32,
+        "destination_binding_hash": "0x" + "23" * 32,
+        "audit_hashes": {
+            key: "0x" + f"{index + 0x30:02x}" * 32
+            for index, key in enumerate(
+                sorted(readiness.NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES)
+            )
+        },
+        "cross_sdk_fixture_parity_artifact": artifact("native/parity.json", 0x40),
+        "native_prover_self_test_artifact": artifact("native/self-test.json", 0x41),
+        "sdk_artifacts": [
+            {
+                "sdk": sdk,
+                "implementation": implementation,
+                "implementation_hash": "0x" + f"{index + 0x50:02x}" * 32,
+                "implementation_artifact": artifact(
+                    f"native/{sdk}-implementation.bin",
+                    index + 0x50,
+                ),
+            }
+            for index, (sdk, implementation) in enumerate(
+                sorted(readiness.NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS.items())
+            )
+        ],
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["native_evm_prover_bundle"] = native_summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("native EVM scalar drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("native EVM scalar drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    label = "bundled report.native_evm_prover_bundle"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{label} schema must be {readiness.NATIVE_EVM_PROVER_BUNDLE_SCHEMA}"
+        in captured.err
+    )
+    assert (
+        f"{label} bundle_id must be {readiness.NATIVE_EVM_PROVER_BUNDLE_ID}"
+        in captured.err
+    )
+    assert f"{label} lanes must be {readiness.ACTIVE_LAUNCH_CHAIN}" in captured.err
+    assert f"{label} proof_backend must be evm-groth16-bn254-v1" in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -17157,6 +17464,177 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
     ) in errors
 
     weakened = markdown.replace(
+        "SCCP release native-prover bundle schema source inventory ",
+        "",
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "SCCP release native-prover bundle schema source inventory"
+    ) in errors
+
+    weakened = markdown.replace("copied-summary scalar exactness, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "copied-summary scalar exactness"
+    ) in errors
+
+    weakened = markdown.replace("production-corridor phase/status visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "production-corridor phase/status visibility"
+    ) in errors
+
+    weakened = markdown.replace("evidence-input path/bytes/hash visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "evidence-input path/bytes/hash visibility"
+    ) in errors
+
+    weakened = markdown.replace("production-corridor artifact/hash visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "production-corridor artifact/hash visibility"
+    ) in errors
+
+    weakened = markdown.replace("checklist gate/status visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "checklist gate/status visibility"
+    ) in errors
+
+    weakened = markdown.replace("checklist blocker-cell visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "checklist blocker-cell visibility"
+    ) in errors
+
+    weakened = markdown.replace("cryptographic row live-EVM visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "cryptographic row live-EVM visibility"
+    ) in errors
+
+    weakened = markdown.replace("cryptographic row core-hash visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "cryptographic row core-hash visibility"
+    ) in errors
+
+    weakened = markdown.replace("cryptographic row route-canary visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "cryptographic row route-canary visibility"
+    ) in errors
+
+    weakened = markdown.replace("lane-readiness status visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "lane-readiness status visibility"
+    ) in errors
+
+    weakened = markdown.replace("lane-readiness blocker-cell visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "lane-readiness blocker-cell visibility"
+    ) in errors
+
+    weakened = markdown.replace("source-inventory gate/status visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "source-inventory gate/status visibility"
+    ) in errors
+
+    weakened = markdown.replace("source-inventory blocker-cell visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "source-inventory blocker-cell visibility"
+    ) in errors
+
+    weakened = markdown.replace("user-prover validation-status visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "user-prover validation-status visibility"
+    ) in errors
+
+    weakened = markdown.replace("user-prover blocker-cell visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "user-prover blocker-cell visibility"
+    ) in errors
+
+    weakened = markdown.replace("user-prover helper/phase row visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "user-prover helper/phase row visibility"
+    ) in errors
+
+    weakened = markdown.replace("native-prover validation-status visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "native-prover validation-status visibility"
+    ) in errors
+
+    weakened = markdown.replace("native-prover blocker-cell visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "native-prover blocker-cell visibility"
+    ) in errors
+
+    weakened = markdown.replace("native-prover artifact/hash row visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "native-prover artifact/hash row visibility"
+    ) in errors
+
+    weakened = markdown.replace("native-prover support-artifact row visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "native-prover support-artifact row visibility"
+    ) in errors
+
+    weakened = markdown.replace(
         "source-adapter gate hash/audit replay rejection, ",
         "",
     )
@@ -17167,6 +17645,22 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "source-adapter gate hash/audit replay rejection"
     ) in errors
 
+    for marker in (
+        "Ethereum mainnet live EVM source production source inventory",
+        "Ethereum mainnet live EVM destination production source inventory",
+        "SCCP launch-scope source inventory",
+        "SCCP release corridor phase-transcript source inventory",
+        "SCCP retired network-surface source inventory",
+        "SCCP unready transparent-proof source inventory",
+        "SCCP TRON deploy operator boolean source inventory",
+    ):
+        weakened = markdown.replace(marker, "")
+        errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+        assert (
+            "readiness report Markdown Required Release Evidence section missing "
+            f"release evidence marker: {marker}"
+        ) in errors
+
     unsupported_note = verifier.SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE
     assert unsupported_note in markdown
     weakened = markdown.replace(f"- {unsupported_note}\n", "")
@@ -17175,6 +17669,61 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "readiness report Markdown Required Release Evidence section missing "
         f"release evidence marker: {unsupported_note}"
     ) in errors
+
+
+def test_release_bundle_required_evidence_source_rows_have_strict_markers(
+    tmp_path: Path,
+) -> None:
+    """Every generated source-inventory evidence row must be invariant-checked."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    required_evidence = markdown.split("## Required Release Evidence\n", 1)[1]
+    required_evidence = required_evidence.split("\n## ", 1)[0]
+    source_row_labels = []
+    for line in required_evidence.splitlines():
+        if not line.startswith("- "):
+            continue
+        if "source inventory" not in line and "source-inventory" not in line:
+            continue
+        label = line[2:].split(" must ", 1)[0]
+        if label not in source_row_labels:
+            source_row_labels.append(label)
+
+    assert source_row_labels
+    missing_markers = [
+        label
+        for label in source_row_labels
+        if not any(
+            label in marker or marker in label
+            for marker in verifier.READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS
+        )
+    ]
+    assert missing_markers == []
+
+
+def test_release_bundle_required_evidence_markers_are_unique_and_generated(
+    tmp_path: Path,
+) -> None:
+    """Strict release-evidence markers must uniquely cover generated Markdown."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    required_evidence = markdown.split("## Required Release Evidence\n", 1)[1]
+    required_evidence = required_evidence.split("\n## ", 1)[0]
+    markers = verifier.READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS
+
+    assert len(markers) == len(set(markers))
+    missing_markers = [
+        marker for marker in markers if marker not in required_evidence
+    ]
+    assert missing_markers == []
 
 
 def test_release_bundle_verifier_release_notes_renderer_is_independent(
@@ -17251,6 +17800,734 @@ def test_release_bundle_verifier_release_notes_invariants_require_status_and_blo
         "release notes attachment missing blocker: - `<invalid blockers>`"
         in errors
     )
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_single_top_level_title(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep one canonical top-level title."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    duplicated = notes.replace(
+        "Status: READY\n\n",
+        "Status: READY\n# SCCP Public Release Notes Attachment\n\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        duplicated,
+    )
+    assert "release notes attachment has multiple canonical titles" in errors
+    assert "release notes attachment has unexpected top-level heading" in errors
+
+    extra_heading = notes.replace(
+        "Status: READY\n\n",
+        "Status: READY\n# Operator Advisory\n\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        extra_heading,
+    )
+    assert "release notes attachment has unexpected top-level heading" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_reject_unexpected_section_headings(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must reject noncanonical section headings."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    extra_sections = notes + "\n## Operator Notes\n\n### Hidden Review Notes\n"
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        extra_sections,
+    )
+
+    assert "release notes attachment has unexpected section heading" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_reject_trailing_content(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must reject noncanonical trailing prose."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    with_trailing_prose = (
+        notes
+        + "Release manager note: publish after the out-of-band manual review.\n"
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        with_trailing_prose,
+    )
+
+    assert "release notes attachment has noncanonical trailing content" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_single_canonical_status_line(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep one status line in canonical position."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    status_line = "Status: READY"
+    assert f"\n{status_line}\n" in notes
+
+    misplaced = notes.replace(
+        f"\n{status_line}\n",
+        f"\n\n{status_line}\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        misplaced,
+    )
+    assert (
+        "release notes attachment status line is not in canonical position"
+        in errors
+    )
+
+    duplicated = notes.replace(
+        f"{status_line}\n",
+        f"{status_line}\nStatus: NOT READY\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        duplicated,
+    )
+    assert "release notes attachment has multiple status lines" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_canonical_title_status_block(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must reject title/status block injection."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    injected = notes.replace(
+        "# SCCP Public Release Notes Attachment\n\nStatus: READY\n\n",
+        (
+            "# SCCP Public Release Notes Attachment\n"
+            "Release manager note: manual review completed.\n"
+            "Status: READY\n\n"
+        ),
+        1,
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        injected,
+    )
+
+    assert "release notes attachment title/status block is not canonical" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_manifest_handoff_lines(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep exact manifest handoff wording."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    weakened = notes.replace(
+        (
+            "Attach `manifest.json` plus every artifact below to the public release "
+            "notes before production activation."
+        ),
+        "Attach the artifacts below; manifest.json may be supplied separately.",
+        1,
+    ).replace(
+        (
+            "`manifest.json` is the verifier root and is intentionally not listed "
+            "in its own artifact table."
+        ),
+        "`manifest.json` is mentioned for operator context.",
+        1,
+    )
+    assert "manifest.json" in weakened
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert "release notes attachment missing manifest handoff instruction" in errors
+    assert "release notes attachment missing manifest root exclusion note" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_single_canonical_manifest_handoff_block(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep one canonical manifest handoff block."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    handoff_line = (
+        "Attach `manifest.json` plus every artifact below to the public release "
+        "notes before production activation."
+    )
+    root_line = (
+        "`manifest.json` is the verifier root and is intentionally not listed "
+        "in its own artifact table."
+    )
+
+    duplicated = notes.replace(
+        f"{handoff_line}\n\n{root_line}",
+        f"{handoff_line}\n{handoff_line}\n\n{root_line}",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        duplicated,
+    )
+    assert (
+        "release notes attachment has multiple manifest handoff instructions"
+        in errors
+    )
+    assert (
+        "release notes attachment manifest handoff block is not canonical"
+        in errors
+    )
+
+    reordered = notes.replace(
+        f"{handoff_line}\n\n{root_line}\n\n",
+        f"{root_line}\n\n{handoff_line}\n\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        reordered,
+    )
+    assert (
+        "release notes attachment manifest handoff block is not canonical"
+        in errors
+    )
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_artifact_table_shape(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep the canonical artifact table shape."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    weakened = notes.replace(
+        "| Artifact | Bytes | SHA-256 |",
+        "| Artifact | Size | Digest |",
+        1,
+    ).replace(
+        "| --- | ---: | --- |",
+        "| --- | --- | --- |",
+        1,
+    )
+    assert "| `" in weakened
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert "release notes attachment missing artifact table header" in errors
+    assert "release notes attachment missing artifact table separator" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_artifact_table_scaffold(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep header/separator adjacency."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    weakened = notes.replace(
+        "| Artifact | Bytes | SHA-256 |\n| --- | ---: | --- |",
+        "| Artifact | Bytes | SHA-256 |\n\n| --- | ---: | --- |",
+        1,
+    )
+    assert "| Artifact | Bytes | SHA-256 |" in weakened
+    assert "| --- | ---: | --- |" in weakened
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert (
+        "release notes attachment artifact table header is not followed by "
+        "separator"
+    ) in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_reject_duplicate_artifact_table_scaffold(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep one canonical artifact table scaffold."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    duplicated_scaffold = notes.replace(
+        "| Artifact | Bytes | SHA-256 |\n| --- | ---: | --- |\n",
+        (
+            "| Artifact | Bytes | SHA-256 |\n"
+            "| --- | ---: | --- |\n"
+            "| Artifact | Bytes | SHA-256 |\n"
+            "| --- | ---: | --- |\n"
+        ),
+        1,
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        duplicated_scaffold,
+    )
+
+    assert "release notes attachment has multiple artifact table headers" in errors
+    assert "release notes attachment has multiple artifact table separators" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_canonical_artifact_table_position(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must reject pre-table prose injection."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    root_line = (
+        "`manifest.json` is the verifier root and is intentionally not listed "
+        "in its own artifact table."
+    )
+    injected = notes.replace(
+        f"{root_line}\n\n| Artifact | Bytes | SHA-256 |",
+        (
+            f"{root_line}\n\n"
+            "Release manager note: manual review completed out-of-band.\n\n"
+            "| Artifact | Bytes | SHA-256 |"
+        ),
+        1,
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        injected,
+    )
+
+    assert (
+        "release notes attachment artifact table scaffold is not canonical"
+        in errors
+    )
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_canonical_blocking_items_section(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep the blocker section canonical."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    ready_notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    ready_with_blockers = ready_notes + "\n## Blocking Items\n\n- None\n"
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        ready_with_blockers,
+    )
+    assert (
+        "release notes attachment must not include Blocking Items section when ready"
+        in errors
+    )
+
+    blocked_report = dict(report)
+    blocked_report["production_ready"] = False
+    blocked_report["blockers"] = ["operator hold"]
+    blocked_notes = verifier._expected_release_notes_attachment(
+        blocked_report,
+        manifest["artifacts"],
+    )
+    blocker_line = "- operator hold"
+    assert f"## Blocking Items\n\n{blocker_line}\n" in blocked_notes
+
+    duplicated_heading = blocked_notes.replace(
+        f"## Blocking Items\n\n{blocker_line}",
+        f"## Blocking Items\n## Blocking Items\n\n{blocker_line}",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        blocked_report,
+        manifest["artifacts"],
+        duplicated_heading,
+    )
+    assert "release notes attachment has multiple Blocking Items sections" in errors
+    assert (
+        "release notes attachment Blocking Items section is not canonical"
+        in errors
+    )
+
+    misplaced_body = blocked_notes.replace(
+        f"## Blocking Items\n\n{blocker_line}",
+        f"## Blocking Items\n\n\n{blocker_line}",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        blocked_report,
+        manifest["artifacts"],
+        misplaced_body,
+    )
+    assert (
+        "release notes attachment Blocking Items section is not canonical"
+        in errors
+    )
+
+    duplicated_blocker = blocked_notes + f"{blocker_line}\n"
+    errors = verifier._release_notes_attachment_invariant_errors(
+        blocked_report,
+        manifest["artifacts"],
+        duplicated_blocker,
+    )
+    assert (
+        "release notes attachment lists blocker more than once: "
+        f"{blocker_line}"
+    ) in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_reject_self_artifact_row(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must reject self-listing artifact rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    self_artifact = next(
+        artifact
+        for artifact in manifest["artifacts"]
+        if artifact["path"] == "sccp-release-notes-attachment.md"
+    )
+    self_artifact_row = (
+        f"| `{self_artifact['path']}` | {self_artifact['bytes']} | "
+        f"`{self_artifact['sha256']}` |"
+    )
+    weakened = notes.replace(
+        "| --- | ---: | --- |\n",
+        f"| --- | ---: | --- |\n{self_artifact_row}\n",
+        1,
+    )
+    assert self_artifact_row in weakened
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert "release notes attachment must not list itself as an artifact" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_artifact_rows(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must bind artifact path, bytes, and hash."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    artifact = next(
+        artifact
+        for artifact in manifest["artifacts"]
+        if artifact["path"] != "sccp-release-notes-attachment.md"
+    )
+    artifact_row = (
+        f"| `{artifact['path']}` | {artifact['bytes']} | "
+        f"`{artifact['sha256']}` |"
+    )
+    drifted_row = (
+        f"| `{artifact['path']}` | {artifact['bytes'] + 1} | "
+        f"`{artifact['sha256']}` |"
+    )
+    assert artifact_row in notes
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        notes.replace(artifact_row, drifted_row, 1),
+    )
+
+    assert (
+        "release notes attachment does not list artifact row: "
+        f"{artifact_row}"
+    ) in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_reject_extra_artifact_rows(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must reject duplicate and forged artifact rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    artifact = next(
+        artifact
+        for artifact in manifest["artifacts"]
+        if artifact["path"] != "sccp-release-notes-attachment.md"
+    )
+    artifact_row = (
+        f"| `{artifact['path']}` | {artifact['bytes']} | "
+        f"`{artifact['sha256']}` |"
+    )
+    forged_row = f"| `operator-extra.txt` | 1 | `{'f0' * 32}` |"
+    weakened = notes.replace(
+        artifact_row,
+        f"{artifact_row}\n{artifact_row}\n{forged_row}",
+        1,
+    )
+    assert weakened.count(artifact_row) == 2
+    assert forged_row in weakened
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert (
+        "release notes attachment lists artifact row more than once: "
+        f"{artifact_row}"
+    ) in errors
+    assert (
+        "release notes attachment lists unexpected artifact row: "
+        f"{forged_row}"
+    ) in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_artifact_row_order(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep manifest artifact row order."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    artifacts = [
+        artifact
+        for artifact in manifest["artifacts"]
+        if artifact["path"] != "sccp-release-notes-attachment.md"
+    ]
+    assert len(artifacts) >= 2
+    first_row = (
+        f"| `{artifacts[0]['path']}` | {artifacts[0]['bytes']} | "
+        f"`{artifacts[0]['sha256']}` |"
+    )
+    second_row = (
+        f"| `{artifacts[1]['path']}` | {artifacts[1]['bytes']} | "
+        f"`{artifacts[1]['sha256']}` |"
+    )
+    assert f"{first_row}\n{second_row}" in notes
+    weakened = notes.replace(
+        f"{first_row}\n{second_row}",
+        f"{second_row}\n{first_row}",
+        1,
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert (
+        "release notes attachment artifact rows are out of manifest order"
+        in errors
+    )
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_contiguous_artifact_table(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep artifact rows inside the table."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    artifact_rows = [
+        f"| `{artifact['path']}` | {artifact['bytes']} | `{artifact['sha256']}` |"
+        for artifact in manifest["artifacts"]
+        if artifact["path"] != "sccp-release-notes-attachment.md"
+    ]
+    artifact_row_block = "\n".join(artifact_rows)
+    assert f"| --- | ---: | --- |\n{artifact_row_block}" in notes
+    weakened = notes.replace(
+        f"| --- | ---: | --- |\n{artifact_row_block}",
+        f"| --- | ---: | --- |\n\n{artifact_row_block}",
+        1,
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert (
+        "release notes attachment artifact rows are not contiguous "
+        "after table separator"
+    ) in errors
 
 
 def test_release_bundle_verifier_rejects_release_notes_status_drift(
@@ -19916,6 +21193,68 @@ def test_release_bundle_verifier_rejects_missing_release_manifest_readiness_flag
     assert (
         "readiness report source_inventory missing required gate: "
         "release_manifest_readiness_flags_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_route_allowlist_canary_summary_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep route-canary summary checks."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("route_allowlist_canary_summary_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "route_allowlist_canary_summary_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_transparent_openverify_summary_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep transparent OpenVerify summary checks."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("transparent_openverify_summary_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "transparent_openverify_summary_gate"
     ) in verified.stdout
 
 
@@ -26152,6 +27491,788 @@ def test_release_bundle_verifier_markdown_invariants_require_public_sections(
         "readiness report Markdown missing section: ## Cryptographic Evidence"
         in errors
     )
+
+
+def test_release_bundle_verifier_markdown_invariants_require_evidence_input_row(
+    tmp_path: Path,
+) -> None:
+    """Evidence-input Markdown must bind path, byte count, and hash."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    artifact = report["input_artifacts"][0]
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = (
+        f"| `{artifact['path']}` | {artifact['bytes']} | "
+        f"`{artifact['sha256']}` |"
+    )
+    assert row_prefix in markdown
+    weakened = markdown.replace(
+        row_prefix,
+        (
+            f"| `{artifact['path']}` | {artifact['bytes']} | "
+            f"`{'99' * 32}` |"
+        ),
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Evidence Inputs section missing "
+        f"input artifact row for {artifact['path']}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_corridor_phase_status(
+    tmp_path: Path,
+) -> None:
+    """Production-corridor Markdown must expose each phase with its exact status."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    phase, phase_status = next(iter(report["corridor"]["phases"].items()))
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = f"| `{phase}` | {phase_status} |"
+    assert row_prefix in markdown
+    weakened_status = "failed" if phase_status != "failed" else "passed"
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace(
+            row_prefix,
+            f"| `{phase}` | {weakened_status} |",
+            1,
+        ),
+    )
+
+    assert (
+        "readiness report Markdown Production Corridor section missing "
+        f"status for phase {phase}: | `{phase}` | {phase_status} |"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_corridor_artifact_row(
+    tmp_path: Path,
+) -> None:
+    """Production-corridor Markdown must bind phase evidence to the phase row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    phase, artifact = next(iter(report["corridor"]["evidence_artifacts"].items()))
+    phase_status = report["corridor"]["phases"][phase]
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = (
+        f"| `{phase}` | {phase_status} | "
+        f"`{artifact['path']}` | `{artifact['sha256']}` |"
+    )
+    assert row_prefix in markdown
+    weakened = markdown.replace(
+        row_prefix,
+        (
+            f"| `{phase}` | {phase_status} | "
+            f"`{artifact['path']}` | `{'99' * 32}` |"
+        ),
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Production Corridor section missing "
+        f"evidence artifact row for phase {phase}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_source_inventory_rows(
+    tmp_path: Path,
+) -> None:
+    """Source-inventory Markdown must expose each gate with its exact status."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = "| `proof_request_bundle_gate` | passed |"
+    assert row_prefix in markdown
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace(
+            row_prefix,
+            "| `proof_request_bundle_gate` | blocked |",
+            1,
+        ),
+    )
+
+    assert (
+        "readiness report Markdown Source Inventory section missing "
+        "source inventory proof_request_bundle_gate status: "
+        "| `proof_request_bundle_gate` | passed |"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_source_inventory_blocker_row(
+    tmp_path: Path,
+) -> None:
+    """Source-inventory Markdown must bind blocker cells to each gate row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = "| `proof_request_bundle_gate` | passed | - |"
+    assert row_prefix in markdown
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace(
+            row_prefix,
+            "| `proof_request_bundle_gate` | passed | forged blocker |",
+            1,
+        ),
+    )
+
+    assert (
+        "readiness report Markdown Source Inventory section missing "
+        "source inventory proof_request_bundle_gate row: "
+        "| `proof_request_bundle_gate` | passed | - |"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_checklist_status(
+    tmp_path: Path,
+) -> None:
+    """Release-checklist Markdown must expose each gate with its exact status."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    item = report["release_checklist"]["items"][0]
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = f"| `{item['id']}` | ready |"
+    assert row_prefix in markdown
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace(row_prefix, f"| `{item['id']}` | blocked |", 1),
+    )
+
+    assert (
+        "readiness report Markdown Release Checklist section missing "
+        f"status for gate {item['id']}: | `{item['id']}` | ready |"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_checklist_blocker_row(
+    tmp_path: Path,
+) -> None:
+    """Release-checklist Markdown must bind blocker cells to each gate row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    item = report["release_checklist"]["items"][0]
+    item_status = "ready" if item["ready"] is True else "blocked"
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = f"| `{item['id']}` | {item_status} | - |"
+    assert row_prefix in markdown
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace(
+            row_prefix,
+            f"| `{item['id']}` | {item_status} | forged blocker |",
+            1,
+        ),
+    )
+
+    assert (
+        "readiness report Markdown Release Checklist section missing "
+        f"checklist row for gate {item['id']}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_crypto_live_evm_row(
+    tmp_path: Path,
+) -> None:
+    """Cryptographic Markdown must bind live EVM cells to the lane row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    row = next(
+        row
+        for row in report["cryptographic_evidence"]
+        if row["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = (
+        f"| {row['domain']} | `{row['chain']}` | "
+        f"`{row['evm_source_rpc_chain_id'] or '-'}` | "
+        f"`{row['evm_source_block_tag'] or '-'}` | "
+        f"`{row['evm_destination_rpc_chain_id'] or '-'}` | "
+        f"`{row['evm_destination_block_tag'] or '-'}` |"
+    )
+    assert row_prefix in markdown
+    weakened = markdown.replace(
+        row_prefix,
+        (
+            f"| {row['domain']} | `{row['chain']}` | `999` | "
+            f"`{row['evm_source_block_tag'] or '-'}` | "
+            f"`{row['evm_destination_rpc_chain_id'] or '-'}` | "
+            f"`{row['evm_destination_block_tag'] or '-'}` |"
+        ),
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Cryptographic Evidence section missing "
+        f"live EVM cells for domain {row['domain']}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_crypto_core_hash_row(
+    tmp_path: Path,
+) -> None:
+    """Cryptographic Markdown must bind core hashes to the lane row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    row = next(
+        row
+        for row in report["cryptographic_evidence"]
+        if row["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    source_gate = f"`{row['source_adapter_gate_hash']}`"
+    if not row["source_adapter_gate_hash"]:
+        source_gate = (
+            "not required"
+            if row["source_adapter_gate_required"] is False
+            else "-"
+        )
+    row_prefix = (
+        f"| {row['domain']} | `{row['chain']}` | "
+        f"`{row['evm_source_rpc_chain_id'] or '-'}` | "
+        f"`{row['evm_source_block_tag'] or '-'}` | "
+        f"`{row['evm_destination_rpc_chain_id'] or '-'}` | "
+        f"`{row['evm_destination_block_tag'] or '-'}` | "
+        f"`{row['source_verifier_material_hash']}` | "
+        f"`{row['source_adapter_engine_deployment_hash']}` | "
+        f"`{row['destination_binding_hash']}` | "
+        f"{source_gate} |"
+    )
+    assert row_prefix in markdown
+    weakened = markdown.replace(
+        row_prefix,
+        row_prefix.replace(row["source_verifier_material_hash"], "0x" + "99" * 32),
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Cryptographic Evidence section missing "
+        f"core cryptographic cells for domain {row['domain']}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_crypto_route_canary_row(
+    tmp_path: Path,
+) -> None:
+    """Cryptographic Markdown must bind route-canary cells to the lane row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    row = next(
+        row
+        for row in report["cryptographic_evidence"]
+        if row["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+
+    def hash_cell(value: object) -> str:
+        return f"`{value}`" if isinstance(value, str) and value else "-"
+
+    def integer_cell(value: object) -> str:
+        return f"`{value}`" if type(value) is int else "-"
+
+    def boolean_cell(value: object) -> str:
+        return "`true`" if value is True else "`false`" if value is False else "-"
+
+    gate_audits = row["source_adapter_gate_audit_hashes"]
+    gate_audit_cell = (
+        "<br>".join(
+            f"`{key}`: `{audit_hash}`"
+            for key, audit_hash in sorted(gate_audits.items())
+        )
+        if gate_audits
+        else "-"
+    )
+    source_gate = hash_cell(row["source_adapter_gate_hash"])
+    if row["source_adapter_gate_required"] is False and source_gate == "-":
+        source_gate = "not required"
+    canary_source = row["route_canary_evidence_source"] or "-"
+    if row["route_canary_evidence_bound"] is not True:
+        canary_source = f"{canary_source} (unbound)"
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = (
+        f"| {row['domain']} | `{row['chain']}` | "
+        f"`{row['evm_source_rpc_chain_id'] or '-'}` | "
+        f"`{row['evm_source_block_tag'] or '-'}` | "
+        f"`{row['evm_destination_rpc_chain_id'] or '-'}` | "
+        f"`{row['evm_destination_block_tag'] or '-'}` | "
+        f"{hash_cell(row['source_verifier_material_hash'])} | "
+        f"{hash_cell(row['source_adapter_engine_deployment_hash'])} | "
+        f"{hash_cell(row['destination_binding_hash'])} | "
+        f"{source_gate} | {gate_audit_cell} | "
+        f"{hash_cell(row['route_allowlist_hash'])} | "
+        f"{hash_cell(row['route_canary_evidence_hash'])} | "
+        f"`{canary_source}` | "
+        f"{hash_cell(row['route_canary_transaction_hash'])} | "
+        f"{integer_cell(row['route_canary_receipt_block_number'])} | "
+        f"{hash_cell(row['route_canary_receipt_block_hash'])} | "
+        f"{boolean_cell(row['route_canary_receipt_block_finalized'])} | "
+        f"{hash_cell(row['route_canary_block_receipts_root'])} | "
+        f"{hash_cell(row['route_canary_message_id'])} | "
+        f"{integer_cell(row['route_canary_block_number'])} | "
+        f"{integer_cell(row['route_canary_block_timestamp'])} |"
+    )
+    assert row_prefix in markdown
+    weakened = markdown.replace(
+        row_prefix,
+        row_prefix.replace(row["route_canary_evidence_hash"], "0x" + "88" * 32),
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Cryptographic Evidence section missing "
+        f"route-canary cells for domain {row['domain']}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_lane_status(
+    tmp_path: Path,
+) -> None:
+    """Lane-readiness Markdown must expose each domain with its exact status."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    lane = next(
+        lane
+        for lane in report["evidence"]["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = f"| {lane['domain']} | `{lane['chain']}` | ready |"
+    assert row_prefix in markdown
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace(
+            row_prefix,
+            f"| {lane['domain']} | `{lane['chain']}` | blocked |",
+            1,
+        ),
+    )
+
+    assert (
+        "readiness report Markdown Lane Readiness section missing "
+        f"status for domain {lane['domain']}: "
+        f"| {lane['domain']} | `{lane['chain']}` | ready |"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_lane_blocker_row(
+    tmp_path: Path,
+) -> None:
+    """Lane-readiness Markdown must bind blockers to the lane row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    lane = next(
+        lane
+        for lane in report["evidence"]["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+    lane["production_ready"] = False
+    lane["blockers"] = ["lane-readiness-blocker-unique"]
+    markdown = verifier._expected_readiness_markdown(report)
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = f"| {lane['domain']} | `{lane['chain']}` | blocked |"
+    row = next(line for line in markdown.splitlines() if line.startswith(row_prefix))
+    assert row.endswith("| lane-readiness-blocker-unique |")
+    weakened = markdown.replace(
+        row,
+        row[:-len("| lane-readiness-blocker-unique |")] + "| forged blocker |",
+        1,
+    )
+    weakened = weakened.replace(
+        "\n## Blocking Items",
+        "\nlane-readiness-blocker-unique\n\n## Blocking Items",
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Lane Readiness section missing "
+        f"blocker cell for domain {lane['domain']}: "
+        "lane-readiness-blocker-unique"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_user_prover_status(
+    tmp_path: Path,
+) -> None:
+    """User-prover Markdown rows must expose each validation status."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    surface = report["user_prover_submission_surfaces"][0]
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = f"| `{surface['lanes']}` | `{surface['proof_backend']}` |"
+    row = next(
+        line for line in markdown.splitlines() if line.startswith(row_prefix)
+    )
+    assert row.endswith("| passed |")
+    weakened = markdown.replace(row, row[:-len("| passed |")] + "| blocked |", 1)
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown User Prover Submission Surfaces section "
+        f"missing validation_status for lanes {surface['lanes']}: passed"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_user_prover_blocker_row(
+    tmp_path: Path,
+) -> None:
+    """User-prover Markdown must bind blockers to the validation cell."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    surface = report["user_prover_submission_surfaces"][0]
+    surface["validation_status"] = "blocked"
+    surface["validation_blockers"] = ["user-surface-blocker-unique"]
+    markdown = verifier._expected_readiness_markdown(report)
+    expected_cell = "blocked: user-surface-blocker-unique"
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+    assert expected_cell in markdown
+
+    weakened = markdown.replace(expected_cell, "blocked: forged blocker", 1)
+    weakened = weakened.replace(
+        "\n## Native Prover Bundle",
+        "\nuser-surface-blocker-unique\n\n## Native Prover Bundle",
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown User Prover Submission Surfaces section "
+        f"missing validation cell for lanes {surface['lanes']}: {expected_cell}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_user_prover_helper_phase_row(
+    tmp_path: Path,
+) -> None:
+    """User-prover Markdown must bind helper, submission, and phase cells."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    surface = report["user_prover_submission_surfaces"][0]
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    helper_cell = verifier._readiness_markdown_sdk_helper_sets_cell(surface)
+    required_phases = ", ".join(
+        f"`{phase}`" for phase in surface["required_phases"]
+    )
+    row_prefix = (
+        f"| `{surface['lanes']}` | `{surface['proof_backend']}` | "
+        f"{helper_cell} | {surface['on_chain_submission']} | "
+        f"{required_phases} |"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+    assert row_prefix in markdown
+
+    weakened = markdown.replace(
+        row_prefix,
+        row_prefix.replace(helper_cell, "`forged-sdk`: `forgedHelper`"),
+        1,
+    )
+    weakened = weakened.replace(
+        "\n## Native Prover Bundle",
+        f"\n{helper_cell}\n\n## Native Prover Bundle",
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown User Prover Submission Surfaces section "
+        f"missing user-prover row for lanes {surface['lanes']}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_native_prover_status(
+    tmp_path: Path,
+) -> None:
+    """Native prover Markdown must expose the validation status."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = "| yes | passed |"
+    assert row_prefix in markdown
+    weakened = markdown.replace(row_prefix, "| yes | blocked |", 1)
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Native Prover Bundle section missing "
+        "native EVM prover validation_status: | yes | passed |"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_native_prover_artifact_row(
+    tmp_path: Path,
+) -> None:
+    """Native prover Markdown must bind core artifact/hash cells to its row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    native_bundle = report["native_evm_prover_bundle"]
+    native_artifact = native_bundle["artifact"]
+    row_prefix = (
+        f"| yes | passed | `{native_artifact['path']}` | "
+        f"`{native_artifact['sha256']}` | "
+        f"`{native_bundle['proof_artifact_hash']}` | "
+        f"`{native_bundle['proving_key_hash']}` | "
+        f"`{native_bundle['verifier_key_hash']}` | "
+        f"`{native_bundle['destination_binding_hash']}` |"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+    assert row_prefix in markdown
+
+    weakened = markdown.replace(
+        row_prefix,
+        row_prefix.replace(native_bundle["proof_artifact_hash"], "0x" + "88" * 32),
+        1,
+    )
+    weakened = weakened.replace(
+        "\n## Source Inventory",
+        f"\n{native_bundle['proof_artifact_hash']}\n\n## Source Inventory",
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Native Prover Bundle section missing "
+        f"native EVM prover artifact/hash row: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_native_prover_support_artifact_row(
+    tmp_path: Path,
+) -> None:
+    """Native prover Markdown must bind support artifact cells to its row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    native_bundle = report["native_evm_prover_bundle"]
+    native_artifact = native_bundle["artifact"]
+    parity_artifact = native_bundle["cross_sdk_fixture_parity_artifact"]
+    self_test_artifact = native_bundle["native_prover_self_test_artifact"]
+    sdk_cell = verifier._readiness_native_evm_sdk_artifacts_cell(
+        native_bundle["sdk_artifacts"]
+    )
+    row_prefix = (
+        f"| yes | passed | `{native_artifact['path']}` | "
+        f"`{native_artifact['sha256']}` | "
+        f"`{native_bundle['proof_artifact_hash']}` | "
+        f"`{native_bundle['proving_key_hash']}` | "
+        f"`{native_bundle['verifier_key_hash']}` | "
+        f"`{native_bundle['destination_binding_hash']}` | "
+        f"`{parity_artifact['path']}`<br>`{parity_artifact['sha256']}` | "
+        f"`{self_test_artifact['path']}`<br>`{self_test_artifact['sha256']}` | "
+        f"{sdk_cell} |"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+    assert row_prefix in markdown
+
+    weakened = markdown.replace(
+        row_prefix,
+        row_prefix.replace(parity_artifact["sha256"], "88" * 32),
+        1,
+    )
+    weakened = weakened.replace(
+        "\n## Source Inventory",
+        f"\n`{parity_artifact['path']}`<br>`{parity_artifact['sha256']}`"
+        "\n\n## Source Inventory",
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Native Prover Bundle section missing "
+        f"native EVM prover support-artifact row: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_native_prover_blocker_row(
+    tmp_path: Path,
+) -> None:
+    """Native prover Markdown must bind blockers to the native prover row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    native_bundle = report["native_evm_prover_bundle"]
+    native_bundle["validation_status"] = "blocked"
+    native_bundle["validation_blockers"] = ["native-prover-blocker-unique"]
+    markdown = verifier._expected_readiness_markdown(report)
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = "| yes | blocked |"
+    row = next(line for line in markdown.splitlines() if line.startswith(row_prefix))
+    assert row.endswith("| native-prover-blocker-unique |")
+    weakened = markdown.replace(
+        row,
+        row[:-len("| native-prover-blocker-unique |")] + "| forged blocker |",
+        1,
+    )
+    weakened = weakened.replace(
+        "\n## Source Inventory",
+        "\nnative-prover-blocker-unique\n\n## Source Inventory",
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Native Prover Bundle section missing "
+        "native EVM prover blocker cell: native-prover-blocker-unique"
+    ) in errors
 
 
 def test_release_bundle_verifier_markdown_invariants_require_blocker_text(

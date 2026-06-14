@@ -759,7 +759,8 @@ fn x25519_process_remote_key_update_rejects_low_order_ephemeral() {
         .expect("key update");
     key_update.pub_ephemeral = vec![0u8; 32];
     let transcript = key_update_transcript_bytes(&key_update).expect("serialize mutated frame");
-    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    let signature = Signature::try_new(publisher_keys.private_key(), &transcript)
+        .expect("fixture streaming key-update signature");
     key_update.signature.copy_from_slice(signature.payload());
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
@@ -787,7 +788,8 @@ fn x25519_process_remote_key_update_rejects_zero_counter_without_state_change() 
         .expect("key update");
     key_update.key_counter = 0;
     let transcript = key_update_transcript_bytes(&key_update).expect("serialize mutated frame");
-    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    let signature = Signature::try_new(publisher_keys.private_key(), &transcript)
+        .expect("fixture streaming key-update signature");
     key_update.signature.copy_from_slice(signature.payload());
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
@@ -817,7 +819,8 @@ fn x25519_process_remote_key_update_rejects_zero_protocol_version_without_state_
         .expect("key update");
     key_update.protocol_version = 0;
     let transcript = key_update_transcript_bytes(&key_update).expect("serialize mutated frame");
-    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    let signature = Signature::try_new(publisher_keys.private_key(), &transcript)
+        .expect("fixture streaming key-update signature");
     key_update.signature.copy_from_slice(signature.payload());
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
@@ -1011,7 +1014,8 @@ fn x25519_key_update_rejects_malformed_restart_without_resetting_session() {
     malformed_restart.pub_ephemeral = vec![0u8; 32];
     let transcript =
         key_update_transcript_bytes(&malformed_restart).expect("serialize malformed restart");
-    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    let signature = Signature::try_new(publisher_keys.private_key(), &transcript)
+        .expect("fixture streaming key-update signature");
     malformed_restart
         .signature
         .copy_from_slice(signature.payload());
@@ -1809,7 +1813,8 @@ fn kyber_process_remote_key_update_rejects_truncated_ciphertext() {
     let mut truncated = key_update.clone();
     truncated.pub_ephemeral.truncate(32);
     let transcript = key_update_transcript_bytes(&truncated).expect("serialize truncated frame");
-    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    let signature = Signature::try_new(publisher_keys.private_key(), &transcript)
+        .expect("fixture streaming key-update signature");
     truncated.signature.copy_from_slice(signature.payload());
     let err = viewer_session
         .process_remote_key_update(&truncated, publisher_keys.public_key())
@@ -2419,7 +2424,8 @@ fn kyber_process_remote_key_update_rejects_suite_change() {
     drifted.key_counter = 2;
     let mutated_suite = drifted.suite;
     let transcript = key_update_transcript_bytes(&drifted).expect("serialize drifted frame");
-    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    let signature = Signature::try_new(publisher_keys.private_key(), &transcript)
+        .expect("fixture streaming key-update signature");
     drifted.signature.copy_from_slice(signature.payload());
 
     let err = viewer_session
@@ -2552,7 +2558,8 @@ fn kyber_suite_change_after_restore_rejects_state_drift_before_decapsulation() {
     drifted.pub_ephemeral = vec![0xA5; TEST_KEM_SUITE.ciphertext_len()];
     let mutated_suite = drifted.suite;
     let transcript = key_update_transcript_bytes(&drifted).expect("serialize drifted frame");
-    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    let signature = Signature::try_new(publisher_keys.private_key(), &transcript)
+        .expect("fixture streaming key-update signature");
     drifted.signature.copy_from_slice(signature.payload());
 
     let err = restored_without_secret

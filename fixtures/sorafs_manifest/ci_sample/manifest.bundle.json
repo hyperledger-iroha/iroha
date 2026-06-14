@@ -1,13 +1,18 @@
 {
   "identity": {
     "jwt_claims": {
-      "aud": "sorafs-ci",
-      "sub": "ci"
+      "aud": "sorafs",
+      "exp": 1700003600,
+      "iat": 1700000000,
+      "iss": "https://fixture.example/issuer",
+      "jti": "ci-sample-token-001",
+      "sub": "ci-fixture"
     },
     "jwt_header": {
-      "alg": "none"
+      "alg": "EdDSA",
+      "typ": "JWT"
     },
-    "token_hash_blake3_hex": "3984b7f8b718ddea05878dd914968e4c97f2e7358bbdb6c4a5f643159233b5f3",
+    "token_hash_blake3_hex": "7b56598bca4584a5f5631ce4e510b8c55bd9379799f231db2a3476774f45722b",
     "token_included": false,
     "token_source": "inline"
   },
@@ -18,14 +23,14 @@
     "chunk_digest_sha3_256_hex": "d2ea766eacaf9b2eab29bc6d04f31080e96af19be6194ff5dcf97c34a3fa1f04",
     "chunk_plan_chunk_count": 1,
     "chunk_plan_source": "fixtures/sorafs_manifest/ci_sample/chunk_plan.json",
-    "manifest_blake3_hex": "3f61a11d3d3f556e49f4d9a09795b7863bf4d7fce20024df3a0848fbb112e568",
+    "manifest_blake3_hex": "3a5e77d6673b68d5456bcc01e99ba93b0c8d4f1ab94f3eadc4ee02c4b934caea",
     "path": "fixtures/sorafs_manifest/ci_sample/manifest.to"
   },
-  "schema_version": "sorafs-cli-manifest-sign/v1",
+  "schema_version": "sorafs-cli-manifest-sign/v2",
   "signature": {
     "algorithm": "ed25519",
-    "public_key_hex": "f8a90a0f3e1e130bb39e2eb4cc056fe2864334ab3763faf6db11e3b3641ec2f1",
-    "public_key_multihash": "ed25519:ed0120F8A90A0F3E1E130BB39E2EB4CC056FE2864334AB3763FAF6DB11E3B3641EC2F1",
-    "signature_hex": "e5850af286acd68c8bd8e0bfb5987ec74f8b05ce3b7c98267f7e6acef6f3d70c08d6474b739e7241cd46f2e45d1050b11ec8db8d516a003b24f363d4dc3d5700"
+    "public_key_hex": "c9754094d2710638d5d81b6fbfb8e71dfa001874cd34cfc7bdde155575b942dd",
+    "public_key_multihash": "ed25519:ed0120C9754094D2710638D5D81B6FBFB8E71DFA001874CD34CFC7BDDE155575B942DD",
+    "signature_hex": "95d8a90f09da5d0e8765a01a3da4befb3376af18956df2ea4ba7f4f7946621a332e39f1274de4bb739e6d31dd2ff765d5cf838c1c8fcbd02ef99558a911eb30d"
   }
 }

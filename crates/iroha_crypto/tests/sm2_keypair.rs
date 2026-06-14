@@ -12,7 +12,7 @@ fn sm2_keypair_sign_and_verify() {
     let keypair = KeyPair::random_with_algorithm(Algorithm::Sm2);
     let msg = b"iroha sm2 keypair smoke test";
 
-    let signature = Signature::new(keypair.private_key(), msg);
+    let signature = Signature::try_new(keypair.private_key(), msg).expect("fixture SM2 signature");
     signature
         .verify(keypair.public_key(), msg)
         .expect("sm2 signature should verify");
@@ -51,7 +51,8 @@ fn sm2_signature_rejects_malformed_payloads() {
     let keypair = KeyPair::random_with_algorithm(Algorithm::Sm2);
     let message = b"malformed signature test vector";
 
-    let signature = Signature::new(keypair.private_key(), message);
+    let signature =
+        Signature::try_new(keypair.private_key(), message).expect("fixture SM2 signature");
     signature
         .verify(keypair.public_key(), message)
         .expect("baseline signature should verify");
@@ -121,9 +122,9 @@ fn sm2_signature_rejects_zero_components() {
     assert!(
         matches!(
             zero_signature.verify(keypair.public_key(), message),
-            Err(Error::Parse(_))
+            Err(Error::BadSignature)
         ),
-        "signature with zeroed r and s must fail parsing"
+        "generic signature verification must reject zeroed r and s as a bad signature"
     );
 }
 
@@ -137,9 +138,9 @@ fn sm2_signature_rejects_high_scalar_components() {
     assert!(
         matches!(
             signature.verify(keypair.public_key(), message),
-            Err(Error::Parse(_))
+            Err(Error::BadSignature)
         ),
-        "signature with components >= n must be rejected"
+        "generic signature verification must reject components >= n as a bad signature"
     );
 }
 

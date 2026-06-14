@@ -7165,7 +7165,7 @@ mod tests {
         PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
             .iter()
             .map(|surface| PrivacyProductionSdkExportV1 {
-                surface: *surface,
+                surface,
                 entrypoints: entrypoints.to_vec(),
             })
             .collect()
@@ -7178,8 +7178,8 @@ mod tests {
                 PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
                     .iter()
                     .map(move |surface| PrivacyProductionSdkParityArtifactV1 {
-                        kind: *kind,
-                        surface: *surface,
+                        kind,
+                        surface,
                         artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
                     })
             })
@@ -7884,7 +7884,7 @@ mod tests {
             let row = privacy_test_evidence_row(entry);
 
             let no_chain_capabilities =
-                privacy_capabilities_with_production_evidence(&[row.clone()], None);
+                privacy_capabilities_with_production_evidence(std::slice::from_ref(&row), None);
             let no_chain_algorithm = no_chain_capabilities
                 .algorithms
                 .iter()
@@ -21716,14 +21716,14 @@ fn privacy_result_for_request(
         }
 
         let known_entry = privacy_algorithm_entry(&request.algorithm_id);
-        if let Some(entry) = known_entry {
-            if privacy_entrypoint_planned(entry, &request.entrypoint) {
-                return privacy_failure_result_without_vk_ref(
-                    PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                    "privacy proof request entrypoint is planned but not executable until the production gate passes",
-                    &request,
-                );
-            }
+        if let Some(entry) = known_entry
+            && privacy_entrypoint_planned(entry, &request.entrypoint)
+        {
+            return privacy_failure_result_without_vk_ref(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request entrypoint is planned but not executable until the production gate passes",
+                &request,
+            );
         }
 
         if request.vk_ref.trim().is_empty() {

@@ -202,7 +202,8 @@ mod tests {
     }
 
     fn release() -> MusubiRelease {
-        let keypair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
+            .expect("derive checked Musubi fixture publisher keypair");
         MusubiRelease::new(
             package_ref(),
             crate::musubi::MusubiArchiveRef::new(

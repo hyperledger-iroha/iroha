@@ -816,7 +816,10 @@ execution-report SHA-256 of the child log. The keygen and
 proof children write combined stdout/stderr directly to their temporary staged
 log files, and those logs are flushed and fsynced after each child exits so a
 supervisor interruption does not make child output depend on a Python-owned
-pipe. The runner also creates or tightens its staged root, `artifacts`
+pipe. Long-running proof and compact-key children also emit periodic fsynced
+heartbeat lines into those same staged logs while waiting, so an operator can
+distinguish a healthy silent prover from a dead or abandoned temporary output.
+The runner also creates or tightens its staged root, `artifacts`
 directory, and `artifacts/kagemusha` directory to `0700`, and writes staged
 child logs, execution reports, run reports, elapsed-time files, and exit
 markers as `0600` files before accepting them. Each temporary child log is
@@ -1168,7 +1171,11 @@ scanner duplicate-binding diagnostics also ignore all-zero binding placeholders.
 The direct
 device-lab scanner summary and the production-readiness summary both require
 complete signed evidence before a status-ok direct report can count toward
-standard matrix coverage or release-facing `duplicate_bindings` metadata.
+standard matrix coverage, offline D2D transport coverage, or release-facing
+`duplicate_bindings` metadata. The readiness rollup also requires accepted
+Android evidence to cover every declared offline D2D payment transport
+(`nearby_offline`, `nfc_hce`, and `qr`) before a production release bundle can
+be marked ready.
 Duplicate-binding blockers still catch copied evidence from incomplete direct
 reports, but release-facing duplicate summaries only reflect slots admitted
 through the complete signed-evidence gates. Direct
