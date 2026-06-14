@@ -3005,7 +3005,7 @@ pub mod openssl_sm {
 
             let der = signature
                 .try_as_der()
-                .map_err(|ParseError(message)| OpenSslSmError::InvalidPublicKey(message))?;
+                .map_err(|crate::ParseError(message)| OpenSslSmError::InvalidPublicKey(message))?;
             let openssl_sig = EcdsaSig::from_der(&der)?;
             Ok(openssl_sig.verify(&digest_bytes, &ec_key)?)
         }

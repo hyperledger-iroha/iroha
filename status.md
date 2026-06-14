@@ -14651,13 +14651,13 @@ Last updated: 2026-06-14
   - `git diff --name-only -- 'Cargo.lock' '**/Cargo.lock'`
     (no output)
 
-## 2026-06-12 Confidential keyset inert spend-key gate
+## 2026-06-12 Confidential keyset inert RNG gate
 
-- Hardened confidential keyset derivation so array, slice, and random keyset
-  entry points reject all-zero 32-byte spend-key placeholders before HKDF
-  expansion.
-- Kept the ignored manual vector dumper on non-zero seeds now that zero is
-  invalid spend-key input.
+- Hardened confidential random keyset generation so all-zero RNG output is
+  rejected before HKDF expansion, while deterministic array/slice derivation
+  remains defined for every 32-byte fixture spend key.
+- Kept the ignored manual vector dumper on non-zero sample seeds; published
+  fixture coverage includes the all-zero derivation vector separately.
 - Validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-stark-air CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto confidential --lib -- --nocapture`
     (`9` passed; `1` ignored)
