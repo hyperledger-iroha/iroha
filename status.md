@@ -2,6 +2,17 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 Core queue router state-view fixture and state-free route fix
+
+- Restored state-free catalog routing for dataspace-scoped permission,
+  settlement, and explicit universal targets before empty-policy deferral.
+- Updated queue-router state-view fixtures so synthetic states carry the same
+  Nexus policy and catalogs that production state-view routing reads.
+- Validation:
+  - `cargo test -p iroha_core queue::router::tests -- --nocapture`
+    (`125` passed, `4921` filtered out)
+  - `cargo fmt --all`
+
 ## 2026-06-13 Data-model state/json/trigger fixture checked keys
 
 - Routed state advisory account, JSON key codec account, and trigger authority
