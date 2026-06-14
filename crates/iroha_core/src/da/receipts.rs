@@ -136,6 +136,22 @@ pub enum DaReceiptSpoolError {
         /// Storage ticket decoded from the receipt.
         receipt_ticket: StorageTicketId,
     },
+    /// The same signed receipt body appeared under multiple replay fingerprints.
+    #[error(
+        "duplicate DA receipt fingerprint conflict for lane {lane:?} epoch {epoch} sequence {sequence}"
+    )]
+    DuplicateFingerprintConflict {
+        /// Lane identifier that conflicted.
+        lane: LaneId,
+        /// Epoch that conflicted.
+        epoch: u64,
+        /// Sequence that conflicted.
+        sequence: u64,
+        /// Replay fingerprint first observed for this receipt body.
+        expected: ReplayFingerprint,
+        /// Replay fingerprint observed on the duplicate filename.
+        observed: ReplayFingerprint,
+    },
 }
 
 /// Errors returned when the receipt queue violates ordering or bundle mapping.
@@ -434,6 +450,8 @@ pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaR
     }
 
     let mut receipts = Vec::new();
+    let mut seen: BTreeMap<(LaneEpoch, u64), Vec<(DaIngestReceipt, ReplayFingerprint)>> =
+        BTreeMap::new();
     let dir_entries =
         std::fs::read_dir(spool_dir).map_err(|source| DaReceiptSpoolError::ReadDir {
             path: spool_dir.to_path_buf(),
@@ -454,7 +472,25 @@ pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaR
             path: path.clone(),
             source,
         })?;
-        receipts.push(decode_receipt(&data, &path)?);
+        let (filename_key, receipt_entry) = decode_receipt(&data, &path)?;
+        let seen_key = (receipt_entry.lane_epoch, receipt_entry.sequence);
+        let duplicate_receipts = seen.entry(seen_key).or_default();
+        if let Some((_, expected)) = duplicate_receipts
+            .iter()
+            .find(|(receipt, _)| receipt == &receipt_entry.receipt)
+        {
+            if *expected != filename_key.fingerprint {
+                return Err(DaReceiptSpoolError::DuplicateFingerprintConflict {
+                    lane: receipt_entry.lane_epoch.lane_id,
+                    epoch: receipt_entry.lane_epoch.epoch,
+                    sequence: receipt_entry.sequence,
+                    expected: *expected,
+                    observed: filename_key.fingerprint,
+                });
+            }
+        }
+        duplicate_receipts.push((receipt_entry.receipt.clone(), filename_key.fingerprint));
+        receipts.push(receipt_entry);
     }
 
     receipts.sort_by(|a, b| {
@@ -506,6 +542,7 @@ struct ReceiptFileKey {
     epoch: u64,
     sequence: u64,
     storage_ticket: StorageTicketId,
+    fingerprint: ReplayFingerprint,
 }
 
 fn parse_receipt_file_key(path: &Path) -> Result<ReceiptFileKey, DaReceiptSpoolError> {
@@ -543,13 +580,14 @@ fn parse_receipt_file_key(path: &Path) -> Result<ReceiptFileKey, DaReceiptSpoolE
     let epoch = parse_fixed_hex_u64(epoch_hex, 16, path)?;
     let sequence = parse_fixed_hex_u64(sequence_hex, 16, path)?;
     let storage_ticket = StorageTicketId::new(parse_fixed_hex_32(ticket_hex, path)?);
-    let _ = parse_fixed_hex_32(fingerprint_hex, path)?;
+    let fingerprint = ReplayFingerprint::from(parse_fixed_hex_32(fingerprint_hex, path)?);
 
     Ok(ReceiptFileKey {
         lane_id,
         epoch,
         sequence,
         storage_ticket,
+        fingerprint,
     })
 }
 
@@ -582,7 +620,10 @@ fn parse_fixed_hex_32(value: &str, path: &Path) -> Result<[u8; 32], DaReceiptSpo
     Ok(bytes)
 }
 
-fn decode_receipt(data: &[u8], path: &Path) -> Result<DaReceiptEntry, DaReceiptSpoolError> {
+fn decode_receipt(
+    data: &[u8],
+    path: &Path,
+) -> Result<(ReceiptFileKey, DaReceiptEntry), DaReceiptSpoolError> {
     let filename_key = parse_receipt_file_key(path)?;
     let stored = norito::decode_from_bytes::<StoredDaReceipt>(data).map_err(|source| {
         DaReceiptSpoolError::Decode {
@@ -617,12 +658,15 @@ fn decode_receipt(data: &[u8], path: &Path) -> Result<DaReceiptEntry, DaReceiptS
         });
     }
     let lane_epoch = LaneEpoch::new(receipt.lane_id, receipt.epoch);
-    Ok(DaReceiptEntry {
-        lane_epoch,
-        sequence,
-        manifest_hash: ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
-        receipt,
-    })
+    Ok((
+        filename_key,
+        DaReceiptEntry {
+            lane_epoch,
+            sequence,
+            manifest_hash: ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
+            receipt,
+        },
+    ))
 }
 
 /// Canonicalize and filter receipts against the current cursor and sealed set.
@@ -879,7 +923,7 @@ pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) -> DaRe
             }
         };
         let entry = match decode_receipt(&data, &path) {
-            Ok(entry) => entry,
+            Ok((_, entry)) => entry,
             Err(err) => {
                 report.skipped_invalid = report.skipped_invalid.saturating_add(1);
                 iroha_logger::warn!(
@@ -1231,6 +1275,36 @@ mod tests {
                 Err(DaReceiptSpoolError::FilenameMismatch { .. })
             ),
             "receipt filename/body ticket mismatches must reject the whole spool load"
+        );
+    }
+
+    #[test]
+    fn load_receipt_entries_rejects_same_receipt_under_different_fingerprint() {
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let stored = StoredDaReceipt {
+            version: STORED_RECEIPT_VERSION,
+            sequence: 3,
+            receipt: receipt.clone(),
+        };
+        let bytes = to_bytes(&stored).expect("encode");
+
+        for fingerprint in [[0x77; 32], [0x78; 32]] {
+            let path = dir.path().join(receipt_file_name(&receipt, 3, fingerprint));
+            std::fs::write(&path, &bytes).expect("write duplicate receipt");
+        }
+
+        assert!(
+            matches!(
+                load_receipt_entries(dir.path()),
+                Err(DaReceiptSpoolError::DuplicateFingerprintConflict {
+                    lane,
+                    epoch: 2,
+                    sequence: 3,
+                    ..
+                }) if lane == LaneId::new(1)
+            ),
+            "same signed receipt under different replay fingerprints must reject the spool load"
         );
     }
 

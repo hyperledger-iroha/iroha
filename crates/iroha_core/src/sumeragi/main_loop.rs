@@ -13158,8 +13158,8 @@ impl Actor {
         validation_handle.join_handles
     }
 
-    pub(super) fn attach_commit_worker(&mut self) -> std::thread::JoinHandle<()> {
-        let handle = commit::spawn_commit_worker(
+    pub(super) fn attach_commit_worker(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        let handle = match commit::spawn_commit_worker(
             Arc::clone(&self.state),
             Arc::clone(&self.kura),
             self.common_config.chain.clone(),
@@ -13167,11 +13167,23 @@ impl Actor {
             self.wake_tx.clone(),
             self.config.persistence.commit_work_queue_cap,
             self.config.persistence.commit_result_queue_cap,
-        );
+        ) {
+            Ok(handle) => handle,
+            Err(error) => {
+                warn!(
+                    %error,
+                    "failed to spawn Sumeragi commit worker thread; falling back to inline commit"
+                );
+                self.subsystems.commit.work_tx = None;
+                self.subsystems.commit.result_rx = None;
+                self.subsystems.commit.worker_disconnect_logged = true;
+                return None;
+            }
+        };
         self.subsystems.commit.work_tx = Some(handle.work_tx);
         self.subsystems.commit.result_rx = Some(handle.result_rx);
         self.subsystems.commit.worker_disconnect_logged = false;
-        handle.join_handle
+        Some(handle.join_handle)
     }
 
     pub(super) fn attach_qc_verify_worker(&mut self) -> Vec<std::thread::JoinHandle<()>> {
@@ -13466,6 +13478,18 @@ impl ViewChangeCause {
             Self::MissingPayload => "missing_payload",
             Self::MissingQc => "missing_qc",
             Self::ValidationReject => "validation_reject",
+        }
+    }
+
+    const fn frontier_slot_seed_reason(self) -> Option<&'static str> {
+        match self {
+            Self::QuorumTimeout | Self::StakeQuorumTimeout => Some("quorum_timeout"),
+            Self::MissingPayload => Some("missing_payload"),
+            Self::MissingQc => Some("missing_qc"),
+            Self::CommitFailure
+            | Self::RosterUnavailable
+            | Self::CensorshipEvidence
+            | Self::ValidationReject => None,
         }
     }
 }
@@ -41509,16 +41533,10 @@ impl Actor {
             && !self.frontier_slot_is_exact_height(height)
         {
             let now = Instant::now();
-            let reason = match cause {
-                ViewChangeCause::QuorumTimeout | ViewChangeCause::StakeQuorumTimeout => {
-                    "quorum_timeout"
-                }
-                ViewChangeCause::MissingPayload => "missing_payload",
-                ViewChangeCause::MissingQc => "missing_qc",
-                _ => unreachable!("cause already filtered to frontier slot-owned causes"),
-            };
-            let _ =
-                self.seed_frontier_slot_from_same_height_evidence(height, view, now, reason, true);
+            if let Some(reason) = cause.frontier_slot_seed_reason() {
+                let _ = self
+                    .seed_frontier_slot_from_same_height_evidence(height, view, now, reason, true);
+            }
         }
         if self.frontier_slot_is_exact_height(height)
             && matches!(
@@ -45091,6 +45109,49 @@ pub(crate) enum RbcProgressStage {
     Delivered,
 }
 
+fn persisted_chunk_index(idx: usize) -> Option<u32> {
+    u32::try_from(idx).ok()
+}
+
+fn persisted_timestamp_ms(timestamp_ms: u128) -> u64 {
+    u64::try_from(timestamp_ms.min(u128::from(u64::MAX))).unwrap_or(u64::MAX)
+}
+
+fn persisted_total_chunk_capacity(total_chunks: u32) -> Result<usize, PersistedLoadError> {
+    usize::try_from(total_chunks).map_err(|_| PersistedLoadError::TooManyChunks {
+        total_chunks,
+        max_chunks: RBC_MAX_TOTAL_CHUNKS,
+    })
+}
+
+fn rbc_session_chunk_capacity(total_chunks: u32) -> Result<usize, RbcSessionError> {
+    if total_chunks > RBC_MAX_TOTAL_CHUNKS {
+        return Err(RbcSessionError::TooManyChunks {
+            total_chunks,
+            max_chunks: RBC_MAX_TOTAL_CHUNKS,
+        });
+    }
+    usize::try_from(total_chunks).map_err(|_| RbcSessionError::TooManyChunks {
+        total_chunks,
+        max_chunks: RBC_MAX_TOTAL_CHUNKS,
+    })
+}
+
+fn complete_chunk_digests_from_slots(
+    slots: &[Option<RbcChunkEntry>],
+) -> Result<Vec<[u8; 32]>, PersistedLoadError> {
+    let mut digests = Vec::with_capacity(slots.len());
+    for slot in slots {
+        let Some(entry) = slot.as_ref() else {
+            return Err(PersistedLoadError::InvalidLayout(
+                "complete session missing chunk slot",
+            ));
+        };
+        digests.push(entry.digest);
+    }
+    Ok(digests)
+}
+
 impl RbcSession {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn new(
@@ -45118,12 +45179,7 @@ impl RbcSession {
         expected_chunk_digests: Option<Vec<[u8; 32]>>,
         epoch: u64,
     ) -> Result<Self, RbcSessionError> {
-        if total_chunks > RBC_MAX_TOTAL_CHUNKS {
-            return Err(RbcSessionError::TooManyChunks {
-                total_chunks,
-                max_chunks: RBC_MAX_TOTAL_CHUNKS,
-            });
-        }
+        let capacity = rbc_session_chunk_capacity(total_chunks)?;
         if let Some(expected_total_chunks) = layout
             .total_chunks()
             .and_then(|count| u32::try_from(count).ok())
@@ -45142,7 +45198,6 @@ impl RbcSession {
                 });
             }
         }
-        let capacity = usize::try_from(total_chunks).unwrap_or(RBC_MAX_TOTAL_CHUNKS as usize);
         let mut session = Self {
             layout,
             total_chunks,
@@ -45640,8 +45695,9 @@ impl RbcSession {
         let mut chunks = Vec::new();
         for (idx, entry) in self.chunks.iter().enumerate() {
             if let Some(entry) = entry {
-                let chunk_idx =
-                    u32::try_from(idx).expect("chunk index fits within u32::MAX for persistence");
+                let Some(chunk_idx) = persisted_chunk_index(idx) else {
+                    continue;
+                };
                 chunks.push(PersistedChunk {
                     idx: chunk_idx,
                     bytes: entry.bytes.clone(),
@@ -45687,11 +45743,8 @@ impl RbcSession {
             .or_else(|| self.all_chunk_digests())
             .unwrap_or_default();
         let computed_root = self.chunk_root();
-        let now_ms = TimeSource::new_system()
-            .now()
-            .as_millis()
-            .min(u128::from(u64::MAX));
-        let now_ms = u64::try_from(now_ms).expect("min(u128, u64::MAX) fits into u64");
+        let now_ms = TimeSource::new_system().now().as_millis();
+        let now_ms = persisted_timestamp_ms(now_ms);
 
         PersistedSession {
             format_version: super::rbc_store::PERSIST_VERSION,
@@ -45870,8 +45923,54 @@ impl RbcSession {
             return Err(PersistedLoadError::InvalidLayout("zero total chunks"));
         }
 
-        let capacity = usize::try_from(total_chunks)
-            .unwrap_or_else(|_| usize::try_from(RBC_MAX_TOTAL_CHUNKS).unwrap());
+        let layout = match chunk_size_bytes {
+            0 => {
+                super::rbc_store::validate_persisted_legacy_layout_metadata(
+                    encoding,
+                    payload_size_bytes,
+                    data_shards,
+                    parity_shards,
+                )
+                .map_err(PersistedLoadError::InvalidLayout)?;
+                RbcPayloadLayout::legacy_plain()
+            }
+            _ => RbcPayloadLayout::new(
+                encoding,
+                chunk_size_bytes,
+                payload_size_bytes,
+                data_shards,
+                parity_shards,
+            )
+            .map_err(|err| {
+                PersistedLoadError::InvalidLayout(match err {
+                    RbcSessionError::InvalidChunkSize { .. } => "invalid chunk size",
+                    RbcSessionError::InvalidErasureProfile { .. } => "invalid erasure profile",
+                    RbcSessionError::LayoutChunkCountMismatch { .. } => {
+                        "layout chunk count mismatch"
+                    }
+                    RbcSessionError::TooManyChunks { .. } => "too many chunks",
+                    RbcSessionError::DigestCountMismatch { .. } => "chunk digest count mismatch",
+                })
+            })?,
+        };
+        let mut seen_chunk_indices = BTreeSet::new();
+        for chunk in &chunks {
+            if chunk.idx >= total_chunks {
+                return Err(PersistedLoadError::ChunkIndexOutOfBounds {
+                    idx: chunk.idx,
+                    total_chunks,
+                });
+            }
+            if !seen_chunk_indices.insert(chunk.idx) {
+                return Err(PersistedLoadError::DuplicateChunkIndex(chunk.idx));
+            }
+        }
+        super::rbc_store::validate_persisted_chunk_lengths(layout, &chunks)
+            .map_err(PersistedLoadError::InvalidLayout)?;
+        super::rbc_store::validate_persisted_reconstruction_counters(layout, reconstructed_stripes)
+            .map_err(PersistedLoadError::InvalidLayout)?;
+
+        let capacity = persisted_total_chunk_capacity(total_chunks)?;
         let mut data = vec![None; capacity];
         for chunk in chunks {
             let idx = usize::try_from(chunk.idx).map_err(|_| {
@@ -45894,27 +45993,6 @@ impl RbcSession {
 
         let received_chunks =
             u32::try_from(data.iter().filter(|entry| entry.is_some()).count()).unwrap_or(u32::MAX);
-        let layout = match chunk_size_bytes {
-            0 => RbcPayloadLayout::legacy_plain(),
-            _ => RbcPayloadLayout::new(
-                encoding,
-                chunk_size_bytes,
-                payload_size_bytes,
-                data_shards,
-                parity_shards,
-            )
-            .map_err(|err| {
-                PersistedLoadError::InvalidLayout(match err {
-                    RbcSessionError::InvalidChunkSize { .. } => "invalid chunk size",
-                    RbcSessionError::InvalidErasureProfile { .. } => "invalid erasure profile",
-                    RbcSessionError::LayoutChunkCountMismatch { .. } => {
-                        "layout chunk count mismatch"
-                    }
-                    RbcSessionError::TooManyChunks { .. } => "too many chunks",
-                    RbcSessionError::DigestCountMismatch { .. } => "chunk digest count mismatch",
-                })
-            })?,
-        };
 
         let expected_chunk_digests = if !chunk_digests.is_empty() {
             if chunk_digests.len() != usize::try_from(total_chunks).unwrap_or(usize::MAX) {
@@ -45925,14 +46003,7 @@ impl RbcSession {
             }
             Some(chunk_digests)
         } else if received_chunks == total_chunks {
-            let mut digests = Vec::with_capacity(data.len());
-            for entry in &data {
-                let entry = entry
-                    .as_ref()
-                    .expect("received_chunks == total_chunks implies all chunk slots filled");
-                digests.push(entry.digest);
-            }
-            Some(digests)
+            Some(complete_chunk_digests_from_slots(&data)?)
         } else {
             None
         };
@@ -46195,6 +46266,12 @@ impl RbcSession {
             return ChunkIngestOutcome::OutOfBounds;
         }
 
+        if let Some(expected_len) = self.layout.expected_chunk_len_for_encoded(idx as usize)
+            && bytes.len() != expected_len
+        {
+            return ChunkIngestOutcome::DigestMismatch;
+        }
+
         if let Some(expected) = self.expected_chunk_digests.as_ref() {
             let Some(expected_digest) = expected.get(idx as usize) else {
                 self.invalid = true;
@@ -46324,6 +46401,14 @@ fn rbc_session_has_invalid_chunk_shape(session: &RbcSession) -> bool {
             {
                 return true;
             }
+        }
+    }
+    for (idx, entry) in session.chunks.iter().enumerate() {
+        if let Some(entry) = entry
+            && let Some(expected_len) = session.layout.expected_chunk_len_for_encoded(idx)
+            && entry.bytes.len() != expected_len
+        {
+            return true;
         }
     }
     let present_chunks = session

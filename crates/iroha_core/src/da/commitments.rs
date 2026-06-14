@@ -4,7 +4,10 @@
 //! configured spool directory and assembles a deterministic bundle ready to
 //! embed into a block payload.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use iroha_data_model::{
     da::{
@@ -16,7 +19,7 @@ use iroha_data_model::{
 use norito::decode_from_bytes;
 use thiserror::Error;
 
-use crate::da::commitment_store::DaCommitmentStore;
+use crate::da::{ReplayFingerprint, commitment_store::DaCommitmentStore};
 
 /// Errors encountered while loading DA commitment artefacts from disk.
 #[derive(Debug, Error)]
@@ -87,6 +90,22 @@ pub enum DaSpoolError {
         /// Storage ticket decoded from the commitment body.
         record_ticket: StorageTicketId,
     },
+    /// The same commitment body appeared under multiple replay fingerprints.
+    #[error(
+        "duplicate DA commitment fingerprint conflict for lane {lane:?} epoch {epoch} sequence {sequence}"
+    )]
+    DuplicateFingerprintConflict {
+        /// Lane identifier that conflicted.
+        lane: LaneId,
+        /// Epoch that conflicted.
+        epoch: u64,
+        /// Sequence that conflicted.
+        sequence: u64,
+        /// Replay fingerprint first observed for this commitment body.
+        expected: ReplayFingerprint,
+        /// Replay fingerprint observed on the duplicate filename.
+        observed: ReplayFingerprint,
+    },
 }
 
 /// Load all DA commitment records from the spool directory.
@@ -110,6 +129,8 @@ pub fn load_commitment_bundle(
     }
 
     let mut records = Vec::new();
+    let mut seen_bodies: BTreeMap<(u32, u64, u64), Vec<(DaCommitmentRecord, ReplayFingerprint)>> =
+        BTreeMap::new();
     let dir_entries = std::fs::read_dir(spool_dir).map_err(|source| DaSpoolError::ReadDir {
         path: spool_dir.to_path_buf(),
         source,
@@ -129,7 +150,23 @@ pub fn load_commitment_bundle(
             path: path.clone(),
             source,
         })?;
-        records.push(decode_commitment_record(&bytes, &path)?);
+        let (filename_key, record) = decode_commitment_record(&bytes, &path)?;
+        let duplicate_bodies = seen_bodies
+            .entry((record.lane_id.as_u32(), record.epoch, record.sequence))
+            .or_default();
+        for (duplicate, expected) in duplicate_bodies.iter() {
+            if duplicate == &record && *expected != filename_key.fingerprint {
+                return Err(DaSpoolError::DuplicateFingerprintConflict {
+                    lane: record.lane_id,
+                    epoch: record.epoch,
+                    sequence: record.sequence,
+                    expected: *expected,
+                    observed: filename_key.fingerprint,
+                });
+            }
+        }
+        duplicate_bodies.push((record.clone(), filename_key.fingerprint));
+        records.push(record);
     }
 
     if records.is_empty() {
@@ -192,6 +229,7 @@ struct CommitmentFileKey {
     epoch: u64,
     sequence: u64,
     storage_ticket: StorageTicketId,
+    fingerprint: ReplayFingerprint,
 }
 
 fn parse_commitment_file_key(path: &Path) -> Result<CommitmentFileKey, DaSpoolError> {
@@ -229,13 +267,14 @@ fn parse_commitment_file_key(path: &Path) -> Result<CommitmentFileKey, DaSpoolEr
     let epoch = parse_fixed_hex_u64(epoch_hex, 16, path)?;
     let sequence = parse_fixed_hex_u64(sequence_hex, 16, path)?;
     let storage_ticket = StorageTicketId::new(parse_fixed_hex_32(ticket_hex, path)?);
-    let _ = parse_fixed_hex_32(fingerprint_hex, path)?;
+    let fingerprint = ReplayFingerprint::from(parse_fixed_hex_32(fingerprint_hex, path)?);
 
     Ok(CommitmentFileKey {
         lane_id,
         epoch,
         sequence,
         storage_ticket,
+        fingerprint,
     })
 }
 
@@ -268,7 +307,10 @@ fn malformed_filename(path: &Path) -> DaSpoolError {
     }
 }
 
-fn decode_commitment_record(data: &[u8], path: &Path) -> Result<DaCommitmentRecord, DaSpoolError> {
+fn decode_commitment_record(
+    data: &[u8],
+    path: &Path,
+) -> Result<(CommitmentFileKey, DaCommitmentRecord), DaSpoolError> {
     let filename_key = parse_commitment_file_key(path)?;
     let record =
         decode_from_bytes::<DaCommitmentRecord>(data).map_err(|source| DaSpoolError::Decode {
@@ -293,7 +335,7 @@ fn decode_commitment_record(data: &[u8], path: &Path) -> Result<DaCommitmentReco
         });
     }
 
-    Ok(record)
+    Ok((filename_key, record))
 }
 
 #[cfg(test)]
@@ -567,5 +609,35 @@ mod tests {
             ),
             "commitment filename/body ticket mismatches must reject the whole spool load"
         );
+    }
+
+    #[test]
+    fn commitment_bundle_rejects_same_record_under_different_fingerprint() {
+        let dir = tempdir().expect("tempdir");
+        let record = sample_record(1, 1);
+        let bytes = to_bytes(&record).expect("encode record");
+
+        for fingerprint in [[0x44; 32], [0x45; 32]] {
+            let path = dir.path().join(commitment_file_name(&record, fingerprint));
+            std::fs::write(path, &bytes).expect("write duplicate-fingerprint record");
+        }
+
+        let err = load_commitment_bundle(dir.path())
+            .expect_err("same commitment body under different fingerprints must reject");
+        match err {
+            DaSpoolError::DuplicateFingerprintConflict {
+                lane,
+                epoch,
+                sequence,
+                expected,
+                observed,
+            } => {
+                assert_eq!(lane, record.lane_id);
+                assert_eq!(epoch, record.epoch);
+                assert_eq!(sequence, record.sequence);
+                assert_ne!(expected, observed);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }

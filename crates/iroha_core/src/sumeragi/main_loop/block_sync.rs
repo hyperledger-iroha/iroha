@@ -2507,12 +2507,12 @@ impl Actor {
         self.enqueue_fetch_pending_block_response(peer, msg);
     }
 
-    fn block_body_response_from_payload(
+    pub(super) fn block_body_response_from_payload(
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
         body: BlockMessage,
-    ) -> super::message::BlockBodyResponse {
+    ) -> Option<super::message::BlockBodyResponse> {
         let body = match body {
             BlockMessage::BlockCreated(created) => {
                 super::message::BlockBodyData::BlockCreated(created)
@@ -2520,17 +2520,23 @@ impl Actor {
             BlockMessage::BlockSyncUpdate(update) => {
                 super::message::BlockBodyData::BlockSyncUpdate(update)
             }
-            other => unreachable!(
-                "exact body fetch payload builder returned unexpected variant: {}",
-                Self::block_message_kind(&other)
-            ),
+            other => {
+                iroha_logger::warn!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    payload_kind = Self::block_message_kind(&other),
+                    "exact body fetch payload builder returned unexpected variant; dropping response"
+                );
+                return None;
+            }
         };
-        super::message::BlockBodyResponse {
+        Some(super::message::BlockBodyResponse {
             block_hash,
             height,
             view,
             body,
-        }
+        })
     }
 
     pub(super) fn block_body_response_for_wire(
@@ -2542,6 +2548,7 @@ impl Actor {
         let view = block.header().view_change_index();
         let body = self.build_fetch_pending_block_payload(block);
         Self::block_body_response_from_payload(block_hash, height, view, body)
+            .unwrap_or_else(|| self.plain_block_body_response_for_wire(block))
     }
 
     pub(super) fn plain_block_body_response_for_wire(
@@ -4503,7 +4510,11 @@ impl Actor {
         debug_assert!(decision.body_response_payload_bound);
         #[cfg(debug_assertions)]
         let payload_for_debug = payload.clone();
-        let response = Self::block_body_response_from_payload(block_hash, height, view, payload);
+        let Some(response) =
+            Self::block_body_response_from_payload(block_hash, height, view, payload)
+        else {
+            return false;
+        };
         debug_assert_eq!(response.block_hash, block_hash);
         debug_assert_eq!(response.height, height);
         debug_assert_eq!(response.view, view);
@@ -8131,12 +8142,19 @@ impl Actor {
                     return Ok(());
                 }
                 debug_assert!(decision.dispatch);
-                let response = Self::block_body_response_from_payload(
+                let Some(response) = Self::block_body_response_from_payload(
                     block_hash,
                     request.height,
                     request.view,
                     payload,
-                );
+                ) else {
+                    if decision.remove_requester {
+                        self.remove_pending_block_body_requester(&block_hash, &peer);
+                    }
+                    debug_assert_eq!(decision.dedup_release_count, 1);
+                    self.release_block_payload_dedup(&dedup_key);
+                    return Ok(());
+                };
                 if decision.remove_requester {
                     self.remove_pending_block_body_requester(&block_hash, &peer);
                 }

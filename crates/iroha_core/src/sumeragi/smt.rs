@@ -173,7 +173,8 @@ fn truncate_prefix(prefix: &[u8], len_bits: u16) -> Vec<u8> {
 
 fn mask_tail_bits(bytes: &mut Vec<u8>, len_bits: u16) {
     let full_bytes = usize::from(len_bits / 8);
-    let rem_bits = u8::try_from(len_bits % 8).expect("remainder must be < 8");
+    let rem_bits = (len_bits % 8) as u8;
+    debug_assert!(rem_bits < 8);
     if rem_bits == 0 {
         // Drop any trailing bytes beyond full_bytes
         if bytes.len() > full_bytes {
@@ -185,11 +186,7 @@ fn mask_tail_bits(bytes: &mut Vec<u8>, len_bits: u16) {
         bytes.resize(full_bytes + 1, 0);
     }
     // Keep only the low `rem_bits` in the last byte
-    let mask = if rem_bits == 0 {
-        0
-    } else {
-        u8::try_from((1u16 << rem_bits) - 1).unwrap_or(u8::MAX)
-    };
+    let mask = (1u8 << rem_bits) - 1;
     bytes[full_bytes] &= mask;
     bytes.truncate(full_bytes + 1);
 }
@@ -353,5 +350,24 @@ mod tests {
         assert_eq!(child_prefix(&parent, 5, true), vec![0b0001_1101]);
         assert_eq!(child_prefix(&[0xFF, 0xFF], 9, false), vec![0xFF, 0x00]);
         assert_eq!(child_prefix(&[0xFF, 0xFF], 9, true), vec![0xFF, 0x01]);
+    }
+
+    #[test]
+    fn mask_tail_bits_handles_byte_boundaries_without_fallible_invariants() {
+        let mut empty = vec![0xAA];
+        mask_tail_bits(&mut empty, 0);
+        assert_eq!(empty, Vec::<u8>::new());
+
+        let mut exact = vec![0xAA, 0x55, 0xFF];
+        mask_tail_bits(&mut exact, 16);
+        assert_eq!(exact, vec![0xAA, 0x55]);
+
+        let mut partial = vec![0xAA, 0xFF];
+        mask_tail_bits(&mut partial, 9);
+        assert_eq!(partial, vec![0xAA, 0x01]);
+
+        let mut short = Vec::new();
+        mask_tail_bits(&mut short, 15);
+        assert_eq!(short, vec![0x00, 0x00]);
     }
 }

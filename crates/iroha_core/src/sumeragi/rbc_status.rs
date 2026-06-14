@@ -548,9 +548,8 @@ impl DiskStore {
         let tmp = temp_store_path(&self.file);
         {
             let mut file = fs::OpenOptions::new()
-                .create(true)
+                .create_new(true)
                 .write(true)
-                .truncate(true)
                 .open(&tmp)?;
             file.write_all(&encoded)?;
             file.sync_all()?;
@@ -888,6 +887,30 @@ fn valid_persisted_summary(stored: &StoredEntry, path: &Path) -> bool {
         );
         return false;
     }
+    if let Some(reason) = summary_encoding_profile_error(summary) {
+        warn!(
+            ?path,
+            block_hash = ?summary.block_hash,
+            height = summary.height,
+            view = summary.view,
+            reason,
+            "dropping RBC session status with impossible encoding profile"
+        );
+        return false;
+    }
+    if let Some(reason) = summary_reconstruction_error(summary) {
+        warn!(
+            ?path,
+            block_hash = ?summary.block_hash,
+            height = summary.height,
+            view = summary.view,
+            reconstructed_stripes = summary.reconstructed_stripes,
+            reconstructable_stripes = summary.reconstructable_stripes,
+            reason,
+            "dropping RBC session status with impossible reconstruction counters"
+        );
+        return false;
+    }
     if !summary.invalid && summary.delivered && !complete_summary_chunk_shape_valid(summary) {
         warn!(
             ?path,
@@ -920,6 +943,50 @@ fn persisted_summary_key(summary: &Summary) -> (HashOf<BlockHeader>, u64, u64) {
 
 fn session_summary_chunk_shape_valid(summary: &Summary) -> bool {
     summary.total_chunks > 0 && summary.received_chunks <= summary.total_chunks
+}
+
+fn summary_encoding_profile_error(summary: &Summary) -> Option<&'static str> {
+    match summary.encoding {
+        RbcEncoding::Plain => {
+            if summary.data_shards != 0 || summary.parity_shards != 0 {
+                return Some("plain summary carries erasure profile");
+            }
+        }
+        RbcEncoding::Rs16 => {
+            if summary.data_shards == 0 || summary.parity_shards == 0 {
+                return Some("RS16 summary missing erasure profile");
+            }
+            let stripe_width = u32::from(summary.data_shards) + u32::from(summary.parity_shards);
+            if summary.total_chunks % stripe_width != 0 {
+                return Some("RS16 total chunks not aligned to stripe width");
+            }
+        }
+    }
+    None
+}
+
+fn summary_reconstruction_error(summary: &Summary) -> Option<&'static str> {
+    match summary.encoding {
+        RbcEncoding::Plain => {
+            if summary.reconstructed_stripes != 0 || summary.reconstructable_stripes != 0 {
+                return Some("plain summary carries erasure reconstruction counters");
+            }
+        }
+        RbcEncoding::Rs16 => {
+            let stripe_width = u32::from(summary.data_shards) + u32::from(summary.parity_shards);
+            if stripe_width == 0 || summary.total_chunks % stripe_width != 0 {
+                return None;
+            }
+            let stripe_count = summary.total_chunks / stripe_width;
+            if summary.reconstructed_stripes > stripe_count {
+                return Some("reconstructed stripe count exceeds stripe count");
+            }
+            if summary.reconstructable_stripes > stripe_count {
+                return Some("reconstructable stripe count exceeds stripe count");
+            }
+        }
+    }
+    None
 }
 
 pub(super) fn summary_allocations_valid(summary: &Summary) -> bool {
@@ -1640,6 +1707,42 @@ mod tests {
     }
 
     #[test]
+    fn persistence_rejects_existing_temp_store_without_truncating() {
+        let dir = tempdir().expect("tempdir");
+        let cfg = StoreConfig {
+            dir: dir.path().to_path_buf(),
+            ttl: Duration::from_secs(60),
+            capacity: 8,
+        };
+        let disk = DiskStore::new(&cfg).expect("disk store");
+        let tmp = temp_store_path(&disk.file);
+        fs::write(&tmp, b"existing-rbc-status-temp").expect("seed temp store");
+        let summary = summary(1, 1, 2, 1, false, None);
+        let mut map = BTreeMap::new();
+        map.insert(
+            (summary.block_hash, summary.height, summary.view),
+            Entry {
+                summary,
+                updated_at: SystemTime::now(),
+            },
+        );
+
+        let err = disk
+            .persist(&map)
+            .expect_err("existing temp store should reject status persistence");
+
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read(&tmp).expect("read temp store after failed persist"),
+            b"existing-rbc-status-temp"
+        );
+        assert!(
+            !disk.file.exists(),
+            "failed persistence must not promote the temp store"
+        );
+    }
+
+    #[test]
     fn configure_failure_marks_persistence_unavailable_but_keeps_memory_snapshot() {
         let dir = tempdir().expect("tempdir");
         let file_path = dir.path().join("not-a-directory");
@@ -2061,6 +2164,45 @@ mod tests {
             delivered: true,
             ..summary(18, 13, 3, 0, false, Some(b"incomplete"))
         };
+        let plain_with_shards = Summary {
+            data_shards: 1,
+            parity_shards: 1,
+            ..summary(19, 13, 1, 0, false, Some(b"plain-profile"))
+        };
+        let rs16_missing_shards = Summary {
+            encoding: RbcEncoding::Rs16,
+            data_shards: 0,
+            parity_shards: 1,
+            ..summary(20, 13, 1, 0, false, Some(b"rs16-missing"))
+        };
+        let rs16_misaligned_chunks = Summary {
+            total_chunks: 5,
+            encoding: RbcEncoding::Rs16,
+            data_shards: 2,
+            parity_shards: 2,
+            ..summary(21, 13, 1, 0, false, Some(b"rs16-misaligned"))
+        };
+        let plain_with_reconstruction_counters = Summary {
+            reconstructed_stripes: 1,
+            reconstructable_stripes: 1,
+            ..summary(22, 13, 1, 0, false, Some(b"plain-reconstruction"))
+        };
+        let rs16_reconstructed_over_count = Summary {
+            total_chunks: 4,
+            encoding: RbcEncoding::Rs16,
+            data_shards: 2,
+            parity_shards: 2,
+            reconstructed_stripes: 2,
+            ..summary(23, 13, 1, 0, false, Some(b"rs16-reconstructed-over"))
+        };
+        let rs16_reconstructable_over_count = Summary {
+            total_chunks: 4,
+            encoding: RbcEncoding::Rs16,
+            data_shards: 2,
+            parity_shards: 2,
+            reconstructable_stripes: 2,
+            ..summary(24, 13, 1, 0, false, Some(b"rs16-reconstructable-over"))
+        };
         let encoded = to_bytes(&vec![
             StoredEntry {
                 summary: valid_in_progress.clone(),
@@ -2084,6 +2226,30 @@ mod tests {
             },
             StoredEntry {
                 summary: delivered_incomplete,
+                updated_at_ms: now_ms,
+            },
+            StoredEntry {
+                summary: plain_with_shards,
+                updated_at_ms: now_ms,
+            },
+            StoredEntry {
+                summary: rs16_missing_shards,
+                updated_at_ms: now_ms,
+            },
+            StoredEntry {
+                summary: rs16_misaligned_chunks,
+                updated_at_ms: now_ms,
+            },
+            StoredEntry {
+                summary: plain_with_reconstruction_counters,
+                updated_at_ms: now_ms,
+            },
+            StoredEntry {
+                summary: rs16_reconstructed_over_count,
+                updated_at_ms: now_ms,
+            },
+            StoredEntry {
+                summary: rs16_reconstructable_over_count,
                 updated_at_ms: now_ms,
             },
         ])

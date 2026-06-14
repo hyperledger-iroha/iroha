@@ -40,6 +40,12 @@ pub enum DaProofVerificationError {
         /// Bundle length advertised by the proof.
         observed: u32,
     },
+    /// The referenced bundle is too large to encode in proof metadata.
+    #[error("commitment bundle length {len} exceeds supported proof metadata range")]
+    BundleLengthUnsupported {
+        /// Number of commitments in the referenced bundle.
+        len: usize,
+    },
     /// The commitment index falls outside the bundle bounds.
     #[error("commitment index {index} out of bounds for bundle length {len}")]
     IndexOutOfBounds {
@@ -78,8 +84,9 @@ pub enum DaProofVerificationError {
 
 /// Build a Merkle membership proof for a commitment.
 ///
-/// Returns `None` when the bundle is empty or the requested index lies outside
-/// the bundle bounds.
+/// Returns `None` when the bundle is empty, the requested index lies outside
+/// the bundle bounds, or the bundle length cannot be represented in proof
+/// metadata.
 #[must_use]
 pub fn build_da_commitment_proof(
     bundle: &DaCommitmentBundle,
@@ -90,7 +97,7 @@ pub fn build_da_commitment_proof(
         return None;
     }
 
-    let bundle_len = bundle.commitments.len();
+    let bundle_len = bundle_len_u32(bundle.commitments.len()).ok()?;
     let mut layer: Vec<Hash> = bundle
         .commitments
         .iter()
@@ -134,7 +141,7 @@ pub fn build_da_commitment_proof(
         layer = next;
     }
 
-    let root = layer.pop().expect("non-empty layer must have a root");
+    let root = layer.pop()?;
     let index_in_bundle = u32::try_from(index).ok()?;
 
     Some(DaCommitmentProof {
@@ -144,7 +151,7 @@ pub fn build_da_commitment_proof(
             index_in_bundle,
         },
         bundle_hash: bundle.canonical_hash(),
-        bundle_len: u32::try_from(bundle_len).unwrap_or(u32::MAX),
+        bundle_len,
         root,
         path,
     })
@@ -188,7 +195,7 @@ pub fn verify_da_commitment_proof(
         });
     }
 
-    let expected_bundle_len = u32::try_from(bundle.commitments.len()).unwrap_or(u32::MAX);
+    let expected_bundle_len = bundle_len_u32(bundle.commitments.len())?;
     if proof.bundle_len != expected_bundle_len {
         return Err(DaProofVerificationError::BundleLengthMismatch {
             expected: expected_bundle_len,
@@ -254,6 +261,10 @@ fn hash_internal(left: &Hash, right: &Hash) -> Hash {
     buf.extend_from_slice(left.as_ref());
     buf.extend_from_slice(right.as_ref());
     Hash::new(buf)
+}
+
+fn bundle_len_u32(len: usize) -> Result<u32, DaProofVerificationError> {
+    u32::try_from(len).map_err(|_| DaProofVerificationError::BundleLengthUnsupported { len })
 }
 
 #[cfg(test)]
@@ -350,6 +361,23 @@ mod tests {
                 observed: 3
             }
         ));
+    }
+
+    #[test]
+    fn bundle_len_metadata_rejects_overflow_without_saturating() {
+        assert_eq!(
+            bundle_len_u32(u32::MAX as usize).expect("u32::MAX is representable"),
+            u32::MAX
+        );
+
+        if let Some(unsupported_len) = (u32::MAX as usize).checked_add(1) {
+            let err = bundle_len_u32(unsupported_len)
+                .expect_err("oversized bundle length must be rejected");
+            assert!(matches!(
+                err,
+                DaProofVerificationError::BundleLengthUnsupported { len } if len == unsupported_len
+            ));
+        }
     }
 
     #[test]
