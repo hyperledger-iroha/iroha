@@ -1,6 +1,95 @@
 # Status
 
-Last updated: 2026-06-13
+Last updated: 2026-06-14
+
+## 2026-06-14 RBC DELIVER Ready-Bundle Prevalidation
+
+- Hardened RBC DELIVER handling so oversized, duplicate-sender, or out-of-range
+  embedded READY bundles are rejected before DELIVER signature preimage
+  construction and verification, avoiding unnecessary crypto work and invalid
+  signature penalties for structurally malformed payloads.
+- Added adversarial coverage proving a malformed READY bundle with a bad
+  DELIVER signature is classified as invalid payload without suppressing the
+  sender through the invalid-signature penalty path.
+- Focused validation passed:
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests handle_rbc_deliver_rejects_malformed_ready_bundle_before_signature_penalty -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests handle_rbc_deliver_rejects_malformed_ready_bundles -- --nocapture`
+
+## 2026-06-14 DA Rent Usage Overflow Hardening
+
+- Hardened DA ingest rent usage calculation so retention periods that exceed
+  the representable rent quote month range fail with `400 Bad Request` instead
+  of being clamped to `u32::MAX` months.
+- Carried the checked GiB/month usage through manifest artifacts so ingest
+  telemetry records the same admitted quote inputs that manifest construction
+  validated.
+- Focused validation passed:
+  - `cargo test -p iroha_torii retention_month_overflow -- --nocapture`
+  - `cargo test -p iroha_torii resolve_manifest_uses_provided_rent_policy -- --nocapture`
+
+## 2026-06-14 DA Proof Bundle-Length Overflow Hardening
+
+- Hardened DA commitment proof metadata so bundle lengths that exceed the
+  representable `u32` proof field are rejected explicitly instead of saturating
+  to `u32::MAX` during construction or verification.
+- Added focused boundary coverage for the exact `u32::MAX` limit and the first
+  unsupported length.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib bundle_len_metadata_rejects_overflow_without_saturating -- --nocapture`
+
+## 2026-06-14 DA Shard Cursor Journal Exclusive-Create Hardening
+
+- Hardened DA shard cursor journal persistence so an existing fixed temp journal
+  rejects the write instead of truncating local recovery state before promotion.
+- Added focused negative coverage proving the existing temp journal survives the
+  failed persist and no main journal is promoted.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib journal_persist_rejects_existing_temp_without_truncating -- --nocapture`
+
+## 2026-06-14 RBC Persistence Temp Snapshot Exclusive-Create Hardening
+
+- Hardened RBC status and full RBC session persistence so existing fixed temp
+  snapshots reject the write instead of being truncated before promotion.
+- Added focused negative coverage proving the existing temp bytes survive failed
+  persistence and no main snapshot is promoted.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rejects_existing_temp -- --nocapture`
+
+## 2026-06-14 DA Temp Artifact Exclusive-Create Hardening
+
+- Hardened DA and Taikai artifact temp writers so temp path collisions,
+  pre-existing files, or symlinks fail at exclusive creation instead of
+  truncating existing local state before hard-link/rename installation.
+- Hardened DA replay cursor snapshot persistence so an existing fixed temp
+  snapshot rejects the cursor advance, rolls back in-memory state, and preserves
+  the temp bytes for startup recovery/operator inspection.
+- Added focused negative coverage proving pre-existing temp artifact bytes are
+  preserved when collision writes are rejected.
+- Focused validation passed:
+  - `cargo test -p iroha_torii temp_artifact_write_rejects_existing_path_without_truncating -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store_rejects_existing_temp_without_truncating -- --nocapture`
+
+## 2026-06-14 DA Manifest and RS16 Row-Parity Overflow Hardening
+
+- Hardened DA RS16 chunk commitment generation so row-parity base and per-column
+  offsets use checked arithmetic and reject oversized manifests instead of
+  clamping overflowed offsets to `u64::MAX`.
+- Added adversarial coverage for both global-parity-area overflow and later
+  row-parity column offset overflow.
+- Hardened manifest stripe-layout calculation so zero data shards, oversized
+  chunk counts, and total-stripe overflow fail closed instead of panicking,
+  narrowing, or saturating on metadata written into manifests and receipts.
+- Focused validation passed:
+  - `cargo test -p iroha_torii build_chunk_commitments_rejects_row_parity -- --nocapture`
+  - `cargo test -p iroha_torii manifest_stripe_layout_fields -- --nocapture`
+
+## 2026-06-14 DA/RBC Abort Counter Saturation
+
+- Hardened RBC abort telemetry so `rbc_abort.total` saturates at `u64::MAX`
+  instead of wrapping back to zero under adversarial counter exhaustion, while
+  still updating the latest abort height and view.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_abort_counter_saturates_without_wrapping -- --nocapture`
 
 ## 2026-06-13 Kagemusha Android JNI and Pixel 6 Clean-APK Evidence
 
@@ -1079,6 +1168,12 @@ Last updated: 2026-06-13
 - Hardened core DA shard cursor journal decoding so duplicate `(shard, lane)`
   entries are rejected as invalid persisted state instead of being normalized by
   picking the newest cursor tuple.
+- Hardened core DA shard cursor journal bundle recording so a bundle that
+  reaches an unknown lane rolls back earlier in-memory cursor advances instead
+  of leaving partial state behind for a later persistence attempt.
+- Hardened the same bundle path to reject shard-level cursor regressions,
+  including regressions introduced by a different lane mapped to the same
+  shard, before proposal sealing persists the cursor journal.
 - Hardened RBC chunk-store temp session recovery so both direct session loads
   and scan-based store loads return an I/O error when a temp snapshot cannot be
   promoted durably, instead of accepting temp-only recovered session state.
@@ -1137,10 +1232,19 @@ Last updated: 2026-06-13
   cannot acknowledge ingest appends or recover duplicate receipts; fallback
   objects remain available for diagnostics/tests, but production
   acknowledgements require durable receipt files.
+- Hardened Taikai TRM lineage guard acquisition so an exhausted lock-acquisition
+  attempt window returns `503 Service Unavailable` instead of panicking; added
+  live-lock coverage proving concurrent same-alias acquisition is rejected
+  fail-closed.
 - Hardened Torii DA replay cursor and receipt-log mutex handling so poisoned
   runtime state no longer panics Torii: receipt appends, duplicate receipt
   recovery, and cursor recording fail closed, while read-only snapshots log and
   return an empty view.
+- Hardened Torii DA governance-metadata encryption so encryptor state drift
+  returns an internal-error response instead of panicking the ingest handler.
+- Hardened Torii DA payload normalization so compressed ingest branches no
+  longer rely on an impossible inner `Identity` arm; identity payloads keep the
+  borrowed fast path and compressed payloads keep explicit length validation.
 - Hardened Torii DA receipt insertion so same-sequence receipts only dedupe when
   the full signed receipt evidence matches; a different receipt body with the
   same manifest hash now returns an explicit conflict instead of being treated
@@ -1281,6 +1385,8 @@ Last updated: 2026-06-13
 - Hardened DA proposal assembly for decoded pin-intent spool entries so
   semantic validation failures reject the proposal before any partial bundle is
   sealed; stale already-sealed or committed identities remain soft-dropped.
+- Added actor-level pin-intent proposal coverage proving duplicate spool tuples
+  reject assembly before the tuple is marked sealed.
 - Added actor-level adversarial DA commitment proposal coverage proving decoded
   semantic-invalid commitment spool entries fail validation before sealing.
 - Added actor-level DA receipt proposal coverage for duplicate signed receipt
@@ -1292,6 +1398,16 @@ Last updated: 2026-06-13
   manifest or storage-ticket identities are rejected from query indexes just
   like duplicate `(lane, epoch, sequence)` keys while raw block bundles remain
   available for proof/hash reconstruction.
+- Hardened DA commitment projection hydration so oversized bundle index
+  conversion saturates instead of panicking if pre-validation invariants ever
+  drift, matching the block-apply indexing fallback behavior.
+- Hardened the same DA commitment projection so duplicate-only committed
+  bundles are still retained by block height for proof/hash reconstruction
+  instead of disappearing when every record is filtered from query indexes.
+- Updated Torii DA commitment handler fixtures to derive unique storage tickets
+  from lane/epoch/sequence, so normal multi-record handler coverage exercises
+  distinct committed identities while duplicate-ticket hardening remains
+  explicit.
 - Hardened the in-memory confidential-compute DA projection so duplicate
   manifest or storage-ticket identities are rejected like duplicate
   `(lane, epoch, sequence)` keys, keeping malformed committed bundles from
@@ -1329,6 +1445,9 @@ Last updated: 2026-06-13
   entries, sequence-rebound signatures, filename/body mismatches,
   filename/ticket mismatches, receipt-shaped directories, same-manifest
   conflicting duplicate receipts, and replay-cursor seed persistence failures.
+- Hardened durable Torii DA receipt recovery so exact duplicate receipt bodies
+  stored under different replay fingerprints reject startup/loading instead of
+  retaining filesystem-order-dependent fingerprint metadata.
 - Added append-time and response-mapping coverage for same-manifest
   receipt-evidence conflicts, including the dedicated receipt-conflict metrics
   label.
@@ -1351,6 +1470,12 @@ Last updated: 2026-06-13
   malformed, and filename/body-mismatched artifacts, plus preflight regressions
   for pending receipts and corrupt receipt files with an empty external
   transaction queue.
+- Hardened core DA receipt spool loading so exact duplicate signed receipts
+  stored under different replay fingerprints reject proposal loading instead of
+  collapsing the replay identity before receipt planning.
+- Hardened core DA commitment and pin-intent spool loading so exact duplicate
+  decoded bodies stored under different replay fingerprints reject proposal
+  loading instead of collapsing filesystem-order-dependent replay identity.
 - Added helper-level non-UTF-8 shaped-artifact regressions for core DA
   commitment, pin-intent, and receipt filename matchers so the fail-closed raw
   filename branch is covered on Unix filesystems that cannot create those names
@@ -1385,10 +1510,168 @@ Last updated: 2026-06-13
 - Added actor-level RBC session TTL coverage proving an unremovable persisted
   temp snapshot blocks stale-status pruning and preserves the persisted-session
   retry marker.
+- Hardened RBC chunk-store recovery so malformed persisted layout metadata
+  (invalid Plain/RS16 profile details or layout-derived chunk-count mismatch)
+  is rejected and deleted during disk load instead of surviving until repeated
+  restart-time session rebuild failures.
+- Hardened persisted RBC status snapshot recovery so impossible encoding
+  profiles (Plain with erasure shards, RS16 without shards, or RS16 chunk totals
+  not aligned to the stripe width) are filtered with other impossible session
+  shapes.
+- Hardened persisted RBC status snapshot recovery so impossible reconstruction
+  counters (Plain sessions reporting erasure reconstruction, or RS16 counters
+  exceeding the stripe count) are filtered from corrupted disk snapshots.
+- Hardened RBC session chunk ingestion so known-layout sessions reject Plain and
+  RS16 chunks whose byte lengths do not match the advertised payload layout,
+  even before expected chunk digests are available; malformed chunks can no
+  longer occupy slots ahead of later integrity metadata.
+- Hardened persisted RBC session recovery with the same known-layout chunk
+  length checks, covering direct session rebuilds, store load validation, and
+  runtime malformed-shape detection for tampered or pre-hardening snapshots.
+- Hardened RBC session snapshot serialization so impossible chunk-slot indexes
+  outside the protocol `u32` range are skipped instead of panicking during
+  persistence if session-vector invariants ever drift.
+- Hardened persisted RBC session recovery so reconstructed-stripe counters are
+  rejected when present on Plain sessions or when RS16 counters exceed the
+  layout-derived stripe count, covering both direct rebuilds and disk cleanup.
+- Hardened legacy Plain RBC snapshot recovery so zero-sized legacy layout
+  metadata cannot smuggle RS16 encoding, payload-size, or erasure-profile fields
+  into direct rebuilds or disk-loaded sessions.
+- Hardened persisted RBC session recovery so complete-session chunk digest
+  rebuilding returns `InvalidLayout` for missing chunk slots instead of relying
+  on an invariant `expect`; added adversarial helper coverage plus the normal
+  persisted-session roundtrip check.
+- Hardened persisted RBC session recovery helpers so timestamp saturation and
+  chunk-vector capacity derivation are explicit, tested conversions instead of
+  invariant `expect`/`unwrap` paths.
+- Hardened `RbcSession` construction so runtime chunk-vector capacity derivation
+  is shared with the protocol cap check and returns `TooManyChunks` instead of
+  falling back through an unchecked capacity default.
+- Added actor-level RBC roster regression coverage proving late conflicting INIT
+  evidence cannot replace or demote an authoritative derived roster, nor clear
+  session READY/pending retry state.
+- Added handler-level RBC INIT idempotence coverage proving a duplicate matching
+  INIT cannot demote a derived roster or clear existing READY/DELIVER session
+  state.
+- Added handler-level RBC READY idempotence coverage proving an identical remote
+  READY replay cannot refresh pending-block progress, rerun commit work, wake
+  commit processing, or rewrite recorded sender evidence.
+- Hardened RBC READY and DELIVER duplicate replay handling so exact-match replay
+  fast paths run only after signature validation, and both READY and DELIVER
+  duplicate handling also run only after chunk-root validation; DELIVER
+  duplicates additionally pass signed READY-bundle shape validation before the
+  duplicate return. Corrupted recovered or in-memory same-signature evidence now
+  records invalid-signature penalties, chunk-root mismatch evidence, or malformed
+  READY-bundle drops instead of being treated as a harmless duplicate.
+- Added handler-level regressions proving invalid stored READY and DELIVER
+  signatures are validated and penalized, and wrong-root READY/DELIVER evidence
+  is attributed as a mismatch, and malformed duplicate DELIVER READY bundles are
+  rejected before duplicate replay handling; valid duplicate READY/DELIVER
+  replays remain idempotent.
+- Added RBC ingress-dedup coverage proving same-sender DELIVER messages with
+  distinct signatures are still routed to the RBC worker, preserving refreshed
+  READY-bundle evidence for handler validation while exact duplicates stay
+  dropped at ingress.
+- Hardened Sumeragi BlockSyncUpdate ingress dedup handling so impossible helper
+  key-shape drift logs and drops the message instead of panicking the inbound
+  worker; the existing dedup-release regression still covers the normal helper
+  shape.
+- Hardened exact block-body response construction so unexpected local payload
+  helper variants log and drop/fall back to plain bodies instead of panicking;
+  added direct negative converter coverage.
+- Hardened RBC payload planning/session construction so encoded chunk-count
+  conversion uses the existing `ChunkCountOverflow` error path instead of
+  `expect`, keeping future chunking invariant drift fail-closed instead of
+  panicking.
+- Hardened RBC payload planning chunk-index conversion so primary and duplicate
+  chunk broadcast plans return the existing `ChunkIndexOverflow` error path
+  instead of panicking if chunk-index invariants drift.
+- Hardened RBC seed-session layout chunk-count derivation so legacy or over-cap
+  layouts return structured `RbcError` variants instead of relying on an
+  invariant `expect`; added direct negative helper coverage.
+- Hardened Sumeragi quorum retransmit target pacing so target-count and
+  rotation-offset conversion drift falls back to deterministic sorted fanout
+  truncation instead of panicking, with direct negative coverage for
+  unrepresentable rotation offsets.
+- Hardened Sumeragi vote verification batching so prepared-slot grouping drift
+  cannot panic same-message, multi-message, or fallback verification paths;
+  missing or already-consumed internal slots now fail closed through guarded
+  slot access.
+- Hardened Sumeragi vote verification worker startup so individual thread-spawn
+  failures are logged and leave only successfully spawned senders in rotation,
+  preserving the existing inline vote verification path when no workers are
+  available; added direct spawn-error sender-drop coverage.
+- Hardened Sumeragi QC verification worker startup so individual thread-spawn
+  failures are logged and leave only successfully spawned senders in rotation,
+  allowing existing inline QC verification fallback to take over if no workers
+  start; added direct spawn-error sender-drop coverage.
+- Hardened Sumeragi commit-worker dispatch so a stale worker sender without a
+  result receiver is treated as a disconnected worker and falls back to inline
+  commit execution instead of relying on an invariant `expect`; added
+  actor-level coverage that the block remains committed or queued for retry.
+- Hardened Sumeragi prevalidated commit retry so fallback full validation uses
+  the saved original block or the validation error's failed block instead of
+  relying on an invariant `expect`; focused commit-work coverage still passes.
+- Hardened Sumeragi commit-validation topology remap retry so predicate drift
+  skips remapping instead of panicking if the retry result is no longer an
+  error; focused commit-work coverage still passes.
+- Hardened inline Sumeragi commit completion so an unexpectedly missing inflight
+  marker logs and leaves the outcome unapplied instead of panicking; the inline
+  fallback actor coverage still confirms stale worker state is cleared.
+- Hardened Sumeragi commit outcome application so duplicate or drifted outcome
+  branches with no pending block left log and leave the outcome unapplied
+  instead of panicking; inline fallback actor coverage still passes.
+- Hardened inline Sumeragi commit execution so a dedicated commit-thread spawn
+  failure logs and rejects the commit work without applying state instead of
+  panicking; added direct spawn-error regression coverage.
+- Hardened Sumeragi commit worker startup so background worker thread-spawn
+  failure is logged and leaves the actor on the existing inline commit path
+  instead of panicking; added direct spawn-error propagation coverage.
+- Hardened Sumeragi block-message wire helpers so owned-message extraction uses
+  an explicit clone fallback, normal serialization propagates Norito encode
+  errors, and legacy infallible decode/pre-encode fallback paths substitute a
+  valid invalid-wire sentinel that the actor drops before consensus-parameter
+  handling.
+- Hardened debug invalid-proposal evidence construction so projection drift is
+  logged instead of panicking while preserving the built evidence; existing
+  invalid-proposal evidence helper/formal tests cover the helper structure.
+- Hardened vNext re-chain handling so chain-order hash encoding uses a
+  fallible helper in Result-returning paths and invalid rebuilt chain-order
+  bounds return a structured `RechainError` instead of panicking; added direct
+  invalid-rebuild negative coverage.
+- Hardened NPoS penalty/offender leader shuffle slot selection so an empty
+  candidate set returns `None` and modulus conversion no longer relies on an
+  invariant `expect`, with direct bounds coverage for the PRF slot helper.
+- Hardened Sumeragi SMT prefix masking so byte-tail width and mask derivation
+  no longer rely on fallible invariant conversions, with direct byte-boundary
+  coverage for zero-length, byte-aligned, partial-byte, and short-buffer inputs.
+- Hardened Sumeragi frontier-slot view-change seeding so cause-to-reason
+  projection is a total helper returning `None` for non-frontier causes instead
+  of relying on a filtered-match panic; added direct variant coverage.
+- Added adversarial phase-latency status coverage proving aggregate pipeline
+  totals saturate at `u64::MAX`, retain saturated maxima, and keep redundant
+  collector fan-out latency reported separately from block-pipeline totals.
+- Added direct RBC mismatch status coverage proving stable mismatch-kind labels
+  and top-level status projection of per-peer chunk-digest, payload-hash, and
+  chunk-root counters plus the latest mismatch timestamp.
 - Added direct core DA proof verifier adversarial coverage for missing header
   commitment hashes, block-height drift, out-of-bounds index tampering,
   commitment payload replacement, Merkle sibling tampering, and lane-policy
   rejection.
+- Hardened core DA commitment proof construction so an unexpectedly empty
+  Merkle root layer returns `None` instead of panicking; normal empty-bundle and
+  out-of-bounds rejection semantics are unchanged.
+- Hardened the core DA replay cache so capacity eviction protects the
+  just-inserted sequence even under adversarial non-monotonic timestamps, and
+  fresh insert response construction no longer depends on a post-eviction
+  `expect`.
+- Added a fallible core DA replay fingerprint constructor and malformed-length
+  coverage so callers can reject short or oversized raw hash bytes without
+  panicking.
+- Removed the remaining panic-only core DA replay fingerprint constructor and
+  made default replay-cache capacity construction deterministic under invariant
+  drift, with direct default-capacity coverage and Torii receipt-spool
+  revalidation.
 - Added Torii DA lock-poison coverage proving replay cursor recording and
   receipt-log append/duplicate recovery fail closed after poisoned mutexes,
   while read-only cursor/receipt views do not panic.
@@ -1399,12 +1682,60 @@ Last updated: 2026-06-13
   strict manifests defer, unreadable matching manifest artifacts and hash
   mismatches fail, and mismatched manifests cannot be filtered away before
   sealing.
+- Added direct mixed RBC ingress status-counter coverage proving READY, DELIVER,
+  INIT, and CHUNK drop/deferral telemetry remains partitioned by
+  kind/outcome/reason and keeps stable operator labels.
 - Focused validation passed:
   - `cargo test -p iroha_core --lib shard_cursor -- --nocapture`
   - `cargo test -p iroha_core --lib rbc_store -- --nocapture`
   - `cargo test -p iroha_core --features sumeragi-main-loop-tests rbc_session_ttl_ -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests rbc_session_rejects_known -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests rbc_session_ingest_chunk_with_outcome_reports_mismatch -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests rbc_prehashed_chunk_ingest -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests complete_rs16_payload_bytes_roundtrip -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests rbc_session_shape_detects_known_layout_chunk_length_drift -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests record_rbc_session_roster_ignores_stale_init_after_derived_cache -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests allow_unverified_rbc_roster -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests handle_rbc_init_duplicate_matching_init_preserves_derived_session_state -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests duplicate_rbc_ready_does_not_refresh_pending_progress_or_rerun_commit_pipeline -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests validates_invalid_stored_signature -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests duplicate_rbc_ready_validates -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests duplicate_rbc_deliver_validates -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests duplicate_rbc_deliver_validates_invalid_stored_signature_before_drop -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests duplicate_rbc_ready_is_ignored -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests duplicate_rbc_deliver_is_ignored -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests complete_rs16_payload_bytes_roundtrip -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_uses_rbc_transport_for_multi_chunk_frontier_payloads -- --nocapture`
+  - `cargo test -p iroha_core --lib incoming_block_message_allows_distinct_rbc_deliver_signatures -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests block_sync_update_releases_ingress_dedup_before_deferral -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests block_body_response_from_payload_rejects_unexpected_variant -- --nocapture`
+  - `cargo test -p iroha_core --lib qc_verify -- --nocapture`
+  - `cargo test -p iroha_core --lib paced_retransmit -- --nocapture`
+  - `cargo test -p iroha_core --lib vote_verify -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests start_commit_job_missing_result_channel_executes_inline_and_clears_worker_state -- --nocapture`
+  - `cargo test -p iroha_core --lib execute_commit_work_ -- --nocapture`
+  - `cargo test -p iroha_core --lib inline_commit_spawn_failure_rejects_without_applying_state -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_worker_spawn_failure_returns_error_without_handle -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_worker_ -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests start_commit_job_ -- --nocapture`
+  - `cargo test -p iroha_core --lib invalid_wire_sentinel -- --nocapture`
+  - `cargo test -p iroha_core --lib block_message_wire_into_message_clones_shared_arc -- --nocapture`
+  - `cargo test -p iroha_core --lib block_message_wire_ -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests consensus_params_invalid_wire_sentinel_is_dropped -- --nocapture`
+  - `cargo test -p iroha_core --lib consensus_message_handling_counters_keep_mixed_rbc_outcomes_partitioned -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests invalid_proposal_evidence -- --nocapture`
+  - `cargo test -p iroha_core --lib vnext -- --nocapture`
+  - `cargo test -p iroha_core --lib npos_shuffle_prf_slot -- --nocapture`
+  - `cargo test -p iroha_core --lib npos_leader_index_cycles -- --nocapture`
+  - `cargo test -p iroha_core --lib smt -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests view_change_cause_frontier_slot_seed_reason_formal_gate -- --nocapture`
+  - `cargo test -p iroha_core --lib phase_snapshot_saturates_pipeline_totals_without_counting_aggregator_fanout -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_mismatch_status_labels_and_top_level_snapshot_are_stable -- --nocapture`
   - `cargo test -p iroha_core --lib remove_ -- --nocapture`
   - `cargo test -p iroha_core --lib proofs -- --nocapture`
+  - `cargo test -p iroha_core --lib replay_cache -- --nocapture`
+  - `cargo test -p iroha_core --lib receipts -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts_rejects_same_receipt_under_different_fingerprint -- --nocapture`
   - `cargo test -p iroha_core --lib scan_entries_rejects_unreadable -- --nocapture`
   - `cargo test -p iroha_core --lib rbc_status -- --nocapture`
   - `cargo test -p iroha_core --lib commitments -- --nocapture`
@@ -1422,6 +1753,7 @@ Last updated: 2026-06-13
   - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_conflicting_da_receipt_evidence -- --nocapture`
   - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_corrupt_da_pin_intent_file -- --nocapture`
   - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_invalid_da_pin_intent_file -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests assemble_proposal_rejects_duplicate_da_pin_intent_spool_entries -- --nocapture`
   - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_guard -- --nocapture`
   - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_available_for_commitment -- --nocapture`
   - `cargo test -p iroha_core --features sumeragi-main-loop-tests manifest_spool_file_name -- --nocapture`
@@ -1447,14 +1779,22 @@ Last updated: 2026-06-13
   - `cargo test -p iroha_torii da_receipt_log_rejects -- --nocapture`
   - `cargo test -p iroha_torii da_receipt_log_in_memory_append_fails_closed -- --nocapture`
   - `cargo test -p iroha_torii lock_poison -- --nocapture`
+  - `cargo test -p iroha_torii normalize_payload -- --nocapture`
+  - `cargo test -p iroha_torii same_receipt_under_different_fingerprint -- --nocapture`
+  - `cargo test -p iroha_torii same_manifest_duplicate -- --nocapture`
+  - `cargo test -p iroha_torii governance_metadata -- --nocapture`
   - `cargo test -p iroha_torii temp_artifact -- --nocapture`
   - `cargo test -p iroha_torii da_spool -- --nocapture`
+  - `cargo test -p iroha_core --lib da:: -- --nocapture` (154 passed)
+  - `cargo test -p iroha_torii da::commitments::tests:: -- --nocapture` (22 passed)
+  - `cargo test -p iroha_torii da:: -- --nocapture` (185 passed, 1 ignored)
   - `cargo test -p iroha_torii replay_cursor_store --features app_api -- --nocapture`
   - `cargo test -p iroha_torii replay_cursor_store_open_rejects_orphan_corrupt_temp_snapshot -- --nocapture`
   - `cargo test -p iroha_torii replay_cursor_store_open_rejects_unremovable_corrupt_temp_snapshot -- --nocapture`
   - `cargo test -p iroha_torii replay_cursor_store -- --nocapture`
   - `cargo test -p iroha_torii load_da_receipts --features app_api -- --nocapture`
   - `cargo test -p iroha_torii da_receipt_log --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii taikai_trm_lineage_guard_rejects_busy_live_lock -- --nocapture`
   - `cargo test -p iroha_torii taikai_trm_lineage --features app_api -- --nocapture`
   - `cargo test -p iroha_torii taikai_trm_lineage -- --nocapture`
   - `cargo test -p iroha_torii taikai_anchor_collection --features app_api -- --nocapture`

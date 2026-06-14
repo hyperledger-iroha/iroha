@@ -225,14 +225,12 @@ pub async fn handler_post_da_ingest(
     match outcome {
         ReplayInsertOutcome::Fresh { .. } | ReplayInsertOutcome::Duplicate { .. } => {
             let duplicate = matches!(outcome, ReplayInsertOutcome::Duplicate { .. });
-            let (rent_gib, rent_months) =
-                rent_usage_from_request(request.total_size, &enforced_retention);
             record_da_rent_quote_metrics(
                 &telemetry,
                 cluster_label,
                 enforced_retention.storage_class,
-                rent_gib,
-                rent_months,
+                manifest.rent_gib,
+                manifest.rent_months,
                 &manifest.manifest.rent_quote,
             );
 
@@ -966,38 +964,42 @@ fn attach_pdp_commitment_header_from_spool(
 fn normalize_payload(
     request: &DaIngestRequest,
 ) -> Result<CanonicalPayload<'_>, (StatusCode, String)> {
+    let expected_decompressed_len = || {
+        usize::try_from(request.total_size).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "total_size {} exceeds this node's supported payload length",
+                    request.total_size
+                ),
+            )
+        })
+    };
+
     match request.compression {
         Compression::Identity => Ok(CanonicalPayload {
             bytes: Cow::Borrowed(&request.payload),
         }),
-        Compression::Gzip | Compression::Deflate | Compression::Zstd => {
-            let expected_len = usize::try_from(request.total_size).map_err(|_| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "total_size {} exceeds this node's supported payload length",
-                        request.total_size
-                    ),
-                )
-            })?;
-            let decompressed = match request.compression {
-                Compression::Identity => unreachable!("handled above"),
-                Compression::Gzip => decompress_reader(
-                    GzDecoder::new(request.payload.as_slice()),
-                    expected_len,
-                    "gzip",
-                )?,
-                Compression::Deflate => decompress_reader(
-                    DeflateDecoder::new(request.payload.as_slice()),
-                    expected_len,
-                    "deflate",
-                )?,
-                Compression::Zstd => decompress_zstd(request.payload.as_slice(), expected_len)?,
-            };
-            Ok(CanonicalPayload {
-                bytes: Cow::Owned(decompressed),
-            })
-        }
+        Compression::Gzip => Ok(CanonicalPayload {
+            bytes: Cow::Owned(decompress_reader(
+                GzDecoder::new(request.payload.as_slice()),
+                expected_decompressed_len()?,
+                "gzip",
+            )?),
+        }),
+        Compression::Deflate => Ok(CanonicalPayload {
+            bytes: Cow::Owned(decompress_reader(
+                DeflateDecoder::new(request.payload.as_slice()),
+                expected_decompressed_len()?,
+                "deflate",
+            )?),
+        }),
+        Compression::Zstd => Ok(CanonicalPayload {
+            bytes: Cow::Owned(decompress_zstd(
+                request.payload.as_slice(),
+                expected_decompressed_len()?,
+            )?),
+        }),
     }
 }
 
@@ -1226,6 +1228,43 @@ fn stripe_layout_from_manifest(manifest: &DaManifestV1) -> DaStripeLayout {
         shards_per_stripe: manifest.shards_per_stripe,
         row_parity_stripes: manifest.erasure_profile.row_parity_stripes,
     }
+}
+
+fn manifest_stripe_layout_fields(
+    chunk_count: usize,
+    erasure_profile: &ErasureProfile,
+) -> Result<(u32, u32), (StatusCode, String)> {
+    let data_shards = u32::from(erasure_profile.data_shards);
+    if data_shards == 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "erasure profile must include at least one data shard".into(),
+        ));
+    }
+    let chunk_count = u32::try_from(chunk_count).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "chunk count exceeds supported manifest stripe space".into(),
+        )
+    })?;
+    let total_stripes = chunk_count.div_ceil(data_shards);
+    let shards_per_stripe = data_shards
+        .checked_add(u32::from(erasure_profile.parity_shards))
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "shards per stripe exceeds supported manifest stripe space".into(),
+            )
+        })?;
+    let total_stripes_full = total_stripes
+        .checked_add(u32::from(erasure_profile.row_parity_stripes))
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "total stripes exceeds supported manifest stripe space".into(),
+            )
+        })?;
+    Ok((total_stripes_full, shards_per_stripe))
 }
 
 fn chunk_profile_for_request(chunk_size: u32) -> ChunkProfile {
@@ -1505,6 +1544,8 @@ pub(crate) struct ManifestArtifacts {
     pub(super) chunk_root: BlobDigest,
     pub(super) storage_ticket: StorageTicketId,
     pub(super) fingerprint: ReplayFingerprint,
+    pub(super) rent_gib: u64,
+    pub(super) rent_months: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1542,12 +1583,8 @@ fn resolve_manifest_with_observer(
 ) -> Result<ManifestArtifacts, (StatusCode, String)> {
     let blob_hash = BlobDigest::from_hash(*chunk_store.payload_digest());
     let chunk_root = BlobDigest::new(*chunk_store.por_tree().root());
-    let total_stripes = (chunk_store.chunks().len() as u32)
-        .div_ceil(u32::from(request.erasure_profile.data_shards));
-    let shards_per_stripe = u32::from(request.erasure_profile.data_shards)
-        .saturating_add(u32::from(request.erasure_profile.parity_shards));
-    let total_stripes_full =
-        total_stripes.saturating_add(u32::from(request.erasure_profile.row_parity_stripes));
+    let (total_stripes_full, shards_per_stripe) =
+        manifest_stripe_layout_fields(chunk_store.chunks().len(), &request.erasure_profile)?;
 
     let chunking_started = Instant::now();
     let chunk_commitments = build_chunk_commitments(request, chunk_store, canonical_payload)?;
@@ -1555,7 +1592,7 @@ fn resolve_manifest_with_observer(
         observer(chunking_started.elapsed());
     }
 
-    let (rent_gib, rent_months) = rent_usage_from_request(request.total_size, enforced_retention);
+    let (rent_gib, rent_months) = rent_usage_from_request(request.total_size, enforced_retention)?;
     let rent_quote = rent_policy.quote(rent_gib, rent_months).map_err(|err| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1657,6 +1694,8 @@ fn resolve_manifest_with_observer(
         chunk_root,
         storage_ticket,
         fingerprint,
+        rent_gib,
+        rent_months,
     })
 }
 
@@ -2103,7 +2142,10 @@ fn ceil_div_u64(value: u64, divisor: u64) -> u64 {
     value.div_ceil(divisor)
 }
 
-fn rent_usage_from_request(total_size: u64, retention: &RetentionPolicy) -> (u64, u32) {
+fn rent_usage_from_request(
+    total_size: u64,
+    retention: &RetentionPolicy,
+) -> Result<(u64, u32), (StatusCode, String)> {
     let adjusted_size = total_size.max(1);
     let gib = ceil_div_u64(adjusted_size, BYTES_PER_GIB).max(1);
     let retention_secs = retention
@@ -2111,8 +2153,13 @@ fn rent_usage_from_request(total_size: u64, retention: &RetentionPolicy) -> (u64
         .max(retention.cold_retention_secs)
         .max(1);
     let months_u64 = ceil_div_u64(retention_secs, SECS_PER_MONTH).max(1);
-    let months_u32 = u32::try_from(months_u64).unwrap_or(u32::MAX);
-    (gib, months_u32)
+    let months_u32 = u32::try_from(months_u64).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "retention period exceeds supported rent quote month range".to_string(),
+        )
+    })?;
+    Ok((gib, months_u32))
 }
 
 fn with_status(mut response: Response, status: StatusCode) -> Response {

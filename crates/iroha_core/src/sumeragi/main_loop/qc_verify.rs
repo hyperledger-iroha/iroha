@@ -1,6 +1,6 @@
 //! QC aggregate-signature verification workers.
 
-use std::sync::mpsc;
+use std::{io, sync::mpsc};
 
 use iroha_logger::prelude::*;
 
@@ -55,6 +55,30 @@ fn resolve_worker_config(
     (threads, work_queue_cap, result_queue_cap)
 }
 
+fn retain_spawned_worker(
+    work_txs: &mut Vec<mpsc::SyncSender<QcVerifyWork>>,
+    join_handles: &mut Vec<std::thread::JoinHandle<()>>,
+    work_tx: mpsc::SyncSender<QcVerifyWork>,
+    spawn_result: io::Result<std::thread::JoinHandle<()>>,
+    idx: usize,
+) -> bool {
+    match spawn_result {
+        Ok(join_handle) => {
+            work_txs.push(work_tx);
+            join_handles.push(join_handle);
+            true
+        }
+        Err(error) => {
+            warn!(
+                idx,
+                %error,
+                "failed to spawn Sumeragi QC verify worker; continuing without this worker"
+            );
+            false
+        }
+    }
+}
+
 /// Spawn QC aggregate verification workers.
 pub(super) fn spawn_qc_verify_workers(
     wake_tx: Option<mpsc::SyncSender<()>>,
@@ -69,32 +93,29 @@ pub(super) fn spawn_qc_verify_workers(
     let mut join_handles = Vec::with_capacity(threads);
     for idx in 0..threads {
         let (work_tx, work_rx) = mpsc::sync_channel::<QcVerifyWork>(work_queue_cap);
-        work_txs.push(work_tx);
         let result_tx = result_tx.clone();
         let wake_tx = wake_tx.clone();
         let name = format!("sumeragi-qc-verify-{idx}");
-        let join_handle = crate::sumeragi::sumeragi_thread_builder(name)
-            .spawn(move || {
-                while let Ok(work) = work_rx.recv() {
-                    let QcVerifyWork { id, key, inputs } = work;
-                    let aggregate_ok = inputs.verify();
-                    if result_tx
-                        .send(QcVerifyResult {
-                            id,
-                            key,
-                            aggregate_ok,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                    if let Some(wake) = wake_tx.as_ref() {
-                        let _ = wake.try_send(());
-                    }
+        let spawn_result = crate::sumeragi::sumeragi_thread_builder(name).spawn(move || {
+            while let Ok(work) = work_rx.recv() {
+                let QcVerifyWork { id, key, inputs } = work;
+                let aggregate_ok = inputs.verify();
+                if result_tx
+                    .send(QcVerifyResult {
+                        id,
+                        key,
+                        aggregate_ok,
+                    })
+                    .is_err()
+                {
+                    break;
                 }
-            })
-            .expect("failed to spawn sumeragi QC verify worker thread");
-        join_handles.push(join_handle);
+                if let Some(wake) = wake_tx.as_ref() {
+                    let _ = wake.try_send(());
+                }
+            }
+        });
+        retain_spawned_worker(&mut work_txs, &mut join_handles, work_tx, spawn_result, idx);
     }
 
     QcVerifyWorkerHandle {
@@ -172,7 +193,8 @@ impl Actor {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_worker_config;
+    use super::{QcVerifyWork, resolve_worker_config, retain_spawned_worker};
+    use std::{io, sync::mpsc};
 
     #[test]
     fn qc_verify_worker_config_auto_scales() {
@@ -183,5 +205,26 @@ mod tests {
         assert_eq!(threads, expected_threads);
         assert_eq!(work_cap, expected_threads.saturating_mul(4).max(4));
         assert_eq!(result_cap, expected_threads.saturating_mul(8).max(8));
+    }
+
+    #[test]
+    fn qc_verify_worker_spawn_error_drops_sender() {
+        let (work_tx, work_rx) = mpsc::sync_channel::<QcVerifyWork>(1);
+        let mut work_txs = Vec::new();
+        let mut join_handles = Vec::new();
+
+        assert!(!retain_spawned_worker(
+            &mut work_txs,
+            &mut join_handles,
+            work_tx,
+            Err(io::Error::other("spawn failed")),
+            0,
+        ));
+        assert!(work_txs.is_empty());
+        assert!(join_handles.is_empty());
+        assert!(
+            work_rx.recv().is_err(),
+            "failed spawn must drop the unbacked sender"
+        );
     }
 }

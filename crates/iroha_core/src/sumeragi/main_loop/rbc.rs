@@ -154,6 +154,7 @@ pub(super) enum RbcError {
     SeedPayloadHashMismatch { expected: Hash, observed: Hash },
     ChunkSizeOverflow { chunk_size: usize },
     ChunkCountOverflow { count: usize },
+    ChunkCountUnavailable,
     ChunkCountExceedsCap { count: u32, cap: u32 },
     ChunkRootUnavailable,
     MissingLeaderSignature,
@@ -189,6 +190,9 @@ impl std::fmt::Display for RbcError {
             Self::ChunkCountOverflow { count } => {
                 write!(f, "RBC payload requires {count} chunks")
             }
+            Self::ChunkCountUnavailable => {
+                write!(f, "RBC payload layout does not advertise a chunk count")
+            }
             Self::ChunkCountExceedsCap { count, cap } => {
                 write!(
                     f,
@@ -218,6 +222,26 @@ impl From<RbcSessionError> for RbcError {
     fn from(err: RbcSessionError) -> Self {
         Self::SessionInit(err)
     }
+}
+
+fn rbc_chunk_index(idx: usize) -> std::result::Result<u32, RbcError> {
+    u32::try_from(idx).map_err(|_| RbcError::ChunkIndexOverflow { idx })
+}
+
+fn rbc_layout_total_chunks(layout: RbcPayloadLayout) -> std::result::Result<u32, RbcError> {
+    let total_chunks = layout
+        .total_chunks()
+        .ok_or(RbcError::ChunkCountUnavailable)?;
+    let total_chunks = u32::try_from(total_chunks).map_err(|_| RbcError::ChunkCountOverflow {
+        count: total_chunks,
+    })?;
+    if total_chunks > RBC_MAX_TOTAL_CHUNKS {
+        return Err(RbcError::ChunkCountExceedsCap {
+            count: total_chunks,
+            cap: RBC_MAX_TOTAL_CHUNKS,
+        });
+    }
+    Ok(total_chunks)
 }
 
 fn spawn_rbc_persist_worker(
@@ -983,6 +1007,43 @@ mod tests {
     }
 
     #[test]
+    fn rbc_chunk_index_reports_overflow() {
+        assert_eq!(rbc_chunk_index(0).expect("zero index"), 0);
+        assert_eq!(
+            rbc_chunk_index(u32::MAX as usize).expect("max u32 index"),
+            u32::MAX
+        );
+        if usize::BITS > u32::BITS {
+            let overflow = (u32::MAX as usize) + 1;
+            assert!(matches!(
+                rbc_chunk_index(overflow),
+                Err(RbcError::ChunkIndexOverflow { idx }) if idx == overflow
+            ));
+        }
+    }
+
+    #[test]
+    fn rbc_layout_total_chunks_rejects_legacy_layout() {
+        assert!(matches!(
+            rbc_layout_total_chunks(RbcPayloadLayout::legacy_plain()),
+            Err(RbcError::ChunkCountUnavailable)
+        ));
+    }
+
+    #[test]
+    fn rbc_layout_total_chunks_rejects_over_cap_layout() {
+        let over_cap_payload_len = u64::from(RBC_MAX_TOTAL_CHUNKS) + 1;
+        let layout = RbcPayloadLayout::new(RbcEncoding::Plain, 1, over_cap_payload_len, 0, 0)
+            .expect("plain over-cap layout");
+
+        assert!(matches!(
+            rbc_layout_total_chunks(layout),
+            Err(RbcError::ChunkCountExceedsCap { count, cap })
+                if count == RBC_MAX_TOTAL_CHUNKS + 1 && cap == RBC_MAX_TOTAL_CHUNKS
+        ));
+    }
+
+    #[test]
     fn select_rbc_chunk_targets_is_deterministic() {
         let roster = sample_roster(5);
         let local = roster[0].clone();
@@ -1411,7 +1472,10 @@ impl Actor {
         );
 
         let encoded = encode_rbc_payload(payload, RbcChunkingSpec::from_config(&self.config.rbc))?;
-        let total_chunks = u32::try_from(encoded.chunks.len()).expect("encoded chunk count fits");
+        let total_chunks =
+            u32::try_from(encoded.chunks.len()).map_err(|_| RbcError::ChunkCountOverflow {
+                count: encoded.chunks.len(),
+            })?;
 
         let (lane_allocations, dataspace_allocations) =
             self.derive_rbc_allocations(transactions, routing, tx_sizes, total_chunks)?;
@@ -1435,7 +1499,7 @@ impl Actor {
         session.block_header = Some(block_header);
         session.leader_signature = Some(leader_signature.clone());
         for (idx, chunk) in encoded.chunks.iter().enumerate() {
-            let chunk_index = u32::try_from(idx).expect("chunk index fits within a 32-bit range");
+            let chunk_index = rbc_chunk_index(idx)?;
             let digest = encoded.digests[idx];
             session.ingest_prehashed_chunk(
                 chunk_index,
@@ -1476,7 +1540,7 @@ impl Actor {
 
         let mut chunks = Vec::with_capacity(order.len());
         for idx in order {
-            let chunk_index = u32::try_from(idx).expect("chunk index fits within a 32-bit range");
+            let chunk_index = rbc_chunk_index(idx)?;
             if self.should_withhold_chunk(chunk_index) {
                 debug!(
                     height,
@@ -1560,8 +1624,7 @@ impl Actor {
                 }
                 let mut dup_chunks = Vec::with_capacity(dup_order.len());
                 for idx in dup_order {
-                    let chunk_index =
-                        u32::try_from(idx).expect("duplicate chunk index fits within 32 bits");
+                    let chunk_index = rbc_chunk_index(idx)?;
                     if self.should_withhold_chunk(chunk_index) {
                         debug!(
                             height,
@@ -1980,7 +2043,10 @@ impl Actor {
         epoch: u64,
     ) -> std::result::Result<RbcSession, RbcError> {
         let encoded = encode_rbc_payload(payload_bytes, chunking)?;
-        let total_chunks = u32::try_from(encoded.chunks.len()).expect("encoded chunk count fits");
+        let total_chunks =
+            u32::try_from(encoded.chunks.len()).map_err(|_| RbcError::ChunkCountOverflow {
+                count: encoded.chunks.len(),
+            })?;
         let mut session = RbcSession::new_with_layout(
             encoded.layout,
             total_chunks,
@@ -1997,7 +2063,7 @@ impl Actor {
             .zip(encoded.digests.into_iter())
             .enumerate()
         {
-            let idx = u32::try_from(idx).map_err(|_| RbcError::ChunkIndexOverflow { idx })?;
+            let idx = rbc_chunk_index(idx)?;
             session.ingest_prehashed_chunk(idx, chunk, digest, None);
         }
 
@@ -2304,20 +2370,7 @@ impl Actor {
         let layout = chunking
             .layout_for_payload(payload_len)
             .map_err(eyre::Report::from)?;
-        let total_chunks = layout
-            .total_chunks()
-            .expect("layout built from a known payload size must report chunk count");
-        let total_chunks =
-            u32::try_from(total_chunks).map_err(|_| RbcError::ChunkCountOverflow {
-                count: total_chunks,
-            })?;
-        if total_chunks > RBC_MAX_TOTAL_CHUNKS {
-            return Err(RbcError::ChunkCountExceedsCap {
-                count: total_chunks,
-                cap: RBC_MAX_TOTAL_CHUNKS,
-            }
-            .into());
-        }
+        let total_chunks = rbc_layout_total_chunks(layout)?;
 
         let mut session = RbcSession::new_with_layout(
             layout,
@@ -5655,28 +5708,6 @@ impl Actor {
         let ready_peer = usize::try_from(ready.sender)
             .ok()
             .and_then(|idx| signature_topology.as_ref().get(idx));
-        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
-            if let Some(existing) = session
-                .ready_signatures
-                .iter()
-                .find(|entry| entry.sender == ready.sender)
-            {
-                if existing.signature == ready.signature {
-                    trace!(
-                        height = ready.height,
-                        view = ready.view,
-                        sender = ready.sender,
-                        "ignoring duplicate RBC READY with identical signature"
-                    );
-                    self.record_consensus_message_handling(
-                        super::status::ConsensusMessageKind::RbcReady,
-                        super::status::ConsensusMessageOutcome::Dropped,
-                        super::status::ConsensusMessageReason::Duplicate,
-                    );
-                    return Ok(());
-                }
-            }
-        }
         if !rbc_ready_signature_valid(
             &ready,
             &signature_topology,
@@ -5796,6 +5827,28 @@ impl Actor {
                     } else {
                         inferred_chunk_root = Some(ready.chunk_root);
                     }
+                }
+            }
+        }
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+            if let Some(existing) = session
+                .ready_signatures
+                .iter()
+                .find(|entry| entry.sender == ready.sender)
+            {
+                if existing.signature == ready.signature {
+                    trace!(
+                        height = ready.height,
+                        view = ready.view,
+                        sender = ready.sender,
+                        "ignoring duplicate RBC READY with identical signature"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcReady,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::Duplicate,
+                    );
+                    return Ok(());
                 }
             }
         }
@@ -6522,26 +6575,50 @@ impl Actor {
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(deliver.height);
         let signature_topology =
             super::topology_for_view(&topology, deliver.height, deliver.view, mode_tag, prf_seed);
-        let deliver_peer = usize::try_from(deliver.sender)
-            .ok()
-            .and_then(|idx| signature_topology.as_ref().get(idx));
-        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
-            if rbc_session_has_complete_delivery(session)
-                && session.deliver_sender == Some(deliver.sender)
-                && session
-                    .deliver_signature
-                    .as_deref()
-                    .is_some_and(|sig| sig == deliver.signature.as_slice())
-            {
-                trace!(
+        let max_ready = signature_topology.as_ref().len();
+        if !deliver.ready_signatures.is_empty() {
+            if deliver.ready_signatures.len() > max_ready {
+                warn!(
                     height = deliver.height,
                     view = deliver.view,
                     sender = deliver.sender,
-                    "ignoring duplicate RBC DELIVER with identical signature"
+                    ready_entries = deliver.ready_signatures.len(),
+                    max_ready,
+                    "dropping RBC DELIVER with oversized READY bundle"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcDeliver,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidPayload,
                 );
                 return Ok(());
             }
+            let mut bundle_senders = BTreeSet::new();
+            for entry in &deliver.ready_signatures {
+                let sender_in_range = usize::try_from(entry.sender)
+                    .ok()
+                    .is_some_and(|idx| idx < max_ready);
+                if !sender_in_range || !bundle_senders.insert(entry.sender) {
+                    warn!(
+                        height = deliver.height,
+                        view = deliver.view,
+                        sender = deliver.sender,
+                        ready_sender = entry.sender,
+                        max_ready,
+                        "dropping RBC DELIVER with malformed READY bundle"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcDeliver,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::InvalidPayload,
+                    );
+                    return Ok(());
+                }
+            }
         }
+        let deliver_peer = usize::try_from(deliver.sender)
+            .ok()
+            .and_then(|idx| signature_topology.as_ref().get(idx));
         if !rbc_deliver_signature_valid(
             &deliver,
             &signature_topology,
@@ -6629,46 +6706,24 @@ impl Actor {
         let mut ready_to_record: Vec<(u32, Vec<u8>)> = Vec::new();
         let mut invalid_ready_senders: Vec<u32> = Vec::new();
         let mut suppressed_ready_senders: Vec<u32> = Vec::new();
-        if !deliver.ready_signatures.is_empty() {
-            let max_ready = signature_topology.as_ref().len();
-            if deliver.ready_signatures.len() > max_ready {
-                warn!(
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+            if rbc_session_has_complete_delivery(session)
+                && session.deliver_sender == Some(deliver.sender)
+                && session
+                    .deliver_signature
+                    .as_deref()
+                    .is_some_and(|sig| sig == deliver.signature.as_slice())
+            {
+                trace!(
                     height = deliver.height,
                     view = deliver.view,
                     sender = deliver.sender,
-                    ready_entries = deliver.ready_signatures.len(),
-                    max_ready,
-                    "dropping RBC DELIVER with oversized READY bundle"
-                );
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::RbcDeliver,
-                    super::status::ConsensusMessageOutcome::Dropped,
-                    super::status::ConsensusMessageReason::InvalidPayload,
+                    "ignoring duplicate RBC DELIVER with identical signature"
                 );
                 return Ok(());
             }
-            let mut bundle_senders = BTreeSet::new();
-            for entry in &deliver.ready_signatures {
-                let sender_in_range = usize::try_from(entry.sender)
-                    .ok()
-                    .is_some_and(|idx| idx < max_ready);
-                if !sender_in_range || !bundle_senders.insert(entry.sender) {
-                    warn!(
-                        height = deliver.height,
-                        view = deliver.view,
-                        sender = deliver.sender,
-                        ready_sender = entry.sender,
-                        max_ready,
-                        "dropping RBC DELIVER with malformed READY bundle"
-                    );
-                    self.record_consensus_message_handling(
-                        super::status::ConsensusMessageKind::RbcDeliver,
-                        super::status::ConsensusMessageOutcome::Dropped,
-                        super::status::ConsensusMessageReason::InvalidPayload,
-                    );
-                    return Ok(());
-                }
-            }
+        }
+        if !deliver.ready_signatures.is_empty() {
             for entry in &deliver.ready_signatures {
                 let ready = RbcReady {
                     block_hash: deliver.block_hash,

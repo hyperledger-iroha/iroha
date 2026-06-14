@@ -344,7 +344,12 @@ pub(crate) mod taikai_ingest {
                     }
                 }
             }
-            unreachable!("lock acquisition attempts exhausted without returning");
+            Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!(
+                    "routing manifest lock acquisition attempts exhausted for alias slug `{slug}`; retry later"
+                ),
+            ))
         }
     }
 
@@ -550,25 +555,19 @@ pub(crate) mod taikai_ingest {
             .map_err(|err| io::Error::new(ErrorKind::Other, err.to_string()))?;
         let tmp_path = path.with_extension(format!("tmp-{}", artifact_temp_suffix()));
         match OpenOptions::new()
-            .create(true)
+            .create_new(true)
             .write(true)
-            .truncate(true)
             .open(&tmp_path)
         {
             Ok(mut file) => {
                 if let Err(err) = file.write_all(rendered.as_bytes()) {
-                    remove_temp_artifact(&tmp_path)?;
-                    return Err(err);
+                    return Err(temp_artifact_write_error(&tmp_path, err));
                 }
                 if let Err(err) = file.sync_all() {
-                    remove_temp_artifact(&tmp_path)?;
-                    return Err(err);
+                    return Err(temp_artifact_write_error(&tmp_path, err));
                 }
             }
-            Err(err) => {
-                remove_temp_artifact(&tmp_path)?;
-                return Err(err);
-            }
+            Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
         }
         if let Err(err) = fs::rename(&tmp_path, path) {
             remove_temp_artifact(&tmp_path)?;
@@ -977,12 +976,18 @@ pub(crate) mod taikai_ingest {
 
     fn write_temp_artifact(tmp_path: &Path, bytes: &[u8]) -> io::Result<()> {
         let mut file = OpenOptions::new()
-            .create(true)
+            .create_new(true)
             .write(true)
-            .truncate(true)
             .open(tmp_path)?;
         file.write_all(bytes)?;
         file.sync_all()
+    }
+
+    fn temp_artifact_write_error(tmp_path: &Path, err: io::Error) -> io::Error {
+        if err.kind() == ErrorKind::AlreadyExists {
+            return err;
+        }
+        remove_temp_artifact(tmp_path).err().unwrap_or(err)
     }
 
     fn artifact_temp_suffix() -> String {
@@ -1035,6 +1040,30 @@ pub(crate) mod taikai_ingest {
             assert!(
                 tmp_path.is_dir(),
                 "failed cleanup should leave temp path visible for operator repair"
+            );
+        }
+
+        #[test]
+        fn taikai_temp_artifact_write_rejects_existing_path_without_truncating() {
+            let dir = tempdir().expect("tempdir");
+            let tmp_path = dir.path().join(".taikai.tmp");
+            fs::write(&tmp_path, b"existing").expect("seed temp artifact");
+
+            let err = write_temp_artifact(&tmp_path, b"replacement")
+                .expect_err("existing temp artifact should not be overwritten");
+
+            assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+            assert_eq!(
+                fs::read(&tmp_path).expect("read existing temp artifact"),
+                b"existing"
+            );
+
+            let err =
+                temp_artifact_write_error(&tmp_path, io::Error::from(ErrorKind::AlreadyExists));
+            assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+            assert_eq!(
+                fs::read(&tmp_path).expect("read existing temp artifact after cleanup helper"),
+                b"existing"
             );
         }
 
@@ -1127,10 +1156,7 @@ pub(crate) mod taikai_ingest {
 
         match write_temp_artifact(&tmp_path, bytes) {
             Ok(()) => {}
-            Err(err) => {
-                remove_temp_artifact(&tmp_path)?;
-                return Err(err);
-            }
+            Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
         }
 
         install_artifact_without_overwrite(&tmp_path, &target_path, bytes, prefix)?;
@@ -1425,10 +1451,7 @@ pub(crate) mod taikai_ingest {
 
         match write_temp_artifact(&tmp_path, body.as_bytes()) {
             Ok(()) => {}
-            Err(err) => {
-                remove_temp_artifact(&tmp_path)?;
-                return Err(err);
-            }
+            Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
         }
         install_anchor_request_capture(&tmp_path, &request_path, body.as_bytes())
     }
@@ -1499,10 +1522,7 @@ pub(crate) mod taikai_ingest {
 
         match write_temp_artifact(&tmp_path, marker.as_bytes()) {
             Ok(()) => {}
-            Err(err) => {
-                remove_temp_artifact(&tmp_path)?;
-                return Err(err);
-            }
+            Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
         }
         if let Err(err) = fs::rename(&tmp_path, path) {
             remove_temp_artifact(&tmp_path)?;

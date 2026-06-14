@@ -235,9 +235,8 @@ impl ReplayCursorStore {
         let tmp_path = replay_cursor_temp_path(&file_path);
         {
             let mut file = fs::OpenOptions::new()
-                .create(true)
+                .create_new(true)
                 .write(true)
-                .truncate(true)
                 .open(&tmp_path)
                 .wrap_err_with(|| {
                     format!(
@@ -745,12 +744,10 @@ impl DaReceiptLog {
                     path.display()
                 ));
             }
-            let stored = Self::decode_receipt(&path).wrap_err_with(|| {
-                format!("failed to load durable DA receipt {}", path.display())
-            })?;
-            let receipt_key = parse_receipt_file_key(&path).wrap_err_with(|| {
-                format!("failed to parse durable DA receipt {}", path.display())
-            })?;
+            let (receipt_key, stored) =
+                Self::decode_receipt_with_key(&path).wrap_err_with(|| {
+                    format!("failed to load durable DA receipt {}", path.display())
+                })?;
             let StoredDaReceipt {
                 sequence, receipt, ..
             } = stored;
@@ -773,6 +770,15 @@ impl DaReceiptLog {
                 if existing.receipt != receipt {
                     return Err(eyre!(
                         "conflicting duplicate receipt for lane {:?} seq {} at {} and {}",
+                        lane_epoch,
+                        sequence,
+                        existing.path.display(),
+                        path.display()
+                    ));
+                }
+                if existing.fingerprint != receipt_key.fingerprint {
+                    return Err(eyre!(
+                        "duplicate receipt fingerprint conflict for lane {:?} seq {} at {} and {}",
                         lane_epoch,
                         sequence,
                         existing.path.display(),
@@ -824,6 +830,10 @@ impl DaReceiptLog {
     }
 
     fn decode_receipt(path: &Path) -> eyre::Result<StoredDaReceipt> {
+        Self::decode_receipt_with_key(path).map(|(_, stored)| stored)
+    }
+
+    fn decode_receipt_with_key(path: &Path) -> eyre::Result<(ReceiptFileKey, StoredDaReceipt)> {
         let data = fs::read(path)?;
         let stored = decode_from_bytes::<StoredDaReceipt>(&data).map_err(|err| eyre!(err))?;
         if stored.version != STORED_RECEIPT_VERSION {
@@ -833,8 +843,8 @@ impl DaReceiptLog {
                 STORED_RECEIPT_VERSION
             ));
         }
-        validate_receipt_filename(path, &stored)?;
-        Ok(stored)
+        let key = validate_receipt_filename(path, &stored)?;
+        Ok((key, stored))
     }
 }
 
@@ -902,7 +912,10 @@ fn parse_receipt_file_key(path: &Path) -> eyre::Result<ReceiptFileKey> {
     })
 }
 
-fn validate_receipt_filename(path: &Path, stored: &StoredDaReceipt) -> eyre::Result<()> {
+fn validate_receipt_filename(
+    path: &Path,
+    stored: &StoredDaReceipt,
+) -> eyre::Result<ReceiptFileKey> {
     let key = parse_receipt_file_key(path)?;
     if key.lane_id != stored.receipt.lane_id
         || key.epoch != stored.receipt.epoch
@@ -921,7 +934,7 @@ fn validate_receipt_filename(path: &Path, stored: &StoredDaReceipt) -> eyre::Res
             stored.receipt.storage_ticket
         ));
     }
-    Ok(())
+    Ok(key)
 }
 
 impl ReplayCursorState {
@@ -1002,12 +1015,18 @@ fn install_artifact_without_overwrite(
 
 fn write_temp_artifact(tmp_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut file = fs::OpenOptions::new()
-        .create(true)
+        .create_new(true)
         .write(true)
-        .truncate(true)
         .open(tmp_path)?;
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+fn temp_artifact_write_error(tmp_path: &Path, err: std::io::Error) -> std::io::Error {
+    if err.kind() == ErrorKind::AlreadyExists {
+        return err;
+    }
+    remove_temp_artifact(tmp_path).err().unwrap_or(err)
 }
 
 fn artifact_temp_suffix() -> String {
@@ -1064,7 +1083,7 @@ mod temp_artifact_tests {
     }
 
     fn test_fingerprint(seed: u8) -> ReplayFingerprint {
-        ReplayFingerprint::from_hash_bytes(&[seed; blake3::OUT_LEN])
+        ReplayFingerprint::from([seed; blake3::OUT_LEN])
     }
 
     fn test_receipt(
@@ -1109,6 +1128,30 @@ mod temp_artifact_tests {
         assert!(
             tmp_path.is_dir(),
             "failed cleanup should leave temp path visible for operator repair"
+        );
+    }
+
+    #[test]
+    fn da_temp_artifact_write_rejects_existing_path_without_truncating() {
+        let dir = tempdir().expect("tempdir");
+        let tmp_path = dir.path().join(".da.tmp");
+        fs::write(&tmp_path, b"existing").expect("seed temp artifact");
+
+        let err = write_temp_artifact(&tmp_path, b"replacement")
+            .expect_err("existing temp artifact should not be overwritten");
+
+        assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read(&tmp_path).expect("read existing temp artifact"),
+            b"existing"
+        );
+
+        let err =
+            temp_artifact_write_error(&tmp_path, std::io::Error::from(ErrorKind::AlreadyExists));
+        assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read(&tmp_path).expect("read existing temp artifact after cleanup helper"),
+            b"existing"
         );
     }
 
@@ -1235,10 +1278,7 @@ pub(super) fn persist_da_receipt(
 
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
-        Err(err) => {
-            remove_temp_artifact(&tmp_path)?;
-            return Err(err);
-        }
+        Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
 
     install_artifact_without_overwrite(&tmp_path, &target_path, &encoded, "DA receipt artifact")?;
@@ -1261,7 +1301,7 @@ pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDa
     }
 
     let mut receipts = Vec::new();
-    let mut by_key: BTreeMap<(u32, u64, u64), usize> = BTreeMap::new();
+    let mut by_key: BTreeMap<(u32, u64, u64), (usize, ReplayFingerprint)> = BTreeMap::new();
     for entry in fs::read_dir(spool_dir)? {
         let entry = entry?;
         let file_name = entry.file_name();
@@ -1275,18 +1315,19 @@ pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDa
             ));
         }
         let path = entry.path();
-        let stored = DaReceiptLog::decode_receipt(&path).map_err(|err| {
-            std::io::Error::new(
-                ErrorKind::InvalidData,
-                format!("failed to load DA receipt {}: {err}", path.display()),
-            )
-        })?;
+        let (receipt_key, stored) =
+            DaReceiptLog::decode_receipt_with_key(&path).map_err(|err| {
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("failed to load DA receipt {}: {err}", path.display()),
+                )
+            })?;
         let key = (
             stored.receipt.lane_id.as_u32(),
             stored.receipt.epoch,
             stored.sequence,
         );
-        if let Some(existing_idx) = by_key.get(&key).copied() {
+        if let Some((existing_idx, existing_fingerprint)) = by_key.get(&key).copied() {
             let existing: &StoredDaReceipt = &receipts[existing_idx];
             if existing.receipt != stored.receipt {
                 return Err(std::io::Error::new(
@@ -1297,9 +1338,18 @@ pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDa
                     ),
                 ));
             }
+            if existing_fingerprint != receipt_key.fingerprint {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "duplicate DA receipt fingerprint conflict for lane {} epoch {} sequence {}",
+                        key.0, key.1, key.2
+                    ),
+                ));
+            }
             continue;
         }
-        by_key.insert(key, receipts.len());
+        by_key.insert(key, (receipts.len(), receipt_key.fingerprint));
         receipts.push(stored);
     }
 
@@ -1733,10 +1783,7 @@ pub(super) fn persist_manifest_for_sorafs(
 
     match write_temp_artifact(&tmp_path, manifest_bytes) {
         Ok(()) => {}
-        Err(err) => {
-            remove_temp_artifact(&tmp_path)?;
-            return Err(err);
-        }
+        Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
 
     install_artifact_without_overwrite(
@@ -1797,10 +1844,7 @@ pub(super) fn persist_pdp_commitment(
 
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
-        Err(err) => {
-            remove_temp_artifact(&tmp_path)?;
-            return Err(err);
-        }
+        Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
 
     install_artifact_without_overwrite(
@@ -1861,10 +1905,7 @@ pub(super) fn persist_da_commitment_record(
 
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
-        Err(err) => {
-            remove_temp_artifact(&tmp_path)?;
-            return Err(err);
-        }
+        Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
 
     install_artifact_without_overwrite(
@@ -1952,10 +1993,7 @@ pub(super) fn persist_da_commitment_schedule_entry(
 
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
-        Err(err) => {
-            remove_temp_artifact(&tmp_path)?;
-            return Err(err);
-        }
+        Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
 
     install_artifact_without_overwrite(
@@ -2016,10 +2054,7 @@ pub(super) fn persist_da_pin_intent(
 
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
-        Err(err) => {
-            remove_temp_artifact(&tmp_path)?;
-            return Err(err);
-        }
+        Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
 
     install_artifact_without_overwrite(

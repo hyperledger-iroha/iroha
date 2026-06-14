@@ -2260,6 +2260,29 @@ fn taikai_trm_lineage_guard_rejects_inverted_window() {
     );
 }
 
+#[test]
+fn taikai_trm_lineage_guard_rejects_busy_live_lock() {
+    let dir = tempdir().expect("tempdir");
+    let spool_dir = dir.path();
+    let alias = sample_trm_manifest().alias_binding;
+    let guard = taikai_ingest::TrmLineageGuard::new(spool_dir, &alias)
+        .expect("guard")
+        .expect("enabled");
+
+    let err = match taikai_ingest::TrmLineageGuard::new(spool_dir, &alias) {
+        Ok(_) => panic!("busy live lock must reject lineage guard acquisition"),
+        Err(err) => err,
+    };
+    drop(guard);
+
+    assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        err.1.contains("routing manifest lock busy for alias slug"),
+        "unexpected busy lock error: {:?}",
+        err
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn taikai_trm_lineage_guard_rejects_unremovable_stale_lock() {
@@ -2885,15 +2908,13 @@ fn build_receipt_prefers_chunk_root_from_manifest() {
             .expect("expected chunk commitments");
     let ipa_commitment =
         ipa_commitment_from_chunks(&chunk_commitments).expect("ipa commitment from chunks");
-    let total_stripes = (chunk_store.chunks().len() as u32)
-        .div_ceil(u32::from(request.erasure_profile.data_shards));
-    let shards_per_stripe = u32::from(request.erasure_profile.data_shards)
-        .saturating_add(u32::from(request.erasure_profile.parity_shards));
-    let total_stripes_full =
-        total_stripes.saturating_add(u32::from(request.erasure_profile.row_parity_stripes));
+    let (total_stripes_full, shards_per_stripe) =
+        manifest_stripe_layout_fields(chunk_store.chunks().len(), &request.erasure_profile)
+            .expect("manifest stripe layout");
     let rent_policy = DaRentPolicyV1::default();
     let (rent_gib, rent_months) =
-        rent_usage_from_request(request.total_size, &request.retention_policy);
+        rent_usage_from_request(request.total_size, &request.retention_policy)
+            .expect("rent usage should fit test inputs");
     let rent_quote = rent_policy
         .quote(rent_gib, rent_months)
         .expect("compute rent quote for manifest");
@@ -2979,6 +3000,93 @@ fn build_chunk_commitments_rejects_oversized_chunk_length() {
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
     assert!(
         err.1.contains("exceeds configured chunk_size"),
+        "unexpected error message: {}",
+        err.1
+    );
+}
+
+#[test]
+fn manifest_stripe_layout_fields_rejects_zero_data_shards() {
+    let mut profile = sample_request().erasure_profile;
+    profile.data_shards = 0;
+
+    let err = manifest_stripe_layout_fields(1, &profile)
+        .expect_err("zero data shards should be rejected before stripe math");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("at least one data shard"),
+        "unexpected error message: {}",
+        err.1
+    );
+}
+
+#[test]
+fn manifest_stripe_layout_fields_rejects_total_stripe_overflow() {
+    let mut profile = sample_request().erasure_profile;
+    profile.data_shards = 1;
+    profile.parity_shards = 0;
+    profile.row_parity_stripes = 1;
+
+    let err = manifest_stripe_layout_fields(u32::MAX as usize, &profile)
+        .expect_err("row parity must not overflow total stripe count");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1
+            .contains("total stripes exceeds supported manifest stripe space"),
+        "unexpected error message: {}",
+        err.1
+    );
+}
+
+#[test]
+fn build_chunk_commitments_rejects_row_parity_base_offset_overflow() {
+    let mut request = sample_request();
+    request.chunk_size = 2;
+    request.payload = vec![0xA5, 0x5A];
+    request.total_size = u64::MAX - 1;
+    request.erasure_profile = ErasureProfile {
+        data_shards: 1,
+        parity_shards: 1,
+        row_parity_stripes: 1,
+        chunk_alignment: 2,
+        fec_scheme: FecScheme::Rs12_10,
+    };
+
+    let chunk_store = build_chunk_store(&request, request.payload.as_slice());
+
+    let err = build_chunk_commitments(&request, &chunk_store, request.payload.as_slice())
+        .expect_err("row parity base offset overflow should be rejected");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1
+            .contains("stripe parity base offset exceeded supported size"),
+        "unexpected error message: {}",
+        err.1
+    );
+}
+
+#[test]
+fn build_chunk_commitments_rejects_row_parity_chunk_offset_overflow() {
+    let mut request = sample_request();
+    request.chunk_size = 2;
+    request.payload = vec![0xA5, 0x5A];
+    request.total_size = u64::MAX - 1;
+    request.erasure_profile = ErasureProfile {
+        data_shards: 2,
+        parity_shards: 0,
+        row_parity_stripes: 1,
+        chunk_alignment: 2,
+        fec_scheme: FecScheme::Rs12_10,
+    };
+
+    let chunk_store = build_chunk_store(&request, request.payload.as_slice());
+
+    let err = build_chunk_commitments(&request, &chunk_store, request.payload.as_slice())
+        .expect_err("row parity chunk offset overflow should be rejected");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1
+            .contains("stripe parity chunk offset exceeded supported size"),
         "unexpected error message: {}",
         err.1
     );
@@ -3731,7 +3839,7 @@ fn test_receipt(
 }
 
 fn test_fingerprint(seed: u8) -> ReplayFingerprint {
-    ReplayFingerprint::from_hash_bytes(&[seed; blake3::OUT_LEN])
+    ReplayFingerprint::from([seed; blake3::OUT_LEN])
 }
 
 fn receipt_spool_file_name(
@@ -3952,6 +4060,34 @@ fn load_da_receipts_rejects_same_manifest_duplicate_with_different_receipt() {
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
         err.to_string().contains("conflicting duplicate DA receipt"),
+        "unexpected receipt load error: {err}"
+    );
+}
+
+#[test]
+fn load_da_receipts_rejects_same_receipt_under_different_fingerprint() {
+    let temp_dir = tempdir().expect("temp dir");
+    let manifest_dir = temp_dir.path();
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xB1);
+    let stored = persistence::StoredDaReceipt {
+        version: persistence::STORED_RECEIPT_VERSION,
+        sequence: 7,
+        receipt: receipt.clone(),
+    };
+    let bytes = to_bytes(&stored).expect("encode receipt");
+
+    for fingerprint in [[0xC2; 32], [0xC3; 32]] {
+        let path = manifest_dir.join(receipt_spool_file_name(&receipt, 7, fingerprint));
+        fs::write(path, &bytes).expect("write duplicate receipt");
+    }
+
+    let err = persistence::load_da_receipts(manifest_dir)
+        .expect_err("same receipt under different fingerprints must reject the receipt load");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("fingerprint conflict"),
         "unexpected receipt load error: {err}"
     );
 }
@@ -4321,6 +4457,48 @@ fn da_receipt_log_rejects_same_manifest_duplicate_with_different_receipt_on_open
 }
 
 #[test]
+fn da_receipt_log_rejects_same_receipt_under_different_fingerprint_on_open() {
+    let temp_dir = tempdir().expect("temp dir");
+    let lane_epoch = LaneEpoch::new(LaneId::new(6), 17);
+    let signer = KeyPair::random();
+    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x93);
+    let stored = persistence::StoredDaReceipt {
+        version: persistence::STORED_RECEIPT_VERSION,
+        sequence: 1,
+        receipt: receipt.clone(),
+    };
+    let bytes = to_bytes(&stored).expect("encode receipt");
+
+    for fingerprint in [[0xA3; 32], [0xA4; 32]] {
+        let path = temp_dir
+            .path()
+            .join(receipt_spool_file_name(&receipt, 1, fingerprint));
+        fs::write(path, &bytes).expect("write duplicate receipt");
+    }
+
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+    let err = match DaReceiptLog::open(
+        temp_dir.path().to_path_buf(),
+        Arc::clone(&cursor_store),
+        signer.public_key().clone(),
+    ) {
+        Ok(_) => {
+            panic!("same receipt under different fingerprints must reject receipt-log recovery")
+        }
+        Err(err) => err,
+    };
+
+    assert!(
+        format!("{err:?}").contains("fingerprint conflict"),
+        "unexpected receipt-log recovery error: {err:?}"
+    );
+    assert!(
+        cursor_store.highest_sequences().is_empty(),
+        "ambiguous duplicate receipts must not seed replay cursors"
+    );
+}
+
+#[test]
 fn da_receipt_log_rejects_sequence_rebound_signature_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 13);
@@ -4574,6 +4752,30 @@ fn replay_cursor_store_retries_after_persist_failure() {
 
     let reopened = ReplayCursorStore::open(path).expect("reopen store");
     assert_replay_cursor_sequences(&reopened, &[(lane_epoch, 42)]);
+}
+
+#[test]
+fn replay_cursor_store_rejects_existing_temp_without_truncating() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().to_path_buf();
+    let main_path = replay_cursor_main_path(temp.path());
+    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
+    let store = ReplayCursorStore::open(path.clone()).expect("open store");
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    fs::write(&tmp_path, b"existing-temp-snapshot").expect("seed temp snapshot");
+
+    let err = store
+        .record(lane_epoch, 42)
+        .expect_err("existing temp snapshot should reject cursor persistence");
+    assert!(
+        format!("{err:?}").contains("failed to create DA replay snapshot temp file"),
+        "unexpected error: {err:?}"
+    );
+    assert_replay_cursor_sequences(&store, &[]);
+    assert_eq!(
+        fs::read(&tmp_path).expect("read temp snapshot after failed record"),
+        b"existing-temp-snapshot"
+    );
 }
 
 fn replay_cursor_main_path(dir: &Path) -> PathBuf {
@@ -4909,11 +5111,64 @@ fn resolve_manifest_uses_provided_rent_policy() {
     )
     .expect("resolve manifest with custom rent policy");
 
-    let (gib, months) = rent_usage_from_request(request.total_size, &request.retention_policy);
+    let (gib, months) = rent_usage_from_request(request.total_size, &request.retention_policy)
+        .expect("rent usage should fit test inputs");
     let expected_quote = rent_policy
         .quote(gib, months)
         .expect("rent quote should compute for test inputs");
     assert_eq!(artifacts.manifest.rent_quote, expected_quote);
+}
+
+#[test]
+fn rent_usage_from_request_rejects_retention_month_overflow() {
+    let request = sample_request();
+    let mut retention = request.retention_policy.clone();
+    retention.cold_retention_secs = u64::from(u32::MAX)
+        .checked_mul(SECS_PER_MONTH)
+        .and_then(|secs| secs.checked_add(1))
+        .expect("overflow threshold fits into u64");
+
+    let err = rent_usage_from_request(request.total_size, &retention)
+        .expect_err("oversized retention duration must be rejected");
+
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("rent quote month range"),
+        "unexpected error: {}",
+        err.1
+    );
+}
+
+#[test]
+fn resolve_manifest_rejects_retention_month_overflow() {
+    let request = sample_request();
+    let canonical = normalize_payload(&request).expect("normalize payload");
+    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let metadata =
+        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
+    let mut retention = request.retention_policy.clone();
+    retention.hot_retention_secs = u64::from(u32::MAX)
+        .checked_mul(SECS_PER_MONTH)
+        .and_then(|secs| secs.checked_add(1))
+        .expect("overflow threshold fits into u64");
+
+    let err = resolve_manifest(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &metadata,
+        &retention,
+        1_701_001_001,
+        &DaRentPolicyV1::default(),
+    )
+    .expect_err("oversized rent duration must reject manifest resolution");
+
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("rent quote month range"),
+        "unexpected error: {}",
+        err.1
+    );
 }
 
 #[test]

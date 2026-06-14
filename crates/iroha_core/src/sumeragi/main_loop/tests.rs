@@ -22660,6 +22660,22 @@ async fn fetch_block_body_response_for_committed_block_preserves_commit_sidecars
     harness.shutdown.send();
 }
 
+#[test]
+fn block_body_response_from_payload_rejects_unexpected_variant() {
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB4; Hash::LENGTH]));
+    let payload = BlockMessage::KuraReplicaAdvert(super::message::KuraReplicaAdvert {
+        height: 2,
+        block_hash,
+        payload_len: 128,
+    });
+
+    assert!(
+        Actor::block_body_response_from_payload(block_hash, 2, 0, payload).is_none(),
+        "unexpected exact body payload variants must fail closed"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_block_body_response_rehydrates_commit_qc_from_precommit_signer_history() {
     let _history_guard = isolate_commit_history_state();
@@ -29114,6 +29130,47 @@ async fn start_commit_job_disconnected_worker_executes_inline_and_clears_worker_
     assert!(
         committed_height == height || pending_present,
         "inline disconnected fallback should leave the block recoverable as either committed state or queued pending work"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn start_commit_job_missing_result_channel_executes_inline_and_clears_worker_state() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    let (block_hash, height, _block, inflight, work) =
+        start_commit_job_fixture(actor, &harness.key_pairs, 96);
+
+    let (work_tx, work_rx) = mpsc::sync_channel(1);
+    actor.subsystems.commit.work_tx = Some(work_tx);
+    actor.subsystems.commit.result_rx = None;
+
+    assert!(
+        actor.start_commit_job(inflight, work),
+        "missing result channel should fall back to inline commit execution"
+    );
+    assert!(
+        actor.subsystems.commit.work_tx.is_none(),
+        "missing result channel fallback should clear the worker sender"
+    );
+    assert!(
+        actor.subsystems.commit.result_rx.is_none(),
+        "missing result channel fallback should leave no stale receiver"
+    );
+    assert!(
+        actor.subsystems.commit.inflight.is_none(),
+        "inline missing-result fallback should clear inflight state after apply"
+    );
+    assert!(
+        matches!(work_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)),
+        "missing result channel fallback must not enqueue work that cannot report completion"
+    );
+    let committed_height = u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX);
+    let pending_present = actor.pending.pending_blocks.contains_key(&block_hash);
+    assert!(
+        committed_height == height || pending_present,
+        "missing result channel fallback should leave the block recoverable as either committed state or queued pending work"
     );
 
     harness.shutdown.send();
@@ -49149,6 +49206,177 @@ async fn duplicate_rbc_ready_is_ignored() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn duplicate_rbc_ready_validates_invalid_stored_signature_before_drop() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.gating.invalid_sig_penalty_threshold = 1;
+    consensus_cfg.gating.invalid_sig_penalty_window = Duration::from_secs(10);
+    consensus_cfg.gating.invalid_sig_penalty_cooldown = Duration::from_secs(5);
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block).to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    let roster = actor.effective_commit_topology();
+    assert!(roster.len() > 1, "test requires a remote signer");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    let local_peer = actor.common_config.peer.id().clone();
+    let signer_peer = roster
+        .iter()
+        .find(|peer| *peer != &local_peer)
+        .expect("remote signer")
+        .clone();
+    let signer_sender = signature_sender_index(actor, &roster, height, view, &signer_peer);
+    let invalid_signature = vec![0xE1];
+    let roster_hash = roster_hash(&roster);
+    assert!(session.record_ready_with_roster_hash(
+        signer_sender,
+        invalid_signature.clone(),
+        roster_hash,
+    ));
+    let chunk_root = session.expected_chunk_root.expect("chunk root");
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    let ready = crate::sumeragi::consensus::RbcReady {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch: actor.epoch_for_height(key.1),
+        roster_hash,
+        chunk_root,
+        sender: signer_sender,
+        signature: invalid_signature,
+    };
+    actor.handle_rbc_ready(ready).expect("READY handled");
+
+    assert!(
+        actor.invalid_sig_penalty.is_suppressed(
+            InvalidSigKind::RbcReady,
+            u64::from(signer_sender),
+            Instant::now(),
+        ),
+        "matching stored READY bytes must still be validated and penalized when invalid"
+    );
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert_eq!(
+        stored.ready_signatures.len(),
+        1,
+        "invalid duplicate evidence must not add READY entries"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn duplicate_rbc_ready_validates_chunk_root_before_drop() {
+    let _guard = super::status::rbc_status_test_guard();
+    super::status::reset_rbc_mismatch_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block).to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    let roster = actor.effective_commit_topology();
+    assert!(roster.len() > 1, "test requires a remote signer");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    let local_peer = actor.common_config.peer.id().clone();
+    let signer_peer = roster
+        .iter()
+        .find(|peer| *peer != &local_peer)
+        .expect("remote signer")
+        .clone();
+    let signer_sender = signature_sender_index(actor, &roster, height, view, &signer_peer);
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+    let roster_hash = roster_hash(&roster);
+    let wrong_root = Hash::prehashed([0x9E; Hash::LENGTH]);
+    let mut ready = crate::sumeragi::consensus::RbcReady {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch: actor.epoch_for_height(key.1),
+        roster_hash,
+        chunk_root: wrong_root,
+        sender: signer_sender,
+        signature: Vec::new(),
+    };
+    let (_, mode_tag, _) = actor.consensus_context_for_height(key.1);
+    let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
+    ready.signature = signature.payload().to_vec();
+    assert!(session.record_ready_with_roster_hash(
+        signer_sender,
+        ready.signature.clone(),
+        roster_hash,
+    ));
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    actor
+        .handle_rbc_ready(ready)
+        .expect("READY duplicate handled");
+
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert_eq!(
+        stored.ready_signatures.len(),
+        1,
+        "wrong-root duplicate should not add READY evidence"
+    );
+    assert!(
+        !stored.is_invalid(),
+        "wrong-root duplicate should be dropped without invalidating the session"
+    );
+    let mismatch_snapshot = super::status::rbc_mismatch_snapshot();
+    let entry = mismatch_snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.peer_id == signer_peer)
+        .expect("mismatch entry");
+    assert_eq!(entry.chunk_root_mismatch_total, 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_ready_drops_on_roster_hash_mismatch() {
     let mut harness = test_actor_harness(4).await;
     let key = insert_active_pending_block(&mut harness.actor, 0);
@@ -51459,6 +51687,86 @@ async fn handle_rbc_deliver_rejects_malformed_ready_bundles() {
             "{case} READY bundle must not be stashed after rejection"
         );
     }
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_deliver_rejects_malformed_ready_bundle_before_signature_penalty() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.gating.invalid_sig_penalty_threshold = 1;
+    consensus_cfg.gating.invalid_sig_penalty_window = Duration::from_secs(10);
+    consensus_cfg.gating.invalid_sig_penalty_cooldown = Duration::from_secs(5);
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let epoch = actor.epoch_for_height(height);
+    let payload = super::proposals::block_payload_bytes(&block).to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+    let roster = actor.effective_commit_topology();
+    assert!(roster.len() >= 4, "test requires four validators");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+    let chunk_root = session.expected_chunk_root.expect("chunk root");
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let max_ready = signature_topology.as_ref().len();
+    assert!(max_ready > 0, "test requires non-empty signature topology");
+    let deliver_sender = u32::try_from(max_ready - 1).expect("sender index fits u32");
+    let ready_signatures = (0..=max_ready)
+        .map(|idx| crate::sumeragi::consensus::RbcReadySignature {
+            sender: u32::try_from(idx % max_ready).expect("READY sender fits u32"),
+            signature: vec![0xA0, u8::try_from(idx % 256).expect("byte fits")],
+        })
+        .collect();
+    let deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height,
+        view,
+        epoch,
+        roster_hash: roster_hash(&roster),
+        chunk_root,
+        sender: deliver_sender,
+        signature: vec![0xDE, 0xAD, 0xBE, 0xEF],
+        ready_signatures,
+    };
+
+    actor
+        .handle_rbc_deliver(deliver)
+        .expect("malformed DELIVER handled");
+
+    assert!(
+        !actor.invalid_sig_penalty.is_suppressed(
+            InvalidSigKind::RbcDeliver,
+            u64::from(deliver_sender),
+            Instant::now(),
+        ),
+        "malformed READY bundles must be rejected before DELIVER signature penalties"
+    );
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session retained");
+    assert!(
+        !stored.delivered,
+        "malformed READY bundle must not deliver the session"
+    );
+    assert!(
+        stored.deliver_signature.is_none(),
+        "malformed READY bundle must not record DELIVER evidence"
+    );
 
     harness.shutdown.send();
 }
@@ -57811,6 +58119,111 @@ async fn record_rbc_session_roster_promotes_matching_init_source_without_resetti
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn record_rbc_session_roster_ignores_stale_init_after_derived_cache() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD8; Hash::LENGTH]));
+    let key = (block_hash, height, view);
+    let derived_roster = actor.effective_commit_topology();
+    assert!(
+        derived_roster.len() > 1,
+        "test requires multiple peers so the stale INIT roster can differ"
+    );
+    let mut stale_init_roster = derived_roster.clone();
+    stale_init_roster.pop();
+    assert_ne!(
+        stale_init_roster, derived_roster,
+        "test setup requires a conflicting stale INIT roster"
+    );
+
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let epoch = actor.epoch_for_height(height);
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+    session.ready_roster_hash = Some(roster_hash(&derived_roster));
+    assert!(session.record_ready(13, vec![0xAA]));
+    session.sent_ready = true;
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, derived_roster.clone(), super::RbcRosterSource::Derived);
+    let pending = actor.pending_rbc_slot(key).expect("pending slot");
+    let _ = pending.push_chunk_capped(
+        crate::sumeragi::consensus::RbcChunk {
+            block_hash,
+            height,
+            view,
+            epoch,
+            idx: 0,
+            bytes: vec![0xCD],
+        },
+        None,
+        usize::MAX,
+        usize::MAX,
+        Instant::now(),
+    );
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .insert(key, Instant::now());
+
+    actor.record_rbc_session_roster(key, stale_init_roster, super::RbcRosterSource::Init);
+
+    assert_eq!(
+        actor.subsystems.da_rbc.rbc.session_rosters.get(&key),
+        Some(&derived_roster),
+        "late INIT evidence must not replace an authoritative derived roster"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "late INIT evidence must not demote an authoritative roster source"
+    );
+    assert!(
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "ignored stale INIT evidence should not clear pending stash state"
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .contains_key(&key),
+        "ignored stale INIT evidence should not clear payload rebroadcast cooldowns"
+    );
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session stored");
+    assert_eq!(stored.ready_roster_hash, Some(roster_hash(&derived_roster)));
+    assert!(
+        stored
+            .ready_signatures
+            .iter()
+            .any(|entry| entry.sender == 13),
+        "ignored stale INIT evidence should not clear recorded READY signatures"
+    );
+    assert!(
+        stored.sent_ready,
+        "ignored stale INIT evidence should not reset READY emission state"
+    );
+    assert!(!stored.delivered);
+    assert!(stored.deliver_signature.is_none());
+    assert!(stored.deliver_sender.is_none());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_init_rejects_epoch_mismatch() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
@@ -58950,6 +59363,103 @@ async fn handle_rbc_init_preserves_existing_session_payload_hash_on_duplicate_mi
         .expect("session stored");
     assert!(!stored.is_invalid(), "session should remain valid");
     assert_eq!(stored.payload_hash(), Some(payload_hash));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_init_duplicate_matching_init_preserves_derived_session_state() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 4u64;
+    let view = 0u64;
+    let epoch = actor.epoch_for_height(height);
+    let roster = actor.effective_commit_topology();
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
+    let block_hash = block_header.hash();
+    let key = (block_hash, height, view);
+
+    let payload = b"duplicate-init-payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+    let expected_digests = session
+        .expected_chunk_digests
+        .clone()
+        .expect("chunk digests");
+    let expected_root = session.expected_chunk_root.expect("chunk root");
+    let old_sender = 17_u32;
+    session.block_header = Some(block_header);
+    session.leader_signature = Some(leader_signature.clone());
+    session.ready_roster_hash = Some(roster_hash(&roster));
+    assert!(session.record_ready(old_sender, vec![0xA1]));
+    session.sent_ready = true;
+    session.delivered = true;
+    session.deliver_sender = Some(old_sender);
+    session.deliver_signature = Some(vec![0xB2]);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let init = crate::sumeragi::consensus::RbcInit {
+        block_hash,
+        height,
+        view,
+        epoch,
+        roster: roster.clone(),
+        roster_hash: roster_hash(&roster),
+        total_chunks: u32::try_from(expected_digests.len()).expect("digest count fits u32"),
+        encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+        chunk_size_bytes: 0,
+        payload_size_bytes: 0,
+        data_shards: 0,
+        parity_shards: 0,
+        chunk_digests: expected_digests,
+        payload_hash,
+        chunk_root: expected_root,
+        block_header,
+        leader_signature,
+    };
+
+    actor.handle_rbc_init(init, None).expect("init handled");
+
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "duplicate INIT must not demote the authoritative roster source"
+    );
+    assert_eq!(
+        actor.subsystems.da_rbc.rbc.session_rosters.get(&key),
+        Some(&roster),
+        "duplicate INIT must keep the derived roster bytes"
+    );
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session stored");
+    assert_eq!(stored.payload_hash(), Some(payload_hash));
+    assert_eq!(stored.ready_roster_hash, Some(roster_hash(&roster)));
+    assert!(
+        stored
+            .ready_signatures
+            .iter()
+            .any(|entry| entry.sender == old_sender),
+        "duplicate INIT must preserve recorded READY signatures"
+    );
+    assert!(
+        stored.sent_ready,
+        "duplicate INIT must preserve local READY emission state"
+    );
+    assert!(
+        stored.delivered,
+        "duplicate INIT must preserve DELIVER state"
+    );
+    assert_eq!(stored.deliver_sender, Some(old_sender));
+    assert_eq!(stored.deliver_signature, Some(vec![0xB2]));
 
     harness.shutdown.send();
 }
@@ -60390,6 +60900,138 @@ async fn handle_rbc_ready_conflict_invalidates_and_clears_pending_deferrals() {
             .deliver_deferral
             .contains_key(&key),
         "terminal READY conflict should clear DELIVER deferral bookkeeping"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn duplicate_rbc_ready_does_not_refresh_pending_progress_or_rerun_commit_pipeline() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = insert_active_pending_block(actor, 0);
+    let pending_block = actor
+        .pending
+        .pending_blocks
+        .get(&key.0)
+        .expect("pending block")
+        .block
+        .clone();
+    let payload = super::proposals::block_payload_bytes(&pending_block).to_vec();
+    let payload_hash = Hash::new(&payload);
+    let epoch = actor.epoch_for_height(key.1);
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+    session.test_set_sent_ready(true);
+
+    let roster = actor.effective_commit_topology();
+    assert!(roster.len() > 1, "test requires multiple validators");
+    bind_session_to_roster_leader(
+        actor,
+        &mut session,
+        &pending_block,
+        &roster,
+        &harness.key_pairs,
+    );
+    let chunk_root = session.expected_chunk_root.expect("chunk root");
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let ready_signature = signed_remote_rbc_ready_signatures_for_roster(
+        actor,
+        &harness.key_pairs,
+        &roster,
+        key.0,
+        key.1,
+        key.2,
+        epoch,
+        chunk_root,
+        1,
+    )
+    .pop()
+    .expect("remote READY signature");
+    let ready = crate::sumeragi::consensus::RbcReady {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        roster_hash: roster_hash(&roster),
+        chunk_root,
+        sender: ready_signature.sender,
+        signature: ready_signature.signature,
+    };
+
+    actor
+        .handle_rbc_ready(ready.clone())
+        .expect("first READY handled");
+    let ready_evidence_after_first = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session")
+        .ready_signatures
+        .iter()
+        .map(|entry| (entry.sender, entry.signature.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ready_evidence_after_first.len(),
+        1,
+        "test setup should record exactly one remote READY"
+    );
+
+    let check_at = Instant::now();
+    let stale_at = check_at
+        .checked_sub(Duration::from_secs(5))
+        .unwrap_or(check_at);
+    actor.pending.last_commit_pipeline_run = stale_at;
+    actor.pending.commit_pipeline_wakeup = false;
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&key.0)
+        .expect("pending block")
+        .touch_progress(stale_at);
+
+    actor
+        .handle_rbc_ready(ready)
+        .expect("duplicate READY handled");
+
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    let ready_evidence_after_second = stored
+        .ready_signatures
+        .iter()
+        .map(|entry| (entry.sender, entry.signature.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ready_evidence_after_second, ready_evidence_after_first,
+        "duplicate READY must not add or rewrite sender evidence"
+    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&key.0)
+        .expect("pending block retained");
+    assert_eq!(
+        pending.progress_age(check_at),
+        Duration::from_secs(5),
+        "duplicate READY should not refresh pending progress"
+    );
+    assert_eq!(
+        actor.pending.last_commit_pipeline_run, stale_at,
+        "duplicate READY should not rerun the commit pipeline"
+    );
+    assert!(
+        !actor.pending.commit_pipeline_wakeup,
+        "duplicate READY should not wake commit processing"
     );
 
     harness.shutdown.send();
@@ -62603,6 +63245,267 @@ async fn duplicate_rbc_deliver_is_ignored() {
 
     assert_eq!(signature_after_first, signature_after_second);
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn duplicate_rbc_deliver_validates_invalid_stored_signature_before_drop() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.gating.invalid_sig_penalty_threshold = 1;
+    consensus_cfg.gating.invalid_sig_penalty_window = Duration::from_secs(10);
+    consensus_cfg.gating.invalid_sig_penalty_cooldown = Duration::from_secs(5);
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block).to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    let roster = actor.effective_commit_topology();
+    assert!(roster.len() > 1, "test requires a remote signer");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    let local_peer = actor.common_config.peer.id().clone();
+    let signer_peer = roster
+        .iter()
+        .find(|peer| *peer != &local_peer)
+        .expect("remote signer")
+        .clone();
+    let signer_sender = signature_sender_index(actor, &roster, height, view, &signer_peer);
+    let invalid_signature = vec![0xE2];
+    assert!(session.record_deliver(signer_sender, invalid_signature.clone()));
+    assert!(rbc_session_has_complete_delivery(&session));
+    let chunk_root = session.expected_chunk_root.expect("chunk root");
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    let roster_hash = roster_hash(&roster);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    let deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch: actor.epoch_for_height(key.1),
+        roster_hash,
+        chunk_root,
+        sender: signer_sender,
+        signature: invalid_signature,
+        ready_signatures: Vec::new(),
+    };
+    actor.handle_rbc_deliver(deliver).expect("DELIVER handled");
+
+    assert!(
+        actor.invalid_sig_penalty.is_suppressed(
+            InvalidSigKind::RbcDeliver,
+            u64::from(signer_sender),
+            Instant::now(),
+        ),
+        "matching stored DELIVER bytes must still be validated and penalized when invalid"
+    );
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert_eq!(stored.deliver_signature.as_deref(), Some(&[0xE2][..]));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn duplicate_rbc_deliver_validates_chunk_root_before_drop() {
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block).to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    let roster = actor.effective_commit_topology();
+    assert!(roster.len() > 1, "test requires a remote signer");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    let local_peer = actor.common_config.peer.id().clone();
+    let signer_peer = roster
+        .iter()
+        .find(|peer| *peer != &local_peer)
+        .expect("remote signer")
+        .clone();
+    let signer_sender = signature_sender_index(actor, &roster, height, view, &signer_peer);
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+    let roster_hash = roster_hash(&roster);
+    let wrong_root = Hash::prehashed([0x9D; Hash::LENGTH]);
+    let mut deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch: actor.epoch_for_height(key.1),
+        roster_hash,
+        chunk_root: wrong_root,
+        sender: signer_sender,
+        signature: Vec::new(),
+        ready_signatures: Vec::new(),
+    };
+    let (_, mode_tag, _) = actor.consensus_context_for_height(key.1);
+    let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
+    deliver.signature = signature.payload().to_vec();
+    assert!(session.record_deliver(signer_sender, deliver.signature.clone()));
+    assert!(rbc_session_has_complete_delivery(&session));
+    let deliver_signature = deliver.signature.clone();
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    actor
+        .handle_rbc_deliver(deliver)
+        .expect("DELIVER duplicate handled");
+
+    let entries = super::status::snapshot().consensus_message_handling.entries;
+    assert!(
+        entries.iter().any(|entry| {
+            entry.kind == super::status::ConsensusMessageKind::RbcDeliver
+                && entry.outcome == super::status::ConsensusMessageOutcome::Dropped
+                && entry.reason == super::status::ConsensusMessageReason::ChunkRootMismatch
+                && entry.total > 0
+        }),
+        "wrong-root duplicate DELIVER must be recorded as a chunk-root mismatch before duplicate drop"
+    );
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert_eq!(
+        stored.deliver_signature.as_deref(),
+        Some(deliver_signature.as_slice())
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn duplicate_rbc_deliver_validates_ready_bundle_shape_before_drop() {
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block).to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    let roster = actor.effective_commit_topology();
+    assert!(roster.len() > 1, "test requires a remote signer");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    let local_peer = actor.common_config.peer.id().clone();
+    let signer_peer = roster
+        .iter()
+        .find(|peer| *peer != &local_peer)
+        .expect("remote signer")
+        .clone();
+    let signer_sender = signature_sender_index(actor, &roster, height, view, &signer_peer);
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+    let roster_hash = roster_hash(&roster);
+    let chunk_root = session.expected_chunk_root.expect("chunk root");
+    let mut deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch: actor.epoch_for_height(key.1),
+        roster_hash,
+        chunk_root,
+        sender: signer_sender,
+        signature: Vec::new(),
+        ready_signatures: vec![
+            crate::sumeragi::consensus::RbcReadySignature {
+                sender: 0,
+                signature: vec![0xAA],
+            },
+            crate::sumeragi::consensus::RbcReadySignature {
+                sender: 0,
+                signature: vec![0xBB],
+            },
+        ],
+    };
+    let (_, mode_tag, _) = actor.consensus_context_for_height(key.1);
+    let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
+    deliver.signature = signature.payload().to_vec();
+    assert!(session.record_deliver(signer_sender, deliver.signature.clone()));
+    assert!(rbc_session_has_complete_delivery(&session));
+    let deliver_signature = deliver.signature.clone();
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    actor
+        .handle_rbc_deliver(deliver)
+        .expect("DELIVER duplicate handled");
+
+    let entries = super::status::snapshot().consensus_message_handling.entries;
+    assert!(
+        entries.iter().any(|entry| {
+            entry.kind == super::status::ConsensusMessageKind::RbcDeliver
+                && entry.outcome == super::status::ConsensusMessageOutcome::Dropped
+                && entry.reason == super::status::ConsensusMessageReason::InvalidPayload
+                && entry.total > 0
+        }),
+        "malformed duplicate DELIVER bundle must be rejected before duplicate drop"
+    );
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert_eq!(
+        stored.deliver_signature.as_deref(),
+        Some(deliver_signature.as_slice())
+    );
+
+    super::status::reset_message_handling_for_tests();
     harness.shutdown.send();
 }
 
@@ -66844,6 +67747,27 @@ async fn consensus_params_expectation_uses_on_chain_values() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn consensus_params_invalid_wire_sentinel_is_dropped() {
+    let _membership_guard = super::status::membership_status_test_guard();
+    let harness = test_actor_harness(3).await;
+    super::status::reset_membership_mismatch_for_tests();
+
+    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    harness
+        .actor
+        .handle_consensus_params(
+            super::message::ConsensusParamsAdvert::invalid_wire_sentinel(),
+            Some(&peer),
+        )
+        .expect("handle invalid-wire sentinel");
+
+    assert_eq!(super::status::membership_mismatch_consecutive(&peer), 0);
+
+    super::status::reset_membership_mismatch_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn consensus_params_membership_mismatch_records_and_clears_peer() {
     let _membership_guard = super::status::membership_status_test_guard();
     let harness = test_actor_harness(3).await;
@@ -67419,6 +68343,68 @@ async fn assemble_proposal_rejects_invalid_da_pin_intent_file() {
             intent.sequence
         )),
         "invalid pin intent must not be marked sealed after assembly rejection"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_duplicate_da_pin_intent_spool_entries() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let first = DaPinIntent::new(
+        LaneId::new(0),
+        1,
+        3,
+        StorageTicketId::new([0x78; 32]),
+        ManifestDigest::new([0x79; 32]),
+    );
+    let duplicate = DaPinIntent::new(
+        first.lane_id,
+        first.epoch,
+        first.sequence,
+        StorageTicketId::new([0x7A; 32]),
+        ManifestDigest::new([0x7B; 32]),
+    );
+    write_da_pin_intent_spool_file(&spool_dir, &first, [0x7C; 32]);
+    write_da_pin_intent_spool_file(&spool_dir, &duplicate, [0x7D; 32]);
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("duplicate DA pin intents must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("invalid DA pin intent in spool"),
+        "expected DA pin-intent validation failure, got {message}"
+    );
+    assert!(
+        message.contains("duplicate DA pin intent"),
+        "error should identify the duplicate pin-intent tuple: {message}"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.da.sealed_pin_intents.contains(&(
+            first.lane_id.as_u32(),
+            first.epoch,
+            first.sequence
+        )),
+        "duplicate pin intent must not be marked sealed after assembly rejection"
     );
 
     harness.shutdown.send();
@@ -76619,6 +77605,28 @@ async fn frontier_recovery_advance_formal_gate_reason_and_early_preconditions() 
     );
 
     harness.shutdown.send();
+}
+
+#[test]
+fn view_change_cause_frontier_slot_seed_reason_formal_gate() {
+    let cases = [
+        (ViewChangeCause::QuorumTimeout, Some("quorum_timeout")),
+        (ViewChangeCause::StakeQuorumTimeout, Some("quorum_timeout")),
+        (ViewChangeCause::MissingPayload, Some("missing_payload")),
+        (ViewChangeCause::MissingQc, Some("missing_qc")),
+        (ViewChangeCause::CommitFailure, None),
+        (ViewChangeCause::RosterUnavailable, None),
+        (ViewChangeCause::CensorshipEvidence, None),
+        (ViewChangeCause::ValidationReject, None),
+    ];
+
+    for (cause, expected) in cases {
+        assert_eq!(
+            cause.frontier_slot_seed_reason(),
+            expected,
+            "{cause:?} frontier-slot seed reason changed"
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -168951,7 +169959,6 @@ async fn debug_corrupt_witness_roots_changes_local_post_root() {
 fn validate_block_for_voting_recovers_stale_signature_indices() {
     use std::collections::BTreeSet;
 
-    use iroha_crypto::SignatureOf;
     use iroha_data_model::block::BlockSignature;
 
     let world = World::default();
@@ -197410,6 +198417,96 @@ fn rbc_session_ingest_chunk_with_outcome_reports_mismatch() {
 }
 
 #[test]
+fn rbc_session_rejects_known_plain_chunk_length_mismatch_without_digests() {
+    let payload = b"abcdef".to_vec();
+    let layout = RbcPayloadLayout::new(RbcEncoding::Plain, 4, payload.len() as u64, 0, 0)
+        .expect("plain layout");
+    let mut session = RbcSession::new_with_layout(
+        layout,
+        layout.total_chunks().expect("known total chunks") as u32,
+        Some(Hash::new(&payload)),
+        None,
+        None,
+        0,
+    )
+    .expect("session");
+
+    let malformed = session.ingest_chunk_with_outcome(1, b"cde".to_vec(), None);
+
+    assert_eq!(malformed, ChunkIngestOutcome::DigestMismatch);
+    assert_eq!(session.received_chunks(), 0);
+    assert_eq!(session.chunk_bytes(1), None);
+
+    let accepted = session.ingest_chunk_with_outcome(1, b"ef".to_vec(), None);
+
+    assert_eq!(accepted, ChunkIngestOutcome::Accepted);
+    assert_eq!(session.received_chunks(), 1);
+    assert_eq!(session.chunk_bytes(1), Some(b"ef".as_slice()));
+}
+
+#[test]
+fn rbc_session_rejects_known_rs16_chunk_length_mismatch_without_digests() {
+    let payload = vec![0xAB; 5];
+    let layout = RbcPayloadLayout::new(RbcEncoding::Rs16, 4, payload.len() as u64, 3, 1)
+        .expect("RS16 layout");
+    let mut session = RbcSession::new_with_layout(
+        layout,
+        layout.total_chunks().expect("known total chunks") as u32,
+        Some(Hash::new(&payload)),
+        None,
+        None,
+        0,
+    )
+    .expect("session");
+
+    let padded_data = session.ingest_chunk_with_outcome(2, vec![0xCC], None);
+    assert_eq!(padded_data, ChunkIngestOutcome::DigestMismatch);
+    assert_eq!(session.received_chunks(), 0);
+
+    let accepted_padded_data = session.ingest_chunk_with_outcome(2, Vec::new(), None);
+    assert_eq!(accepted_padded_data, ChunkIngestOutcome::Accepted);
+    assert_eq!(session.received_chunks(), 1);
+
+    let short_parity = session.ingest_chunk_with_outcome(3, vec![0xDD; 3], None);
+    assert_eq!(short_parity, ChunkIngestOutcome::DigestMismatch);
+    assert_eq!(session.received_chunks(), 1);
+    assert_eq!(session.chunk_bytes(3), None);
+
+    let accepted_parity = session.ingest_chunk_with_outcome(3, vec![0xDD; 4], None);
+    assert_eq!(accepted_parity, ChunkIngestOutcome::Accepted);
+    assert_eq!(session.received_chunks(), 2);
+}
+
+#[test]
+fn rbc_session_shape_detects_known_layout_chunk_length_drift() {
+    let payload = b"abcdef".to_vec();
+    let layout = RbcPayloadLayout::new(RbcEncoding::Plain, 4, payload.len() as u64, 0, 0)
+        .expect("plain layout");
+    let mut session = RbcSession::new_with_layout(
+        layout,
+        layout.total_chunks().expect("known total chunks") as u32,
+        Some(Hash::new(&payload)),
+        None,
+        None,
+        0,
+    )
+    .expect("session");
+    let malformed = b"cde".to_vec();
+    let mut digest = [0u8; 32];
+    digest.copy_from_slice(&Sha256::digest(&malformed));
+    session.chunks[1] = Some(RbcChunkEntry {
+        bytes: malformed,
+        digest,
+    });
+    session.received_chunks = 1;
+
+    assert!(
+        super::rbc_session_has_invalid_chunk_shape(&session),
+        "known-layout sessions must treat wrong-length persisted or in-memory chunks as malformed"
+    );
+}
+
+#[test]
 fn rbc_session_persist_roundtrip() {
     let mut session = RbcSession::test_new(1, None, None, 42);
     let payload = b"bytes".to_vec();
@@ -197419,7 +198516,7 @@ fn rbc_session_persist_roundtrip() {
     let digests = session.all_chunk_digests().expect("digests");
     session.expected_chunk_digests = Some(digests.clone());
     session.ready_signatures.push(ReadySignature {
-        sender: 7,
+        sender: 0,
         signature: vec![1, 2, 3],
     });
     let manifest = SoftwareManifest::current();
@@ -197433,6 +198530,86 @@ fn rbc_session_persist_roundtrip() {
     assert_eq!(rebuilt.payload_hash(), Some(payload_hash));
     assert_eq!(rebuilt.expected_chunk_digests.as_ref(), Some(&digests));
     assert!(rebuilt.recovered_from_disk());
+}
+
+#[test]
+fn persisted_chunk_index_rejects_overflow() {
+    assert_eq!(super::persisted_chunk_index(0), Some(0));
+    assert_eq!(
+        super::persisted_chunk_index(u32::MAX as usize),
+        Some(u32::MAX)
+    );
+    if usize::BITS > u32::BITS {
+        assert_eq!(super::persisted_chunk_index((u32::MAX as usize) + 1), None);
+    }
+}
+
+#[test]
+fn persisted_timestamp_ms_saturates_at_u64_max() {
+    assert_eq!(super::persisted_timestamp_ms(0), 0);
+    assert_eq!(
+        super::persisted_timestamp_ms(u128::from(u64::MAX)),
+        u64::MAX
+    );
+    assert_eq!(
+        super::persisted_timestamp_ms(u128::from(u64::MAX) + 1),
+        u64::MAX
+    );
+}
+
+#[test]
+fn persisted_total_chunk_capacity_accepts_supported_cap() {
+    assert_eq!(
+        super::persisted_total_chunk_capacity(1).expect("capacity"),
+        1
+    );
+    assert_eq!(
+        super::persisted_total_chunk_capacity(RBC_MAX_TOTAL_CHUNKS).expect("capacity"),
+        usize::try_from(RBC_MAX_TOTAL_CHUNKS).expect("RBC chunk cap fits usize")
+    );
+}
+
+#[test]
+fn rbc_session_chunk_capacity_rejects_over_cap() {
+    assert_eq!(super::rbc_session_chunk_capacity(1).expect("capacity"), 1);
+    assert_eq!(
+        super::rbc_session_chunk_capacity(RBC_MAX_TOTAL_CHUNKS).expect("capacity"),
+        usize::try_from(RBC_MAX_TOTAL_CHUNKS).expect("RBC chunk cap fits usize")
+    );
+
+    let over_cap = RBC_MAX_TOTAL_CHUNKS.saturating_add(1);
+    assert!(matches!(
+        super::rbc_session_chunk_capacity(over_cap),
+        Err(super::RbcSessionError::TooManyChunks {
+            total_chunks,
+            max_chunks,
+        }) if total_chunks == over_cap && max_chunks == RBC_MAX_TOTAL_CHUNKS
+    ));
+}
+
+#[test]
+fn complete_chunk_digests_from_slots_rejects_missing_slot() {
+    let digest0 = Sha256::digest(b"chunk0").into();
+    let digest1 = Sha256::digest(b"chunk1").into();
+    let slots = vec![
+        Some(RbcChunkEntry {
+            bytes: b"chunk0".to_vec(),
+            digest: digest0,
+        }),
+        None,
+        Some(RbcChunkEntry {
+            bytes: b"chunk1".to_vec(),
+            digest: digest1,
+        }),
+    ];
+
+    let err = super::complete_chunk_digests_from_slots(&slots)
+        .expect_err("missing chunk slots must not panic during recovery");
+
+    assert_eq!(
+        err,
+        super::PersistedLoadError::InvalidLayout("complete session missing chunk slot")
+    );
 }
 
 #[test]

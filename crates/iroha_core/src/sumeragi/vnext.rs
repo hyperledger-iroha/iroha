@@ -334,8 +334,17 @@ impl ChainOrder {
     /// Return the deterministic Norito hash of this chain order.
     #[must_use]
     pub fn hash(&self) -> Hash {
-        let bytes = norito::to_bytes(self).expect("chain order should encode");
-        Hash::new(&bytes)
+        match self.try_hash() {
+            Some(hash) => hash,
+            None => Hash::new(b"vnext-chain-order-encoding-error"),
+        }
+    }
+
+    /// Try to return the deterministic Norito hash of this chain order.
+    #[must_use]
+    pub fn try_hash(&self) -> Option<Hash> {
+        let bytes = norito::to_bytes(self).ok()?;
+        Some(Hash::new(&bytes))
     }
 
     /// Return the validators currently on the critical path.
@@ -379,7 +388,7 @@ impl ChainOrder {
             return Err(RechainError::EmptyEvidence);
         }
 
-        let previous_chain_order_hash = self.hash();
+        let previous_chain_order_hash = self.try_hash().ok_or(RechainError::ChainOrderEncoding)?;
         let mut canonical = BTreeMap::new();
         for suspect in suspicions {
             self.validate_successor_suspicion(&suspect)?;
@@ -416,7 +425,7 @@ impl ChainOrder {
         Ok(RechainCertificate {
             slot: ordered_suspicions[0].slot,
             previous_chain_order_hash,
-            new_chain_order_hash: current.hash(),
+            new_chain_order_hash: current.try_hash().ok_or(RechainError::ChainOrderEncoding)?,
             new_order: current.clone(),
             rechain_seq: current.rechain_seq,
             tainted,
@@ -465,7 +474,8 @@ impl ChainOrder {
         if suspect.rechain_seq != self.rechain_seq {
             return Err(RechainError::RechainSequenceMismatch);
         }
-        if suspect.chain_order_hash != self.hash() {
+        let chain_order_hash = self.try_hash().ok_or(RechainError::ChainOrderEncoding)?;
+        if suspect.chain_order_hash != chain_order_hash {
             return Err(RechainError::ChainOrderHashMismatch);
         }
         Ok(())
@@ -505,7 +515,7 @@ impl ChainOrder {
             self.critical_prefix_len,
             self.quarantine_start,
         )
-        .expect("reordered chain must preserve validated bounds");
+        .map_err(RechainError::InvalidRebuiltChainOrder)?;
 
         if !quorum.satisfied_by(next.critical_path()) {
             return Err(RechainError::InsufficientQuorumAfterQuarantine);
@@ -863,7 +873,10 @@ impl RechainCertificate {
         {
             return Err(VNextSignatureError::SlotMismatch);
         }
-        if self.new_chain_order_hash != self.new_order.hash() {
+        let Some(new_order_hash) = self.new_order.try_hash() else {
+            return Err(VNextSignatureError::CanonicalEncoding);
+        };
+        if self.new_chain_order_hash != new_order_hash {
             return Err(VNextSignatureError::ChainOrderHashMismatch);
         }
         if self.rechain_seq != self.new_order.rechain_seq {
@@ -1284,6 +1297,8 @@ struct ViewChangeCertificateSigningBody {
 pub enum RechainError {
     /// Re-chain evidence was empty.
     EmptyEvidence,
+    /// Chain-order hashing could not canonically encode the order.
+    ChainOrderEncoding,
     /// Re-chain evidence could not be canonically encoded.
     CanonicalEvidenceEncoding,
     /// Re-chain evidence repeated the same canonical suspicion body.
@@ -1310,6 +1325,8 @@ pub enum RechainError {
     },
     /// Quarantine would violate the configured quorum policy.
     InsufficientQuorumAfterQuarantine,
+    /// Rebuilding a chain order after quarantine produced invalid bounds.
+    InvalidRebuiltChainOrder(ChainOrderError),
     /// Re-chain sequence overflowed.
     RechainSequenceExhausted,
 }
@@ -1331,6 +1348,7 @@ fn stake_weight(weights: &[StakeWeight], validator: &PeerId) -> Option<Numeric> 
 pub(super) fn rechain_error_label(err: &RechainError) -> &'static str {
     match err {
         RechainError::EmptyEvidence => "empty_evidence",
+        RechainError::ChainOrderEncoding => "chain_order_encoding",
         RechainError::CanonicalEvidenceEncoding => "canonical_evidence_encoding",
         RechainError::DuplicateEvidence => "duplicate_evidence",
         RechainError::SlotMismatch => "slot_mismatch",
@@ -1340,6 +1358,7 @@ pub(super) fn rechain_error_label(err: &RechainError) -> &'static str {
         RechainError::AccusedIsNotSuccessor { .. } => "accused_is_not_successor",
         RechainError::InsufficientUntaintedValidators { .. } => "insufficient_untainted_validators",
         RechainError::InsufficientQuorumAfterQuarantine => "insufficient_quorum_after_quarantine",
+        RechainError::InvalidRebuiltChainOrder(_) => "invalid_rebuilt_chain_order",
         RechainError::RechainSequenceExhausted => "rechain_sequence_exhausted",
     }
 }
@@ -1509,6 +1528,7 @@ mod tests {
     fn successor_scoped_suspicion_rechains_accuser_and_accused_to_tail() {
         let validators = peers(5);
         let order = ChainOrder::new(7, 2, 0, 0, validators.clone(), 3, 3).expect("valid order");
+        assert_eq!(order.try_hash(), Some(order.hash()));
         let suspect = unsigned_suspect(
             slot(9),
             validators[1].clone(),
@@ -1583,6 +1603,29 @@ mod tests {
                 critical_prefix_len: 3,
             })
         );
+    }
+
+    #[test]
+    fn rechain_rebuild_rejects_invalid_internal_order_without_panic() {
+        let validators = peers(3);
+        let order = ChainOrder {
+            height: 7,
+            view: 2,
+            epoch: 0,
+            rechain_seq: 0,
+            ordered_validators: validators,
+            critical_prefix_len: 2,
+            quarantine_start: 1,
+        };
+
+        let err = order
+            .rebuild_with_tainted_tail(&[], &QuorumPolicy::Count { required: 2 })
+            .expect_err("invalid rebuilt chain order must reject");
+        assert_eq!(
+            err,
+            RechainError::InvalidRebuiltChainOrder(ChainOrderError::InvalidQuarantineStart)
+        );
+        assert_eq!(rechain_error_label(&err), "invalid_rebuilt_chain_order");
     }
 
     #[test]
